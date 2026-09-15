@@ -107,6 +107,12 @@ export async function prepareCompactionSessionAgent(params: {
     undefined,
     {
       ...(preparedRuntimeExtraParams ? { preparedExtraParams: preparedRuntimeExtraParams } : {}),
+      auth: params.runtimePlan?.auth.selectedAuthMode
+        ? {
+            mode: params.runtimePlan.auth.selectedAuthMode,
+            authFlow: params.runtimePlan.auth.selectedAuthFlow,
+          }
+        : undefined,
       nativeWebSearchPolicyContext: {
         // Summaries have no tool loop; provider-hosted tools must not inherit
         // the originating conversation's broader web-search authority.

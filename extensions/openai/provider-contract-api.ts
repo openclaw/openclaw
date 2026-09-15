@@ -5,6 +5,7 @@ import {
   asNonArrayRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isTokenSharingAuthFlow } from "./token-sharing.js";
 
 const noopAuth = async () => ({ profiles: [] });
 const OPENAI_API_KEY_LABEL = "OpenAI API Key";
@@ -28,6 +29,29 @@ const CODEX_API_KEY_IMPORT = {
   itemId: "auth:openai:api-key",
   credentialKind: "api_key",
 } as const;
+
+const matchesTokenSharingAccount: NonNullable<
+  ProviderPlugin["auth"][number]["matchesPersonalAccount"]
+> = (credential, existing) => {
+  if (
+    credential.type !== "oauth" ||
+    existing.type !== "oauth" ||
+    credential.provider !== "openai" ||
+    existing.provider !== "openai" ||
+    !isTokenSharingAuthFlow(credential.authFlow) ||
+    !isTokenSharingAuthFlow(existing.authFlow) ||
+    !credential.idToken ||
+    !existing.idToken ||
+    !credential.clientId ||
+    credential.clientId !== existing.clientId
+  ) {
+    return false;
+  }
+  // Issuance verified these ID tokens; decoding here only compares persisted subjects.
+  const current = decodeOpenAICodexJwtPayload(credential.idToken);
+  const previous = decodeOpenAICodexJwtPayload(existing.idToken);
+  return Boolean(current?.sub && current.sub === previous?.sub && current.iss === previous?.iss);
+};
 
 function accountSubject(access: string): { accountId: string; userId: string } | undefined {
   const claims = asNonArrayRecord(
@@ -97,6 +121,21 @@ export function createOpenAIProvider(): ProviderPlugin {
           choiceHint: OPENAI_CHATGPT_DEVICE_PAIRING_HINT,
           assistantPriority: -40,
           onboardingFeatured: true,
+          ...OPENAI_ACCOUNT_WIZARD_GROUP,
+        },
+      },
+      {
+        id: "token-sharing",
+        kind: "oauth",
+        label: "Sign in with ChatGPT — Token Sharing",
+        hint: "Use your ChatGPT allowance through the Responses API",
+        run: noopAuth,
+        matchesPersonalAccount: matchesTokenSharingAccount,
+        wizard: {
+          choiceId: "openai-token-sharing",
+          choiceLabel: "Sign in with ChatGPT — Token Sharing",
+          choiceHint: "Use your ChatGPT allowance through the Responses API",
+          assistantPriority: 0,
           ...OPENAI_ACCOUNT_WIZARD_GROUP,
         },
       },

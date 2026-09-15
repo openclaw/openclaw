@@ -19,6 +19,7 @@ import {
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
+import { isCodexResponsesOAuth } from "./responses-oauth.js";
 import { prewarmCodexAttemptClient } from "./run-attempt-client-prewarm.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
 import {
@@ -234,12 +235,13 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
       ? "transient"
       : undefined;
   preDynamicStartupStages.mark("native-tool-surface");
-  const nativeProviderWebSearchSupport =
-    resolveCodexWebSearchPlan({
-      config: params.config,
-      disableTools: params.disableTools,
-      nativeToolSurfaceEnabled,
-    }).kind === "native-hosted"
+  const nativeProviderWebSearchSupport = isCodexResponsesOAuth(startupPreparedAuth)
+    ? "supported"
+    : resolveCodexWebSearchPlan({
+          config: params.config,
+          disableTools: params.disableTools,
+          nativeToolSurfaceEnabled,
+        }).kind === "native-hosted"
       ? await resolveCodexProviderWebSearchSupport({
           clientFactory: attemptClientFactory,
           appServer,

@@ -1,6 +1,7 @@
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 // Codex plugin module implements auth bridge behavior.
 
+import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -67,6 +68,11 @@ import {
   type CodexGetAccountResponse,
   type CodexLoginAccountParams,
 } from "./protocol.js";
+import {
+  fingerprintCodexResponsesOAuth,
+  isCodexResponsesOAuthCredential,
+  materializeCodexResponsesOAuthProfile,
+} from "./responses-oauth.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
@@ -190,6 +196,7 @@ function resolveUnimportedAgentCodexAuthMessage(params: {
 }
 
 type CodexAppServerPreparedAuthProfileSnapshot = {
+  inferenceAuth?: "host-oauth";
   loginParams: CodexLoginAccountParams;
   secretFreeCacheKey: string;
   /** Genuine ChatGPT principal id; email/profile fallbacks are not authorization identity. */
@@ -236,6 +243,27 @@ export async function resolveCodexAppServerPreparedAuthProfileSnapshot(params: {
   const credential = store.profiles[profileId];
   if (!credential || !isCodexAppServerAuthProfileCredential(credential)) {
     return undefined;
+  }
+  if (isCodexResponsesOAuthCredential(credential)) {
+    return {
+      inferenceAuth: "host-oauth",
+      // Native Codex also uses API-key auth for auxiliary services. Only this local
+      // placeholder may enter native auth; the parent relay owns the real bearer.
+      loginParams: { type: "apiKey", apiKey: `openclaw-local-${randomUUID()}` },
+      secretFreeCacheKey: fingerprintCodexResponsesOAuth(
+        await materializeCodexResponsesOAuthProfile({
+          profileId,
+          store,
+          agentDir,
+          config: params.config,
+        }),
+      ),
+    };
+  }
+  if (credential.type === "oauth" && credential.authFlow === "chatgpt-identity") {
+    throw new Error(
+      "ChatGPT subscription sharing was not granted; sign in again and enable sharing.",
+    );
   }
   const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal({
     agentDir,
@@ -287,6 +315,30 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   // token logins, so a prepared OpenClaw handoff here would rewrite the account that
   // Codex CLI and Desktop share. Native homes are verified, never logged into.
   const usesNativeHome = params.homeScope === "user";
+  const selectedCredential = params.authProfileId
+    ? params.authProfileStore.profiles[params.authProfileId]
+    : undefined;
+  if (isCodexResponsesOAuthCredential(selectedCredential)) {
+    if (usesNativeHome || params.requirePreparedAuth || params.authRequirement !== "api-key") {
+      throw new Error(
+        "ChatGPT subscription sharing requires the managed local Codex API route and an isolated home.",
+      );
+    }
+    const snapshot = await resolveCodexAppServerPreparedAuthProfileSnapshot(params);
+    if (!snapshot || !params.authProfileId) {
+      throw new Error("ChatGPT subscription sharing could not prepare the selected profile.");
+    }
+    return {
+      authProfileId: params.authProfileId,
+      nativeAuthProfile: false,
+      preparedAuth: {
+        kind: "profile" as const,
+        profileId: params.authProfileId,
+        store: params.authProfileStore,
+        snapshot,
+      },
+    };
+  }
   if (params.requirePreparedAuth && usesNativeHome) {
     throw createCodexAppServerAuthError(
       'Codex remote-exec cloud placement requires prepared OpenAI auth. Configure an OpenAI API-key, OAuth, or token profile and use appServer.homeScope="agent"; ambient credentials and native Codex auth are not allowed.',

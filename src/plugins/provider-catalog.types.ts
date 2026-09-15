@@ -38,6 +38,7 @@ export type ProviderCatalogContext = {
     profileId?: string;
     /** Credential preparation exhausted its candidates; not an unconfigured provider. */
     preparationFailed?: boolean;
+    authFlow?: string;
   };
 };
 

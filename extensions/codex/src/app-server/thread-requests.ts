@@ -30,6 +30,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
 import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
@@ -436,7 +437,7 @@ export function buildCodexRuntimeThreadConfigForRun(
   const webSearchConfig = resolveCodexWebSearchPlan({
     config: params.config,
     disableTools: params.disableTools,
-    nativeToolSurfaceEnabled: options.nativeCodeModeEnabled,
+    nativeToolSurfaceEnabled: isCodexResponsesOAuthRun(params) || options.nativeCodeModeEnabled,
     nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
     webSearchAllowed: options.webSearchAllowed,
   }).threadConfig;
@@ -448,6 +449,19 @@ export function buildCodexRuntimeThreadConfigForRun(
     mergeCodexThreadConfigs(
       baseConfig,
       options.appServer?.networkProxy?.configPatch,
+      isCodexResponsesOAuthRun(params)
+        ? {
+            ...CODEX_DELEGATION_DISABLED_THREAD_CONFIG,
+            "features.apps": false,
+            "features.plugins": false,
+            "features.image_generation": false,
+            "features.memories": false,
+            "features.skill_search": false,
+            "orchestrator.skills.enabled": false,
+            "orchestrator.mcp.enabled": false,
+            "skills.bundled.enabled": false,
+          }
+        : undefined,
       params.pluginHarnessToolPolicySafeDeniedTools?.includes("image_generate")
         ? { "features.image_generation": false }
         : undefined,
@@ -460,7 +474,7 @@ export function buildCodexRuntimeThreadConfigForRun(
       messageOnlySourceReply || params.pluginHarnessToolPolicyRestricted === true
         ? buildRestrictedToolConfigPatch(
             restrictedToolSurfaceMcpServerNames,
-            Boolean(params.scheduledRuntimeAuthority),
+            Boolean(params.scheduledRuntimeAuthority) && !isCodexResponsesOAuthRun(params),
           )
         : buildCodexRingZeroThreadConfigPatch(
             params,

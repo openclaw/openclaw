@@ -48,6 +48,7 @@ export function createCodexDynamicToolSpecs(params: {
   entries: readonly ProjectedCodexDynamicTool<CodexToolDescriptor>[];
   loading: CodexDynamicToolsLoading;
   directToolNames?: Iterable<string>;
+  functionToolsOnly?: boolean;
 }): CodexDynamicToolSpec[] {
   const directToolNames = new Set([
     ...ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES,
@@ -70,7 +71,7 @@ export function createCodexDynamicToolSpecs(params: {
       specs.push(functionSpec);
       continue;
     }
-    if (entry.tool.catalogMode === "direct-only") {
+    if (entry.tool.catalogMode === "direct-only" && !params.functionToolsOnly) {
       directOnlyNamespaceTools.push(functionSpec);
       continue;
     }

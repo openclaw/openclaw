@@ -33,6 +33,7 @@ import {
   type ExecApprovalDecision,
 } from "./plugin-approval-roundtrip.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
+import { isCodexResponsesOAuth } from "./responses-oauth.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
@@ -181,6 +182,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   const scheduledCodexAppAuth = preparedChatgptAuth ?? configuredAppServerAuth;
   const appPolicy = resolveCodexPluginsPolicy(pluginConfig);
   const codexAppsMayBeVisible =
+    !isCodexResponsesOAuth(connection.startupPreparedAuth) &&
     appPolicy.enabled &&
     (appPolicy.allowAllPlugins || appPolicy.pluginPolicies.some((entry) => entry.enabled));
   const appCreatorCapture = resolveScheduledCodexAppCreatorCaptureDecision({
@@ -546,9 +548,12 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       registeredSpecs: nativeSpecs,
       signal: runAbortController.signal,
       computerContextEpoch,
-      loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
-        connectionClass: connection.appServer.connectionClass,
-      }),
+      functionToolsOnly: isCodexResponsesOAuth(connection.startupPreparedAuth),
+      loading: isCodexResponsesOAuth(connection.startupPreparedAuth)
+        ? "direct"
+        : resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, effectiveRuntimeModelId, {
+            connectionClass: connection.appServer.connectionClass,
+          }),
       directToolNames: resolveCodexDynamicToolDirectNames(
         params,
         registeredWithScopedMcp,

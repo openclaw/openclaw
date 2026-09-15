@@ -20,13 +20,13 @@ import {
   isModelScopedCooldownReason,
 } from "../auth-profiles/usage-state.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
+import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
 import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import { resolveModelRouteIntent } from "../model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
-import { resolveProviderModelRouteAuthRequirement } from "../provider-model-route-auth.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
 import { ensureAuthProfileStore } from "./store-runtime.js";
 
@@ -56,9 +56,14 @@ function profileAuthRequirement(params: {
   store: ReturnType<typeof ensureAuthProfileStore> | undefined;
   profileId: string;
 }): ProviderModelRouteAuthRequirement | undefined {
-  return resolveProviderModelRouteAuthRequirement(
-    params.store?.profiles[params.profileId]?.type ??
-      params.cfg.auth?.profiles?.[params.profileId]?.mode,
+  const credential = params.store?.profiles[params.profileId];
+  const configured = params.cfg.auth?.profiles?.[params.profileId];
+  return (
+    resolveProviderModelAuthPolicy({
+      provider: credential?.provider ?? configured?.provider ?? "",
+      mode: credential?.type ?? configured?.mode,
+      authFlow: credential?.type === "oauth" ? credential.authFlow : undefined,
+    }).authRequirement ?? undefined
   );
 }
 
@@ -503,6 +508,10 @@ async function resolveSessionAuthProfileOverride(params: {
               allowPluginNormalization: false,
             }),
             resolveProfileAuthMode: (profileId) => store.profiles[profileId]?.type,
+            resolveProfileAuthFlow: (profileId) => {
+              const credential = store.profiles[profileId];
+              return credential?.type === "oauth" ? credential.authFlow : undefined;
+            },
           }),
         })
       : null;

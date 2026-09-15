@@ -119,6 +119,56 @@ describe("resolvePreparedRuntimeModelAuth", () => {
     });
   });
 
+  it("preserves the selected renewable OAuth owner through public Responses preparation", async () => {
+    const credential = {
+      type: "oauth" as const,
+      provider: "openai",
+      authFlow: "chatgpt-token-sharing",
+      access: "shared-access",
+      refresh: "shared-refresh",
+      expires: Date.now() + 60_000,
+    };
+    const store = authStore({
+      "openai:shared": credential,
+      "openai:unselected": { ...credential, access: "unselected-access" },
+    });
+    const resolved = await resolvePreparedRuntimeModelAuth({
+      plan: {
+        providerForAuth: "openai",
+        authProfileProviderForAuth: "openai",
+        forwardedAuthProfileId: "openai:shared",
+        forwardedAuthProfileSource: "user",
+        forwardedAuthProfileCandidateIds: ["openai:shared"],
+        selectedAuthMode: "oauth",
+        selectedAuthFlow: "chatgpt-token-sharing",
+        modelRoute: {
+          provider: "openai",
+          modelId: platformModel.id,
+          api: "openai-responses",
+          baseUrl: platformModel.baseUrl,
+          authRequirement: "api-key",
+          requestTransportOverrides: "none",
+        },
+      },
+      model: platformModel,
+      cfg: {},
+      store,
+    });
+    expect(resolved.auth).toMatchObject({
+      apiKey: "shared-access",
+      mode: "oauth",
+      authFlow: "chatgpt-token-sharing",
+      profileId: "openai:shared",
+    });
+    expect(resolved.plan).toMatchObject({
+      selectedAuthMode: "oauth",
+      selectedAuthFlow: "chatgpt-token-sharing",
+    });
+    expect(scopeAuthProfileStoreToPreparedPlan(store, resolved.plan).profiles).toEqual({
+      "openai:shared": credential,
+    });
+  });
+
   it("keeps a failed explicit SecretRef terminal across prepared profile candidates", async () => {
     const store = authStore({
       "openai:missing": {

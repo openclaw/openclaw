@@ -68,7 +68,7 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       return { generation: registration.generation, release: registration.release };
     },
     /** Caller must authenticate its private transport before parsing any model request. */
-    prepare(body: JsonObject) {
+    prepare(body: JsonObject, requireAdmission = false) {
       assertOpen();
       const metadata = isJsonObject(body.client_metadata) ? body.client_metadata : undefined;
       const raw = metadata?.["x-codex-turn-metadata"];
@@ -92,22 +92,37 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       );
       const kind = value.request_kind;
       // Native children/reviewers and compaction/memory keep their original instructions.
-      if (child || kind === "compaction" || kind === "memory") {
+      if (!requireAdmission && (child || kind === "compaction" || kind === "memory")) {
         return { body, assertCurrent: assertOpen, signal: undefined };
       }
-      if (kind !== "turn" && kind !== "prewarm") {
+      if (
+        child ||
+        (kind !== "turn" && kind !== "prewarm" && !(requireAdmission && kind === "compaction"))
+      ) {
         throw new Error("Codex inference request has an unsupported native purpose");
       }
       const registration = typeof threadId === "string" ? roots.get(threadId) : undefined;
       const generation = value[CODEX_INFERENCE_GENERATION_KEY];
       // Startup prewarm precedes host admission; it must never borrow a later turn's persona.
-      if (kind === "prewarm" && body.generate === false && generation == null) {
+      if (
+        !requireAdmission &&
+        kind === "prewarm" &&
+        body.generate === false &&
+        generation == null
+      ) {
         return { body, assertCurrent: assertOpen, signal: undefined };
       }
       if (!registration || generation !== registration.generation) {
         throw new Error("Codex inference has no current admitted parent generation");
       }
       registration.assertCurrent();
+      if (kind === "compaction") {
+        return {
+          body,
+          assertCurrent: registration.assertCurrent,
+          signal: registration.controller.signal,
+        };
+      }
       // Responses Lite carries native base instructions in input and omits this optional field.
       const instructions = body.instructions;
       if (instructions !== undefined && typeof instructions !== "string") {

@@ -27,7 +27,7 @@ import { assertAuthProfileMigrationReady } from "./auth-profiles/legacy-source-d
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
-import { assertAuthModeAllowedForModel, isAuthModeAllowedForModel } from "./model-auth-openai.js";
+import { assertAuthModeAllowedForModel, isAuthModeAllowedForModel } from "./model-auth-policy.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import { resolveModelProviderAuthConfig } from "./model-auth-provider-route.js";
 import {
@@ -114,6 +114,7 @@ export async function resolveProviderEntryApiKeyAuth(params: {
   store: AuthProfileStore;
   agentDir?: string;
   modelApi?: string;
+  modelBaseUrl?: string;
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth | undefined> {
   const { provider, cfg } = params;
@@ -135,8 +136,10 @@ export async function resolveProviderEntryApiKeyAuth(params: {
     assertAuthModeAllowedForModel({
       provider,
       modelApi: params.modelApi,
+      modelBaseUrl: params.modelBaseUrl,
       profileId: binding.auth.profileId ?? provider,
       mode: binding.auth.mode,
+      authFlow: binding.auth.authFlow,
     });
     return binding.auth;
   }
@@ -228,13 +231,17 @@ export async function resolveApiKeyForProviderCore(input: {
       profileId,
       deprecatedProfileIds: getDeprecatedProfileIds(),
     });
-    const configuredProfileType = store.profiles[profileId]?.type;
+    const configuredCredential = store.profiles[profileId];
+    const configuredProfileType = configuredCredential?.type;
     if (configuredProfileType) {
       assertAuthModeAllowedForModel({
         provider,
         modelApi: params.modelApi,
+        modelBaseUrl: params.modelBaseUrl,
         profileId,
         mode: authConfig.profileTypeToAuthMode(configuredProfileType),
+        authFlow:
+          configuredCredential?.type === "oauth" ? configuredCredential.authFlow : undefined,
       });
     }
     const resolved = await resolveApiKeyForProfile({
@@ -252,7 +259,7 @@ export async function resolveApiKeyForProviderCore(input: {
     if (params.lockedProfile && resolvedProfileId !== profileId) {
       throw new Error("Locked auth profile resolution returned a different profile.");
     }
-    const credential = store.profiles[resolvedProfileId];
+    const credential = resolved.credential ?? store.profiles[resolvedProfileId];
     if (
       changedAuthProvider &&
       (!credential || !isStoredCredentialCompatibleWithAuthProvider({ cfg, provider, credential }))
@@ -273,12 +280,17 @@ export async function resolveApiKeyForProviderCore(input: {
       profileId: resolvedProfileId,
       source: `profile:${resolvedProfileId}`,
       mode: mode ? authConfig.profileTypeToAuthMode(mode) : "api-key",
+      ...(credential?.type === "oauth" && credential.authFlow
+        ? { authFlow: credential.authFlow }
+        : {}),
     };
     assertAuthModeAllowedForModel({
       provider,
       modelApi: params.modelApi,
+      modelBaseUrl: params.modelBaseUrl,
       profileId: resolvedProfileId,
       mode: result.mode,
+      authFlow: result.authFlow,
     });
     // When the resolved key is a provider-owned synthetic profile marker and
     // the caller has not locked this profile, fall through to env/config
@@ -364,6 +376,7 @@ export async function resolveApiKeyForProviderCore(input: {
         !isAuthModeAllowedForModel({
           provider,
           modelApi: params.modelApi,
+          modelBaseUrl: params.modelBaseUrl,
           mode: resolvedMode,
         })
       ) {
@@ -390,6 +403,7 @@ export async function resolveApiKeyForProviderCore(input: {
     store: getScopedStore(),
     agentDir,
     modelApi: params.modelApi,
+    modelBaseUrl: params.modelBaseUrl,
     secretSentinels: params.secretSentinels,
   });
   if (providerEntryAuth) {
@@ -465,7 +479,10 @@ export async function resolveApiKeyForProviderCore(input: {
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
   let refreshFailure: OAuthRefreshFailureError | undefined;
   for (const candidate of order) {
-    const candidateType = store.profiles[candidate]?.type;
+    const candidateCredential = store.profiles[candidate];
+    const candidateType = candidateCredential?.type;
+    const candidateAuthFlow =
+      candidateCredential?.type === "oauth" ? candidateCredential.authFlow : undefined;
     const candidateMode = candidateType
       ? authConfig.profileTypeToAuthMode(candidateType)
       : undefined;
@@ -474,7 +491,9 @@ export async function resolveApiKeyForProviderCore(input: {
       !isAuthModeAllowedForModel({
         provider,
         modelApi: params.modelApi,
+        modelBaseUrl: params.modelBaseUrl,
         mode: candidateMode,
+        authFlow: candidateAuthFlow,
       })
     ) {
       continue;
@@ -500,7 +519,8 @@ export async function resolveApiKeyForProviderCore(input: {
       });
       if (resolved) {
         const resolvedProfileId = resolved.profileId ?? candidate;
-        const mode = resolved.profileType ?? store.profiles[resolvedProfileId]?.type;
+        const credential = resolved.credential ?? store.profiles[resolvedProfileId];
+        const mode = resolved.profileType ?? credential?.type;
         const resolvedMode: ResolvedProviderAuth["mode"] = mode
           ? authConfig.profileTypeToAuthMode(mode)
           : "api-key";
@@ -515,12 +535,17 @@ export async function resolveApiKeyForProviderCore(input: {
           profileId: resolvedProfileId,
           source: `profile:${resolvedProfileId}`,
           mode: resolvedMode,
+          ...(credential?.type === "oauth" && credential.authFlow
+            ? { authFlow: credential.authFlow }
+            : {}),
         };
         if (
           !isAuthModeAllowedForModel({
             provider,
             modelApi: params.modelApi,
+            modelBaseUrl: params.modelBaseUrl,
             mode: result.mode,
+            authFlow: result.authFlow,
           })
         ) {
           continue;
@@ -549,7 +574,9 @@ export async function resolveApiKeyForProviderCore(input: {
           isAuthModeAllowedForModel({
             provider,
             modelApi: params.modelApi,
+            modelBaseUrl: params.modelBaseUrl,
             mode: candidateMode,
+            authFlow: candidateAuthFlow,
           }))
       ) {
         refreshFailure = err;
@@ -591,6 +618,7 @@ export async function resolveApiKeyForProviderCore(input: {
       isAuthModeAllowedForModel({
         provider,
         modelApi: params.modelApi,
+        modelBaseUrl: params.modelBaseUrl,
         mode: resolvedMode,
       })
     ) {
@@ -619,6 +647,7 @@ export async function resolveApiKeyForProviderCore(input: {
     isAuthModeAllowedForModel({
       provider,
       modelApi: params.modelApi,
+      modelBaseUrl: params.modelBaseUrl,
       mode: managedRuntimeAuth.mode,
     })
   ) {
@@ -647,7 +676,14 @@ export async function resolveApiKeyForProviderCore(input: {
       provider,
       inferredMode: "api-key",
     });
-    if (isAuthModeAllowedForModel({ provider, modelApi: params.modelApi, mode })) {
+    if (
+      isAuthModeAllowedForModel({
+        provider,
+        modelApi: params.modelApi,
+        modelBaseUrl: params.modelBaseUrl,
+        mode,
+      })
+    ) {
       authConfig.assertInlineProviderApiKeyUsable({ store: getScopedStore(), provider });
       return { apiKey: customKey.apiKey, source: customKey.source, mode };
     }

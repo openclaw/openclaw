@@ -83,6 +83,7 @@ async function completePreparedModel(params: PreparedCompletionParams): Promise<
       apiRegistry: runtime?.registry ?? defaultApiRegistry,
       model: params.model,
       cfg: params.cfg,
+      auth: { mode: params.auth.mode, authFlow: params.auth.authFlow },
     });
   if (runtime) {
     completionModel = bindModelLlmRuntime(completionModel, runtime);

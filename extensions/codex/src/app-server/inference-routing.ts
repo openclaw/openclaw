@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
@@ -6,6 +7,7 @@ import {
 } from "./config-layer-policy.js";
 import type { CodexInferenceProxy } from "./inference-proxy.js";
 import { isJsonObject, type CodexConfigReadResponse, type JsonObject } from "./protocol.js";
+import { CODEX_RESPONSES_OAUTH_PROVIDER, type CodexResponsesOAuth } from "./responses-oauth.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 
 type Owner = {
@@ -14,6 +16,7 @@ type Owner = {
   threads: Map<string, CodexInferenceProxy>;
   handles: Set<CodexInferenceProxy>;
   authRoute?: "apiKey" | "chatgpt";
+  oauth?: CodexResponsesOAuth;
 };
 // Shared clients survive duplicate module loads; their inference ownership must too.
 const owners = defineCodexBuildState(
@@ -28,11 +31,20 @@ const NATIVE_OPENAI_UPSTREAMS = new Set([
 ]);
 
 /** Only managed native stdio startup calls this; locality or metadata cannot opt a client in. */
-export function ownCodexInferenceClient(client: CodexAppServerClient): void {
+export function ownCodexInferenceClient(
+  client: CodexAppServerClient,
+  oauth?: CodexResponsesOAuth,
+): void {
   if (owners.has(client)) {
     return;
   }
-  const owner: Owner = { closed: false, routes: new Map(), threads: new Map(), handles: new Set() };
+  const owner: Owner = {
+    closed: false,
+    routes: new Map(),
+    threads: new Map(),
+    handles: new Set(),
+    oauth,
+  };
   owners.set(client, owner);
   const close = () => {
     owner.closed = true;
@@ -98,8 +110,16 @@ async function prepareCodexInferenceRoute(params: {
     params.effectiveConfig ??
     (await readCodexEffectiveConfig(params.client, params.cwd, { signal: params.signal }));
   assertCurrent();
-  if (snapshot.config.model_provider != null && snapshot.config.model_provider !== "openai") {
+  const unsupported = () => {
+    if (owner.oauth) {
+      throw new Error(
+        "ChatGPT subscription sharing requires the managed public Responses inference route.",
+      );
+    }
     return undefined;
+  };
+  if (snapshot.config.model_provider != null && snapshot.config.model_provider !== "openai") {
+    return unsupported();
   }
   // Native system-proxy routing owns its transport, including loopback bypass.
   // Leave that profile intact instead of proxying its private inference IPC.
@@ -107,7 +127,7 @@ async function prepareCodexInferenceRoute(params: {
     isJsonObject(snapshot.config.features) &&
     snapshot.config.features.respect_system_proxy === true
   ) {
-    return undefined;
+    return unsupported();
   }
   const configured = snapshot.config.openai_base_url;
   if (configured != null && typeof configured !== "string") {
@@ -120,15 +140,18 @@ async function prepareCodexInferenceRoute(params: {
     try {
       target = new URL(configured);
     } catch {
-      return undefined;
+      return unsupported();
     }
-    if (!NATIVE_OPENAI_UPSTREAMS.has(target.href.replace(/\/$/, ""))) {
-      return undefined;
+    if (
+      !NATIVE_OPENAI_UPSTREAMS.has(target.href.replace(/\/$/, "")) ||
+      (owner.oauth && target.href.replace(/\/$/, "") !== "https://api.openai.com/v1")
+    ) {
+      return unsupported();
     }
   }
   const origin = snapshot.origins?.openai_base_url;
   if (origin && !CODEX_SESSION_OVERRIDABLE_LAYER_TYPES.has(origin.name.type)) {
-    return undefined;
+    return unsupported();
   }
   const account = await params.client.request(
     "account/read",
@@ -140,8 +163,8 @@ async function prepareCodexInferenceRoute(params: {
   );
   assertCurrent();
   const type = isJsonObject(account.account) ? account.account.type : undefined;
-  if (type !== "apiKey" && type !== "chatgpt") {
-    return undefined;
+  if ((type !== "apiKey" && type !== "chatgpt") || (owner.oauth && type !== "apiKey")) {
+    return unsupported();
   }
   if (owner.authRoute && owner.authRoute !== type) {
     throw new Error("Codex native account route changed; reconnect before retrying");
@@ -161,7 +184,11 @@ async function prepareCodexInferenceRoute(params: {
     }
     pending = import("./inference-proxy.js").then(({ createCodexInferenceProxy }) => {
       assertClient();
-      return createCodexInferenceProxy({ upstream: target, assertCurrent: assertClient });
+      return createCodexInferenceProxy({
+        upstream: target,
+        assertCurrent: assertClient,
+        oauth: owner.oauth,
+      });
     });
     // Keep a failed route failed for this physical client; never fall back to unmodified inference.
     owner.routes.set(key, pending);
@@ -187,6 +214,9 @@ export async function prepareCodexInferenceThreadConfig(params: {
 }): Promise<{ route: CodexInferenceProxy; config: JsonObject } | undefined> {
   const { binding } = params;
   if (binding?.connectionScope === "supervision" || binding?.preserveNativeModel === true) {
+    if (owners.get(params.client)?.oauth) {
+      throw new Error("ChatGPT subscription sharing cannot attach to a native Codex thread.");
+    }
     return undefined;
   }
   const route = await prepareCodexInferenceRoute(params);
@@ -215,7 +245,27 @@ export async function prepareCodexInferenceThreadConfig(params: {
   ) {
     throw new Error("Codex thread configuration conflicts with its trusted inference upstream");
   }
+  if (owners.get(params.client)?.oauth) {
+    return {
+      route,
+      config: {
+        ...params.config,
+        model_provider: CODEX_RESPONSES_OAUTH_PROVIDER,
+        model_providers: { [CODEX_RESPONSES_OAUTH_PROVIDER]: responsesOAuthProvider(route) },
+      },
+    };
+  }
   return { route, config: { ...params.config, openai_base_url: route.baseUrl } };
+}
+
+function responsesOAuthProvider(route: CodexInferenceProxy): JsonObject {
+  return {
+    name: "OpenClaw subscription sharing",
+    base_url: route.baseUrl,
+    wire_api: "responses",
+    requires_openai_auth: true,
+    supports_websockets: false,
+  };
 }
 
 /** Validate the exact private handle and unchanged upstream, not a localhost string exception. */
@@ -223,16 +273,25 @@ export function assertCodexInferenceRouteConfig(
   client: CodexAppServerClient,
   route: CodexInferenceProxy | undefined,
   config: JsonObject | undefined,
+  modelProvider?: string | null,
 ): void {
   if (!route) {
     return;
   }
   const owner = owners.get(client);
+  const providers = config?.model_providers;
+  const expectedConfig = owner?.oauth
+    ? config?.model_provider === CODEX_RESPONSES_OAUTH_PROVIDER &&
+      isJsonObject(providers) &&
+      isDeepStrictEqual(providers[CODEX_RESPONSES_OAUTH_PROVIDER], responsesOAuthProvider(route))
+    : config?.openai_base_url === route.baseUrl;
   if (
     !owner ||
     owner.closed ||
     !owner.handles.has(route) ||
-    config?.openai_base_url !== route.baseUrl
+    !expectedConfig ||
+    (modelProvider != null &&
+      modelProvider !== (owner?.oauth ? CODEX_RESPONSES_OAUTH_PROVIDER : "openai"))
   ) {
     throw new Error("Codex parent-local inference route was overridden; no turn was sent");
   }

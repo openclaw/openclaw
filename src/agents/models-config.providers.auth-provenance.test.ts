@@ -769,6 +769,31 @@ describe("models-config provider auth provenance", () => {
     });
   });
 
+  it.each(["chatgpt-token-sharing", "chatgpt-identity"])(
+    "exposes %s to provider catalog policy",
+    (authFlow) => {
+      const auth = createProviderAuthResolver(
+        {},
+        createAuthProfileStoreFixture({
+          "openai:shared": {
+            type: "oauth",
+            provider: "openai",
+            authFlow,
+            access: "shared-access",
+            refresh: "shared-refresh",
+            expires: Date.now() + 60_000,
+          },
+        }),
+      );
+      expect(auth("openai")).toMatchObject({
+        mode: "oauth",
+        authFlow,
+        profileId: "openai:shared",
+        discoveryApiKey: "shared-access",
+      });
+    },
+  );
+
   it("resolves plugin-owned synthetic auth through the provider hook", () => {
     // Plugin-owned synthetic auth can provide discovery keys while persisted
     // config still records a non-secret marker.

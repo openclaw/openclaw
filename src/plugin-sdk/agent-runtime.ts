@@ -145,6 +145,10 @@ export type {
   AuthProfileStore,
   OAuthCredential,
 } from "../agents/auth-profiles.js";
+export {
+  isPendingOAuthRefreshFence,
+  isSameOAuthRefreshGeneration,
+} from "../agents/auth-profiles/oauth-refresh-marker.js";
 
 export { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
 export { extractEmbeddedAssistantText as extractAssistantText } from "../agents/embedded-agent-utils.js";

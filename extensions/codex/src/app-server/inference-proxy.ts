@@ -12,6 +12,7 @@ import {
 import { type RawData, WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { createCodexInferenceContext } from "./inference-context.js";
 import { isJsonObject } from "./protocol.js";
+import type { CodexResponsesOAuth } from "./responses-oauth.js";
 
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const MAX_ERROR_BODY_BYTES = 1024 * 1024;
@@ -36,10 +37,14 @@ const FAILURE = "Codex parent-local inference transport failed; retry on a fresh
 export async function createCodexInferenceProxy(params: {
   upstream: URL;
   assertCurrent: () => void;
+  oauth?: CodexResponsesOAuth;
 }) {
   const upstream = new URL(params.upstream);
   if (upstream.protocol !== "https:" || upstream.username || upstream.password || upstream.hash) {
     throw new Error("Codex inference requires a credential-free HTTPS upstream URL");
+  }
+  if (params.oauth && upstream.href.replace(/\/$/, "") !== "https://api.openai.com/v1") {
+    throw new Error("ChatGPT subscription sharing requires the public Responses endpoint");
   }
   const lifetime = new AbortController();
   const assertCurrent = () => {
@@ -86,6 +91,9 @@ export async function createCodexInferenceProxy(params: {
     }
     const target = new URL(upstream);
     const incoming = new URL(suffix, "http://localhost");
+    if (params.oauth && (incoming.pathname !== "/responses" || incoming.search)) {
+      throw new Error(FAILURE);
+    }
     target.pathname = upstream.pathname.replace(/\/$/, "") + incoming.pathname;
     for (const [key, value] of incoming.searchParams) {
       target.searchParams.append(key, value);
@@ -101,7 +109,7 @@ export async function createCodexInferenceProxy(params: {
     if (!isJsonObject(value)) {
       throw new Error(FAILURE);
     }
-    const prepared = context.prepare(value);
+    const prepared = context.prepare(value, Boolean(params.oauth));
     const rewritten = Buffer.from(JSON.stringify(prepared.body));
     if (rewritten.length > MAX_BODY_BYTES) {
       throw new Error(FAILURE);
@@ -140,17 +148,50 @@ export async function createCodexInferenceProxy(params: {
           controller.signal,
           ...(prepared.signal ? [prepared.signal] : []),
         ]);
-        guarded = await fetchWithSsrFGuard({
-          url: target.toString(),
-          init: { method: "POST", headers: relayHeaders(req.headers), body, signal },
-          signal,
-          beforeRequest: prepared.assertCurrent,
-          requireHttps: true,
-          maxRedirects: 0,
-          capture: false,
-          mode: "trusted_env_proxy",
-          auditContext: "codex-parent-local-inference",
-        });
+        for (let attempt = 0; attempt < (params.oauth ? 2 : 1); attempt++) {
+          const headers = relayHeaders(req.headers);
+          const auth = await params.oauth?.resolve(attempt === 1);
+          const assertAuthorized = () => {
+            prepared.assertCurrent();
+            signal.throwIfAborted();
+            auth?.assertCurrent();
+          };
+          assertAuthorized();
+          if (auth) {
+            for (const key of [
+              "authorization",
+              "chatgpt-account-id",
+              "openai-organization",
+              "openai-project",
+            ]) {
+              delete headers[key];
+            }
+            headers.authorization = `Bearer ${auth.token}`;
+          }
+          guarded = await fetchWithSsrFGuard({
+            url: target.toString(),
+            init: { method: "POST", headers, body, signal },
+            signal,
+            // Refresh and DNS/proxy preparation both await. Recheck the admitted
+            // turn and current persisted grant immediately before physical I/O.
+            beforeRequest: assertAuthorized,
+            requireHttps: true,
+            maxRedirects: 0,
+            capture: false,
+            mode: "trusted_env_proxy",
+            auditContext: "codex-parent-local-inference",
+          });
+          assertAuthorized();
+          if (!params.oauth || guarded.response.status !== 401 || attempt === 1) {
+            break;
+          }
+          await guarded.response.body?.cancel();
+          await guarded.release();
+          guarded = undefined;
+        }
+        if (!guarded) {
+          throw new Error(FAILURE);
+        }
         prepared.assertCurrent();
         // fetch decodes response content encodings. Never forward stale encoding/length headers.
         const headers = Object.fromEntries(guarded.response.headers);
@@ -201,6 +242,9 @@ export async function createCodexInferenceProxy(params: {
       };
       try {
         const { target, sampling } = resolveTarget(req);
+        if (params.oauth) {
+          throw new Error(FAILURE);
+        }
         if (!sampling || active.size >= MAX_CONNECTIONS) {
           throw new Error(FAILURE);
         }

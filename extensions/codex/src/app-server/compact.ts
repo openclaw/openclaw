@@ -39,6 +39,7 @@ import {
   readCodexNotificationTurnId,
 } from "./notification-correlation.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
+import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import {
   CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
@@ -497,6 +498,16 @@ async function compactCodexNativeThread(
       reason: "no codex app-server thread binding",
       recovery: "missing_thread_binding",
     });
+  }
+  if (initialBinding.modelProvider === CODEX_RESPONSES_OAUTH_PROVIDER) {
+    // The pinned manual compact RPC cannot carry the admitted turn generation.
+    // Automatic in-turn summarization carries it and remains authorized.
+    return {
+      ok: false,
+      compacted: false,
+      reason:
+        "Manual compaction is unavailable with ChatGPT subscription sharing. Automatic compaction runs during normal turns; continue the conversation or start a new session.",
+    };
   }
   if (
     params.nativeToolSurface === "host-isolated" ||

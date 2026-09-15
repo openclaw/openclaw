@@ -70,15 +70,18 @@ class CodexPluginThreadConfigDeadlineError extends Error {
 export function resolveCodexPluginThreadConfigStartupPolicy(params: {
   pluginConfig: CodexPluginConfig;
   nativeToolSurfaceEnabled: boolean;
+  hostedAppsSupported?: boolean;
   scheduledRuntimeAuthority?: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"];
 }) {
   const pluginThreadConfigRequired =
+    params.hostedAppsSupported === false ||
     Boolean(params.scheduledRuntimeAuthority) ||
     !params.nativeToolSurfaceEnabled ||
     shouldBuildCodexPluginThreadConfig(params.pluginConfig);
   // Restricted runs disable the native apps feature without inventory discovery.
   const pluginThreadConfigPluginConfig =
-    params.nativeToolSurfaceEnabled || params.scheduledRuntimeAuthority
+    params.hostedAppsSupported !== false &&
+    (params.nativeToolSurfaceEnabled || params.scheduledRuntimeAuthority)
       ? params.pluginConfig
       : disableCodexPluginThreadConfig(params.pluginConfig);
   const resolvedPluginPolicy = pluginThreadConfigRequired

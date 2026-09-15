@@ -498,6 +498,7 @@ export async function resolveProviderEntryApiKeyBinding(params: {
       return { kind: "profile-unresolved", profileId: reference.profileId };
     }
     const resolvedProfileId = resolved.profileId ?? reference.profileId;
+    const credential = resolved.credential ?? reference.credential;
     return {
       kind: "profile-resolved",
       auth: {
@@ -511,6 +512,9 @@ export async function resolveProviderEntryApiKeyBinding(params: {
         profileId: resolvedProfileId,
         source: `profile:${resolvedProfileId}`,
         mode: resolved.profileType ? profileTypeToAuthMode(resolved.profileType) : reference.mode,
+        ...(credential.type === "oauth" && credential.authFlow
+          ? { authFlow: credential.authFlow }
+          : {}),
       },
     };
   } catch (err) {

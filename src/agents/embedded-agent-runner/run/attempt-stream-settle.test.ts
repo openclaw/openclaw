@@ -558,6 +558,41 @@ describe("prepareEmbeddedAttemptTransport", () => {
     registerProviderStreamForModel.mockReset();
   });
 
+  it.each([undefined, "test-subscription"])(
+    "lets the provider select transport from the prepared auth flow %s",
+    async (authFlow) => {
+      const { input, session, streamFn } = createTransportFixture({
+        compaction: false,
+        pruning: false,
+        apiKey: "test-access-token",
+      });
+      input.attempt.runtimePlan!.auth.selectedAuthMode = "oauth";
+      input.attempt.runtimePlan!.auth.selectedAuthFlow = authFlow;
+      extraParamsTesting.setProviderRuntimeDepsForTest({
+        wrapProviderStreamFn: ({ context }) => {
+          const base = context.streamFn;
+          if (!base) {
+            throw new Error("Expected prepared base stream");
+          }
+          return (model, messages, options) =>
+            base(model, messages, {
+              ...options,
+              transport: context.auth?.authFlow === "test-subscription" ? "sse" : "auto",
+            });
+        },
+      });
+
+      await prepareEmbeddedAttemptTransport(input);
+      void session.agent.streamFn(input.attempt.model, { messages: [] }, {});
+
+      expect(streamFn).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ transport: authFlow ? "sse" : "auto" }),
+      );
+    },
+  );
+
   it.each([
     {
       compaction: true,

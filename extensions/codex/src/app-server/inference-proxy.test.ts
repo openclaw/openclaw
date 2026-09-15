@@ -95,10 +95,14 @@ async function post(
   );
 }
 
-async function fixture(withInstructions = true) {
+async function fixture(
+  withInstructions = true,
+  oauth?: Parameters<typeof createCodexInferenceProxy>[0]["oauth"],
+) {
   const proxy = await createCodexInferenceProxy({
     upstream: new URL("https://api.openai.com/v1"),
     assertCurrent: () => {},
+    oauth,
   });
   proxies.push(proxy);
   const controller = new AbortController();
@@ -124,6 +128,140 @@ async function fixture(withInstructions = true) {
 }
 
 describe("private inference HTTP relay", () => {
+  it("resolves host OAuth only for admitted Responses requests and refreshes once after 401", async () => {
+    const resolve = vi.fn(async (forceRefresh: boolean) => ({
+      token: forceRefresh ? "synthetic-refreshed" : "synthetic-access",
+      assertCurrent: () => {},
+    }));
+    const { proxy, body } = await fixture(true, { resolve });
+    transport.fetch.mockImplementation(async (args) => {
+      args.beforeRequest();
+      const first = args.init.headers.authorization === "Bearer synthetic-access";
+      expect(args.init.headers).not.toHaveProperty("chatgpt-account-id");
+      expect(args.init.headers).not.toHaveProperty("openai-organization");
+      expect(args.init.headers).not.toHaveProperty("openai-project");
+      return {
+        response: new Response(first ? "expired" : "data: completed\n\n", {
+          status: first ? 401 : 200,
+        }),
+        release: async () => {},
+      };
+    });
+    for (const path of ["/models", "/responses/compact", "/responses?other=1"]) {
+      expect(
+        (await post(proxy.baseUrl + path, { method: "POST", body: JSON.stringify(body) })).status,
+      ).toBe(502);
+    }
+    expect(resolve).not.toHaveBeenCalled();
+    const result = await post(proxy.baseUrl + "/responses", {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: {
+        authorization: "Bearer local-placeholder",
+        "chatgpt-account-id": "native-account",
+        "openai-project": "native-project",
+        "openai-organization": "native-org",
+      },
+    });
+    expect(result.status).toBe(200);
+    expect(await result.text()).toBe("data: completed\n\n");
+    expect(resolve.mock.calls).toEqual([[false], [true]]);
+    expect(transport.fetch).toHaveBeenCalledTimes(2);
+    expect(transport.fetch.mock.calls[1]?.[0].init.headers.authorization).toBe(
+      "Bearer synthetic-refreshed",
+    );
+  });
+
+  it("rejects OAuth use after refresh loses the admitted turn and before physical I/O loses the grant", async () => {
+    let loseAdmission = true;
+    let grantCurrent = true;
+    const resolve = vi.fn(async () => {
+      if (loseAdmission) registration.release();
+      return {
+        token: "synthetic-access",
+        assertCurrent: () => {
+          if (!grantCurrent) throw new Error("revoked");
+        },
+      };
+    });
+    const { proxy, body, registration } = await fixture(true, { resolve });
+    expect(
+      (await post(proxy.baseUrl + "/responses", { method: "POST", body: JSON.stringify(body) }))
+        .status,
+    ).toBe(502);
+    expect(transport.fetch).not.toHaveBeenCalled();
+    loseAdmission = false;
+    const next = await fixture(true, { resolve });
+    let writes = 0;
+    transport.fetch.mockImplementation(async (args) => {
+      grantCurrent = false;
+      args.beforeRequest();
+      writes++;
+      throw new Error("unexpected upstream write");
+    });
+    expect(
+      (
+        await post(next.proxy.baseUrl + "/responses", {
+          method: "POST",
+          body: JSON.stringify(next.body),
+        })
+      ).status,
+    ).toBe(502);
+    expect(writes).toBe(0);
+  });
+
+  it("rejects unadmitted native prewarm for OAuth", async () => {
+    const resolve = vi.fn();
+    const { proxy } = await fixture(true, { resolve });
+    const body = {
+      generate: false,
+      client_metadata: { "x-codex-turn-metadata": JSON.stringify({ request_kind: "prewarm" }) },
+    };
+    expect(
+      (await post(proxy.baseUrl + "/responses", { method: "POST", body: JSON.stringify(body) }))
+        .status,
+    ).toBe(502);
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("authorizes automatic compaction only with the current admitted generation", async () => {
+    const resolve = vi.fn(async () => ({ token: "synthetic-access", assertCurrent: () => {} }));
+    const { proxy, body, registration } = await fixture(true, { resolve });
+    const compaction = {
+      ...body,
+      client_metadata: {
+        thread_id: "root",
+        "x-codex-turn-metadata": JSON.stringify({
+          thread_id: "root",
+          request_kind: "compaction",
+          [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
+        }),
+      },
+    };
+    transport.fetch.mockImplementation(async (args) => {
+      args.beforeRequest();
+      expect(JSON.parse(args.init.body.toString()).instructions).toBe("native base");
+      return { response: new Response("data: summary\n\n"), release: async () => {} };
+    });
+    expect(
+      (
+        await post(proxy.baseUrl + "/responses", {
+          method: "POST",
+          body: JSON.stringify(compaction),
+        })
+      ).status,
+    ).toBe(200);
+    registration.release();
+    expect(
+      (
+        await post(proxy.baseUrl + "/responses", {
+          method: "POST",
+          body: JSON.stringify(compaction),
+        })
+      ).status,
+    ).toBe(502);
+    expect(resolve).toHaveBeenCalledOnce();
+  });
   it.each([
     { zstd: false, withInstructions: true },
     { zstd: true, withInstructions: true },
@@ -220,6 +358,20 @@ describe("private inference HTTP relay", () => {
 });
 
 describe("private inference WebSocket relay", () => {
+  it("rejects WebSocket OAuth without resolving a bearer or dialing upstream", async () => {
+    const resolve = vi.fn();
+    const { proxy } = await fixture(true, { resolve });
+    const socket = new WebSocket(proxy.baseUrl.replace("http:", "ws:") + "/responses");
+    socket.on("error", () => {});
+    try {
+      await once(socket, "error");
+      expect(resolve).not.toHaveBeenCalled();
+      expect(transport.resolve).not.toHaveBeenCalled();
+      expect(transport.dials).toEqual([]);
+    } finally {
+      socket.terminate();
+    }
+  });
   it.each(["unavailable", "private"] as const)(
     "rejects %s destination DNS on a direct WebSocket route",
     async (resolution) => {

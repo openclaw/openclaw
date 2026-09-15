@@ -41,6 +41,20 @@ describe("createModelAuthAvailabilityResolver", () => {
       selectedRoute: subscriptionRoute,
       selectedAuthMode: "oauth",
     },
+    {
+      label: "ChatGPT token-sharing OAuth",
+      profileId: "openai:shared",
+      profile: {
+        type: "oauth" as const,
+        provider: "openai",
+        authFlow: "chatgpt-token-sharing",
+        access: "shared-access",
+        refresh: "shared-refresh",
+        expires: Date.now() + 60_000,
+      },
+      selectedRoute: platformRoute,
+      selectedAuthMode: "oauth",
+    },
   ])("selects a ready $label route", ({ profileId, profile, selectedAuthMode, selectedRoute }) => {
     expect(evaluate({ store: authStore({ [profileId]: profile }) })).toMatchObject({
       availability: true,
@@ -49,6 +63,23 @@ describe("createModelAuthAvailabilityResolver", () => {
       selectedProfileId: profileId,
       selectedRoute,
     });
+  });
+
+  it("does not advertise inference for an identity-only ChatGPT login", () => {
+    expect(
+      evaluate({
+        store: authStore({
+          "openai:identity": {
+            type: "oauth",
+            provider: "openai",
+            authFlow: "chatgpt-identity",
+            access: "identity-access",
+            refresh: "identity-refresh",
+            expires: Date.now() + 60_000,
+          },
+        }),
+      }).availability,
+    ).toBe(false);
   });
 
   it("canonicalizes prepared runtime auth through provider aliases", () => {

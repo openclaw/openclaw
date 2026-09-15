@@ -126,6 +126,7 @@ export async function prepareProviderCatalogOAuthAuth(
   config?: OpenClawConfig,
 ) {
   const failedProfileIds: string[] = [];
+  let failedAuthFlow: string | undefined;
   let preparedProfile: { profileId: string; apiKey: string } | undefined;
   // Let an admitted refresh finish persisting its rotation, but do not start
   // another candidate after the catalog owner closes preparation admission.
@@ -161,9 +162,11 @@ export async function prepareProviderCatalogOAuthAuth(
       }
     } catch {
       failedProfileIds.push(auth.profileId);
+      failedAuthFlow = auth.authFlow;
       continue;
     }
     failedProfileIds.push(auth.profileId);
+    failedAuthFlow = auth.authFlow;
   }
   return (requestedProvider?: string, options?: { oauthMarker?: string }) => {
     const target = requestedProvider?.trim() || provider;
@@ -178,7 +181,11 @@ export async function prepareProviderCatalogOAuthAuth(
         resolveProviderIdForAuth(provider, { config, env })
     ) {
       onPreparationFailure(failedProfileIds);
-      return { ...auth, preparationFailed: true };
+      return {
+        ...auth,
+        preparationFailed: true,
+        ...(failedAuthFlow ? { authFlow: failedAuthFlow } : {}),
+      };
     }
     // Refresh owns a separate store; the captured catalog snapshot can still
     // contain the old token. Carry the resolved value for this exact profile.

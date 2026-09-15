@@ -1,5 +1,5 @@
 ---
-summary: "Connect OpenAI with an API key or a ChatGPT/Codex subscription"
+summary: "Connect OpenAI with an API key, Codex subscription, or ChatGPT token sharing"
 read_when:
   - You are connecting OpenAI to OpenClaw for the first time
   - You want Codex subscription auth instead of API keys
@@ -421,3 +421,45 @@ sidebarTitle: "Setup"
 
   </Tab>
 </Tabs>
+
+## ChatGPT token sharing (preview)
+
+Token sharing authorizes eligible Responses API requests against your ChatGPT
+allowance. It is a separate sign-in choice from the existing Codex integration.
+It does not connect your ChatGPT conversations, Codex history, or connected apps.
+
+<Warning>
+  This preview is awaiting an OpenAI-approved OpenClaw OAuth client registration.
+  Sign-in remains unavailable until that client is configured in the build and
+  enabled by OpenAI. A test client does not establish release readiness.
+</Warning>
+
+Once enabled, run this on the computer running your browser:
+
+```bash
+openclaw models auth login --provider openai --method token-sharing
+```
+
+The browser returns to `http://localhost:8080/auth/callback`. OpenClaw verifies
+the identity and granted permissions, then stores and renews the credentials
+through its existing auth-profile store. If you decline token sharing while
+completing sign-in, OpenClaw retains that identity and asks you to enable sharing
+or explicitly choose another inference credential.
+
+The preview uses HTTP Responses streaming with full context. Developer function
+tools and web search are supported. Hosted MCP tools, connected apps, tool search,
+file-backed inputs, and WebSocket inference are unavailable. Model and allowance
+eligibility are enforced by OpenAI. OpenClaw does not use the token to query Codex
+usage or model-list endpoints.
+
+With the Codex runtime, this preview requires a managed local process and an
+isolated agent home. Automatic context summarization is supported; manual
+`/compact`, remote execution, and supervised sessions are unavailable with this
+credential.
+
+### Public OAuth client security
+
+OpenClaw's client ID is public and contains no secret. PKCE ties the authorization
+code to the login transaction; user consent authorizes the requested access.
+Another program can copy a public client ID, so attribution to that registration
+does not prove that the caller is an unmodified OpenClaw executable.

@@ -29,6 +29,7 @@ import type { UsageProviderId } from "./provider-usage.types.js";
 export type ProviderAuth = {
   provider: UsageProviderId;
   token: string;
+  authFlow?: string;
   accountId?: string;
   authProfileId?: string;
   hookProvider?: string;
@@ -331,9 +332,13 @@ async function resolveOAuthToken(params: {
       if (!resolved) {
         continue;
       }
+      const credential = resolved.credential ?? cred;
       return {
         provider: params.provider as UsageProviderId,
         token: resolved.apiKey,
+        ...(credential.type === "oauth" && credential.authFlow
+          ? { authFlow: credential.authFlow }
+          : {}),
         accountId:
           cred.type === "oauth" && "accountId" in cred
             ? (cred as { accountId?: string }).accountId
@@ -395,6 +400,7 @@ async function resolveProviderUsageAuthViaPlugin(params: {
         return auth
           ? {
               token: auth.token,
+              ...(auth.authFlow ? { authFlow: auth.authFlow } : {}),
               ...(auth.accountId ? { accountId: auth.accountId } : {}),
               ...(auth.subscriptionType ? { subscriptionType: auth.subscriptionType } : {}),
               ...(auth.rateLimitTier ? { rateLimitTier: auth.rateLimitTier } : {}),
@@ -417,6 +423,7 @@ async function resolveProviderUsageAuthViaPlugin(params: {
       token: resolved.token,
       ...(resolved.accountId ? { accountId: resolved.accountId } : {}),
       ...(resolved.subscriptionType ? { subscriptionType: resolved.subscriptionType } : {}),
+      ...(resolved.authFlow ? { authFlow: resolved.authFlow } : {}),
       ...(resolved.rateLimitTier ? { rateLimitTier: resolved.rateLimitTier } : {}),
       ...(resolved.email ? { email: resolved.email } : {}),
     },

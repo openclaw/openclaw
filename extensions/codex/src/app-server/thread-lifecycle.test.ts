@@ -16,6 +16,7 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
+import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
@@ -57,6 +58,67 @@ import {
 } from "./thread-lifecycle.js";
 import { createLeasedCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
 import { attestCodexRestrictedToolSurfaceMcpServersDisabled } from "./thread-requests.js";
+
+it("uses direct OpenClaw functions and hosted web search for subscription sharing", () => {
+  const params = createAttemptParams({ provider: "openai", authProfileId: "openai:sharing" });
+  const profile = params.authProfileStore!.profiles["openai:sharing"]!;
+  params.authProfileStore!.profiles["openai:sharing"] = {
+    ...profile,
+    authFlow: "chatgpt-token-sharing",
+  } as typeof profile;
+  params.runtimePlan = {
+    ...params.runtimePlan,
+    auth: {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+      selectedAuthMode: "oauth",
+      selectedAuthFlow: "chatgpt-token-sharing",
+    },
+  } as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
+  const nativeCodeModeEnabled = shouldEnableCodexAppServerNativeToolSurface(params);
+  expect(nativeCodeModeEnabled).toBe(false);
+  const start = buildThreadStartParams(params, {
+    appServer: createAppServerOptions() as never,
+    cwd: "/repo",
+    dynamicTools: [],
+    nativeCodeModeEnabled,
+    nativeProviderWebSearchSupport: "supported",
+    webSearchAllowed: true,
+  });
+  expect(start.environments).toEqual([]);
+  expect(start.modelProvider).toBe("openclaw_token_sharing");
+  expect(
+    buildThreadResumeParams(params, {
+      appServer: createAppServerOptions() as never,
+      threadId: "thread-1",
+    }).modelProvider,
+  ).toBe("openclaw_token_sharing");
+  expect(start.config).toMatchObject({
+    "features.code_mode": false,
+    "features.apps": false,
+    "features.multi_agent": false,
+    "features.multi_agent_v2": false,
+    "features.plugins": false,
+    "orchestrator.skills.enabled": false,
+    "skills.bundled.enabled": false,
+    web_search: "cached",
+    "features.standalone_web_search": false,
+  });
+  expect(start.developerInstructions).not.toContain("tool_search");
+  expect(start.developerInstructions).not.toContain("spawn_agent");
+  params.pluginHarnessToolPolicyRestricted = true;
+  params.scheduledRuntimeAuthority = {} as NonNullable<
+    EmbeddedRunAttemptParams["scheduledRuntimeAuthority"]
+  >;
+  const restricted = buildThreadStartParams(params, {
+    appServer: createAppServerOptions() as never,
+    cwd: "/repo",
+    dynamicTools: [],
+    nativeCodeModeEnabled,
+  });
+  expect(restricted.config?.["features.apps"]).toBe(false);
+  expect(restricted.config?.["orchestrator.mcp.enabled"]).toBe(false);
+});
 
 type CodexThreadLifecycleTimingLogger = NonNullable<
   NonNullable<Parameters<typeof startOrResumeThreadImpl>[0]["timing"]>["log"]

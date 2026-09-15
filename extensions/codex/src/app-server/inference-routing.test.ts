@@ -39,6 +39,7 @@ async function prepare(
   h: ReturnType<typeof harness>,
   type: string,
   snapshot: CodexConfigReadResponse = { config: {}, origins: {} },
+  oauth = false,
 ) {
   const index = h.writes.length;
   const pending = prepareThread(h.client, snapshot);
@@ -49,11 +50,54 @@ async function prepare(
   if (!prepared) {
     throw new Error("expected an owned route");
   }
-  expect(prepared.config).toEqual({ openai_base_url: prepared.route.baseUrl });
+  if (!oauth) {
+    expect(prepared.config).toEqual({ openai_base_url: prepared.route.baseUrl });
+  } else {
+    expect(prepared.config).toEqual({
+      model_provider: "openclaw_token_sharing",
+      model_providers: {
+        openclaw_token_sharing: {
+          name: "OpenClaw subscription sharing",
+          base_url: prepared.route.baseUrl,
+          wire_api: "responses",
+          requires_openai_auth: true,
+          supports_websockets: false,
+        },
+      },
+    });
+    expect(() =>
+      assertCodexInferenceRouteConfig(
+        h.client,
+        prepared.route,
+        prepared.config,
+        "openclaw_token_sharing",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertCodexInferenceRouteConfig(h.client, prepared.route, prepared.config, "openai"),
+    ).toThrow();
+  }
   return prepared.route;
 }
 
 describe("managed inference route ownership", () => {
+  it("fails closed for host OAuth on native backend and custom provider configurations", async () => {
+    const h = harness();
+    ownCodexInferenceClient(h.client, { resolve: vi.fn() });
+    for (const config of [
+      { openai_base_url: "https://chatgpt.com/backend-api/codex" },
+      { openai_base_url: "https://models.example.com/v1" },
+      { model_provider: "bedrock" },
+      { features: { respect_system_proxy: true } },
+    ]) {
+      await expect(prepareThread(h.client, { config, origins: {} })).rejects.toThrow(
+        "public Responses",
+      );
+    }
+    expect(h.writes).toEqual([]);
+    const route = await prepare(h, "apiKey", undefined, true);
+    expect(route.upstream).toBe("https://api.openai.com/v1");
+  });
   it("leaves unowned native clients completely untouched", async () => {
     const h = harness();
     expect(await prepareThread(h.client)).toBeUndefined();

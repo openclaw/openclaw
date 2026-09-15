@@ -8,6 +8,11 @@ import {
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-auth";
+import {
+  fingerprintCodexResponsesOAuth,
+  isCodexResponsesOAuthCredential,
+  materializeCodexResponsesOAuthProfile,
+} from "./responses-oauth.js";
 
 type CodexAppServerPreparedAuthBinding = {
   authProfileStore: AuthProfileStore;
@@ -40,6 +45,19 @@ export async function prepareCodexAppServerAuthBinding(
     return undefined;
   }
   if (credential.type === "oauth") {
+    if (isCodexResponsesOAuthCredential(credential)) {
+      const store = structuredClone(params.authProfileStore);
+      const materialized = await materializeCodexResponsesOAuthProfile({
+        profileId: params.authProfileId,
+        store,
+        agentDir: params.agentDir,
+        config: params.config,
+      });
+      return {
+        fingerprint: fingerprintCodexResponsesOAuth(materialized),
+        authProfileStore: store,
+      };
+    }
     // The ChatGPT workspace can change under the same profile/email. Rotating
     // tokens for that same workspace must not invalidate a live process binding.
     const fingerprint = fingerprintResolvedAuthProfileCredential({

@@ -283,6 +283,20 @@
     },
     {
       "provider": "openai",
+      "method": "token-sharing",
+      "personalAccount": true,
+      "choiceId": "openai-token-sharing",
+      "appGuidedAuth": "oauth",
+      "credentialOnly": true,
+      "choiceLabel": "Sign in with ChatGPT — Token Sharing",
+      "choiceHint": "Use your ChatGPT allowance through the Responses API",
+      "assistantPriority": 0,
+      "groupId": "openai",
+      "groupLabel": "OpenAI",
+      "groupHint": "ChatGPT/Codex sign-in or API key"
+    },
+    {
+      "provider": "openai",
       "method": "api-key",
       "personalAccount": true,
       "choiceId": "openai-api-key",

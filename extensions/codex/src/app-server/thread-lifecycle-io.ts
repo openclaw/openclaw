@@ -181,14 +181,8 @@ export async function resumeExistingCodexThread(
             params.client,
             params.inferenceRoute,
             resumeParams.config,
+            resumeParams.modelProvider,
           );
-          if (
-            params.inferenceRoute &&
-            resumeParams.modelProvider != null &&
-            resumeParams.modelProvider !== "openai"
-          ) {
-            throw new Error("Codex inference route requires the native OpenAI provider");
-          }
         },
       }),
     );
@@ -504,14 +498,12 @@ export async function startFreshCodexThread(
   };
   const assertInferenceCurrent = () => {
     assertCurrent();
-    assertCodexInferenceRouteConfig(params.client, params.inferenceRoute, startParams.config);
-    if (
-      params.inferenceRoute &&
-      startParams.modelProvider != null &&
-      startParams.modelProvider !== "openai"
-    ) {
-      throw new Error("Codex inference route requires the native OpenAI provider");
-    }
+    assertCodexInferenceRouteConfig(
+      params.client,
+      params.inferenceRoute,
+      startParams.config,
+      startParams.modelProvider,
+    );
   };
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {

@@ -452,6 +452,10 @@ export async function prepareEmbeddedAttemptTransport(input: {
     ...attempt.streamParams,
     fastMode: attempt.fastMode,
   };
+  const selectedAuth = attempt.runtimePlan?.auth;
+  const auth = selectedAuth?.selectedAuthMode
+    ? { mode: selectedAuth.selectedAuthMode, authFlow: selectedAuth.selectedAuthFlow }
+    : undefined;
   const preparedRuntimeExtraParams = attempt.runtimePlan?.transport.resolveExtraParams({
     extraParamsOverride: streamExtraParamsOverride,
     thinkingLevel: input.providerThinkingLevel,
@@ -474,12 +478,14 @@ export async function prepareEmbeddedAttemptTransport(input: {
       workspaceDir: input.workspaceDir,
       model: attempt.model,
       resolvedTransport,
+      auth,
     });
   const providerStreamFn = registerProviderStreamForModel({
     model: attempt.model,
     cfg: attempt.config,
     agentDir: input.agentDir,
     workspaceDir: input.workspaceDir,
+    auth,
   });
   const directProviderStreamFn = providerStreamFn
     ? wrapStreamFnWithMessageTransform(
@@ -576,6 +582,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     resolvedTransport,
     {
       preparedExtraParams: effectiveExtraParams,
+      auth,
       nativeWebSearchPolicyContext,
     },
   );

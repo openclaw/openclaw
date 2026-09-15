@@ -37,7 +37,7 @@ describe("OpenAI setup auth provider", () => {
     const apiKey = provider.auth.find((method) => method.id === "api-key");
 
     expect(provider.id).toBe("openai");
-    expect(authMethodIds(provider)).toEqual(["oauth", "device-code", "api-key"]);
+    expect(authMethodIds(provider)).toEqual(["oauth", "device-code", "token-sharing", "api-key"]);
     expect(oauth?.label).toBe("ChatGPT Login");
     expect(oauth?.wizard?.choiceId).toBe("openai");
     expect(apiKey?.label).toBe("OpenAI API Key");

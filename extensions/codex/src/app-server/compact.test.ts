@@ -19,6 +19,7 @@ import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionI
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexServerNotification } from "./protocol.js";
+import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { resolveCodexSessionBinding, sessionBindingIdentity } from "./session-binding.js";
 import {
@@ -357,6 +358,19 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(details.signal).toBe("thread/compact/start");
     expect(details.pending).toBe(false);
     expect(details.completed).toBe(true);
+  });
+
+  it("explains manual subscription-sharing compaction without starting native inference", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding({ modelProvider: CODEX_RESPONSES_OAUTH_PROVIDER });
+
+    await expect(startCompaction(sessionFile)).resolves.toMatchObject({
+      ok: false,
+      compacted: false,
+      reason: expect.stringContaining("Automatic compaction runs during normal turns"),
+    });
+    expect(fake.request).not.toHaveBeenCalled();
   });
 
   it("does not compact a thread created with restricted native authority", async () => {
