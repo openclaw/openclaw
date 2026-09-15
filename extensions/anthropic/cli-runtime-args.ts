@@ -1,4 +1,6 @@
 import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePreferredOpenClawTmpDir, tempWorkspaceSync } from "openclaw/plugin-sdk/temp-path";
 
 const PROTOCOL_FLAGS = new Set([
   "-p",
@@ -23,14 +25,119 @@ const PROTOCOL_VALUE_FLAGS = new Set([
   "--system-prompt",
 ]);
 const TOOL_FLAGS = new Set(["--tools", "--allowedTools", "--allowed-tools"]);
+const CLAUDE_SETTINGS_ARG = "--settings";
+// Windows caps a spawned command line near 32,767 characters; a large
+// tool-availability allow list overflows that budget inline and surfaces as
+// spawn ENAMETOOLONG. Past this size, carry the allow list in a temporary
+// Claude settings file instead: permissions.allow is the native settings
+// equivalent of --allowedTools, and the file path keeps argv short on every
+// platform.
+const ALLOWED_TOOLS_INLINE_CHAR_BUDGET = 8 * 1024;
+
+type PreparedClaudeCliTransportArgs = {
+  args: string[];
+  excludeDynamicSections: boolean;
+  /** Releases the temporary settings file once the transport process closes. */
+  cleanup?: () => void;
+};
+
+function parseInlineClaudeSettings(raw: string | undefined): Record<string, unknown> | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Move an oversized allow list off argv into a temporary settings file. */
+function relocateApprovedToolsToSettingsFile(
+  args: string[],
+  approvedTools: string[],
+): { cleanup: () => void } {
+  // Claude Code honors a single --settings value, so merge into the inline
+  // settings the restricted execution projection already passed instead of
+  // appending a second flag that would shadow them.
+  let settingsIndex = -1;
+  let settingsConsumesValue = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]!;
+    if (arg === CLAUDE_SETTINGS_ARG && typeof args[index + 1] === "string") {
+      settingsIndex = index;
+      settingsConsumesValue = true;
+      break;
+    }
+    if (arg.startsWith(CLAUDE_SETTINGS_ARG + "=")) {
+      settingsIndex = index;
+      break;
+    }
+  }
+  let baseSettings: Record<string, unknown> = {};
+  let splicedSettings: string[] = [];
+  if (settingsIndex >= 0) {
+    const raw = settingsConsumesValue
+      ? args[settingsIndex + 1]
+      : args[settingsIndex]!.slice(CLAUDE_SETTINGS_ARG.length + 1);
+    const parsed = parseInlineClaudeSettings(raw);
+    if (parsed === undefined) {
+      // A --settings file path or unrecognized value stays authoritative;
+      // keep the historical inline allow list for that configuration.
+      args.push("--allowedTools", approvedTools.join(","));
+      return { cleanup: () => {} };
+    }
+    baseSettings = parsed;
+    splicedSettings = args.splice(settingsIndex, settingsConsumesValue ? 2 : 1);
+  }
+  let settingsPath: string;
+  let cleanup: () => void;
+  try {
+    const workspace = tempWorkspaceSync({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-claude-cli-settings-",
+    });
+    const basePermissions = isRecord(baseSettings.permissions) ? baseSettings.permissions : {};
+    settingsPath = workspace.writeJson("settings.json", {
+      ...baseSettings,
+      permissions: { ...basePermissions, allow: approvedTools },
+    });
+    let cleaned = false;
+    cleanup = () => {
+      if (cleaned) {
+        return;
+      }
+      cleaned = true;
+      try {
+        workspace.cleanup();
+      } catch {
+        // Temp cleanup is best effort; the OS sweeps the temp root eventually.
+      }
+    };
+  } catch {
+    // If the temp file cannot be written, restore the historical inline argv
+    // rather than failing the run in a new way.
+    if (splicedSettings.length > 0) {
+      args.splice(settingsIndex, 0, ...splicedSettings);
+    }
+    args.push("--allowedTools", approvedTools.join(","));
+    return { cleanup: () => {} };
+  }
+  args.push(CLAUDE_SETTINGS_ARG, settingsPath);
+  return { cleanup };
+}
 
 /** Keep prepared CLI arguments, replacing only transport and admission-owned policy. */
-export function prepareClaudeCliTransportArgs(context: CliBackendExecuteContext) {
+export function prepareClaudeCliTransportArgs(
+  context: CliBackendExecuteContext,
+): PreparedClaudeCliTransportArgs {
   const args: string[] = [];
   const allowedTools: string[] = [];
   let tools: string[] | undefined;
   let settingSources = "user";
   let excludeDynamicSections = false;
+  let cleanup: (() => void) | undefined;
   for (let index = 0; index < context.args.length; index += 1) {
     const raw = context.args[index]!;
     const equals = raw.indexOf("=");
@@ -107,10 +214,17 @@ export function prepareClaudeCliTransportArgs(context: CliBackendExecuteContext)
     args.push("--tools", tools.join(","));
   }
   if (approvedTools.length) {
-    args.push("--allowedTools", approvedTools.join(","));
+    const inlineAllowedTools = approvedTools.join(",");
+    if (inlineAllowedTools.length <= ALLOWED_TOOLS_INLINE_CHAR_BUDGET) {
+      args.push("--allowedTools", inlineAllowedTools);
+    } else {
+      cleanup = relocateApprovedToolsToSettingsFile(args, approvedTools).cleanup;
+    }
   }
   if (context.sessionId) {
     args.push(context.useResume ? "--resume" : "--session-id", context.sessionId);
   }
-  return { args, excludeDynamicSections };
+  return cleanup === undefined
+    ? { args, excludeDynamicSections }
+    : { args, excludeDynamicSections, cleanup };
 }
