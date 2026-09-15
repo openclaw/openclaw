@@ -52,7 +52,15 @@ it.each([
   { failure: "identity_terminal_refusal", recover: false },
 ])(
   "handles Responses $failure after settled tools (status: $responseStatus, recovery: $recover, repeated: $repeatFailure, output: $beforeConflict)",
-  async ({ failure, recover, retryEnabled, responseStatus, repeatFailure, beforeConflict, unprovenRequest }) => {
+  async ({
+    failure,
+    recover,
+    retryEnabled,
+    responseStatus,
+    repeatFailure,
+    beforeConflict,
+    unprovenRequest,
+  }) => {
     const identityFailure = failure.startsWith("identity_");
     const filteredConflict = failure === "identity_content_filter";
     const earlyConflict =
