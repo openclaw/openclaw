@@ -72,7 +72,9 @@ export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
   if (boundary) {
     yield { entry: boundary, context: "current" };
   }
-  for (const [index, entry] of pathEntries.entries()) {
+  let index = -1;
+  for (const entry of pathEntries) {
+    index += 1;
     const retained = index < boundaryIndex;
     if (
       index === boundaryIndex ||
