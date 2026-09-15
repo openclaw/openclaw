@@ -1,6 +1,7 @@
 /**
  * Gateway config reload handler tests.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -87,6 +88,7 @@ import {
   getActiveSecretsRuntimeSnapshotRevision,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { isRecord } from "../utils.js";
@@ -3112,6 +3114,79 @@ describe("gateway hot reload model state", () => {
     await applyHotReload(buildGatewayReloadPlan(changedPaths), nextConfig);
 
     expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
+  });
+});
+
+describe("managed gateway reload context", () => {
+  it("starts channel replacements outside the config writer's async context", async () => {
+    // Real timers retain the writer's async context; advancing fake timers
+    // outside it would hide the context leak this regression checks.
+    const initialConfig: OpenClawConfig = {
+      channels: { telegram: { accounts: { default: { name: "Before" } } } },
+    };
+    const nextConfig: OpenClawConfig = {
+      channels: { telegram: { accounts: { default: { name: "After" } } } },
+    };
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "telegram" }),
+      reload: { configPrefixes: ["channels.telegram"] },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", plugin, source: "test" }]));
+    const writerContext = new AsyncLocalStorage<string>();
+    const writerWork = new AsyncWorkScope();
+    const writeListenerRef = createConfigWriteListenerRef();
+    const channelContexts: Array<[string | undefined, AbortSignal | undefined]> = [];
+    const logReloadError = vi.fn<(message: string) => void>();
+    const startChannel = vi.fn(async () => {
+      channelContexts.push([writerContext.getStore(), getAsyncWorkSignal()]);
+      return new Map();
+    });
+    const startupWork = new AsyncWorkScope();
+    const reloader = startupWork.run(() =>
+      startManagedGatewayConfigReloader({
+        initialConfig,
+        readSnapshot: async () => createValidConfigSnapshot(nextConfig, "profile-change"),
+        subscribeToWrites: captureConfigWriteListener(writeListenerRef),
+        startChannel,
+        logReload: { info: vi.fn(), warn: vi.fn(), error: logReloadError },
+      }),
+    );
+    await reloader.ready;
+    await startupWork.drain();
+    const application = createRuntimeConfigWriteApplication();
+    const listener = writeListenerRef.current;
+    if (!listener) {
+      throw new Error("Expected managed config write listener");
+    }
+    try {
+      writerContext.run("channel-turn", () =>
+        writerWork.run(() => {
+          listener(
+            attachRuntimeConfigWriteApplication(
+              createConfigWriteNotification(
+                nextConfig,
+                "profile-change",
+                1,
+                "runtime-profile-change",
+                "source-profile-change",
+              ),
+              application,
+            ),
+          );
+        }),
+      );
+      await writerWork.drain();
+
+      const status = await application.result;
+      expect(status, logReloadError.mock.calls.flat().join("\n")).toBe("applied");
+      expect(startChannel).toHaveBeenCalled();
+      for (const [context, signal] of channelContexts) {
+        expect(context).toBeUndefined();
+        expect(signal).toBeUndefined();
+      }
+    } finally {
+      await reloader.stop();
+    }
   });
 });
 
