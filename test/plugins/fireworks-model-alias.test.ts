@@ -150,3 +150,57 @@ describe("Fireworks manifest provider alias", () => {
     },
   );
 });
+
+describe("Kilocode manifest provider alias", () => {
+  const modelId = "kilo-auto/balanced";
+
+  beforeEach(() => {
+    const rootDir = path.dirname(
+      resolveBundledPluginPublicModulePath({
+        pluginId: "kilocode",
+        artifactBasename: "openclaw.plugin.json",
+      }),
+    );
+    const loaded = loadPluginManifest(rootDir);
+    if (!loaded.ok) {
+      throw new Error(loaded.error);
+    }
+    const snapshot = createPluginMetadataSnapshotFixture({
+      plugins: [{ ...loaded.manifest, origin: "bundled", rootDir }],
+    });
+    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
+    manifestMocks.loadPluginManifestRegistryCore.mockReturnValue(snapshot.manifestRegistry);
+  });
+
+  it("owns kilo before runtime load and resolves the canonical catalog model", () => {
+    expect(resolveOwningPluginIdsForProviderRef({ provider: "kilo" })).toEqual(["kilocode"]);
+    const catalogModel = resolveBundledStaticCatalogModel({
+      provider: "kilocode",
+      modelId,
+      includeRuntimeDiscovery: true,
+    });
+    expect(catalogModel).toMatchObject({
+      provider: "kilocode",
+      id: modelId,
+      api: "openai-completions",
+      baseUrl: "https://api.kilo.ai/api/gateway/",
+    });
+    const resolve = (provider: string) =>
+      resolveModelWithRegistry({
+        provider,
+        modelId,
+        modelRegistry: {
+          getAll: () => [catalogModel!],
+          getAvailable: () => [],
+          hasConfiguredAuth: () => false,
+          find: (candidateProvider, candidateId) =>
+            candidateProvider === catalogModel!.provider && candidateId === catalogModel!.id
+              ? catalogModel
+              : undefined,
+        },
+        runtimeHooks: resolveRuntimeHooks({ skipProviderRuntimeHooks: true }),
+        authProfileMode: "api_key",
+      });
+    expect(resolve("kilo")).toEqual(resolve("kilocode"));
+  });
+});
