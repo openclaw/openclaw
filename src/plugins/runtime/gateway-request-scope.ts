@@ -172,10 +172,8 @@ export function hasGatewayContextOwner(
   gatewayOwner: GatewayContextResolver,
 ): boolean {
   const resolver = gatewayContextResolvers.get(owner);
-  // A lifetime wrapper records one canonical host owner; it remains the execution binding.
-  return (
-    resolver !== undefined && (gatewayContextResolvers.get(resolver) ?? resolver) === gatewayOwner
-  );
+  // Channel and plugin lifetime wrappers share a root owner but retain their execution fences.
+  return resolver !== undefined && getCanonicalGatewayContextResolver(resolver) === gatewayOwner;
 }
 
 export const clearGatewayContextResolver = (owner: object) => gatewayContextResolvers.delete(owner);
