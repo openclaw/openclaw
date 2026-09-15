@@ -14,6 +14,7 @@ export function resolveSubagentThinkingOverride(params: {
   targetAgentConfig?: unknown;
   thinkingOverrideRaw?: string;
   callerThinkingRaw?: string;
+  includeConfiguredSubagentThinking?: boolean;
 }) {
   const requesterSubagents = asOptionalObjectRecord(
     asOptionalObjectRecord(params.requesterAgentConfig)?.subagents,
@@ -27,7 +28,9 @@ export function resolveSubagentThinkingOverride(params: {
     normalizeOptionalString(targetSubagents?.thinking) ??
     normalizeOptionalString(defaultSubagents?.thinking);
 
-  const overrideCandidateRaw = params.thinkingOverrideRaw || resolvedThinkingDefaultRaw;
+  const configuredThinkingDefaultRaw =
+    params.includeConfiguredSubagentThinking === false ? undefined : resolvedThinkingDefaultRaw;
+  const overrideCandidateRaw = params.thinkingOverrideRaw || configuredThinkingDefaultRaw;
   if (overrideCandidateRaw) {
     const normalizedThinking = normalizeThinkLevel(overrideCandidateRaw);
     if (!normalizedThinking) {
