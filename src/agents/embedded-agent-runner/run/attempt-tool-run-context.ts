@@ -52,12 +52,8 @@ export function buildEmbeddedAttemptToolRunContext(
     memoryFlushWritePath?: string;
     toolsAllow?: string[];
     forceMessageTool?: boolean;
-    /**
-     * Host-required result tools that must remain available despite a narrowed turn allowlist.
-     * Omitting this preserves existing behavior; listed names still pass through ordinary tool
-     * construction and downstream authorization policy.
-     */
-    forceToolNames?: readonly string[];
+    /** Keep the host-required heartbeat result tool available despite a narrowed turn allowlist. */
+    forceHeartbeatTool?: boolean;
     swarmCollector?: boolean;
     swarmOutputSchema?: Record<string, unknown>;
     conversationToolPolicy?: GroupToolPolicyConfig;
@@ -71,7 +67,7 @@ export function buildEmbeddedAttemptToolRunContext(
   const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
     forceMessageTool: params.forceMessageTool,
     forceToolNames: [
-      ...(params.forceToolNames ?? []),
+      ...(params.forceHeartbeatTool ? ["heartbeat_respond"] : []),
       ...(params.swarmCollector && params.swarmOutputSchema ? ["structured_output"] : []),
     ],
   });

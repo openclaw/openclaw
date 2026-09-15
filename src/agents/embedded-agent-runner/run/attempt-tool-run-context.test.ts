@@ -50,7 +50,7 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
   it("keeps host-required tools in a narrowed runtime allowlist", () => {
     const context = buildEmbeddedAttemptToolRunContext({
       toolsAllow: ["read"],
-      forceToolNames: ["heartbeat_respond"],
+      forceHeartbeatTool: true,
     });
 
     expect(context.runtimeToolAllowlist).toEqual(["read", "heartbeat_respond"]);
@@ -60,7 +60,7 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
     const context = buildEmbeddedAttemptToolRunContext({
       toolsAllow: ["read"],
       forceMessageTool: true,
-      forceToolNames: ["heartbeat_respond"],
+      forceHeartbeatTool: true,
       swarmCollector: true,
       swarmOutputSchema: { type: "object" },
     });

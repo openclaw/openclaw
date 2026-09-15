@@ -233,7 +233,7 @@ export async function buildDynamicTools(
   const toolRunContext = buildEmbeddedAttemptToolRunContext({
     ...params,
     forceMessageTool: shouldForceMessageTool(messagePolicyParams),
-    forceToolNames: heartbeatToolEnabled ? ["heartbeat_respond"] : undefined,
+    forceHeartbeatTool: heartbeatToolEnabled,
   });
   if (params.disableTools) {
     input.onWebSearchPolicyResolved?.(false);
