@@ -533,6 +533,32 @@ it("accounts a completed compaction before an empty heartbeat skips reply prepar
   expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
 });
 
+it.each([
+  { heartbeat: false, touchesActivity: true },
+  { heartbeat: true, touchesActivity: false },
+] as const)(
+  "updates session activity only for ordinary completed replies (heartbeat=$heartbeat)",
+  async ({ heartbeat, touchesActivity }) => {
+    const fixture = await createFixture();
+    const previousActivityAt = 10;
+    await fixture.replace({
+      ...fixture.context.activeSessionEntry!,
+      lastReadAt: previousActivityAt,
+      lastActivityAt: previousActivityAt,
+    });
+    fixture.context.isHeartbeat = heartbeat;
+
+    await fixture.account("ordinary", {});
+
+    const entry = fixture.read();
+    if (touchesActivity) {
+      expect(entry?.lastActivityAt).toBeGreaterThan(previousActivityAt);
+    } else {
+      expect(entry?.lastActivityAt).toBe(previousActivityAt);
+    }
+  },
+);
+
 it.each(["NO_REPLY", "hook_block", "empty"] as const)(
   "finalizes a %s fallback without confusing deliberate silence with failure",
   async (completion) => {

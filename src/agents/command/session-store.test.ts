@@ -10,6 +10,7 @@ import {
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
+import { deriveSessionUnread } from "../../gateway/session-utils-core.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import { clearCliSessionInStore, persistCliSessionBindingResult } from "../cli-session-store.js";
@@ -1991,6 +1992,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
         touchInteraction: false,
         touchActivity: false,
+        preserveUserFacingSessionModelState: true,
       });
 
       expect(sessionStore[sessionKey]?.lastActivityAt).toBe(lastActivityAt);
@@ -2457,8 +2459,50 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(next?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("new-visible-cli-session");
       expect(next?.compactionCount).toBe(9);
       expect(next?.lastInteractionAt).toBeGreaterThan(20);
-      // Preserved-state runs must not re-flag the session unread.
-      expect(next?.lastActivityAt).toBe(21);
+      expect(next?.lastActivityAt).toBeGreaterThan(21);
+    });
+  });
+
+  it("marks a preserved-state completion as unread activity", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-preserved-completion-activity";
+      const sessionId = "test-preserved-completion-activity-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          lastReadAt: 10,
+        },
+      };
+      await seedSessionStore(storePath, sessionStore);
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        touchInteraction: false,
+        touchActivity: true,
+        preserveUserFacingSessionModelState: true,
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "openai",
+              model: "gpt-5.5",
+            },
+          },
+        },
+      });
+
+      const next = sessionStore[sessionKey];
+      expect(next?.lastActivityAt).toBeGreaterThan(10);
+      expect(deriveSessionUnread(next)).toBe(true);
     });
   });
 
