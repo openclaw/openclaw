@@ -155,18 +155,34 @@ suite.define(() => {
     const reply = {
       role: "assistant",
       content: "Success after the earlier failure.",
-      timestamp: firstStartedAt + 994_000,
+      // Creation precedes the long final request; lifecycle owns completion.
+      timestamp: firstStartedAt + 983_000,
       __openclaw: { id: "successful-reply", runId },
     };
     messages.push(reply);
     // The same canonical history must survive a full page reload, not just
     // the live terminal projection or its retained local timestamps.
+    const completedSession = {
+      key: sessionKey,
+      hasActiveRun: false,
+      activeRunIds: [],
+      status: "done",
+      lastRunId: runId,
+      startedAt: firstStartedAt + 981_000,
+      endedAt: firstStartedAt + 994_000,
+      runtimeMs: 13_000,
+      updatedAt: firstStartedAt + 994_000,
+    };
     await gateway.setMethodResponse("chat.history", {
       ...prepareChatHistoryFixture(messages),
       sessionId: `session:${sessionKey}`,
-      sessionInfo: { key: sessionKey, hasActiveRun: false, activeRunIds: [], status: "done" },
+      sessionInfo: completedSession,
     });
     await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "final", message: reply });
+    await gateway.emitGatewayEvent("sessions.changed", {
+      ...completedSession,
+      reason: "lifecycle",
+    });
     const replyBody = currentPage
       .locator(".chat-group.assistant")
       .getByText(reply.content, { exact: true });
