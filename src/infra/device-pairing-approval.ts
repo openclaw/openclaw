@@ -32,7 +32,6 @@ import type {
   PairedDevice,
   PairedDeviceApprovalKind,
 } from "./device-pairing.types.js";
-import { generatePairingToken } from "./pairing-token.js";
 
 const OPERATOR_ROLE = "operator";
 const OPERATOR_SCOPE_PREFIX = "operator.";
@@ -381,15 +380,14 @@ export async function approveDevicePairing(
       for (const [roleForToken, nextScopes] of nextTokenScopesByRole) {
         const existingToken = tokens[roleForToken];
         const tokenNow = Date.now();
-        tokens[roleForToken] = {
-          token: generatePairingToken(),
+        tokens[roleForToken] = createDeviceAuthToken({
           role: roleForToken,
           scopes: nextScopes,
-          createdAtMs: existingToken?.createdAtMs ?? tokenNow,
+          existing: existingToken,
+          preserveExistingIssuer: true,
+          now: tokenNow,
           rotatedAtMs: existingToken ? tokenNow : undefined,
-          revokedAtMs: undefined,
-          lastUsedAtMs: existingToken?.lastUsedAtMs,
-        };
+        });
       }
       const device = buildApprovedPairedDevice({
         pending,

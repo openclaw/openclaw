@@ -1695,6 +1695,53 @@ describe("device pairing tokens", () => {
     });
   });
 
+  test("preserves the shared-auth issuer through owner approval", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedBrowserOperatorDevice(baseDir);
+    const issued = await ensureDeviceToken({
+      deviceId: "browser-device-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      issuer: { kind: "shared-gateway-auth", generation: "original-generation" },
+      baseDir,
+    });
+    const request = await requestDevicePairing(
+      {
+        deviceId: "browser-device-1",
+        publicKey: "public-key-browser-1",
+        clientId: "openclaw-control-ui",
+        clientMode: "webchat",
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
+      },
+      baseDir,
+    );
+    await approveDevicePairing(
+      request.request.requestId,
+      { callerScopes: ["operator.admin"] },
+      baseDir,
+    );
+    const paired = await getPairedDevice("browser-device-1", baseDir);
+    const token = requireToken(paired?.tokens?.operator?.token);
+    expect(token).not.toBe(issued?.token);
+    for (const [candidateToken, generation, expected] of [
+      [token, "original-generation", { ok: true, issuer: issued?.issuer }],
+      [token, "rotated-generation", { ok: false, reason: "issuer-generation-stale" }],
+      [requireToken(issued?.token), "original-generation", { ok: false, reason: "token-mismatch" }],
+    ] as const) {
+      await expect(
+        verifyDeviceToken({
+          deviceId: "browser-device-1",
+          token: candidateToken,
+          role: "operator",
+          scopes: ["operator.read", "operator.write"],
+          requiredSharedGatewaySessionGeneration: generation,
+          baseDir,
+        }),
+      ).resolves.toEqual(expected);
+    }
+  });
+
   test("keeps ambiguous legacy device tokens valid across shared gateway auth rotation", async () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedOperatorDevice(baseDir, ["operator.read"]);
