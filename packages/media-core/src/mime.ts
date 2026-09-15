@@ -175,7 +175,10 @@ export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!cleaned) {
     return undefined;
   }
-  return MIME_SYNONYMS[cleaned] ?? cleaned;
+  // Own keys only: a remote Content-Type that names a prototype member (e.g.
+  // "__proto__", "constructor") must fold like any other unknown type instead of
+  // resolving to an inherited object/function and breaking downstream string ops.
+  return Object.hasOwn(MIME_SYNONYMS, cleaned) ? MIME_SYNONYMS[cleaned] : cleaned;
 }
 
 /** Returns the bounded buffer prefix used for dependency MIME sniffing. */
@@ -290,7 +293,9 @@ export function extensionForMime(mime?: string | null): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  return EXT_BY_MIME[normalized];
+  // Same own-keys rule as normalizeMimeType: EXT_BY_MIME["__proto__"] would
+  // otherwise hand callers an inherited object instead of an extension string.
+  return Object.hasOwn(EXT_BY_MIME, normalized) ? EXT_BY_MIME[normalized] : undefined;
 }
 
 /** Returns true when content type or filename identifies GIF media. */
