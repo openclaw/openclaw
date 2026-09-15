@@ -1,5 +1,11 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/harness/native-hook-relay-store.test.ts",
+  "src/agents/harness/native-hook-relay.approval-binding.test.ts",
+  "src/agents/harness/native-hook-relay.approval-wait.test.ts",
+  "src/agents/harness/native-hook-relay.lifecycle.test.ts",
+  "src/agents/harness/native-hook-relay.test.ts",
+  "src/gateway/server-methods/native-hook-relay.test.ts",
   "src/snapshot/git-backup.test.ts",
   "src/state/backup-run-records.test.ts",
   "src/claws/provenance-runtime-read.async.test.ts",

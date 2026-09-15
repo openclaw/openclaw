@@ -74,6 +74,10 @@ database, and joins the worker before using the result. The worker preserves
 schema admission without loading shared-state writer startup. The caller retains
 the existing retry and deadline rules.
 
+Bridge publication, renewal, lookup, and removal run in the shared-state worker.
+Publication and renewal recheck the current host registration inside their write
+transaction, and cleanup joins accepted work before closing the listener.
+
 A relay without a listening direct bridge can still renew its logical expiry;
 a listening bridge updates its stored locator before extending the visible
 expiry. Unregistering invalidates foreground access

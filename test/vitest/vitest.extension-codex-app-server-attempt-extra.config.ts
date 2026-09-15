@@ -43,6 +43,7 @@ export function createExtensionCodexAppServerAttemptExtraVitestConfig(
       env,
       // Prewarm is owned by the light attempt shard, including narrowed runs.
       exclude: ["extensions/codex/src/app-server/run-attempt-client-prewarm.test.ts"],
+      pool: "forks",
       fileParallelism: false,
       name: "extension-codex-app-server-attempt-extra",
       passWithNoTests: true,
