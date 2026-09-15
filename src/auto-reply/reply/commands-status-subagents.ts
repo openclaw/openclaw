@@ -1,5 +1,6 @@
 // Formats subagent status rows for the status command response.
 import type { buildControlledSubagentRunsReadContext } from "../../agents/subagents/registry/subagent-control-scope.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagents/registry/subagent-lifecycle-events.js";
 import {
   hasSubagentRunEnded,
   isRetainedUnendedSubagentRun,
@@ -19,7 +20,15 @@ export function buildSubagentsStatusLine(params: {
   }
   const now = params.now ?? Date.now();
   let active = 0;
-  let done = 0;
+  const endedCounts = {
+    done: 0,
+    failed: 0,
+    timedOut: 0,
+    cancelled: 0,
+    ended: 0,
+    deliveryPending: 0,
+    deliveryBlocked: 0,
+  };
   const detailLines: string[] = [];
   for (const entry of context.runs) {
     const pendingDescendants = context.countPendingDescendantRuns(entry.childSessionKey);
@@ -42,13 +51,61 @@ export function buildSubagentsStatusLine(params: {
           : "";
       detailLines.push(`  • ${label} · ${duration}${descendantText}`);
     } else if (hasSubagentRunEnded(entry) && pendingDescendants === 0) {
-      done += 1;
+      const outcomeStatus = entry.execution.outcome?.status;
+      if (
+        entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+        entry.suppressAnnounceReason !== "steer-restart"
+      ) {
+        endedCounts.cancelled += 1;
+      } else if (outcomeStatus === "ok") {
+        endedCounts.done += 1;
+      } else if (outcomeStatus === "timeout") {
+        endedCounts.timedOut += 1;
+      } else if (outcomeStatus === "error") {
+        endedCounts.failed += 1;
+      } else {
+        endedCounts.ended += 1;
+      }
+
+      const deliveryStatus = entry.delivery?.status;
+      if (deliveryStatus === "pending" || deliveryStatus === "in_progress") {
+        endedCounts.deliveryPending += 1;
+      } else if (deliveryStatus === "failed" || deliveryStatus === "suspended") {
+        endedCounts.deliveryBlocked += 1;
+      }
     }
   }
+  const endedParts = formatEndedCounts(endedCounts);
   if (active === 0) {
-    return verboseEnabled && done > 0 ? `🤖 Subagents: 0 active · ${done} done` : undefined;
+    return verboseEnabled && endedParts.length > 0
+      ? `🤖 Subagents: 0 active · ${endedParts.join(" · ")}`
+      : undefined;
   }
 
-  const summary = `🤖 Subagents: ${active} active${done > 0 ? ` · ${done} done` : ""}`;
+  const summary = `🤖 Subagents: ${active} active${endedParts.length > 0 ? ` · ${endedParts.join(" · ")}` : ""}`;
   return [summary, ...detailLines].join("\n");
+}
+
+function formatEndedCounts(counts: {
+  done: number;
+  failed: number;
+  timedOut: number;
+  cancelled: number;
+  ended: number;
+  deliveryPending: number;
+  deliveryBlocked: number;
+}): string[] {
+  return [
+    formatCount(counts.done, "done"),
+    formatCount(counts.failed, "failed"),
+    formatCount(counts.timedOut, "timed out"),
+    formatCount(counts.cancelled, "cancelled"),
+    formatCount(counts.ended, "ended"),
+    formatCount(counts.deliveryPending, "delivery pending"),
+    formatCount(counts.deliveryBlocked, "delivery blocked"),
+  ].filter((part): part is string => part !== undefined);
+}
+
+function formatCount(count: number, label: string): string | undefined {
+  return count > 0 ? `${count} ${label}` : undefined;
 }
