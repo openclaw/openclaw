@@ -125,7 +125,11 @@ async function prepareMediaGenerationTaskLookup(params: {
   agentId?: string;
   taskKind: string;
   sourcePrefix: string;
-}): Promise<{ tasks: TaskRecord[]; config: OpenClawConfig | undefined }> {
+}): Promise<{
+  tasks: TaskRecord[];
+  config: OpenClawConfig | undefined;
+  assertCurrent: () => void;
+}> {
   const context = captureOpenClawStateWorkerContext();
   const store = getTaskRegistryStore();
   const assertCurrent = () => assertTaskRegistryOwnerCurrent(context, store);
@@ -135,6 +139,7 @@ async function prepareMediaGenerationTaskLookup(params: {
   let tasks = await listFreshTasksForOwnerKey(context, params.sessionKey);
   const sourcePrefix = normalizeOptionalString(params.sourcePrefix);
   let config: OpenClawConfig | undefined;
+  let assertPreparedCurrent = assertCurrent;
   if (
     readConfig &&
     tasks.some(
@@ -147,18 +152,18 @@ async function prepareMediaGenerationTaskLookup(params: {
         !resolveMediaGenerationTaskRequesterAgentId(task),
     )
   ) {
+    assertPreparedCurrent = readConfig.assertCurrent;
     try {
       config = await readConfig();
     } catch {
       // Unreadable config keeps legacy requester ownership unresolved.
     }
-    readConfig.assertCurrent();
+    assertPreparedCurrent();
     // Config preparation may outlive a task's completion or deletion.
     tasks = await listFreshTasksForOwnerKey(context, params.sessionKey);
-    readConfig.assertCurrent();
   }
-  assertCurrent();
-  return { tasks, config };
+  assertPreparedCurrent();
+  return { tasks, config, assertCurrent: assertPreparedCurrent };
 }
 
 function isTaskStillBlockingDuplicateGuard(task: TaskRecord): boolean {
@@ -413,7 +418,11 @@ async function listActiveMediaGenerationTasksForSession(params: {
   if (!sessionKey) {
     return [];
   }
-  const { tasks, config } = await prepareMediaGenerationTaskLookup({ ...params, sessionKey });
+  const { tasks, config, assertCurrent } = await prepareMediaGenerationTaskLookup({
+    ...params,
+    sessionKey,
+  });
+  assertCurrent();
   return selectActiveMediaGenerationTasks(params, tasks, config);
 }
 
@@ -473,7 +482,11 @@ async function findDuplicateGuardMediaGenerationTaskForSession(params: {
   if (!sessionKey) {
     return undefined;
   }
-  const { tasks, config } = await prepareMediaGenerationTaskLookup({ ...params, sessionKey });
+  const { tasks, config, assertCurrent } = await prepareMediaGenerationTaskLookup({
+    ...params,
+    sessionKey,
+  });
+  assertCurrent();
   return (
     findRecentStartedMediaGenerationTaskForSession({ ...params, sessionKey, tasks, config }) ??
     selectActiveMediaGenerationTasks(params, tasks, config)[0]

@@ -52,8 +52,19 @@ function createTask(params: Partial<Parameters<typeof createTaskRecord>[0]>) {
   return task;
 }
 
-async function taskIds(params: Omit<Parameters<typeof listTaskRecordPage>[0], "offset" | "limit">) {
-  const result = await listTaskRecordPage({ ...params, offset: 0, limit: 100 });
+async function taskIds(
+  params: Omit<
+    Parameters<typeof listTaskRecordPage>[0],
+    "offset" | "limit" | "readContext" | "store"
+  >,
+) {
+  const result = await listTaskRecordPage({
+    ...params,
+    readContext: captureOpenClawStateWorkerContext(),
+    store: getTaskRegistryStore(),
+    offset: 0,
+    limit: 100,
+  });
   if (!result.ok) {
     throw new Error(result.error);
   }

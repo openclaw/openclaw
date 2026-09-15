@@ -200,6 +200,9 @@ describe("media generation delivery-phase prompt guard", () => {
     { ownerKey: "global", requesterAgentId: "ops" },
     { ownerKey: "agent:ops:main", requesterAgentId: undefined },
   ])("uses recorded requester identity without loading config for $ownerKey", async (identity) => {
+    configMocks.assertSourceCurrent.mockImplementation(() => {
+      throw new Error("unused config selector retired");
+    });
     const task = makeTask({ ...identity, agentId: "research" });
     taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReturnValue([
       makeTask({ taskId: "unrelated", taskKind: "image_generation" }),
@@ -210,6 +213,7 @@ describe("media generation delivery-phase prompt guard", () => {
       task,
     ]);
     expect(configMocks.readConfig).not.toHaveBeenCalled();
+    expect(configMocks.assertSourceCurrent).not.toHaveBeenCalled();
     expect(taskRuntimeInternalMocks.listFreshTasksForOwnerKey).toHaveBeenCalledOnce();
   });
 
@@ -369,6 +373,86 @@ describe("media generation delivery-phase prompt guard", () => {
 
     expect(await pending).toMatchObject({ taskId: "recent-start", status: "running" });
   });
+
+  it.each([
+    { lookup: "active", prepared: "tasks" },
+    { lookup: "duplicate", prepared: "tasks" },
+    { lookup: "active", prepared: "config" },
+    { lookup: "duplicate", prepared: "config" },
+  ] as const)(
+    "revalidates $lookup ownership when $prepared preparation settles before its caller resumes",
+    async ({ lookup, prepared }) => {
+      let settled = false;
+      let queued = false;
+      let retired = false;
+      let lateSelections = 0;
+      const retirement = new Error(`${prepared} owner retired after preparation`);
+      const task: TaskRecord = {
+        ...makeTask({
+          ownerKey: "global",
+          requesterAgentId: prepared === "tasks" ? "ops" : undefined,
+        }),
+        get taskKind() {
+          if (retired) {
+            lateSelections += 1;
+          }
+          return "video_generation";
+        },
+      };
+      const assertCurrent = () => {
+        if (retired) {
+          throw retirement;
+        }
+        if (settled && !queued) {
+          queued = true;
+          queueMicrotask(() => {
+            retired = true;
+          });
+        }
+      };
+      if (prepared === "tasks") {
+        taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation(() =>
+          Promise.resolve([task]).then((tasks) => {
+            settled = true;
+            return tasks;
+          }),
+        );
+        ownerMocks.assertTaskRegistryOwnerCurrent.mockImplementation(assertCurrent);
+      } else {
+        taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockResolvedValue([task]);
+        configMocks.readConfig.mockImplementation(() =>
+          Promise.resolve(fixedStoreConfig).then((config) => {
+            settled = true;
+            return config;
+          }),
+        );
+        configMocks.assertSourceCurrent.mockImplementation(assertCurrent);
+      }
+      if (lookup === "duplicate") {
+        recordRecentMediaGenerationTaskStartForSession({
+          sessionKey: "global",
+          agentId: "ops",
+          taskKind: "video_generation",
+          sourcePrefix: "video_generate",
+          taskId: task.taskId,
+          runId: task.runId,
+          taskLabel: task.task,
+          progressSummary: "Generating video",
+        });
+      }
+      const pending =
+        lookup === "active"
+          ? videoTaskStatusOwner.listActiveTasksForSession("global", "ops")
+          : videoTaskStatusOwner.findDuplicateGuardTaskForSession("global", { agentId: "ops" });
+
+      await expect(pending).rejects.toBe(retirement);
+      expect(lateSelections).toBe(0);
+      if (prepared === "tasks") {
+        expect(configMocks.readConfig).not.toHaveBeenCalled();
+        expect(configMocks.assertSourceCurrent).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("blocks the same prompt while allowing a distinct prompt", async () => {
     const task = makeTask({
