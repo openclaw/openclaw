@@ -25,6 +25,7 @@ import { appendSkillProposalEvent } from "../skills/workshop/store-sqlite-event.
 import { importLegacySkillProposal } from "../skills/workshop/store.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
+import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -506,6 +507,7 @@ describe("doctor lint state isolation", () => {
         } finally {
           stdout.mockRestore();
           closeAuthProfileReadPool({ kind: "root", rootPath: state.root });
+          closeOpenClawAgentDatabaseByPath(path.join(customDir, "openclaw-agent.sqlite"));
         }
       });
     },
@@ -789,8 +791,8 @@ describe("doctor lint state isolation", () => {
     });
     const databasePath = resolveOpenClawStateSqlitePath(process.env);
     closeOpenClawStateDatabaseByPath(databasePath);
-    const lock = new DatabaseSync(databasePath);
-    lock.exec("BEGIN IMMEDIATE");
+    const lock = process.platform === "win32" ? undefined : new DatabaseSync(databasePath);
+    lock?.exec("BEGIN IMMEDIATE");
     const before = snapshotDoctorLintSqliteFamily(databasePath);
     mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
       {
@@ -825,8 +827,8 @@ describe("doctor lint state isolation", () => {
       expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
     } finally {
       stdout.mockRestore();
-      lock.exec("ROLLBACK");
-      lock.close();
+      lock?.exec("ROLLBACK");
+      lock?.close();
       closeOpenClawStateDatabaseByPath(databasePath);
       fs.rmSync(rootDir, { recursive: true, force: true });
     }

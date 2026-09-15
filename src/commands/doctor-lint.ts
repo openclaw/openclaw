@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
+import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite.js";
 import { createConfigIO, readConfigFileSnapshot } from "../config/config.js";
 import { maybeLoadDotEnvForConfig } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
@@ -370,8 +371,10 @@ async function withReadOnlyPluginStateSnapshot<T>(
       outcome = { ok: false, error };
     }
     try {
-      // Inspectors can cache private writers. Retire only this snapshot's handle
-      // before restoring the ambient state or deleting files; failed retirement retains files.
+      // Inspectors can cache private readers and writers. Retire only this snapshot's
+      // handles before restoring the ambient state or deleting files; failed retirement
+      // retains files.
+      closeAuthProfileReadPool({ kind: "root", rootPath: privateStateDir });
       await closeOpenClawStateDatabaseByPathAsync(privateDatabasePath);
       if (!(await cleanup())) {
         throw new Error("Temporary doctor lint state snapshot cleanup did not complete.");
