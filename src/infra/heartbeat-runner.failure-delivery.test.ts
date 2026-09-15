@@ -54,6 +54,10 @@ describe("runHeartbeatOnce failure delivery", () => {
       channels: {
         telegram: { token: "test-token", allowFrom: ["*"], heartbeat: { showOk: false } },
       },
+      messages: {
+        visibleReplies: "automatic",
+        groupChat: { visibleReplies: "automatic" },
+      },
       session: { store: params.storePath },
     } as OpenClawConfig;
   }

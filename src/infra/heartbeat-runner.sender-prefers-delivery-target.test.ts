@@ -22,6 +22,10 @@ describe("runHeartbeatOnce", () => {
               },
             },
           },
+          messages: {
+            visibleReplies: "automatic",
+            groupChat: { visibleReplies: "automatic" },
+          },
           session: { store: storePath },
         };
 

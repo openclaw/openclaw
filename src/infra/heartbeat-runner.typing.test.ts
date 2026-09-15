@@ -55,6 +55,10 @@ function createHeartbeatConfig(params: {
           : {}),
       },
     },
+    messages: {
+      visibleReplies: "automatic",
+      groupChat: { visibleReplies: "automatic" },
+    },
     session: {
       store: params.storePath,
       ...params.session,

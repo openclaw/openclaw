@@ -34,6 +34,10 @@ describe("runHeartbeatOnce responsePrefix templates", () => {
           responsePrefix: params.responsePrefix,
         },
       } as never,
+      messages: {
+        visibleReplies: "automatic",
+        groupChat: { visibleReplies: "automatic" },
+      },
       session: { store: params.storePath },
     };
   }

@@ -205,6 +205,15 @@ async function prepareHeartbeatDispatchReply(
     prepared.replyPrefix.responsePrefix,
     prepared.replyPrefix.responsePrefixContextProvider(),
   );
+  // Heartbeat response-tool turns force message_tool_only in reply options;
+  // keep suppress + channel-batch gates on the same provenance so a failed or
+  // omitted message-tool send cannot fall open to ordinary assistant delivery.
+  const messageToolOnlyDelivery =
+    prepared.usesHeartbeatResponseTool ||
+    resolveSourceReplyDeliveryMode({
+      cfg,
+      ctx: { ChatType: delivery.chatType, Provider: delivery.channel },
+    }) === "message_tool_only";
   const outcome = classifyHeartbeatAgentOutcome({
     agentRun: {
       agentRunFailed: execution === "failed",
@@ -213,11 +222,7 @@ async function prepareHeartbeatDispatchReply(
       replyPayload: selected,
     },
     hasRelayableExecCompletion: prepared.hasRelayableExecCompletion,
-    suppressUnmarkedSourceReplies:
-      resolveSourceReplyDeliveryMode({
-        cfg,
-        ctx: { ChatType: delivery.chatType, Provider: delivery.channel },
-      }) === "message_tool_only",
+    suppressUnmarkedSourceReplies: messageToolOnlyDelivery,
     responsePrefix,
     ackMaxChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   });
@@ -419,11 +424,30 @@ async function prepareHeartbeatDispatchReply(
       return {};
     }
   }
-  if (!channel || !delivery.to || !visibility.showAlerts || (failed && outcome.shouldSkipMain)) {
+  // message_tool_only turns must not fall open to a channel DM for unmarked
+  // assistant text after a failed/omitted message-tool send. Structured
+  // notify:true, marked operator notices, and explicit isError notices remain
+  // deliverable through their intentional paths.
+  const selectedDeliveryMeta = selected ? getReplyPayloadMetadata(selected) : undefined;
+  const responseToolBlocksChannelDelivery =
+    messageToolOnlyDelivery &&
+    !(typeof response?.notify === "boolean" && response.notify) &&
+    selectedDeliveryMeta?.deliverDespiteSourceReplySuppression !== true &&
+    selected?.isError !== true;
+  if (
+    !channel ||
+    !delivery.to ||
+    !visibility.showAlerts ||
+    responseToolBlocksChannelDelivery ||
+    (failed && outcome.shouldSkipMain)
+  ) {
     if (!failed) {
-      await unconfirmed(
-        !channel || !delivery.to ? (delivery.reason ?? "no-target") : "alerts-disabled",
-      );
+      const skipReason = responseToolBlocksChannelDelivery
+        ? "message-tool-only"
+        : !channel || !delivery.to
+          ? (delivery.reason ?? "no-target")
+          : "alerts-disabled";
+      await unconfirmed(skipReason);
       if (!visibility.showAlerts) {
         await restoreActivity();
       }
@@ -435,7 +459,11 @@ async function prepareHeartbeatDispatchReply(
         : {
             ...event,
             status: "skipped",
-            reason: !channel || !delivery.to ? (delivery.reason ?? "no-target") : "alerts-disabled",
+            reason: responseToolBlocksChannelDelivery
+              ? "message-tool-only"
+              : !channel || !delivery.to
+                ? (delivery.reason ?? "no-target")
+                : "alerts-disabled",
             hasMedia: outcome.mediaUrls.length > 0,
             indicatorType:
               channel && delivery.to && !visibility.showAlerts && visibility.useIndicator

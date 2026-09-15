@@ -253,6 +253,12 @@ export function heartbeatTestConfig(
       },
     },
     channels: { [channel]: { allowFrom: ["*"] } },
+    // Channel-batch fixtures expect unmarked assistant text to deliver. Opt out of
+    // Codex/default message_tool_only suppress (see heartbeat-dispatch fail-closed).
+    messages: {
+      visibleReplies: "automatic",
+      groupChat: { visibleReplies: "automatic" },
+    },
     session: { store: storePath },
   };
 }

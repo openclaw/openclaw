@@ -69,6 +69,10 @@ describe("runHeartbeatOnce identity", () => {
             },
             entries: { main: { default: true }, historian2: {} },
           },
+          messages: {
+            visibleReplies: "automatic",
+            groupChat: { visibleReplies: "automatic" },
+          },
           session: { scope: "global", dmScope: "per-channel-peer", store: storeTemplate },
         };
         const mainStorePath = resolveSessionStorePathCore(storeTemplate, { agentId: "main" });
@@ -262,6 +266,10 @@ describe("runHeartbeatOnce identity", () => {
           entries: { main: { identity: { name: "Pulse", emoji: "📟" } } },
         },
         channels: { slack: { heartbeatVisibility: { showOk } } },
+        messages: {
+          visibleReplies: "automatic",
+          groupChat: { visibleReplies: "automatic" },
+        },
         session: { store: storePath },
       };
       await seedMainSessionStore(storePath, cfg, {

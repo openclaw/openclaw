@@ -122,6 +122,10 @@ it("keeps an identical successor queued when heartbeat consumes a stale snapshot
         },
       },
       channels: { telegram: { allowFrom: ["*"] } },
+      messages: {
+        visibleReplies: "automatic",
+        groupChat: { visibleReplies: "automatic" },
+      },
       session: { mainKey: "notify-ack", store: storePath },
     };
     const sessionKey = await seedMainSessionStore(storePath, cfg, {

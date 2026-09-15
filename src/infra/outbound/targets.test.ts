@@ -615,6 +615,130 @@ describe("resolveSessionDeliveryTarget", () => {
     });
   });
 
+  it.each([{ kind: "internal" as const }, { kind: "none" as const }])(
+    "keeps explicit target:owner authority for delivery.kind=$kind run contexts",
+    ({ kind }) => {
+      const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
+      alpha.config = { ...alpha.config, resolveAllowFrom: () => ["user:owner"] };
+      setActivePluginRegistry(createTargetsTestRegistry([alpha]));
+
+      const resolved = resolveHeartbeatDeliveryTarget({
+        cfg: {
+          commands: { ownerAllowFrom: ["user:owner"] },
+          channels: { alpha: { allowFrom: ["user:owner"] } },
+        } as OpenClawConfig,
+        entry: {
+          sessionId: `sess-delivery-${kind}`,
+          updatedAt: 1,
+          delivery: { kind },
+        },
+        heartbeat: { target: "owner" },
+      });
+
+      expect(resolved).toMatchObject({
+        channel: "alpha",
+        to: "user:owner",
+        chatType: "direct",
+      });
+    },
+  );
+
+  it("still allows explicit channel+to from an internal session", () => {
+    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
+    setActivePluginRegistry(createTargetsTestRegistry([alpha]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {
+        channels: { alpha: { allowFrom: ["user:ops"] } },
+      } as OpenClawConfig,
+      entry: {
+        sessionId: "sess-internal-explicit",
+        updatedAt: 1,
+        delivery: { kind: "internal" },
+      },
+      heartbeat: { target: "alpha", to: "user:ops" },
+    });
+
+    expect(resolved).toMatchObject({
+      channel: "alpha",
+      to: "user:ops",
+    });
+  });
+
+  it("fail-closes inferred owner discovery for internal completion provenance", () => {
+    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
+    alpha.config = { ...alpha.config, resolveAllowFrom: () => ["user:owner"] };
+    setActivePluginRegistry(createTargetsTestRegistry([alpha]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {
+        commands: { ownerAllowFrom: ["user:owner"] },
+        channels: { alpha: { allowFrom: ["user:owner"] } },
+      } as OpenClawConfig,
+      entry: {
+        sessionId: "sess-internal-completion",
+        updatedAt: 1,
+        delivery: { kind: "internal" },
+      },
+      // Implicit default target (unset) would invent owner; completion wakes without
+      // an event destination must not attach that inferred route.
+      disallowInferredOwnerFallback: true,
+    });
+
+    expect(resolved).toMatchObject({ channel: "none", reason: "no-route" });
+    expect(resolved.to).toBeUndefined();
+  });
+
+  it("keeps explicit target:owner under internal completion provenance", () => {
+    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
+    alpha.config = { ...alpha.config, resolveAllowFrom: () => ["user:owner"] };
+    setActivePluginRegistry(createTargetsTestRegistry([alpha]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {
+        commands: { ownerAllowFrom: ["user:owner"] },
+        channels: { alpha: { allowFrom: ["user:owner"] } },
+      } as OpenClawConfig,
+      entry: {
+        sessionId: "sess-internal-explicit-owner",
+        updatedAt: 1,
+        delivery: { kind: "internal" },
+      },
+      heartbeat: { target: "owner" },
+      disallowInferredOwnerFallback: true,
+    });
+
+    expect(resolved).toMatchObject({
+      channel: "alpha",
+      to: "user:owner",
+      chatType: "direct",
+    });
+  });
+
+  it("keeps explicit completion notification destinations as turnSource", () => {
+    const alpha = createGenericTargetTestPlugin("alpha", "Alpha");
+    setActivePluginRegistry(createTargetsTestRegistry([alpha]));
+
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {
+        channels: { alpha: { allowFrom: ["user:ops"] } },
+      } as OpenClawConfig,
+      entry: {
+        sessionId: "sess-completion-turnsource",
+        updatedAt: 1,
+        delivery: { kind: "internal" },
+      },
+      heartbeat: { target: "owner" },
+      turnSource: { channel: "alpha", to: "user:ops" },
+      disallowInferredOwnerFallback: true,
+    });
+
+    expect(resolved).toMatchObject({
+      channel: "alpha",
+      to: "user:ops",
+    });
+  });
+
   it("uses the first owner entry compatible with a configured channel", () => {
     const telegram = createOwnerAllowlistTargetTestPlugin({
       id: "telegram",

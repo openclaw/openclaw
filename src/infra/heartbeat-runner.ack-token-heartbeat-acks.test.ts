@@ -42,7 +42,11 @@ describe("runHeartbeatOnce ack handling", () => {
         },
       },
       channels: params.channels as never,
-      ...(params.messages ? { messages: params.messages as never } : {}),
+      messages: {
+        visibleReplies: "automatic",
+        groupChat: { visibleReplies: "automatic" },
+        ...(params.messages as object | undefined),
+      } as never,
       session: { store: params.storePath },
     };
   }

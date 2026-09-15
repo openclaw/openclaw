@@ -56,6 +56,10 @@ describe("Heartbeat event routing", () => {
       },
     },
     channels: { telegram: { allowFrom: ["*"] } },
+    messages: {
+      visibleReplies: "automatic",
+      groupChat: { visibleReplies: "automatic" },
+    },
     session: { store: params.storePath },
   });
 

@@ -129,6 +129,12 @@ async function runMainCronCase(
       },
     },
     channels: { telegram: { allowFrom: ["*"] } },
+    // Channel-batch delivery of unmarked reply text; opt out of Codex/default
+    // message_tool_only suppress (heartbeat-dispatch fail-closed).
+    messages: {
+      visibleReplies: "automatic",
+      groupChat: { visibleReplies: "automatic" },
+    },
     session: {
       store: sandbox.sessionStorePath,
       ...(options.mainSessionKey ? { mainKey: options.mainSessionKey } : {}),

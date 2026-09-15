@@ -90,6 +90,10 @@ function makeIsolatedLastTargetConfig(tmpDir: string, storePath: string): OpenCl
       },
     },
     channels: { whatsapp: { allowFrom: ["*"] } },
+    messages: {
+      visibleReplies: "automatic",
+      groupChat: { visibleReplies: "automatic" },
+    },
     session: { store: storePath },
   };
 }

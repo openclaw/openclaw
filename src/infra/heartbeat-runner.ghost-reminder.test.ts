@@ -75,6 +75,10 @@ describe("Ghost reminder bug (issue #13317)", () => {
         },
       },
       channels: { telegram: { allowFrom: ["*"] } },
+      messages: {
+        visibleReplies: "automatic",
+        groupChat: { visibleReplies: "automatic" },
+      },
       session: { store: params.storePath },
     };
     const sessionKey = await seedMainSessionStore(params.storePath, cfg, {

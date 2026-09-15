@@ -28,6 +28,8 @@ import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { isInternalMessageChannel } from "../utils/message-channel.js";
 import { getAgentEventLifecycleGeneration } from "./agent-events.js";
 import { formatErrorMessage } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
@@ -65,6 +67,7 @@ import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+import type { SystemEvent } from "./system-events.js";
 
 const CRON_COMMAND_LANE: string = CommandLane.Cron;
 
@@ -326,6 +329,64 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
 type StageResult<T, K extends string> = Extract<Awaited<T>, { kind: K }>;
 export type ReadyHeartbeatWake = StageResult<ReturnType<typeof resolveHeartbeatWakeStage>, "ready">;
 
+/**
+ * Fail-closed inferred-owner discovery only for wakes whose provenance clearly
+ * shows an **internal, routeless** completion: Control UI / webchat session
+ * (`delivery.kind` internal|none), and/or an internal-channel turnSource that
+ * was stripped, with pending events that carry no external delivery authority.
+ *
+ * Prefer fail-open when ambiguous so legitimate default-owner completion alerts
+ * (e.g. pending cron/exec on an external last-route session) still resolve.
+ * Do **not** key solely on `pendingEventEntries.length > 0`. Maintainer feedback
+ * welcome on this boundary.
+ */
+function isInternalRoutelessEventWake(params: {
+  pendingEventEntries: readonly SystemEvent[];
+  /** Turn source after stripping internal channels. */
+  turnSource: DeliveryContext | undefined;
+  /** Raw turn source before stripping (may be webchat / Control UI ambient). */
+  rawTurnSource: DeliveryContext | undefined;
+  conversationDeliveryKind?: "none" | "internal" | "external";
+}): boolean {
+  if (params.pendingEventEntries.length === 0) {
+    return false;
+  }
+  // Explicit external event destination retains delivery authority.
+  if (params.turnSource?.channel && params.turnSource.to?.trim()) {
+    return false;
+  }
+
+  const kind = params.conversationDeliveryKind;
+  const sessionIsInternal = kind === "internal" || kind === "none";
+  const rawWasInternalChannel = Boolean(
+    params.rawTurnSource?.channel && isInternalMessageChannel(params.rawTurnSource.channel),
+  );
+
+  // Pending events lack external-delivery authority when every entry is missing
+  // a deliverable external context (none / internal channel / external without to).
+  const eventsLackExternalDeliveryAuthority = params.pendingEventEntries.every((event) => {
+    const ctx = event.deliveryContext;
+    if (!ctx?.channel) {
+      return true;
+    }
+    if (isInternalMessageChannel(ctx.channel)) {
+      return true;
+    }
+    return !ctx.to?.trim();
+  });
+  if (!eventsLackExternalDeliveryAuthority) {
+    return false;
+  }
+
+  // Ambiguous: pending state on a non-internal session without stripped internal
+  // turnSource — fail open (preserve default-owner discovery).
+  if (!sessionIsInternal && !rawWasInternalChannel) {
+    return false;
+  }
+
+  return true;
+}
+
 export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   const { cfg, agentId, heartbeat, preflight } = wake;
   const { scheduledTasks, startedAt } = wake;
@@ -338,6 +399,22 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   // a new session ID (empty transcript) each run, avoiding the cost of
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing uses the selected conversation, not the fresh execution row.
+  const rawTurnSource = preflight.session.inspectsRunQueue
+    ? preflight.turnSourceDeliveryContext
+    : undefined;
+  // Ignore Control UI / webchat ambient stamped onto completion events.
+  const turnSource =
+    rawTurnSource?.channel && isInternalMessageChannel(rawTurnSource.channel)
+      ? undefined
+      : rawTurnSource;
+  // Narrow provenance: only internal/routeless completions suppress inferred
+  // owner discovery — not every pending event without turnSource.
+  const disallowInferredOwnerFallback = isInternalRoutelessEventWake({
+    pendingEventEntries: preflight.pendingEventEntries,
+    turnSource,
+    rawTurnSource,
+    conversationDeliveryKind: conversationEntry?.delivery?.kind,
+  });
   const delivery = await resolveHeartbeatDeliveryTargetWithSessionRoute({
     cfg,
     agentId,
@@ -346,9 +423,8 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     currentSessionKey: sessionKey,
     // A base queue's route stays excluded; events on the actual isolated queue
     // own their route, including exec completion after the base route moves.
-    turnSource: preflight.session.inspectsRunQueue
-      ? preflight.turnSourceDeliveryContext
-      : undefined,
+    turnSource,
+    disallowInferredOwnerFallback,
   });
   // Routeless ambient polls are pure model burn, but only they may skip:
   // triggered wakes (hook/manual/cron/exec), polls with queued events, and
@@ -519,9 +595,18 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       });
     }
   }
+  // Keep heartbeat.target authority for channel-batch / structured notify, but
+  // do not attach inferred OriginatingChannel into an internal Control UI run
+  // context (message-tool "current" + ambient completion stamping).
+  const deliveryKind = conversationEntry?.delivery?.kind;
+  const suppressOriginatingContext =
+    preflight.session.suppressOriginatingContext ||
+    deliveryKind === "internal" ||
+    deliveryKind === "none";
   return {
     kind: "ready",
     ...preflight.session,
+    suppressOriginatingContext,
     previousUpdatedAt,
     policySessionEntry:
       outboundPolicySessionKey && (outboundPolicySessionKey !== sessionKey || !entry)

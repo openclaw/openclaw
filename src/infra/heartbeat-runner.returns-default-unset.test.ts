@@ -878,6 +878,10 @@ describe("runHeartbeatOnce", () => {
         list: [{ id: "main" }],
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: {
+        visibleReplies: "automatic",
+        groupChat: { visibleReplies: "automatic" },
+      },
       session: { store: storePath },
     };
     const sessionKey = resolveMainSessionKey(cfg);
@@ -1048,6 +1052,10 @@ describe("runHeartbeatOnce", () => {
         },
       },
       channels: { whatsapp: { allowFrom: ["+15555550166"] } },
+      messages: {
+        visibleReplies: "automatic",
+        groupChat: { visibleReplies: "automatic" },
+      },
       session: { store: storePath },
     };
     const sessionKey = resolveMainSessionKey(cfg);
@@ -1111,6 +1119,10 @@ describe("runHeartbeatOnce", () => {
         },
         commands: { ownerAllowFrom: ["+15555550166"] },
         channels: { whatsapp: { allowFrom: ["+15555550166"] } },
+        messages: {
+          visibleReplies: "automatic",
+          groupChat: { visibleReplies: "automatic" },
+        },
         session: { store: storePath },
       };
       const sessionKey = resolveMainSessionKey(cfg);
@@ -1144,6 +1156,10 @@ describe("runHeartbeatOnce", () => {
       },
       commands: { ownerAllowFrom: ["+15555550166"] },
       channels: { whatsapp: { allowFrom: ["+15555550166"] } },
+      messages: {
+        visibleReplies: "automatic",
+        groupChat: { visibleReplies: "automatic" },
+      },
       session: { store: storePath },
     };
     const sessionKey = resolveMainSessionKey(cfg);
@@ -1215,6 +1231,10 @@ describe("runHeartbeatOnce", () => {
           ],
         },
         channels: { whatsapp: { allowFrom: ["*"] } },
+        messages: {
+          visibleReplies: "automatic",
+          groupChat: { visibleReplies: "automatic" },
+        },
         session: { store: storePath },
       };
       const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "ops" });
@@ -1275,6 +1295,10 @@ describe("runHeartbeatOnce", () => {
           ],
         },
         channels: { whatsapp: { allowFrom: ["*"] } },
+        messages: {
+          visibleReplies: "automatic",
+          groupChat: { visibleReplies: "automatic" },
+        },
         session: { store: storeTemplate },
       };
       const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
@@ -1642,6 +1666,10 @@ describe("runHeartbeatOnce", () => {
           list: [{ id: "work", default: true }],
         },
         channels: { whatsapp: { allowFrom: ["*"] } },
+        messages: {
+          visibleReplies: "automatic",
+          groupChat: { visibleReplies: "automatic" },
+        },
         session: { store: storeTemplate },
       };
       const sessionKey = resolveMainSessionKey(cfg);
@@ -1721,6 +1749,10 @@ describe("runHeartbeatOnce", () => {
         },
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: {
+        visibleReplies: "automatic",
+        groupChat: { visibleReplies: "automatic" },
+      },
       session: { store: storePath },
     };
     await seedHeartbeatScratchForTest({ content: scratchContent });
@@ -1837,6 +1869,10 @@ Some global directive after tasks.
         },
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: {
+        visibleReplies: "automatic",
+        groupChat: { visibleReplies: "automatic" },
+      },
       session: { store: storePath },
     };
     await seedWhatsAppSession(storePath, resolveMainSessionKey(cfg));
@@ -1891,6 +1927,10 @@ tasks:
         },
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: {
+        visibleReplies: "automatic",
+        groupChat: { visibleReplies: "automatic" },
+      },
       session: { store: storePath },
     };
     await seedWhatsAppSession(storePath, resolveMainSessionKey(cfg));

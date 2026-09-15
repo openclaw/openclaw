@@ -89,6 +89,10 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         },
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: {
+        visibleReplies: "automatic",
+        groupChat: { visibleReplies: "automatic" },
+      },
       session: { store: storePath },
     };
   }
@@ -111,6 +115,10 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
         },
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: {
+        visibleReplies: "automatic",
+        groupChat: { visibleReplies: "automatic" },
+      },
       session: { store: storePath },
     };
   }
@@ -425,6 +433,10 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
           },
         },
         channels: { whatsapp: { allowFrom: ["*"] } },
+        messages: {
+          visibleReplies: "automatic",
+          groupChat: { visibleReplies: "automatic" },
+        },
         session: { store: storePath },
       };
       const baseSessionKey = resolveMainSessionKey(cfg);

@@ -223,6 +223,8 @@ export function resolveHeartbeatDeliveryTarget(params: {
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   turnSource?: DeliveryContext;
+  /** Fail closed for ambient owner discovery when wake provenance is an internal completion. */
+  disallowInferredOwnerFallback?: boolean;
 }): OutboundTarget {
   const { cfg, entry } = params;
   const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
@@ -258,6 +260,19 @@ export function resolveHeartbeatDeliveryTarget(params: {
     const base = resolveSessionDeliveryTarget({ entry });
     return buildNoHeartbeatDeliveryTarget({
       reason: "target-none",
+      lastChannel: base.lastChannel,
+      lastAccountId: base.lastAccountId,
+    });
+  }
+
+  // Completion/event wakes without an explicit event destination must not invent
+  // an owner route from ambient session provenance. Explicit heartbeat.target
+  // ("owner" / channel+to) retains authority; session delivery.kind does not
+  // redefine target (docs: session = run context, target = delivery).
+  if (params.disallowInferredOwnerFallback && implicitDefaultRoute) {
+    const base = resolveSessionDeliveryTarget({ entry });
+    return buildNoHeartbeatDeliveryTarget({
+      reason: "no-route",
       lastChannel: base.lastChannel,
       lastAccountId: base.lastAccountId,
     });
@@ -515,6 +530,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   turnSource?: DeliveryContext;
   currentSessionKey?: string;
+  disallowInferredOwnerFallback?: boolean;
 }): Promise<OutboundTarget> {
   const delivery = resolveHeartbeatDeliveryTarget(params);
   const heartbeat = params.heartbeat ?? params.cfg.agents?.defaults?.heartbeat;

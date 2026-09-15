@@ -95,6 +95,10 @@ function createHeartbeatTelegramConfig(storePath: string): OpenClawConfig {
         allowFrom: ["123"],
       },
     },
+    messages: {
+      visibleReplies: "automatic",
+      groupChat: { visibleReplies: "automatic" },
+    },
   } as unknown as OpenClawConfig;
 }
 
