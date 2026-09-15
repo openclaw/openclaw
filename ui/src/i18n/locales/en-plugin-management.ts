@@ -4,6 +4,17 @@ import { en } from "./en.ts";
 // Plugin management and its lazy sibling surfaces register this shared copy on use.
 const enPluginManagement = {
   pluginsPage: {
+    editor: {
+      title: "{name} settings",
+      search: "Search settings",
+      other: "Other",
+      noMatches: "No matching settings.",
+      empty: "This plugin has no configurable settings.",
+      permissions: "Permissions",
+      actions: "Actions for {name}",
+      reset: "Reset value",
+      ask: "Ask OpenClaw",
+    },
     breadcrumb: "Breadcrumb",
     settingsDescription: "Configure installed plugins, access, and lifecycle.",
     settingsTabs: "Plugin settings sections",

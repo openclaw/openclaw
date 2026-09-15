@@ -166,6 +166,11 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
     plugins: [controlUiLocaleModulesPlugin()],
     optimizeDeps: {
       include: [
+        // These controls share wa-popup's eager registration. Optimize them together
+        // so later test imports cannot re-register a rebuilt common chunk.
+        "@awesome.me/webawesome/dist/components/dropdown/dropdown.js",
+        "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js",
+        "@awesome.me/webawesome/dist/components/popover/popover.js",
         "@lit/context",
         "@noble/ed25519",
         "@noble/hashes/sha2.js",

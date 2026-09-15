@@ -49,6 +49,11 @@ export type ConfigNodeRenderParams = {
   controlIdentity?: unknown;
   structuredDraftOwner?: boolean;
   showLabel?: boolean;
+  /** Description rendered by the surrounding field layout. */
+  descriptionId?: string;
+  /** Compact editors show effective defaults and inline collection controls. */
+  compact?: boolean;
+  commitOnBlur?: boolean;
   /** Section shells own the title while collection rows still own help/default metadata. */
   showHeaderMeta?: boolean;
   searchCriteria?: ConfigSearchCriteria;
@@ -283,6 +288,7 @@ export function renderSegmentedControl(params: {
   resolvedValue: unknown;
   disabled: boolean;
   ariaLabel: string;
+  descriptionId?: string;
   onSelect: (value: unknown) => boolean | void;
 }): TemplateResult {
   const selectedIndex = params.options.findIndex((option) =>
@@ -296,6 +302,7 @@ export function renderSegmentedControl(params: {
     })),
     disabled: params.disabled,
     ariaLabel: params.ariaLabel,
+    descriptionId: params.descriptionId,
     onChange: (index) => {
       const option = params.options[Number(index)];
       if (option !== undefined) {

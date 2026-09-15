@@ -582,6 +582,7 @@ function buildRecord(params: {
     schemaCacheKey: params.schemaCacheKey,
     configSchema: params.configSchema,
     configUiHints: params.manifest.uiHints,
+    configGroups: params.manifest.configGroups,
     contracts: mergeManifestContracts(
       params.manifest.contracts,
       officialCatalogManifest?.contracts,

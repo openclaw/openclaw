@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, it } from "vitest";
+import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import {
   calendarInspection,
@@ -107,24 +108,39 @@ describeControlUiE2e("Plugin overview", () => {
         } else {
           await page.goto(`${overviewUrl}?view=settings`);
         }
-        await page.getByRole("heading", { name: "Calendar Plus Settings", exact: true }).waitFor();
-        await page.getByRole("heading", { name: "Access", exact: true }).waitFor();
+        await page.getByRole("heading", { name: "Calendar Plus settings", exact: true }).waitFor();
+        await page.getByRole("heading", { name: "Permissions", exact: true }).waitFor();
         await captureScreenshot(page, `direct-settings-${entry}.png`, "viewport");
         const timeZone = page.getByRole("textbox", { name: "Time zone", exact: true });
         await timeZone.waitFor();
         expect(await timeZone.inputValue()).toBe("Europe/Paris");
         expect(await timeZone.isEnabled()).toBe(true);
         await page.locator("summary").getByText("Hooks", { exact: true }).click();
-        const permission = page.getByRole("switch", { name: "Allow prompt changes", exact: true });
+        const permission = page.getByRole("checkbox", {
+          name: "Allow prompt changes",
+          exact: true,
+        });
         expect(await permission.isEnabled()).toBe(true);
         expect(await gateway.getRequests("config.set")).toEqual([]);
         await permission.press("Space");
-        await expect.poll(() => permission.getAttribute("aria-checked")).toBe("true");
+        await expect.poll(() => permission.isChecked()).toBe(true);
         await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(1);
+        // The request recorder observes dispatch; wait for the owning writer's
+        // acknowledgement before reloading the saved permission.
+        await expect
+          .poll(() =>
+            page.evaluate(
+              () =>
+                document.querySelector<HTMLElement & { context: ApplicationContext }>(
+                  "openclaw-plugins-page",
+                )?.context.runtimeConfig.state.configAutoSaveStatus,
+            ),
+          )
+          .toBe("saved");
         await page.reload();
         await page.getByRole("textbox", { name: "Time zone", exact: true }).waitFor();
         await page.locator("summary").getByText("Hooks", { exact: true }).click();
-        await expect.poll(() => permission.getAttribute("aria-checked")).toBe("true");
+        await expect.poll(() => permission.isChecked()).toBe(true);
         await captureScreenshot(page, `direct-settings-${entry}-permissions.png`, "viewport");
         expect(new URL(page.url()).pathname).toBe(`/plugins/${plugin.catalogId}`);
         expect(new URL(page.url()).search).toBe("?view=settings");

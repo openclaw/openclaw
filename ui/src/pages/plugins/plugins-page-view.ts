@@ -68,8 +68,8 @@ type PluginsPageViewActions = {
   updateEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   uninstall: (pluginId: string, rowKey: string) => void;
   reload: (pluginId: string, rowKey: string) => void;
-  patchConfig: (path: Array<string | number>, value: unknown) => void;
-  removeConfig: (path: Array<string | number>) => void;
+  patchConfig: (path: Array<string | number>, value: unknown) => boolean | void;
+  removeConfig: (path: Array<string | number>) => boolean | void;
   reloadConfig: () => void;
   retryConfigRead: () => void;
   retryConfigWrite: () => void;
@@ -141,7 +141,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     canMutate: model.canMutate,
     reloadBlockedReason: model.reloadBlockedReason,
     mutationBlockedReason: model.mutationBlockedReason,
-    configBusy: configState.configLoading || configState.configSaving,
+    configBusy: configState.configLoading,
     configError: configState.lastError,
     canEditConfig: model.canEditConfig,
     configValue: configState.configForm,

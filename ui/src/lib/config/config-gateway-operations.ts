@@ -172,6 +172,7 @@ export type ConfigWriteCoordinator = {
   discardDraft: (options?: { reloadOnly?: boolean }) => Promise<void>;
   setWritesSuspended: (suspended: boolean, refreshAdmission?: () => Promise<void>) => void;
   waitForPendingWrites: () => Promise<void>;
+  flushFormChanges: () => Promise<boolean>;
   save: (options?: RuntimeConfigDispatchOptions) => Promise<boolean>;
   retry: () => Promise<boolean>;
   apply: () => Promise<boolean>;

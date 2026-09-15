@@ -595,6 +595,23 @@ export function createConfigWriteCoordinator({
       }
     },
     waitForPendingWrites: () => drainPendingWrites(true),
+    flushFormChanges: async () => {
+      const client = state.client;
+      const epoch = currentConfigConnectionEpoch(state);
+      if (!client || !canCallConfigMethod("config.set") || state.configFormMode !== "form") {
+        return false;
+      }
+      // Field commits skip the debounce, but never rebind a retained draft as
+      // manual Save does. A new revision alone cannot acknowledge this draft.
+      await drainPendingWrites(true);
+      return (
+        !isDisposed() &&
+        isCurrentConfigConnection(state, client, epoch) &&
+        !state.configFormDirty &&
+        state.configRecoveryError === null &&
+        (state.configAutoSaveStatus === "saved" || state.configAutoSaveStatus === "idle")
+      );
+    },
     save: (options = {}) => {
       const canDispatch = () =>
         canDispatchConfigMutation("config.set") && (options.canDispatch?.() ?? true);

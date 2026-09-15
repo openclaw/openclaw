@@ -48,6 +48,8 @@ export type RuntimeConfigCapability = {
   setWritesSuspended: (suspended: boolean, refreshAdmission?: () => Promise<void>) => void;
   /** Resolves once no config write is in flight (used as an updater barrier). */
   waitForPendingWrites: () => Promise<void>;
+  /** Commits queued form edits without overriding autosave recovery or reconnect policy. */
+  flushFormChanges: () => Promise<boolean>;
   save: (options?: RuntimeConfigDispatchOptions) => Promise<boolean>;
   retry: () => Promise<boolean>;
   apply: () => Promise<boolean>;
@@ -233,6 +235,7 @@ export function createRuntimeConfigCapability(
     discardDraft: writes.discardDraft,
     setWritesSuspended: writes.setWritesSuspended,
     waitForPendingWrites: writes.waitForPendingWrites,
+    flushFormChanges: writes.flushFormChanges,
     save: writes.save,
     retry: writes.retry,
     apply: writes.apply,

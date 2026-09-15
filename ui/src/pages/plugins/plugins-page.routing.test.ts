@@ -4,6 +4,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ToolsCatalogResult } from "../../api/types.ts";
+import { configMocks } from "../../e2e/plugins-settings-admin.test-support.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { PluginCatalogItem, PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -285,10 +286,13 @@ describe("PluginsPage routing", () => {
     const { page } = await mountPage(context, routeData);
     await switchToSettingsSurface(page, routeData);
 
-    const retry = Array.from(page.querySelectorAll<HTMLElement>(".plugins-settings-error"))
+    await vi.waitFor(() =>
+      expect(page.querySelector(".plugin-editor .callout button")).not.toBeNull(),
+    );
+    const retry = Array.from(page.querySelectorAll<HTMLElement>(".plugin-editor .callout"))
       .find((element) => element.textContent?.includes("Save failed"))
       ?.querySelector<HTMLButtonElement>("button");
-    expect(retry?.textContent?.trim()).toBe("Try again");
+    expect(retry?.textContent?.trim()).toBe("Retry");
     retry?.click();
 
     expect(runtimeConfig.runtimeConfig.retry).toHaveBeenCalledOnce();
@@ -321,7 +325,10 @@ describe("PluginsPage routing", () => {
     const { page } = await mountPage(context, routeData);
     await switchToSettingsSurface(page, routeData);
 
-    page.querySelector<HTMLButtonElement>(".plugins-settings-error button")?.click();
+    await vi.waitFor(() =>
+      expect(page.querySelector(".plugin-editor .callout button")).not.toBeNull(),
+    );
+    page.querySelector<HTMLButtonElement>(".plugin-editor .callout button")?.click();
 
     expect(refresh).toHaveBeenCalledOnce();
     expect(runtimeConfig.runtimeConfig.refreshSchema).toHaveBeenCalledOnce();
@@ -398,6 +405,71 @@ describe("PluginsPage routing", () => {
     await refresh;
   });
 
+  it.each([
+    {
+      label: "Workspace label",
+      key: "workspaceLabel",
+      text: "Revised planning",
+      value: "Revised planning",
+    },
+    { label: "Refresh interval (minutes)", key: "refreshMinutes", text: "30", value: 30 },
+  ])(
+    "commits the focused $label before Escape dismisses settings",
+    async ({ label, key, text, value }) => {
+      const result = createResult();
+      const { client } = createClient(async (method) => {
+        if (method === "plugins.inspect") {
+          return createInspectResult();
+        }
+        if (method === "plugins.list") {
+          return result;
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      });
+      const harness = createGateway(client);
+      const configState = {
+        connected: true,
+        configFormDirty: false,
+        lastError: null,
+        configForm: structuredClone(configMocks["config.get"].config),
+        configSchema: configMocks["config.schema"].schema,
+        configUiHints: configMocks["config.schema"].uiHints,
+      };
+      const runtimeConfig = createRuntimeConfigHarness(
+        vi.fn(async () => undefined),
+        configState,
+      );
+      const context = createContext(harness.gateway, undefined, undefined, runtimeConfig);
+      const { page } = await mountPage(
+        context,
+        createPluginsRouteData(
+          harness.gateway,
+          result,
+          createPluginsRouteLocation("/settings/plugins/workboard?view=settings"),
+        ),
+      );
+      await vi.waitFor(() =>
+        expect(page.querySelector(`input[aria-label="${label}"]`)).not.toBeNull(),
+      );
+      const input = page.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+      input.focus();
+      input.value = text;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(runtimeConfig.runtimeConfig.patchForm).not.toHaveBeenCalled();
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await page.updateComplete;
+      expect(page.querySelector(".plugin-editor")).toBeNull();
+      expect(runtimeConfig.runtimeConfig.patchForm).toHaveBeenCalledExactlyOnceWith(
+        ["plugins", "entries", "workboard", "config", key],
+        value,
+      );
+      expect(runtimeConfig.runtimeConfig.flushFormChanges).toHaveBeenCalledOnce();
+      expect(context.replace).toHaveBeenCalledWith("plugin-settings", {
+        pathname: "/settings/plugins",
+      });
+    },
+  );
+
   it("keeps the autosaved inspection when an older optional catalog completes", async () => {
     const plugin = { ...createPlugin(), catalogId: "ch_d29ya2JvYXJk", version: "1.2.3" };
     const result = createResult(plugin);
@@ -473,10 +545,19 @@ describe("PluginsPage routing", () => {
       ),
     );
     await vi.waitFor(() => expect(catalogs).toBe(1));
-    const input = page.querySelector<HTMLInputElement>('input[type="text"]');
+    await vi.waitFor(() =>
+      expect(page.querySelector('.plugin-editor input[aria-label="Greeting"]')).not.toBeNull(),
+    );
+    const input = page.querySelector<HTMLInputElement>(
+      '.plugin-editor input[aria-label="Greeting"]',
+    );
     expect(input).not.toBeNull();
+    input!.focus();
     input!.value = "After";
     input!.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(runtimeConfig.runtimeConfig.patchForm).not.toHaveBeenCalled();
+    input!.blur();
+    expect(runtimeConfig.runtimeConfig.flushFormChanges).toHaveBeenCalledOnce();
     expect(runtimeConfig.runtimeConfig.patchForm).toHaveBeenCalledWith(
       ["plugins", "entries", "workboard", "config", "greeting"],
       "After",

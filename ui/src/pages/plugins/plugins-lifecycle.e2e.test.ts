@@ -173,7 +173,7 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         .locator(".plugin-catalog-detail__actions")
         .getByRole("link", { name: "Settings", exact: true })
         .click();
-      await page.getByRole("heading", { name: "Calendar Plus Settings", exact: true }).waitFor();
+      await page.getByRole("heading", { name: "Calendar Plus settings", exact: true }).waitFor();
       expect(new URL(page.url()).searchParams.get("view")).toBe("settings");
       await page
         .locator(".plugins-settings-breadcrumb")

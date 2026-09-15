@@ -59,6 +59,7 @@ export type PluginUiMetadata = {
   name?: string;
   description?: string;
   configSecretInputPaths?: readonly string[];
+  configGroups?: ConfigUiHint["groups"];
   configUiHints?: Record<
     string,
     Pick<
@@ -246,6 +247,7 @@ function applyMetadataHints(
       ...next[`${basePath}.config`],
       label: `${name} Config`,
       help: `Plugin-defined config payload for ${id}.`,
+      ...(plugin.configGroups ? { groups: plugin.configGroups } : {}),
     };
 
     mergeRelativeHints(`${basePath}.config`, plugin.configUiHints);
@@ -381,6 +383,7 @@ function buildMergedSchemaCacheKey(params: {
       configSchema: plugin.configSchema ?? null,
       configSecretInputPaths: plugin.configSecretInputPaths ?? null,
       configUiHints: plugin.configUiHints ?? null,
+      configGroups: plugin.configGroups ?? null,
     }))
     .toSorted((a, b) => a.id.localeCompare(b.id));
   const channels = params.channels

@@ -1,0 +1,212 @@
+openclaw-plugin-settings-editor {
+  display: block;
+  min-width: 0;
+}
+.plugin-editor {
+  container-type: inline-size;
+}
+.plugin-editor__header {
+  margin-bottom: 24px;
+}
+.plugin-editor__header a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.plugin-editor__header a svg,
+.plugin-editor__search svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+.plugin-editor__header h1 {
+  font-size: 26px;
+  margin: 24px 0 0;
+}
+.plugin-editor__search {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 12px;
+}
+.plugin-editor__search .settings-input {
+  width: 100%;
+  max-width: none;
+  border: 0;
+  background: transparent;
+}
+.plugin-editor__section {
+  margin-top: 28px;
+}
+.plugin-editor__section h2 {
+  font-size: 18px;
+  margin: 0 0 12px;
+}
+.plugin-editor__group {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: clip;
+  background: var(--card);
+}
+.plugin-editor__row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 34%);
+  gap: 36px;
+  align-items: start;
+  padding: 20px 20px 20px 64px;
+}
+.plugin-editor__row + .plugin-editor__row {
+  border-top: 1px solid var(--border);
+}
+.plugin-editor__row:hover,
+.plugin-editor__row:focus-within {
+  background: var(--bg-hover);
+}
+.plugin-editor__copy {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  padding-top: 4px;
+}
+.plugin-editor__title {
+  font-weight: 600;
+}
+.plugin-editor__copy p {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+.plugin-editor__control {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+.plugin-editor__control > .settings-row {
+  padding: 0;
+  min-height: 0;
+  background: transparent;
+  border: 0;
+}
+.plugin-editor__control .settings-row__control {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+.plugin-editor__control .settings-input,
+.plugin-editor__control .settings-select {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+.plugin-editor__control .settings-toggle {
+  margin-left: auto;
+}
+.plugin-editor__control input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 8px 0 0 auto;
+  accent-color: var(--accent);
+}
+.plugin-editor__menu {
+  /* The dropdown host uses display: contents; this wrapper owns its position. */
+  position: absolute;
+  left: 12px;
+  top: 20px;
+  opacity: 0;
+}
+.plugin-editor__menu button[slot="trigger"] {
+  width: 30px;
+  height: 30px;
+}
+.plugin-editor__menu button[slot="trigger"] svg {
+  transform: rotate(90deg);
+}
+.plugin-editor__row:hover .plugin-editor__menu,
+.plugin-editor__row:focus-within .plugin-editor__menu,
+.plugin-editor__menu:has(wa-dropdown[open]) {
+  opacity: 1;
+}
+
+.plugin-editor__control .cfg-block {
+  margin: 0;
+}
+.plugin-editor__permission-details {
+  border-top: 1px solid var(--border);
+  padding: 20px;
+}
+.plugin-editor__control .settings-subrows {
+  margin: 0;
+  padding: 0;
+}
+.plugin-editor__control .settings-subrows .settings-row {
+  padding: 8px 0;
+}
+@media (hover: none) {
+  .plugin-editor__menu {
+    opacity: 1;
+  }
+}
+@container (max-width: 768px) {
+  .plugin-editor__row {
+    grid-template-columns: minmax(0, 1fr) minmax(180px, 38%);
+    gap: 20px;
+    padding: 16px 16px 16px 52px;
+  }
+  .plugin-editor__menu {
+    left: 8px;
+    top: 16px;
+  }
+}
+@container (max-width: 560px) {
+  .plugin-editor__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .plugin-editor__control .settings-toggle {
+    margin-left: 0;
+  }
+  .plugin-editor__control {
+    grid-column: 1;
+    grid-row: 2;
+  }
+}
+
+.plugin-editor__control .cfg-array__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+.plugin-editor__control .cfg-array__item + .cfg-array__item {
+  margin-top: 8px;
+}
+.plugin-editor__control .cfg-array__value {
+  min-width: 0;
+}
+.plugin-editor__control .cfg-array__value > .settings-row {
+  padding: 0;
+  border: 0;
+}
+.plugin-editor__control .cfg-array__item > openclaw-tooltip {
+  padding-top: 4px;
+}
+
+.plugin-editor__control .cfg-array {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.plugin-editor__control .cfg-array > .settings-row {
+  order: 2;
+  padding: 0;
+  min-height: 0;
+}
+.plugin-editor__control .cfg-array > openclaw-config-form-collection-draft {
+  order: 3;
+}

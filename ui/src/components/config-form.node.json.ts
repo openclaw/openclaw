@@ -15,7 +15,8 @@ export function renderJsonTextarea(params: ConfigNodeRenderParams): TemplateResu
   const { schema, value, path, hints, disabled, onPatch } = params;
   const showLabel = params.showLabel ?? true;
   const { label, help } = resolveFieldMeta(path, schema, hints);
-  const helpId = showLabel && help ? configFieldId(path, "description") : undefined;
+  const helpId =
+    params.descriptionId ?? (showLabel && help ? configFieldId(path, "description") : undefined);
   const fallback = jsonValue(value !== undefined ? value : schema.default);
   const sensitiveState = getSensitiveRenderState({
     path,

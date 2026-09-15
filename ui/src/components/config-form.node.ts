@@ -120,6 +120,7 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
           resolvedValue,
           disabled,
           ariaLabel: label,
+          descriptionId: params.descriptionId,
           onSelect: (literal) => onPatch(path, literal),
         }),
       });
@@ -192,6 +193,7 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
           resolvedValue,
           disabled,
           ariaLabel: label,
+          descriptionId: params.descriptionId,
           onSelect: (option) => onPatch(path, option),
         }),
       });
@@ -223,6 +225,27 @@ export function renderNode(params: ConfigNodeRenderParams): TemplateResult | typ
           ? schema.default
           : false;
     const onChange = (checked: boolean) => onPatch(path, checked);
+    if (params.compact) {
+      return renderFieldRow({
+        label,
+        help,
+        showLabel,
+        control: html`<input
+          type="checkbox"
+          aria-label=${label}
+          aria-describedby=${params.descriptionId ?? nothing}
+          .checked=${displayValue}
+          ?disabled=${disabled}
+          @change=${(event: Event) => {
+            // SAFETY: Lit binds this handler directly to the native checkbox.
+            const input = event.currentTarget as HTMLInputElement;
+            if (onChange(input.checked) === false) {
+              input.checked = displayValue;
+            }
+          }}
+        />`,
+      });
+    }
     if (!showLabel) {
       // Control-only contexts (array items, map values) have no visible title,
       // so the switch keeps its accessible name from the field label.

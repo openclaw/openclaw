@@ -181,13 +181,10 @@ suite.define(() => {
           routeId: "plugin-settings",
         });
         const setting = page.locator(".settings-row", { hasText: settingLabel });
-        await page.locator("summary").getByText("Session Catalog", { exact: true }).click();
         await setting.waitFor({ state: "visible" });
         expect(await setting.getByText("eligible paired nodes.", { exact: false }).count()).toBe(1);
         expect(
-          await setting
-            .locator("wa-switch")
-            .evaluate((element) => (element as HTMLElement & { checked: boolean }).checked),
+          await setting.getByRole("checkbox", { name: settingLabel, exact: true }).isChecked(),
         ).toBe(expected);
       };
       await readDiscoverySetting("codex", "Discover Codex Sessions", true);
