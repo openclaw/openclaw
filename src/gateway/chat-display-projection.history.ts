@@ -488,15 +488,15 @@ function stripInterSessionPromptPrefixFromContent(content: unknown): unknown {
   });
 }
 
-function extractPromptPrefixField(text: string, field: string): string | undefined {
+function extractPromptSourceSession(content: unknown): string | undefined {
+  const text = extractProjectedText(content);
   const prefixIndex = text.indexOf(INTER_SESSION_PROMPT_PREFIX_BASE);
   if (prefixIndex === -1) {
     return undefined;
   }
   const lineEnd = text.indexOf("\n", prefixIndex);
   const header = lineEnd === -1 ? text.slice(prefixIndex) : text.slice(prefixIndex, lineEnd);
-  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = new RegExp(`(?:^|\\s)${escapedField}=([^\\s]+)`).exec(header);
+  const match = /(?:^|\s)sourceSession=([^\s]+)/.exec(header);
   return normalizeOptionalString(match?.[1]);
 }
 
@@ -504,9 +504,8 @@ function resolveSessionsSendForwardedSenderSession(
   message: Record<string, unknown>,
 ): { sessionKey?: string; agentId?: string } | undefined {
   const provenance = normalizeInputProvenance(message.provenance);
-  const text = extractProjectedText(message.content ?? message.text);
   const sourceSessionKey =
-    provenance?.sourceSessionKey ?? extractPromptPrefixField(text, "sourceSession");
+    provenance?.sourceSessionKey ?? extractPromptSourceSession(message.content ?? message.text);
   const agentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
   return sourceSessionKey
     ? { sessionKey: sourceSessionKey, ...(agentId ? { agentId } : {}) }
