@@ -21,6 +21,7 @@ type RealtimeAudioQueueItem =
     }
   | {
       name: string;
+      onSent?: (sent: boolean) => void;
       type: "mark";
     };
 
@@ -59,6 +60,7 @@ export class RealtimeAudioPacer {
   private streamClockMs: number | null = null;
   private playbackSegments: RealtimePlaybackSegment[] = [];
   private sentAudioMs = 0;
+  private carrierPlaybackEndAtMs = 0;
   private retiredAudioMs = 0;
   private confirmedPlayedMs = 0;
   private readonly playbackMarkPrefix = `openclaw-playout-${randomUUID()}`;
@@ -132,12 +134,18 @@ export class RealtimeAudioPacer {
     }));
   }
 
+  /** Estimate media still buffered at the carrier from actual send cadence. */
+  getEstimatedCarrierBufferedMs(): number {
+    return Math.max(0, this.carrierPlaybackEndAtMs - performance.now());
+  }
+
   /** Queue a provider mark frame after prior audio frames. */
-  sendMark(name: string): void {
+  sendMark(name: string, onSent?: (sent: boolean) => void): void {
     if (this.closed || !name) {
+      onSent?.(false);
       return;
     }
-    this.queue.push({ type: "mark", name });
+    this.queue.push({ type: "mark", name, onSent });
     this.ensurePump();
   }
 
@@ -233,6 +241,7 @@ export class RealtimeAudioPacer {
     this.playbackSegments = [];
     this.queuedAudioBytes = 0;
     this.sentAudioMs = 0;
+    this.carrierPlaybackEndAtMs = 0;
     this.retiredAudioMs = 0;
     this.confirmedPlayedMs = 0;
     this.lastPlaybackMarkMs = 0;
@@ -309,6 +318,9 @@ export class RealtimeAudioPacer {
       }
 
       const sent = item.type === "audio" ? this.sendAudioItem(item) : this.sendMarkItem(item);
+      if (item.type === "mark") {
+        item.onSent?.(sent);
+      }
       if (!sent) {
         this.resetQueue();
         this.queuedAudioBytes = 0;
@@ -329,6 +341,8 @@ export class RealtimeAudioPacer {
     this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
     const sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
     if (sent) {
+      this.carrierPlaybackEndAtMs =
+        Math.max(performance.now(), this.carrierPlaybackEndAtMs) + item.durationMs;
       item.segment.sentMs += item.durationMs;
       this.sentAudioMs += item.durationMs;
       item.segment.lastSentEndMs = this.sentAudioMs;

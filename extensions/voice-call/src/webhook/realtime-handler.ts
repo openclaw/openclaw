@@ -38,6 +38,11 @@ import type { CallRecord, EndReason, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
 import { WebSocket, WebSocketServer } from "../websocket.js";
 import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
+import {
+  createRealtimeEndCallDrain,
+  executeRealtimeEndCallTool,
+  type RealtimeEndCallDrainResult,
+} from "./realtime-end-call.js";
 import type { StreamDisconnectLifecycle } from "./stream-disconnect-grace.js";
 import {
   type StreamFrameAdapter,
@@ -326,8 +331,10 @@ type RealtimeTelephonyBinding = {
   bridge: ActiveRealtimeVoiceBridge;
   acknowledgeCarrierMark: (markName?: string) => void;
   close: (cause: RealtimeCallEndCause) => Promise<void>;
+  drainPlaybackBeforeEndCall: () => Promise<RealtimeEndCallDrainResult>;
   endCall: () => void;
   noteMediaActivity: () => void;
+  resumeAfterEndCallDrain: () => void;
   retire: () => void;
 };
 
@@ -962,10 +969,18 @@ export class RealtimeCallHandler {
       return true;
     };
     const pendingMarkAcks = new Map<string, () => void>();
+    const endCallDrain = createRealtimeEndCallDrain({
+      getEstimatedCarrierBufferedMs: () => audioPacer.getEstimatedCarrierBufferedMs(),
+      pendingMarkAcks,
+      sendMark: (name, onSent) => audioPacer.sendMark(name, onSent),
+    });
     const audioPacer = new RealtimeAudioPacer({
       // Every pacer reset discards queued marks, so their stored provider
       // acknowledgements can never fire and must be retired with them.
-      onPlaybackReset: () => pendingMarkAcks.clear(),
+      onPlaybackReset: () => {
+        pendingMarkAcks.clear();
+        endCallDrain.onPlaybackReset();
+      },
       send: sendString,
       serializer: {
         media: (payload) => adapter.serializeMedia(payload),
@@ -1091,6 +1106,9 @@ export class RealtimeCallHandler {
       audioSink: {
         isOpen: () => !sessionClosed && ws.readyState === WebSocket.OPEN,
         sendAudio: (muLaw, metadata) => {
+          if (endCallDrain.isOutputFenced()) {
+            return;
+          }
           harness.recordOutputAudio(muLaw);
           audioPacer.sendAudio(muLaw, metadata);
         },
@@ -1518,6 +1536,7 @@ export class RealtimeCallHandler {
         }
       },
       close: (cause) => closeBinding(telephonyBinding, cause),
+      drainPlaybackBeforeEndCall: endCallDrain.drainPlaybackBeforeEndCall,
       endCall: () => {
         // Close the provider session before the carrier socket so no pending
         // response can reach the caller after the hang-up request succeeds.
@@ -1548,6 +1567,7 @@ export class RealtimeCallHandler {
         }, REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS);
         livenessTimer.unref?.();
       },
+      resumeAfterEndCallDrain: endCallDrain.resumeAfterEndCallDrain,
       retire: () => {
         void closeBinding(telephonyBinding);
       },
@@ -2048,52 +2068,12 @@ export class RealtimeCallHandler {
     turnId: string;
     harness: RealtimeVoiceSessionHarness;
   }): Promise<void> {
-    const binding = this.activeTelephonyBindingsByCallId.get(params.callId);
-    if (
-      !binding ||
-      binding.bridge !== params.bridge ||
-      !this.isActiveBridgeOwner(params.callId, params.bridge)
-    ) {
-      return;
-    }
-
-    let result: { success: boolean; error?: string };
-    try {
-      result = await this.manager.endCall(params.callId);
-    } catch (error) {
-      result = { success: false, error: formatErrorMessage(error) };
-    }
-
-    if (
-      this.activeTelephonyBindingsByCallId.get(params.callId) !== binding ||
-      !this.isActiveBridgeOwner(params.callId, params.bridge)
-    ) {
-      return;
-    }
-    if (!result.success) {
-      const detail = result.error?.trim() || "the telephony provider returned no reason";
-      const toolResult = {
-        error: `Could not end the current phone call: ${detail}. Tell the caller the call could not be ended and they can hang up or ask you to try again.`,
-      };
-      await params.bridge.submitToolResult(params.bridgeCallId, toolResult);
-      params.harness.emit({
-        type: "tool.error",
-        turnId: params.turnId,
-        callId: params.bridgeCallId,
-        payload: { name: REALTIME_VOICE_END_CALL_TOOL_NAME, result: toolResult },
-        final: true,
-      });
-      return;
-    }
-
-    params.harness.emit({
-      type: "tool.result",
-      turnId: params.turnId,
-      callId: params.bridgeCallId,
-      payload: { name: REALTIME_VOICE_END_CALL_TOOL_NAME, result: { success: true } },
-      final: true,
+    await executeRealtimeEndCallTool({
+      ...params,
+      endCall: (callId) => this.manager.endCall(callId),
+      getActiveBinding: (callId) => this.activeTelephonyBindingsByCallId.get(callId),
+      isActiveBridgeOwner: (callId, bridge) => this.isActiveBridgeOwner(callId, bridge),
     });
-    binding.endCall();
   }
 
   private async executeToolCall(
