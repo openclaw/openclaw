@@ -145,6 +145,7 @@ type DynamicToolBuildParams = {
   policyAgentId: string;
   pluginConfig: CodexPluginConfig;
   profilerEnabled?: boolean;
+  inheritedToolAllowlistRef?: OpenClawCodingToolsOptions["inheritedToolAllowlistRef"];
   cronCreatorToolAllowlistRef?: OpenClawCodingToolsOptions["cronCreatorToolAllowlistRef"];
   cronCreatorToolAllowlistCaptureRef?: OpenClawCodingToolsOptions["cronCreatorToolAllowlistCaptureRef"];
   resolveCronCreatorToolAuthority?: Parameters<
@@ -361,6 +362,7 @@ export async function buildDynamicTools(
     onToolOutcome: params.onToolOutcome,
     isTurnTainted: params.isTurnTainted,
     allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
+    inheritedToolAllowlistRef: input.inheritedToolAllowlistRef,
     cronCreatorToolAllowlistRef: input.cronCreatorToolAllowlistRef,
     cronCreatorToolAllowlistCaptureRef: input.cronCreatorToolAllowlistCaptureRef,
     cronCreatorAuthorityUnavailableReason: input.cronCreatorAuthorityUnavailableReason,
