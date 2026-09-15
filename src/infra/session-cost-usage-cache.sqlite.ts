@@ -2,11 +2,11 @@ import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   runOpenClawAgentWriteTransaction,
   resolveOpenClawAgentSqlitePath,
-  withOpenClawAgentDatabaseAsync,
 } from "../state/openclaw-agent-db.js";
 import { chunkItems } from "../utils/chunk-items.js";
 // Per-agent SQLite storage for rebuildable per-session usage rollups.
@@ -47,7 +47,7 @@ function runCacheWriteTransaction<T>(
   transactionOptions: Parameters<typeof runOpenClawAgentWriteTransaction>[2],
 ): Promise<T> {
   const options = captureCacheDatabaseOptions(inputOptions);
-  return withOpenClawAgentDatabaseAsync(options, (database) =>
+  return withOpenClawAgentDatabaseWrite(options, (database) =>
     runOpenClawAgentWriteTransaction(
       operation,
       { ...options, path: database.path },

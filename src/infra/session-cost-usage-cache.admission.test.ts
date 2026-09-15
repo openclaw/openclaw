@@ -10,11 +10,13 @@ import {
   openOpenClawAgentDatabase,
   withOpenClawAgentDatabaseAsync,
 } from "../state/openclaw-agent-db.js";
+import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import {
   acquireSessionCostUsageRefreshLock,
+  deleteSessionCostUsageRollupsExcept,
   isSessionCostUsageRefreshRunning,
   readSessionCostUsageRollupRows,
   writeSessionCostUsageRollup,
@@ -27,6 +29,116 @@ afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawStateDatabaseForTest();
 });
+
+it.each(["acquire", "release", "rollup", "prune", "stale-lock"] as const)(
+  "queues warm usage %s behind the active writer reservation",
+  async (operation) => {
+    const root = tempDirs.make("openclaw-usage-writer-reservation-");
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+      const agentId = "usage-test";
+      const database = openOpenClawAgentDatabase({ agentId });
+      const databasePath = database.path;
+      await writeSessionCostUsageRollup({
+        agentId,
+        databasePath,
+        rollupId: "session.jsonl",
+        previousValueJson: null,
+        valueJson: '{"totalTokens":1}',
+        updatedAt: 1,
+      });
+      let lock: Awaited<ReturnType<typeof acquireSessionCostUsageRefreshLock>> | undefined;
+      if (operation === "release") {
+        lock = await acquireSessionCostUsageRefreshLock(agentId, databasePath);
+        expect(lock.acquired).toBe(true);
+      } else if (operation === "stale-lock") {
+        database.db
+          .prepare(
+            "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)",
+          )
+          .run("session-cost-usage", "refresh-lock", "{}", 1);
+      }
+      const readLock = () =>
+        database.db
+          .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
+          .get("session-cost-usage", "refresh-lock");
+      const readSnapshot = () => ({
+        lock: readLock(),
+        rows: readSessionCostUsageRollupRows(agentId, databasePath),
+      });
+      const before = readSnapshot();
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const reservation = runOpenClawAgentWorkerWrite({ agentId, path: databasePath }, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      await entered.promise;
+      let settled = false;
+      const writing = (async () => {
+        switch (operation) {
+          case "acquire":
+            lock = await acquireSessionCostUsageRefreshLock(agentId, databasePath);
+            expect(lock.acquired).toBe(true);
+            break;
+          case "release":
+            await lock!.release();
+            break;
+          case "rollup":
+            expect(
+              await writeSessionCostUsageRollup({
+                agentId,
+                databasePath,
+                rollupId: "session.jsonl",
+                previousValueJson: before.rows[0]!.valueJson,
+                valueJson: '{"totalTokens":2}',
+                updatedAt: 2,
+              }),
+            ).toBe(true);
+            break;
+          case "prune":
+            await deleteSessionCostUsageRollupsExcept({
+              agentId,
+              databasePath,
+              rows: before.rows,
+              liveKeys: new Set(),
+            });
+            break;
+          case "stale-lock":
+            expect(await isSessionCostUsageRefreshRunning(agentId, databasePath)).toBe(false);
+            break;
+        }
+      })().finally(() => {
+        settled = true;
+      });
+      const written = Promise.allSettled([writing]);
+      try {
+        try {
+          await setImmediate();
+          expect(readSnapshot()).toEqual(before);
+          expect(settled).toBe(false);
+        } finally {
+          release.resolve();
+          await reservation;
+          await written;
+        }
+        await expect(writing).resolves.toBeUndefined();
+        if (operation === "acquire") {
+          expect(readLock()).toBeDefined();
+        } else if (operation === "release" || operation === "stale-lock") {
+          expect(readLock()).toBeUndefined();
+        } else {
+          expect(readSessionCostUsageRollupRows(agentId, databasePath)).toEqual(
+            operation === "prune"
+              ? []
+              : [{ key: "session.jsonl", valueJson: '{"totalTokens":2}', updatedAt: 2 }],
+          );
+        }
+      } finally {
+        await lock?.release();
+      }
+    });
+  },
+);
 
 it.each([
   { closing: false, retarget: false, refresh: false },
