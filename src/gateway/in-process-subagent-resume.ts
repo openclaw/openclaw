@@ -1,5 +1,16 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { TrustedSubagentResume } from "./session-subagent-resume.js";
+import type { TrustedAgentToolCaller } from "./server-methods/types.js";
+
+/** Host-only admission facts; never accepted from model arguments or Gateway wire params. */
+export type TrustedSubagentResume = Readonly<{
+  caller: TrustedAgentToolCaller;
+  childSessionKey: string;
+  childSessionId: string;
+  previousRunId: string;
+  taskRunId: string;
+  generation: number | undefined;
+  createdAt: number;
+}>;
 
 // Published host runtime and source tools must redeem the same process-owned binding.
 const resumes = resolveGlobalSingleton<WeakMap<object, TrustedSubagentResume>>(

@@ -6,18 +6,8 @@ import {
 import { getLatestLiveSubagentRunByChildSessionKey } from "../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { TrustedSubagentResume } from "./in-process-subagent-resume.js";
 import type { GatewayContextResolver, TrustedAgentToolCaller } from "./server-methods/types.js";
-
-/** Host-only admission facts; never accepted from model arguments or Gateway wire params. */
-export type TrustedSubagentResume = Readonly<{
-  caller: TrustedAgentToolCaller;
-  childSessionKey: string;
-  childSessionId: string;
-  previousRunId: string;
-  taskRunId: string;
-  generation: number | undefined;
-  createdAt: number;
-}>;
 
 // Control ownership comes from the registry, not the child's key shape or message provenance.
 function requirePausedChild(cfg: OpenClawConfig, caller: TrustedAgentToolCaller, key: string) {
