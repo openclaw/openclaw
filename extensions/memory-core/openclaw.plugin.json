@@ -131,6 +131,11 @@
                 "properties": {
                   "model": {
                     "type": "string"
+                  },
+                  "timeoutMs": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Completion timeout in milliseconds for Dream Diary narrative generation only. Other dreaming work (e.g. deep consolidation) keeps its own fixed timeouts."
                   }
                 }
               }
@@ -166,6 +171,11 @@
                     "properties": {
                       "model": {
                         "type": "string"
+                      },
+                      "timeoutMs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Completion timeout in milliseconds for Dream Diary narrative generation only. Other dreaming work (e.g. deep consolidation) keeps its own fixed timeouts."
                       }
                     }
                   }
@@ -223,6 +233,11 @@
                     "properties": {
                       "model": {
                         "type": "string"
+                      },
+                      "timeoutMs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Completion timeout in milliseconds for Dream Diary narrative generation only. Other dreaming work (e.g. deep consolidation) keeps its own fixed timeouts."
                       }
                     }
                   }
@@ -254,6 +269,11 @@
                     "properties": {
                       "model": {
                         "type": "string"
+                      },
+                      "timeoutMs": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Completion timeout in milliseconds for Dream Diary narrative generation only. Other dreaming work (e.g. deep consolidation) keeps its own fixed timeouts."
                       }
                     }
                   }
