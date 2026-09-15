@@ -8,7 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 const state = vi.hoisted(() => ({
   launchctl: { stdout: "", stderr: "Could not find service", code: 113 },
   files: new Map<string, string>(),
-  accessErrors: new Map<string, string>(),
+  readErrors: new Map<string, string>(),
   readdirError: "",
   plutilValues: new Map<string, unknown>(),
   plutilErrors: new Map<string, string>(),
@@ -21,14 +21,31 @@ function fsError(code: string, target: string): NodeJS.ErrnoException {
 vi.mock("node:fs/promises", () => {
   const mocked = {
     constants,
-    access: vi.fn(async (target: string, mode?: number) => {
-      const code = state.accessErrors.get(target);
-      if (code && mode === constants.R_OK) {
-        throw fsError(code, target);
-      }
+    access: vi.fn(async (target: string) => {
       if (!state.files.has(target)) {
         throw fsError("ENOENT", target);
       }
+    }),
+    open: vi.fn(async (target: string) => {
+      const code = state.readErrors.get(target);
+      if (code) {
+        throw fsError(code, target);
+      }
+      const contents = state.files.get(target);
+      if (contents === undefined) {
+        throw fsError("ENOENT", target);
+      }
+      const bytes = Buffer.from(contents);
+      let position = 0;
+      return {
+        stat: async () => ({ isFile: () => true, size: bytes.length }),
+        read: async (buffer: Buffer, offset: number, length: number) => {
+          const bytesRead = bytes.copy(buffer, offset, position, position + length);
+          position += bytesRead;
+          return { bytesRead };
+        },
+        close: vi.fn(async () => {}),
+      };
     }),
     readdir: vi.fn(async (dir: string) => {
       if (state.readdirError) {
@@ -174,7 +191,7 @@ describe("system LaunchDaemon ownership", () => {
     vi.clearAllMocks();
     state.launchctl = { stdout: "", stderr: "Could not find service", code: 113 };
     state.files.clear();
-    state.accessErrors.clear();
+    state.readErrors.clear();
     state.readdirError = "";
     state.plutilValues.clear();
     state.plutilErrors.clear();
@@ -303,7 +320,7 @@ describe("system LaunchDaemon ownership", () => {
   it("skips an unreadable foreign plist", async () => {
     const unrelated = "/Library/LaunchDaemons/com.vendor.locked.plist";
     state.files.set(unrelated, "<plist/>");
-    state.accessErrors.set(unrelated, "EACCES");
+    state.readErrors.set(unrelated, "EACCES");
     state.plutilErrors.set(unrelated, "Operation not permitted");
 
     await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toEqual({
@@ -319,7 +336,7 @@ describe("system LaunchDaemon ownership", () => {
     const unrelated = "/Library/LaunchDaemons/com.vendor.locked.plist";
     const owner = "/Library/LaunchDaemons/vendor-openclaw.plist";
     state.files.set(unrelated, "<plist/>");
-    state.accessErrors.set(unrelated, "EACCES");
+    state.readErrors.set(unrelated, "EACCES");
     state.plutilErrors.set(unrelated, "Operation not permitted");
     state.files.set(owner, "<plist/>");
     state.plutilValues.set(owner, { Label: "ai.openclaw.gateway" });
@@ -329,6 +346,66 @@ describe("system LaunchDaemon ownership", () => {
       serviceTarget: "system/ai.openclaw.gateway",
       plistPath: owner,
     });
+  });
+
+  it.each(["EACCES", "EPERM"])(
+    "skips actual %s read denial despite successful access",
+    async (code) => {
+      const target = "/Library/LaunchDaemons/com.endpoint.plist";
+      state.files.set(target, "<plist/>");
+      state.plutilErrors.set(target, "parser path access denied");
+      state.readErrors.set(target, code);
+      await expect(
+        assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway"),
+      ).resolves.toBeUndefined();
+      expect(execLaunchctl).toHaveBeenCalledTimes(2);
+      expect(execFileUtf8).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["com.endpoint", "ai.openclaw.gateway"])(
+    "parses captured bytes and retains %s ownership",
+    async (label) => {
+      const target = "/Library/LaunchDaemons/com.endpoint.plist";
+      const contents = "bplist00-captured-bytes";
+      state.files.set(target, contents);
+      state.plutilErrors.set(target, "parser path access denied");
+      state.plutilValues.set("-", { Label: label });
+      const ownership = await inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway");
+      expect(ownership.status).toBe(label === "ai.openclaw.gateway" ? "installed" : "absent");
+      expect(execFileUtf8).toHaveBeenLastCalledWith(
+        "/usr/bin/plutil",
+        ["-convert", "json", "-o", "-", "--", "-"],
+        { input: Buffer.from(contents), timeout: 5_000 },
+      );
+    },
+  );
+
+  it.each(["EIO", "EMFILE"])("refuses unrelated actual read error %s", async (code) => {
+    const target = "/Library/LaunchDaemons/com.endpoint.plist";
+    state.files.set(target, "<plist/>");
+    state.plutilErrors.set(target, "Operation not permitted");
+    state.readErrors.set(target, code);
+    await expect(assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway")).rejects.toMatchObject({
+      code: "SYSTEM_LAUNCH_DAEMON_OWNERSHIP",
+    });
+    expect(execLaunchctl).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses malformed captured bytes and oversized reads", async () => {
+    const target = "/Library/LaunchDaemons/com.endpoint.plist";
+    state.files.set(target, "broken");
+    state.plutilErrors.set(target, "cannot parse path");
+    state.plutilErrors.set("-", "cannot parse bytes");
+    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toMatchObject({
+      status: "unverifiable",
+    });
+    state.files.set(target, "x".repeat(1024 * 1024 + 1));
+    execFileUtf8.mockClear();
+    await expect(inspectSystemLaunchDaemonOwnership("ai.openclaw.gateway")).resolves.toMatchObject({
+      status: "unverifiable",
+    });
+    expect(execFileUtf8).toHaveBeenCalledTimes(1);
   });
 
   it("rechecks the system domain after a negative plist snapshot", async () => {

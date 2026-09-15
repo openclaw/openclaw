@@ -631,6 +631,123 @@ describe("openclaw live updater", () => {
     ).toThrow("could not inspect system LaunchDaemon plist");
   });
 
+  test.each(["EACCES", "EPERM", "EIO"])(
+    "uses actual plist read errno %s, then rechecks ownership",
+    (code) => {
+      let probes = 0;
+      const check = () =>
+        assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+          readdirSync: () => ["com.vendor.plist"],
+          readPlistBytes: () => {
+            throw Object.assign(new Error("read failed"), { code });
+          },
+          spawnSync: (command: string) =>
+            command === "/bin/launchctl"
+              ? (++probes, { status: 113, stderr: "Could not find service" })
+              : { status: 1, stderr: "Operation not permitted" },
+        });
+      if (code === "EIO") {
+        expect(check).toThrow("could not read system LaunchDaemon plist");
+        expect(probes).toBe(1);
+      } else {
+        expect(check).not.toThrow();
+        expect(probes).toBe(2);
+      }
+    },
+  );
+
+  test("rejects a loaded owner appearing after an unreadable plist was skipped", () => {
+    let probes = 0;
+    expect(() =>
+      assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+        readdirSync: () => ["com.vendor.plist"],
+        readPlistBytes: () => {
+          throw Object.assign(new Error("denied"), { code: "EPERM" });
+        },
+        spawnSync: (command: string) =>
+          command === "/bin/launchctl"
+            ? { status: ++probes === 1 ? 113 : 0, stderr: "Could not find service" }
+            : { status: 1 },
+      }),
+    ).toThrow("system/ai.openclaw.gateway already owns");
+    expect(probes).toBe(2);
+  });
+
+  test.each(["com.vendor", "ai.openclaw.gateway", "malformed"])(
+    "parses captured plist bytes: %s",
+    (label) => {
+      const bytes = Buffer.from("captured plist bytes");
+      let stdinParses = 0;
+      const check = () =>
+        assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+          readdirSync: () => ["com.vendor.plist"],
+          readPlistBytes: () => bytes,
+          spawnSync: (command: string, args: string[], options: { input?: Buffer }) => {
+            if (command === "/bin/launchctl") {
+              return { status: 113, stderr: "Could not find service" };
+            }
+            if (args.at(-1) !== "-") {
+              return { status: 1, stderr: "Operation not permitted" };
+            }
+            stdinParses++;
+            expect(options.input).toBe(bytes);
+            return {
+              status: label === "malformed" ? 1 : 0,
+              stdout: JSON.stringify({ Label: label }),
+            };
+          },
+        });
+      if (label === "malformed") {
+        expect(check).toThrow("could not inspect system LaunchDaemon plist");
+      } else if (label === "ai.openclaw.gateway") {
+        expect(check).toThrow("already owns the managed Gateway label");
+      } else {
+        expect(check).not.toThrow();
+      }
+      expect(stdinParses).toBe(1);
+    },
+  );
+
+  test.skipIf(process.platform !== "darwin")(
+    "native fallback reads XML/binary and refuses malformed/oversized files",
+    () => {
+      const root = mkdtempSync(path.join(tmpdir(), "updater-plist-proof-"));
+      const file = path.join(root, "fixture.plist");
+      const check = () =>
+        assertNoSystemLaunchDaemonOwnership("ai.openclaw.gateway", {
+          readdirSync: () => [path.relative("/Library/LaunchDaemons", file)],
+          spawnSync: (command: string, args: string[], options: object) => {
+            if (command === "/bin/launchctl") {
+              return { status: 113, stderr: "Could not find service" };
+            }
+            if (args.at(-1) !== "-") {
+              return { status: 1, stderr: "Operation not permitted" };
+            }
+            return spawnSync(command, args, options);
+          },
+        });
+      try {
+        for (const label of ["com.vendor", "ai.openclaw.gateway"]) {
+          for (const format of ["xml1", "binary1"]) {
+            writeFileSync(file, JSON.stringify({ Label: label }));
+            execFileSync("/usr/bin/plutil", ["-convert", format, "--", file]);
+            if (label === "com.vendor") {
+              expect(check).not.toThrow();
+            } else {
+              expect(check).toThrow("already owns the managed Gateway label");
+            }
+          }
+        }
+        writeFileSync(file, "not a plist");
+        expect(check).toThrow("could not inspect system LaunchDaemon plist");
+        writeFileSync(file, Buffer.alloc(1024 * 1024 + 1));
+        expect(check).toThrow("could not read system LaunchDaemon plist");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   test("audits raw file logs when RPC log retrieval is unavailable", () => {
     const output = [
       {

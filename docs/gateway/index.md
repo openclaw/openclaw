@@ -217,6 +217,8 @@ OpenClaw installs and manages a per-user LaunchAgent. It does not install or man
 
 The ownership check reads `launchctl print system/<label>` and also checks installed plists under `/Library/LaunchDaemons`. It fails closed when system ownership cannot be verified, and `--force` does not bypass it. `openclaw gateway status` reports a loaded same-label system job; add `--deep` to scan installed system service files.
 
+If endpoint protection denies the native parser access to a plist, the scan tries an actual bounded read and parses those captured bytes with the native parser. Actual permission-denied reads are skipped, while malformed data and other read failures still block activation. Loaded same-label jobs remain blocked; an unloaded same-label plist hidden by read denial cannot be detected. The detached restart fallback uses macOS's `/usr/bin/perl`; if that reader is unavailable, the scan still refuses unverifiable activation. This does not change endpoint-protection policy or suppress its alerts.
+
 Choose one lifecycle owner before retrying:
 
 - To keep the custom system LaunchDaemon, remove any competing user LaunchAgent and set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when running Doctor so it remains diagnostic-only for service lifecycle.

@@ -92,6 +92,58 @@ if [ -z "$openclaw_system_launchd_conflict" ]; then
           elif /usr/bin/plutil -lint -- "$openclaw_system_launchd_plist" >/dev/null 2>&1; then
             continue
           else
+            # Endpoint protection can deny plutil while allowing a real read. The system
+            # Perl reader survives package swaps and classifies errno, not diagnostic text.
+            openclaw_system_launchd_snapshot=$(/usr/bin/mktemp "\${TMPDIR:-/tmp}/openclaw-launchd-plist.XXXXXX")
+            if [ -n "$openclaw_system_launchd_snapshot" ]; then
+              /usr/bin/perl -e '
+use strict;
+use Fcntl qw(O_RDONLY O_NONBLOCK);
+use Errno qw(EACCES EPERM ENOENT ENOTDIR);
+sub read_failed {
+  my $code = 0 + $!;
+  exit(($code == EACCES || $code == EPERM) ? 77 :
+       ($code == ENOENT || $code == ENOTDIR) ? 66 : 74);
+}
+$SIG{ALRM} = sub { exit 74; };
+alarm 5;
+sysopen(my $file, $ARGV[0], O_RDONLY | O_NONBLOCK) or read_failed();
+-f $file or exit 74;
+binmode STDOUT;
+my $total = 0;
+while (1) {
+  my $count = sysread($file, my $bytes, 65536);
+  defined($count) or read_failed();
+  last if !$count;
+  $total += $count;
+  $total <= 1048576 or exit 75;
+  print STDOUT $bytes or exit 74;
+}
+close($file) or read_failed();
+close(STDOUT) or exit 74;
+' "$openclaw_system_launchd_plist" >"$openclaw_system_launchd_snapshot" 2>/dev/null
+              openclaw_system_launchd_read_status=$?
+              if [ "$openclaw_system_launchd_read_status" -eq 77 ] || [ "$openclaw_system_launchd_read_status" -eq 66 ]; then
+                /bin/rm -f "$openclaw_system_launchd_snapshot"
+                continue
+              elif [ "$openclaw_system_launchd_read_status" -eq 0 ]; then
+                # The sentinel preserves label newlines through command substitution.
+                if openclaw_system_launchd_plist_label=$(/usr/bin/plutil -extract Label raw -expect string -n -o - -- - <"$openclaw_system_launchd_snapshot" 2>/dev/null; openclaw_system_launchd_parse_status=$?; printf '.'; exit "$openclaw_system_launchd_parse_status"); then
+                  openclaw_system_launchd_plist_label=\${openclaw_system_launchd_plist_label%.}
+                  /bin/rm -f "$openclaw_system_launchd_snapshot"
+                  if [ "$openclaw_system_launchd_plist_label" != "$openclaw_system_launchd_label" ]; then
+                    continue
+                  fi
+                  openclaw_system_launchd_conflict="$openclaw_system_launchd_plist"
+                  openclaw_system_launchd_detail="installed same-label system LaunchDaemon plist $openclaw_system_launchd_plist"
+                  break
+                elif /usr/bin/plutil -lint -- - <"$openclaw_system_launchd_snapshot" >/dev/null 2>&1; then
+                  /bin/rm -f "$openclaw_system_launchd_snapshot"
+                  continue
+                fi
+              fi
+              /bin/rm -f "$openclaw_system_launchd_snapshot"
+            fi
             openclaw_system_launchd_conflict="$openclaw_system_launchd_plist"
             openclaw_system_launchd_detail="could not inspect system LaunchDaemon plist $openclaw_system_launchd_plist: $openclaw_system_launchd_plist_label"
             break
@@ -121,18 +173,55 @@ type LaunchDaemonPlistLabelResult =
   | { status: "unreadable" }
   | { status: "unverifiable"; detail: string };
 
+async function readLaunchDaemonPlistBytes(plistPath: string): Promise<Buffer> {
+  const limit = 1024 * 1024;
+  const handle = await fs.open(plistPath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > limit) {
+      throw new Error("LaunchDaemon plist must be a regular file of at most 1 MiB");
+    }
+    const bytes = Buffer.alloc(limit + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, length, bytes.length - length, null);
+      if (bytesRead === 0) {
+        return bytes.subarray(0, length);
+      }
+      length += bytesRead;
+    }
+    throw new Error("LaunchDaemon plist exceeds 1 MiB");
+  } finally {
+    await handle.close();
+  }
+}
+
 /** Reads the top-level Label through the native parser for XML and binary plists. */
 export async function readLaunchDaemonPlistLabel(
   plistPath: string,
 ): Promise<LaunchDaemonPlistLabelResult> {
-  const converted = await execFileUtf8(PLUTIL_PATH, [
-    "-convert",
-    "json",
-    "-o",
-    "-",
-    "--",
-    plistPath,
-  ]);
+  let converted = await execFileUtf8(PLUTIL_PATH, ["-convert", "json", "-o", "-", "--", plistPath]);
+  if (converted.code !== 0) {
+    let bytes: Buffer;
+    try {
+      bytes = await readLaunchDaemonPlistBytes(plistPath);
+    } catch (error) {
+      if (isMissingPathError(error)) {
+        return { status: "missing" };
+      }
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "EACCES" || code === "EPERM") {
+        return { status: "unreadable" };
+      }
+      return { status: "unverifiable", detail: formatUnknownError(error) };
+    }
+    // Endpoint protection can deny the parser's path read while permitting this
+    // process to capture bytes. Parse that exact snapshot, including binary plists.
+    converted = await execFileUtf8(PLUTIL_PATH, ["-convert", "json", "-o", "-", "--", "-"], {
+      input: bytes,
+      timeout: 5_000,
+    });
+  }
   if (converted.code === 0) {
     try {
       const plist = JSON.parse(converted.stdout) as { Label?: unknown } | null;
@@ -143,18 +232,6 @@ export async function readLaunchDaemonPlistLabel(
     } catch (error) {
       return { status: "unverifiable", detail: formatUnknownError(error) };
     }
-  }
-  try {
-    await fs.access(plistPath, fs.constants.R_OK);
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return { status: "missing" };
-    }
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    if (code === "EACCES" || code === "EPERM") {
-      return { status: "unreadable" };
-    }
-    return { status: "unverifiable", detail: formatUnknownError(error) };
   }
   return {
     status: "unverifiable",

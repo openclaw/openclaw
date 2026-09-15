@@ -3,9 +3,14 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  closeSync,
+  constants as fsConstants,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
+  readSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -1306,9 +1311,33 @@ function isLaunchctlServiceMissing(result) {
   return result.status !== 0 && /could not find service|no such process|not found/iu.test(output);
 }
 
+function readLaunchDaemonPlistBytes(plistPath) {
+  const limit = 1024 * 1024;
+  const fd = openSync(plistPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > limit) {
+      throw new Error("LaunchDaemon plist must be a regular file of at most 1 MiB");
+    }
+    const bytes = Buffer.alloc(limit + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const count = readSync(fd, bytes, length, bytes.length - length, null);
+      if (count === 0) {
+        return bytes.subarray(0, length);
+      }
+      length += count;
+    }
+    throw new Error("LaunchDaemon plist exceeds 1 MiB");
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function assertNoSystemLaunchDaemonOwnership(label, dependencies = {}) {
   const run = dependencies.spawnSync ?? spawnSync;
   const readDirectory = dependencies.readdirSync ?? readdirSync;
+  const readPlistBytes = dependencies.readPlistBytes ?? readLaunchDaemonPlistBytes;
   const serviceTarget = `system/${label}`;
   const inspectLoadedService = () => {
     const result = run(
@@ -1346,11 +1375,32 @@ export function assertNoSystemLaunchDaemonOwnership(label, dependencies = {}) {
   }
   for (const entry of entries.filter((candidate) => candidate.endsWith(".plist")).toSorted()) {
     const plistPath = path.join(SYSTEM_LAUNCH_DAEMON_DIR, entry);
-    const result = run(
+    let result = run(
       "/usr/bin/plutil",
       ["-convert", "json", "-o", "-", "--", plistPath],
       boundedSyncOptions({ encoding: "utf8" }),
     );
+    if (result.status !== 0) {
+      let bytes;
+      try {
+        bytes = readPlistBytes(plistPath);
+      } catch (error) {
+        // Same unreadable-file policy as the CLI: actual read errno, never a
+        // parser diagnostic or filename, admits this visibility exception.
+        if (["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes(error?.code)) {
+          continue;
+        }
+        throw new UpdateInvariantError(
+          "gateway_system_launchdaemon_unverifiable",
+          `could not read system LaunchDaemon plist ${plistPath}`,
+        );
+      }
+      result = run(
+        "/usr/bin/plutil",
+        ["-convert", "json", "-o", "-", "--", "-"],
+        boundedSyncOptions({ encoding: "utf8", input: bytes, maxBuffer: 1024 * 1024 }),
+      );
+    }
     if (result.status !== 0) {
       throw new UpdateInvariantError(
         "gateway_system_launchdaemon_unverifiable",

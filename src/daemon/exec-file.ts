@@ -21,6 +21,7 @@ export async function execFileUtf8(
     timeout?: number;
     killSignal?: NodeJS.Signals | number;
     windowsHide?: boolean;
+    input?: Uint8Array;
   } = {},
 ): Promise<ExecResult> {
   assertGatewayServiceUpdateCurrent();
@@ -33,6 +34,7 @@ export async function execFileUtf8(
         cwd: options.cwd ?? (process.platform === "win32" ? undefined : "/"),
         killSignal: options.killSignal,
         maxOutputBytes: 1024 * 1024,
+        input: options.input,
         timeoutMs: options.timeout,
       },
     );
