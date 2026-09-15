@@ -1,5 +1,4 @@
 // Zai plugin entrypoint registers its OpenClaw integration.
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type {
@@ -30,6 +29,7 @@ import {
   defaultToolStreamExtraParams,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { fetchZaiUsage } from "openclaw/plugin-sdk/provider-usage";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectZaiEndpoint, type ZaiEndpointId } from "./detect.js";
 import { zaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
@@ -45,6 +45,7 @@ import { resolveThinkingProfile, resolveZaiReasoningEffort } from "./provider-po
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
+const PI_AGENT_AUTH_FILE_MAX_BYTES = 1024 * 1024;
 function resolveDeprecatedPiAgentAuthPath(env: NodeJS.ProcessEnv): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
   return path.join(home, ".pi", "agent", "auth.json");
@@ -56,13 +57,14 @@ function resolveDeprecatedPiAgentAccessToken(
 ): string | undefined {
   try {
     const authPath = resolveDeprecatedPiAgentAuthPath(env);
-    if (!fs.existsSync(authPath)) {
+    const text = tryReadSecretFileSync(authPath, "Pi Agent auth file", {
+      maxBytes: PI_AGENT_AUTH_FILE_MAX_BYTES,
+      rejectHardlinks: false,
+    });
+    if (!text) {
       return undefined;
     }
-    const parsed = JSON.parse(fs.readFileSync(authPath, "utf-8")) as Record<
-      string,
-      { access?: unknown }
-    >;
+    const parsed = JSON.parse(text) as Record<string, { access?: unknown }>;
     for (const providerId of providerIds) {
       const token = parsed[providerId]?.access;
       if (typeof token === "string" && token.trim()) {
