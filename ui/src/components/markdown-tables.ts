@@ -52,22 +52,72 @@ export function markdownTableCopyText(table: HTMLTableElement): string {
     .join("\n");
 }
 
-function syncTableOverflow(shell: HTMLElement): void {
+type TableOverflowState = [shell: HTMLElement, canScrollLeft: boolean, canScrollRight: boolean];
+
+function readTableOverflow(shell: HTMLElement): TableOverflowState | null {
   const viewport = shell.querySelector<HTMLElement>(tableViewportSelector);
   if (!viewport) {
-    return;
+    return null;
   }
   const overflows = viewport.scrollWidth - viewport.clientWidth > 1;
-  shell.classList.toggle("markdown-table--can-scroll-left", overflows && viewport.scrollLeft > 1);
-  shell.classList.toggle(
-    "markdown-table--can-scroll-right",
+  return [
+    shell,
+    overflows && viewport.scrollLeft > 1,
     overflows && viewport.scrollLeft + viewport.clientWidth < viewport.scrollWidth - 1,
-  );
+  ];
+}
+
+function applyTableOverflow([shell, canScrollLeft, canScrollRight]: TableOverflowState): void {
+  shell.classList.toggle("markdown-table--can-scroll-left", canScrollLeft);
+  shell.classList.toggle("markdown-table--can-scroll-right", canScrollRight);
+}
+
+const queuedOverflowShells = new Set<HTMLElement>();
+let overflowSyncFrame: number | null = null;
+
+// Toggling classes invalidates layout, so measuring a shell right after
+// writing a sibling's would force one reflow per table; a scroll burst can
+// also deliver several events in a single frame. Coalesce every queued shell
+// into one frame, measure them all, then write them all.
+function flushTableOverflows(): void {
+  overflowSyncFrame = null;
+  const shells = [...queuedOverflowShells];
+  queuedOverflowShells.clear();
+  const states: TableOverflowState[] = [];
+  for (const shell of shells) {
+    if (!shell.isConnected) {
+      continue;
+    }
+    const state = readTableOverflow(shell);
+    if (state) {
+      states.push(state);
+    }
+  }
+  for (const state of states) {
+    applyTableOverflow(state);
+  }
+}
+
+function syncTableOverflows(shells: Iterable<HTMLElement>): void {
+  let queued = false;
+  for (const shell of shells) {
+    if (queuedOverflowShells.has(shell)) {
+      continue;
+    }
+    queuedOverflowShells.add(shell);
+    queued = true;
+  }
+  if (queued) {
+    overflowSyncFrame ??= requestAnimationFrame(flushTableOverflows);
+  }
+}
+
+function syncTableOverflow(shell: HTMLElement): void {
+  syncTableOverflows([shell]);
 }
 
 function enhanceTableShell(shell: HTMLElement): void {
   if (enhancedTableShells.has(shell)) {
-    syncTableOverflow(shell);
     return;
   }
   const viewport = shell.querySelector<HTMLElement>(tableViewportSelector);
@@ -80,7 +130,6 @@ function enhanceTableShell(shell: HTMLElement): void {
   render(toolIcons.maximize, expand);
   render(icons.copy, copy);
   viewport.addEventListener("scroll", () => syncTableOverflow(shell), { passive: true });
-  syncTableOverflow(shell);
 }
 
 export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
@@ -113,6 +162,7 @@ export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
           resizeObserver?.observe(viewport);
         }
       }
+      syncTableOverflows(owner.querySelectorAll<HTMLElement>(tableShellSelector));
     };
     const mutationObserver = new MutationObserver(syncOwnerTables);
     mutationObserver.observe(owner, { childList: true, subtree: true });
@@ -134,6 +184,18 @@ export function releaseMarkdownTables(owner: HTMLElement): void {
   tableOwnerStates.delete(owner);
   state?.release();
   state?.closeDialog?.();
+  // Queue and frame handle are module-level, so a released owner must drop its
+  // own shells. Otherwise the handle stays non-null forever and `??=` never
+  // schedules another frame for any later owner.
+  for (const shell of queuedOverflowShells) {
+    if (owner === shell || owner.contains(shell)) {
+      queuedOverflowShells.delete(shell);
+    }
+  }
+  if (queuedOverflowShells.size === 0 && overflowSyncFrame !== null) {
+    cancelAnimationFrame(overflowSyncFrame);
+    overflowSyncFrame = null;
+  }
 }
 
 async function showTableDialog(
@@ -225,6 +287,7 @@ export function handleMarkdownTableInteraction(event: Event): void {
     return;
   }
   enhanceTableShell(shell);
+  syncTableOverflow(shell);
   const table = shell.querySelector<HTMLTableElement>("table");
   if (!table) {
     return;

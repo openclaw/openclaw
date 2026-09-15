@@ -84,6 +84,36 @@ function interactiveOwner(content = markdown): {
   return { owner, shell, viewport };
 }
 
+// jsdom's pretendToBeVisual drives a real animation-frame loop, so tests that do
+// not care about scheduling let it run. Tests that assert on coalescing or
+// cancellation install a queue-only mock and step it by hand. The mock must stay
+// asynchronous: production stores the id via `overflowSyncFrame ??=
+// requestAnimationFrame(...)`, so a synchronous callback would run before the id
+// is assigned and strand a handle that no later flush can reach.
+const pendingAnimationFrames = new Map<number, FrameRequestCallback>();
+let nextAnimationFrameId = 0;
+
+function installDeferredAnimationFrames(): void {
+  pendingAnimationFrames.clear();
+  nextAnimationFrameId = 0;
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    nextAnimationFrameId += 1;
+    pendingAnimationFrames.set(nextAnimationFrameId, callback);
+    return nextAnimationFrameId;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => {
+    pendingAnimationFrames.delete(id);
+  });
+}
+
+function flushTableOverflowFrames(): void {
+  const frames = [...pendingAnimationFrames.values()];
+  pendingAnimationFrames.clear();
+  for (const callback of frames) {
+    callback(0);
+  }
+}
+
 describe("Markdown table interactions", () => {
   beforeEach(() => {
     TestMutationObserver.instances = [];
@@ -111,10 +141,14 @@ describe("Markdown table interactions", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    // Drain any frame a test left queued so the module-level handle returns to
+    // null instead of leaking into the next test.
+    flushTableOverflowFrames();
     document.body.replaceChildren();
     restoreProperty(navigator, "clipboard", clipboardDescriptor);
     restoreProperty(globalThis, "MutationObserver", mutationObserverDescriptor);
     restoreProperty(globalThis, "ResizeObserver", resizeObserverDescriptor);
+    vi.unstubAllGlobals();
     restoreDialogPolyfill();
   });
 
@@ -136,20 +170,122 @@ describe("Markdown table interactions", () => {
   });
 
   it("tracks hidden columns in both scroll directions", () => {
+    installDeferredAnimationFrames();
     const { shell, viewport } = interactiveOwner();
+    flushTableOverflowFrames();
 
     expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(false);
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(true);
 
     viewport.scrollLeft = 100;
     viewport.dispatchEvent(new Event("scroll"));
+    // Overflow reads are coalesced into one frame, so the scroll handler itself
+    // must not flip the class. A synchronous pass fails this line.
+    expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(false);
+    flushTableOverflowFrames();
     expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(true);
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(true);
 
     viewport.scrollLeft = 200;
     viewport.dispatchEvent(new Event("scroll"));
+    flushTableOverflowFrames();
     expect(shell.classList.contains("markdown-table--can-scroll-left")).toBe(true);
     expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
+  });
+
+  it("coalesces several tables into a single scheduled frame", () => {
+    installDeferredAnimationFrames();
+    interactiveOwner();
+    expect(pendingAnimationFrames.size).toBe(1);
+
+    interactiveOwner();
+    // A later owner must not schedule a second frame while one is pending.
+    expect(pendingAnimationFrames.size).toBe(1);
+  });
+
+  it("cancels the queued overflow frame when its owner is released", () => {
+    installDeferredAnimationFrames();
+    const { owner, viewport } = interactiveOwner();
+    flushTableOverflowFrames();
+
+    viewport.scrollLeft = 100;
+    viewport.dispatchEvent(new Event("scroll"));
+    expect(pendingAnimationFrames.size).toBe(1);
+
+    releaseMarkdownTables(owner);
+    // The module-level handle must not outlive its owner, or no later owner
+    // would ever schedule a frame again.
+    expect(pendingAnimationFrames.size).toBe(0);
+  });
+
+  it("schedules a fresh frame for a new owner after the previous one was released", () => {
+    installDeferredAnimationFrames();
+    const { owner, viewport } = interactiveOwner();
+    flushTableOverflowFrames();
+
+    viewport.scrollLeft = 100;
+    viewport.dispatchEvent(new Event("scroll"));
+    expect(pendingAnimationFrames.size).toBe(1);
+
+    releaseMarkdownTables(owner);
+    expect(pendingAnimationFrames.size).toBe(0);
+
+    // Dropping the queue entries is not enough: the module-level frame handle
+    // must be null too. A cancelled-but-still-set id makes `??=` skip the
+    // request, so this owner's overflow would never be measured and the classes
+    // would stay stale.
+    interactiveOwner();
+    expect(pendingAnimationFrames.size).toBe(1);
+  });
+
+  it("measures every table before writing the first overflow class", () => {
+    installDeferredAnimationFrames();
+    const { owner } = interactiveOwner(
+      `${markdown}\n\n| Other | Value |\n| --- | --- |\n| Beta | Two |`,
+    );
+    const shells = [...owner.querySelectorAll<HTMLElement>(".markdown-table")];
+    expect(shells).toHaveLength(2);
+
+    const events: string[] = [];
+    shells.forEach((shell, index) => {
+      const viewport = shell.querySelector<HTMLElement>(".markdown-table__viewport")!;
+      Object.defineProperties(viewport, {
+        clientWidth: { configurable: true, value: 100 },
+        scrollLeft: { configurable: true, value: 0, writable: true },
+        scrollWidth: { configurable: true, value: 300 },
+      });
+      for (const property of ["clientWidth", "scrollWidth", "scrollLeft"] as const) {
+        const value = viewport[property];
+        Object.defineProperty(viewport, property, {
+          configurable: true,
+          get() {
+            events.push(`${index}:read`);
+            return value;
+          },
+        });
+      }
+      const classList = shell.classList as unknown as {
+        toggle: (token: string, force?: boolean) => boolean;
+      };
+      const realToggle = classList.toggle.bind(classList);
+      classList.toggle = (token: string, force?: boolean) => {
+        events.push(`${index}:write`);
+        return realToggle(token, force);
+      };
+    });
+
+    flushTableOverflowFrames();
+
+    // Both tables must actually have been measured, so the ordering assertion
+    // below cannot pass just because nothing ran.
+    expect(events.some((event) => event === "0:read")).toBe(true);
+    expect(events.some((event) => event === "1:read")).toBe(true);
+
+    const firstWrite = events.findIndex((event) => event.endsWith(":write"));
+    expect(firstWrite).toBeGreaterThan(-1);
+    // Toggling a class invalidates layout, so measuring any table after writing
+    // a sibling's class would force one reflow per table in the burst.
+    expect(events.slice(firstWrite).some((event) => event.endsWith(":read"))).toBe(false);
   });
 
   it("copies TSV and updates the copy label", async () => {
