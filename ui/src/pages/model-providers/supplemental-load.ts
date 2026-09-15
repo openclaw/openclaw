@@ -19,6 +19,8 @@ type SupplementalOptions = {
   setData: (data: ModelProvidersData) => void;
   setDataClient: (client: GatewayBrowserClient | null) => void;
   refreshPolicy: UsageRefreshPolicy;
+  /** Scopes usage.status; without it the Gateway answers for the default agent. */
+  getAgentId: () => string | undefined;
 };
 
 type SupplementalKind = "usage" | "cost";
@@ -43,7 +45,7 @@ export class ModelProviderSupplementalLoader {
     this.usageTask = this.createTask(
       host,
       "usage",
-      loadModelProviderUsage,
+      (client, signal) => loadModelProviderUsage(client, signal, this.options.getAgentId()),
       (providerUsage) => ({ providerUsage }),
       (providerUsage, epoch) =>
         this.options.refreshPolicy.markProviderUsage(providerUsage, Date.now(), epoch),
