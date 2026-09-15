@@ -174,6 +174,8 @@ your custom name.
 
 Root sessions and ordinary Home-linked dashboard sessions can be pinned; spawned, subagent, and nested-child sessions live in their parent's tree and reject pin requests, including when they appear as top-level threads.
 
+Pinned parents keep their indented child trees and vertical guides in the Pages section. Expanding or collapsing a pinned parent shows or hides its children together.
+
 The menu groups routine actions first: **Pin/Unpin**, **Rename**, **Mark as unread/read**, and **Archive/Unarchive**. **Delete** stays separate at the bottom.
 
 - **Icon & color** opens one picker with color swatches, an icon grid, and **Reset to default**. It stays open while you change both; the sidebar reflects your changes.
