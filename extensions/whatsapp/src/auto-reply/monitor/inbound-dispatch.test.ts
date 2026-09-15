@@ -248,6 +248,28 @@ describe("prepared WhatsApp inbound boundary", () => {
 });
 
 describe("WhatsApp reply delivery", () => {
+  it("passes deferred typing to the durable send without starting it early", async () => {
+    const startVisibleDeliveryTyping = vi.fn();
+    const { plan } = await fixture({
+      cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
+      context: { Body: "hi", ChatType: "group", WasMentioned: false, CommandAuthorized: false },
+    });
+    expect(plan.replyOptions).toMatchObject({ typingStartPolicy: "visible_delivery" });
+    if (typeof plan.delivery.durable !== "function") {
+      throw new Error("expected durable delivery policy");
+    }
+    const options = await plan.delivery.durable({ text: "reply" }, {
+      kind: "final", startVisibleDeliveryTyping,
+    });
+    expect(options).toBeTruthy();
+    if (!options) {
+      throw new Error("expected durable delivery options");
+    }
+    expect(startVisibleDeliveryTyping).not.toHaveBeenCalled();
+    await options.onVisibleDeliveryStart?.();
+    expect(startVisibleDeliveryTyping).toHaveBeenCalledOnce();
+  });
+
   it("records visible delivery without logging the reply content", async () => {
     const text = "private WhatsApp reply with confidential account details";
     const { deliver, plan } = await fixture();

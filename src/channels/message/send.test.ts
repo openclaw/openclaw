@@ -107,7 +107,6 @@ describe("withDurableMessageSendContext", () => {
       expect(ctx.intent?.renderedBatch).toBe(rendered);
       return send;
     });
-    const onPlatformSendStart = vi.fn();
 
     assert(result.status === "sent");
     expect(result.deliveryIntent?.id).toBe("intent-1");
@@ -119,7 +118,6 @@ describe("withDurableMessageSendContext", () => {
     expect(request.payloads).toEqual([{ text: "hello" }]);
     expect(request.threadId).toBe(42);
     expect(request.replyToId).toBe("reply-1");
-    expect(onPlatformSendStart).toHaveBeenCalledTimes(1);
   });
 
   it("records a replayable rendered batch plan on the durable intent", async () => {

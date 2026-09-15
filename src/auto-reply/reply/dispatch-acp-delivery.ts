@@ -205,6 +205,7 @@ export async function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDe
 
     try {
       const { runMessageAction } = await messageActionRuntimeLoader.load();
+      await startVisibleDeliveryOnce();
       await runMessageAction({
         cfg: params.cfg,
         action: "edit",
@@ -500,6 +501,7 @@ export async function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDe
           mirror: false,
           replyKind: sendKind,
           runId: params.runId,
+          onVisibleDeliveryStart: startVisibleDeliveryOnce,
         });
         const outcome = resolveRoutedReplyDeliveryOutcome(result);
         const pending = outcome === "recovery-owned" || outcome === "failed-deliver";

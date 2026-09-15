@@ -370,6 +370,26 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(onReplyStart).not.toHaveBeenCalled();
   });
 
+  it("defers routed typing to visible delivery when generic lifecycle is suppressed", async () => {
+    const onReplyStart = vi.fn();
+    const onVisibleDeliveryStart = vi.fn();
+    const coordinator = await createCoordinator({
+      suppressReplyLifecycle: true,
+      shouldRouteToOriginating: true,
+      originatingChannel: "visiblechat",
+      originatingTo: "channel:thread-1",
+      onReplyStart,
+      onVisibleDeliveryStart,
+    });
+    expect(await coordinator.deliver("block", { text: "hello" })).toBe(true);
+    const [routeParams] = expectDefined(deliveryMocks.routeReply.mock.calls[0], "routed reply");
+    expect(onVisibleDeliveryStart).not.toHaveBeenCalled();
+    expect(routeParams.onVisibleDeliveryStart).toEqual(expect.any(Function));
+    await routeParams.onVisibleDeliveryStart?.();
+    expect(onVisibleDeliveryStart).toHaveBeenCalledOnce();
+    expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
   it("routes ACP replies through the configured default account when AccountId is omitted", async () => {
     await expectVisibleChatBlockRoutesToAccount(
       createAcpTestConfig({

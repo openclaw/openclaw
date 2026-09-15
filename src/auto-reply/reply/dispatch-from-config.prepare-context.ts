@@ -287,6 +287,13 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     },
   };
   Object.assign(sourceReplyPolicy, sourceReplyDeliveryRuntimeOptions);
+  const startReplyDispatchLifecycleAtVisibleDelivery =
+    params.replyOptions?.typingStartPolicy === "visible_delivery";
+  const suppressReplyDispatchLifecycle =
+    sourceReplyPolicy.suppressHookReplyLifecycle || startReplyDispatchLifecycleAtVisibleDelivery;
+  const replyDispatchVisibleDeliveryStart = startReplyDispatchLifecycleAtVisibleDelivery
+    ? params.replyOptions?.onVisibleDeliveryStart
+    : undefined;
   const reasoningPayloadsEnabled = params.replyOptions?.reasoningPayloadsEnabled === true;
   const commentaryPayloadsEnabled = params.replyOptions?.commentaryPayloadsEnabled === true;
   const attachSourceReplyDeliveryMode = (
@@ -519,6 +526,8 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     sourceReplyPolicy,
     sourceReplyDeliveryRuntimeOptions,
     ...sourceReplyPolicy,
+    suppressReplyDispatchLifecycle,
+    replyDispatchVisibleDeliveryStart,
     reasoningPayloadsEnabled,
     commentaryPayloadsEnabled,
     attachSourceReplyDeliveryMode,

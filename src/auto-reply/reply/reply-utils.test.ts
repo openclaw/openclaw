@@ -17,7 +17,7 @@ import {
 import { createStreamingDirectiveAccumulator } from "./streaming-directives.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler, resolveTypingMode } from "./typing-mode.js";
-import { createTypingController } from "./typing.js";
+import { createTypingController, runVisibleDeliveryTypingStart } from "./typing.js";
 
 it.each([
   ["@openclaw hello", /\bopenclaw\b/i, false, true],

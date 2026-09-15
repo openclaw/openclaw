@@ -84,6 +84,28 @@ describe("prepared reply routing", () => {
     },
   );
 
+  it.each(["raw", "prepared"] as const)(
+    "starts typing after producer preparation and before the %s platform send",
+    async (operation) => {
+      const order: string[] = [];
+      const payload = { text: "reply", mediaUrl: "https://example.invalid/clip.ogg" };
+      const params = {
+        ...destination,
+        beforeDeliver: async () => { order.push("prepared"); },
+        onVisibleDeliveryStart: async () => {
+          expect(visible).toEqual([]);
+          order.push("typing");
+        },
+      };
+      const result = operation === "prepared"
+        ? await routePreparedReply({ ...params, plan: prepare(payload) })
+        : await routeReply({ ...params, payload });
+      expect(result).toMatchObject({ ok: true, delivered: true });
+      expect(order).toEqual(["prepared", "typing"]);
+      expect(visible).toHaveLength(1);
+    },
+  );
+
   it("delivers admitted final reasoning through the prepared transport", async () => {
     const result = await routePreparedReply({
       ...destination,

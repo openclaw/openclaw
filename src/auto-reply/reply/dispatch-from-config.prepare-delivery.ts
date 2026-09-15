@@ -194,6 +194,11 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     }
     return await normalizeReplyMediaPaths(payload);
   };
+  const routedVisibleDeliveryStart =
+    state.params.replyOptions?.typingStartPolicy === "visible_delivery" &&
+    state.params.replyOptions?.suppressTyping !== true
+      ? state.params.replyOptions.onVisibleDeliveryStart
+      : undefined;
 
   const routeReplyOperationToOriginating = async (
     operation: ReplyDispatchOperation,
@@ -258,6 +263,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       runId: state.params.replyOptions?.runId,
       responsePrefixContext: options?.responsePrefixContext,
       deliveryIntentId: options?.deliveryIntentId,
+      onVisibleDeliveryStart: routedVisibleDeliveryStart,
     };
     const result =
       operation.kind === "prepared"

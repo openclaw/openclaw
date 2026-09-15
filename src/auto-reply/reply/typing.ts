@@ -1,6 +1,7 @@
 import {
   finiteSecondsToTimerSafeMilliseconds,
   MAX_TIMER_TIMEOUT_MS,
+  resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createTypingKeepaliveLoop } from "../../channels/typing-lifecycle.js";
@@ -8,6 +9,57 @@ import { createTypingKeepaliveLoop } from "../../channels/typing-lifecycle.js";
 const DEFAULT_TYPING_INTERVAL_SECONDS = 6;
 const DEFAULT_TYPING_TTL_MS = 2 * 60_000;
 const MAX_TYPING_INTERVAL_MS = Math.floor(MAX_TIMER_TIMEOUT_MS / 2);
+const VISIBLE_DELIVERY_TYPING_START_TIMEOUT_MS = 1000;
+
+export async function runVisibleDeliveryTypingStart(params: {
+  start: () => Promise<void> | void;
+  timeoutMs?: number;
+  onTimeout?: () => void;
+  onLateCompletion?: () => void;
+  log?: (message: string) => void;
+}): Promise<void> {
+  const timeoutMs = resolveTimerTimeoutMs(
+    params.timeoutMs,
+    VISIBLE_DELIVERY_TYPING_START_TIMEOUT_MS,
+    0,
+  );
+  const start = Promise.resolve()
+    .then(() => params.start())
+    .catch((error: unknown) => {
+      params.log?.(`visible-delivery typing start failed: ${String(error)}`);
+    });
+  if (timeoutMs <= 0) {
+    await start;
+    return;
+  }
+
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), timeoutMs);
+    timer.unref?.();
+  });
+  const result = await Promise.race([start.then(() => "done" as const), timeout]);
+  if (timer) {
+    clearTimeout(timer);
+  }
+  if (result === "timeout") {
+    try {
+      params.onTimeout?.();
+    } catch (error) {
+      params.log?.(`visible-delivery typing timeout cleanup failed: ${String(error)}`);
+    }
+    void start.then(() => {
+      try {
+        params.onLateCompletion?.();
+      } catch (error) {
+        params.log?.(`visible-delivery typing late cleanup failed: ${String(error)}`);
+      }
+    });
+    params.log?.(
+      `visible-delivery typing start timed out after ${timeoutMs}ms; continuing delivery`,
+    );
+  }
+}
 
 export function resolveTypingIntervalMs(seconds: number | undefined): number {
   if (Number.isFinite(seconds) && (seconds ?? 0) <= 0) {
@@ -56,6 +108,8 @@ export function createTypingController(params: {
   let active = false;
   let runComplete = false;
   let dispatchIdle = false;
+  let triggerInFlight = false;
+  let stopAfterTrigger = false;
   // Late streaming callbacks must not restart a completed controller.
   let sealed = false;
   let typingTtlTimer: NodeJS.Timeout | undefined;
@@ -83,6 +137,7 @@ export function createTypingController(params: {
         console.warn(`[typing] cleanup failed: ${String(err)}`);
       }
     }
+    stopAfterTrigger = triggerInFlight;
   };
 
   const refreshTypingTtl = () => {
@@ -102,15 +157,29 @@ export function createTypingController(params: {
 
   const isActive = () => active && !sealed;
 
-  const triggerTyping = async () => {
-    if (sealed || runComplete) {
+  const triggerTyping = async (options?: { allowAfterRunComplete?: boolean }) => {
+    if (triggerInFlight || sealed || (runComplete && options?.allowAfterRunComplete !== true)) {
       return;
     }
+    triggerInFlight = true;
     try {
       await onReplyStart?.();
+      if (sealed) {
+        return;
+      }
       refreshTypingTtl();
     } catch (err) {
       log?.(`typing start failed: ${String(err)}`);
+    } finally {
+      triggerInFlight = false;
+      if (stopAfterTrigger) {
+        stopAfterTrigger = false;
+        try {
+          onCleanup?.();
+        } catch (err) {
+          console.warn(`[typing] cleanup failed: ${String(err)}`);
+        }
+      }
     }
   };
 
@@ -184,7 +253,9 @@ export function createTypingController(params: {
     // Visible delivery is owned by the dispatcher and may happen after the
     // model run is complete; keep the stream-event late-start guard separate.
     await ensureStart({ allowAfterRunComplete: true });
-    typingLoop.start();
+    if (keepalive && !sealed) {
+      typingLoop.start();
+    }
   };
 
   const startTypingOnText = async (text?: string) => {

@@ -78,7 +78,10 @@ type WhatsAppInboundTransportContext = WhatsAppReplyTransportContext & {
   sendComposing: AdmittedWebInboundMessage["platform"]["sendComposing"];
 };
 
-type ReplyDeliveryInfo = { kind: ReplyDispatchKind };
+type ReplyDeliveryInfo = {
+  kind: ReplyDispatchKind;
+  startVisibleDeliveryTyping?: () => Promise<void>;
+};
 
 type PendingWhatsAppMediaOnlyPayload = {
   info: ReplyDeliveryInfo;
@@ -316,7 +319,7 @@ export async function prepareWhatsAppInboundContext(params: {
 }
 
 function isExplicitWhatsAppCommandTurn(params: {
-  commandTurn?: CommandTurnContext;
+  commandTurn?: FinalizedMsgContext["CommandTurn"];
   commandSource?: "native" | "text";
   commandAuthorized?: boolean;
 }): boolean {
@@ -337,7 +340,7 @@ function isExplicitWhatsAppCommandTurn(params: {
 
 function resolveWhatsAppTypingStartPolicy(params: {
   chatType?: string;
-  commandTurn?: CommandTurnContext;
+  commandTurn?: FinalizedMsgContext["CommandTurn"];
   commandSource?: "native" | "text";
   commandAuthorized?: boolean;
   wasMentioned?: boolean;
@@ -443,6 +446,13 @@ export function createWhatsAppReplyPlan(params: {
       : undefined;
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.cfg.channels?.whatsapp);
+  const typingStartPolicy = resolveWhatsAppTypingStartPolicy({
+    chatType: params.context.ChatType,
+    commandTurn: params.context.CommandTurn,
+    commandSource: params.context.CommandSource,
+    commandAuthorized: params.context.CommandAuthorized,
+    wasMentioned: params.context.WasMentioned,
+  });
   let didSendReply = false;
   let reactionDeferred = false;
   let agentRunOutcome: "completed" | "failed" | undefined;
@@ -480,6 +490,7 @@ export function createWhatsAppReplyPlan(params: {
     if (!reply.hasMedia && !reply.text.trim()) {
       return { visibleReplySent: false };
     }
+    await info.startVisibleDeliveryTyping?.();
     let delivery: WhatsAppReplyDeliveryResult;
     try {
       delivery = await params.deliverReply({
@@ -677,9 +688,10 @@ export function createWhatsAppReplyPlan(params: {
           tableMode,
           chunkMode,
         },
+        onVisibleDeliveryStart: info.startVisibleDeliveryTyping,
       };
     },
-    deliver: async (payload: ReplyPayload, info: { kind: ReplyDispatchKind }) => {
+    deliver: async (payload: ReplyPayload, info: ReplyDeliveryInfo) => {
       const normalizedDeliveryPayload = payload as DeliverableWhatsAppOutboundPayload<ReplyPayload>;
       const reply = resolveSendableOutboundReplyParts(normalizedDeliveryPayload);
       if (!reply.hasMedia && !reply.text.trim()) {
@@ -743,6 +755,7 @@ export function createWhatsAppReplyPlan(params: {
       sourceRepliesAreToolOnly &&
       params.context.ChatType === "group" &&
       params.context.WasMentioned !== true,
+    ...(!sourceRepliesAreToolOnly && typingStartPolicy ? { typingStartPolicy } : {}),
     disableBlockStreaming: sourceRepliesAreToolOnly
       ? true
       : typeof blockStreamingEnabled === "boolean"

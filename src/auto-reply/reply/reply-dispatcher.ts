@@ -715,14 +715,17 @@ export function createReplyDispatcherWithTyping(
       startedVisibleDeliveryTyping = true;
       await runVisibleDeliveryTypingStart({
         start: () => visibleDeliveryTypingController.startTypingForVisibleDelivery(),
-        log: (message) => replyDispatcherLogger.debug(message),
+        onTimeout: () => visibleDeliveryTypingController.cleanup(),
+        log: (message) => silentReplyLogger.debug(message),
       });
       return;
     }
     startedVisibleDeliveryTyping = true;
     await runVisibleDeliveryTypingStart({
       start: () => resolvedOnReplyStart?.(),
-      log: (message) => replyDispatcherLogger.debug(message),
+      onTimeout: () => resolvedOnCleanup?.(),
+      onLateCompletion: () => resolvedOnCleanup?.(),
+      log: (message) => silentReplyLogger.debug(message),
     });
   };
   const dispatcher = createReplyDispatcher({

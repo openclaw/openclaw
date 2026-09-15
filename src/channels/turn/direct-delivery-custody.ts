@@ -91,6 +91,9 @@ export function toCoreManagedDeliveryInfo(info: ChannelDeliveryInfo, payload: Re
   const blockSource = info.kind === "block" ? readReplyPayloadSourceOccurrence(payload) : undefined;
   return {
     kind: info.kind,
+    ...(info.startVisibleDeliveryTyping
+      ? { startVisibleDeliveryTyping: info.startVisibleDeliveryTyping }
+      : {}),
     ...(info.participant ? { participant: info.participant } : {}),
     ...(info.assistantMessageIndex === undefined
       ? {}

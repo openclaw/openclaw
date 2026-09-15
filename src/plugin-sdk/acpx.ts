@@ -121,6 +121,7 @@ export async function tryDispatchAcpReplyHook(
         : legacyFullToolDetails === true,
     bypassForCommand,
     onReplyStart: ctx.onReplyStart,
+    onVisibleDeliveryStart: ctx.onVisibleDeliveryStart,
     onAgentRunStart: ctx.onAgentRunStart,
     onPreparedAgentRunStart: ctx.onPreparedAgentRunStart,
     turnAdoption: ctx.turnAdoption,

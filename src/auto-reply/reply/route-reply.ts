@@ -93,6 +93,8 @@ type RouteReplyParams = {
   /** Reply lane for reply_payload_sending hooks. */
   replyKind: ReplyDispatchKind;
   runId?: string;
+  /** Starts deferred typing immediately before the routed platform send. */
+  onVisibleDeliveryStart?: () => Promise<void> | void;
   /** @internal Stable producer-owned block delivery intent. */
   deliveryIntentId?: string;
   /** Model/session context for response-prefix template interpolation. */
@@ -369,10 +371,14 @@ async function routeReplyOperation(
       replyToId: resolvedReplyToId ?? null,
       ...(inferredReplyTarget ? { replyToMode: replyDelivery?.replyToMode ?? "all" } : {}),
       threadId: resolvedThreadId,
-      onPlatformSendStart: params.onVisibleDeliveryStart,
       session: outboundSession,
       signal: abortSignal,
-      onPlatformSendDispatch: params.beforeDeliver,
+      onPlatformSendDispatch: params.onVisibleDeliveryStart
+        ? async () => {
+            await params.beforeDeliver?.();
+            await params.onVisibleDeliveryStart?.();
+          }
+        : params.beforeDeliver,
       assertDirectAdapterHandoff:
         assertGatewayCurrent && params.assertCurrent
           ? () => {

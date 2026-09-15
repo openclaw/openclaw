@@ -123,9 +123,11 @@ describe("durable inbound reply delivery", () => {
 
   it("preserves explicit null threads and run identity", async () => {
     const executionIdentityToken = createExecutionIdentityAdmissionToken("run-exact");
+    const onVisibleDeliveryStart = vi.fn();
     await deliver({
       threadId: null,
       executionIdentityToken,
+      onVisibleDeliveryStart,
       ctxPayload: { ...context, MessageThreadId: "context-thread" },
     });
     expect(mocks.send.mock.calls[0]?.[0]).toMatchObject({
@@ -135,6 +137,9 @@ describe("durable inbound reply delivery", () => {
       durability: "best_effort",
     });
     expect(mocks.send.mock.calls[0]?.[0].requireUnknownSendReconciliation).toBeUndefined();
+    expect(onVisibleDeliveryStart).not.toHaveBeenCalled();
+    await mocks.send.mock.calls[0]?.[0].onPlatformSendDispatch();
+    expect(onVisibleDeliveryStart).toHaveBeenCalledOnce();
   });
 
   it("uses required durability when a caller explicitly requires unknown-send reconciliation", async () => {
