@@ -98,6 +98,24 @@ export type NodeWorkerObservedTerminal = NodeWorkerActiveBase & {
 
 export type NodeWorkerActiveOwnership = NodeWorkerRunningChild | NodeWorkerObservedTerminal;
 
+export function nodeWorkerObservedTerminal(
+  active: NodeWorkerRunningChild,
+  outcome: NodeWorkerTerminalOutcome,
+): NodeWorkerObservedTerminal {
+  return {
+    state: "observed",
+    binding: active.binding,
+    gatewayNamespace: active.gatewayNamespace,
+    launchId: active.launchId,
+    planHash: active.planHash,
+    supervisor: active.supervisor,
+    worker: active.worker,
+    ...(active.container ? { container: active.container } : {}),
+    outcome,
+    ...(!active.stopState && active.turn?.cancelled ? { cancelledTurn: active.turn.claim } : {}),
+  };
+}
+
 export type NodeWorkerSupervisorOptions = {
   bundleRoot?: string;
   env?: NodeJS.ProcessEnv;

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NodeRegistry } from "../node-registry.js";
 import { environmentsHandlers } from "./environments.js";
+import { pairedNodeDevice } from "./environments.test-support.js";
 
 const registries: NodeRegistry[] = [];
 
@@ -15,13 +15,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-vi.mock("../../infra/device-pairing.js", () => ({
+vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
   listDevicePairing: vi.fn(),
-  resolveNodePairingState: vi.fn(),
-}));
-
-vi.mock("../../infra/device-pairing-node.js", () => ({
-  listNodePairing: vi.fn(),
 }));
 
 vi.mock("../worker-environments/placement-capabilities.js", () => ({
@@ -39,8 +35,7 @@ vi.mock("../worker-environments/placement-capabilities.js", () => ({
 }));
 
 beforeEach(() => {
-  vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
-  vi.mocked(listNodePairing).mockResolvedValue({ paired: [] } as never);
+  vi.mocked(listDevicePairing).mockResolvedValue({ pending: [], paired: [] });
 });
 
 describe("node environment command authority", () => {
@@ -112,6 +107,25 @@ describe("node environment command authority", () => {
     },
   ])("projects $name", async (testCase) => {
     const { declared, approved, allow, deny, expected, state } = testCase;
+    vi.mocked(listDevicePairing).mockResolvedValue({
+      pending: [],
+      paired: [
+        pairedNodeDevice(
+          "node-exec",
+          {
+            displayName: "Execution Node",
+            caps: ["session.host"],
+            commands: approved,
+          },
+          {
+            platform: "linux",
+            deviceFamily: "Linux",
+            clientId: "node-host",
+            clientMode: "node",
+          },
+        ),
+      ],
+    });
     const commandPolicy = { allow, deny };
     const initialPolicy = "initialPolicy" in testCase ? testCase.initialPolicy : undefined;
     let config = { gateway: { nodes: { commands: initialPolicy ?? commandPolicy } } };

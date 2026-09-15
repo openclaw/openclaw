@@ -5,11 +5,7 @@ import fs from "node:fs";
 import module from "node:module";
 import path from "node:path";
 import { parse, type Node as AcornNode } from "acorn";
-import {
-  WORKER_BUNDLE_ENTRY_PATH,
-  WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH,
-  WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
-} from "../src/shared/worker-bundle-hash.js";
+import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../src/shared/worker-bundle-hash.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { readGatewayRunChunks } from "./lib/gateway-run-chunk-metadata.mts";
 import { isUnstagedWorkerDeployRuntimeArtifact } from "./lib/worker-deploy-build-plugin.mts";
@@ -25,11 +21,9 @@ const NATIVE_HOOK_RELAY_FORBIDDEN_STATIC_MARKERS = [
 ];
 // fs-safe must retain its package scope for optional native-platform loading.
 const NATIVE_HOOK_RELAY_ALLOWED_EXTERNAL_IMPORTS = ["kysely", "@openclaw/fs-safe"];
-const WORKER_DEPLOY_ENTRYPOINTS = [
-  `dist/worker/${WORKER_BUNDLE_ENTRY_PATH}`,
-  `dist/worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
-  `dist/worker/${WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH}`,
-] as const;
+const WORKER_DEPLOY_ENTRYPOINTS = WORKER_BUNDLE_ARTIFACT_PATHS.map(
+  (artifact) => `dist/worker/${artifact}`,
+);
 const DEFAULT_GATEWAY_RUN_CHUNK_MAX_BYTES = 70 * 1024;
 const GATEWAY_RUN_CHUNK_MARKER_SETS = [
   ["const GATEWAY_AUTH_MODES", "function addGatewayRunCommand"],

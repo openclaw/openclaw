@@ -15,7 +15,7 @@ import {
   validateWorkerDesktopLaunchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { projectPairedDeviceNodeBindings } from "../../infra/device-pairing-node-state.js";
-import { listNodePairing } from "../../infra/device-pairing-node.js";
+import { projectNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
@@ -173,7 +173,8 @@ export async function listGatewayEnvironments(
   workers = listWorkerEnvironments(context),
   runtimeId?: string,
 ): Promise<EnvironmentSummary[]> {
-  const [devices, nodes] = await Promise.all([listDevicePairing(), listNodePairing()]);
+  const devices = await listDevicePairing();
+  const nodes = projectNodePairing(devices.paired);
   // Orphaned or failed rows that retain a node binding still own its pairing role.
   // Only destroyed proves enrollment retirement; teardown-failed rows clear nodeDeviceId.
   const managedCloudNodeIds = new Set(

@@ -1,5 +1,7 @@
 import { isGatewayLoopbackHost } from "../../packages/gateway-client/src/websocket-transport.js";
 import { createChildAdapter } from "../process/supervisor/adapters/child.js";
+import { supportsNodeWorkerProcessOwner } from "../process/supervisor/service-child-protocol.js";
+import { createServiceChildRelayAdapter } from "../process/supervisor/service-child-relay-host.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import { parseNodeWorkerConnectionFailureMessage } from "../worker/node-supervisor-protocol.js";
 import {
@@ -25,7 +27,9 @@ import {
 } from "./node-worker-output.js";
 import type { NodeWorkerLaunchInput } from "./node-worker-supervisor-contract.js";
 
-export type NodeWorkerChildAdapter = Awaited<ReturnType<typeof createChildAdapter>>;
+export type NodeWorkerChildAdapter = Awaited<ReturnType<typeof createChildAdapter>> & {
+  confirmExtinction?: () => boolean;
+};
 
 type NodeWorkerLaunchTransportOptions = {
   bundleRoot: string;
@@ -59,28 +63,39 @@ export async function prepareNodeWorkerLaunchTransport(
     gatewayNamespace: options.input.gatewayNamespace,
   });
   if (!options.containerEngine) {
+    const args = [entry, "--internal-worker-ipc", "--internal-worker-session"];
+    const workerOptions = {
+      env: options.workerEnv,
+      ownedWorker: true,
+      stdinMode: "pipe-open",
+      onWorkerMessage: (message: unknown) => {
+        const diagnostic = parseNodeWorkerConnectionFailureMessage(message);
+        if (!diagnostic) {
+          return;
+        }
+        options.connectionFailure.errorText = diagnostic.cause
+          ? sanitizeNodeWorkerDiagnostic(
+              diagnostic.cause,
+              "node worker gateway connection failed",
+              options.scrubber.scrub,
+            )
+          : undefined;
+      },
+    } as const;
     return {
       kind: "started",
-      adapter: await createChildAdapter({
-        argv: [process.execPath, entry, "--internal-worker-ipc", "--internal-worker-session"],
-        env: options.workerEnv,
-        exactEnv: true,
-        ownedWorker: true,
-        onWorkerMessage: (message) => {
-          const diagnostic = parseNodeWorkerConnectionFailureMessage(message);
-          if (!diagnostic) {
-            return;
-          }
-          options.connectionFailure.errorText = diagnostic.cause
-            ? sanitizeNodeWorkerDiagnostic(
-                diagnostic.cause,
-                "node worker gateway connection failed",
-                options.scrubber.scrub,
-              )
-            : undefined;
-        },
-        stdinMode: "pipe-open",
-      }),
+      adapter: !supportsNodeWorkerProcessOwner()
+        ? await createChildAdapter({
+            ...workerOptions,
+            argv: [process.execPath, ...args],
+            exactEnv: true,
+          })
+        : await createServiceChildRelayAdapter({
+            ...workerOptions,
+            command: process.execPath,
+            args,
+            oomScoreWrapperSelected: false,
+          }),
     };
   }
 

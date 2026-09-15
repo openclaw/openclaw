@@ -36,20 +36,18 @@ async function writeFixture(
     })}\n`,
     "utf8",
   );
-  await fs.writeFile(path.join(packageRoot, "dist", "worker", "worker.mjs"), workerSource, {
-    encoding: "utf8",
-    mode: 0o755,
-  });
-  await fs.writeFile(
-    path.join(packageRoot, "dist", "worker", "github-exec-launcher.mjs"),
-    "export const launcher = true;\n",
-    { encoding: "utf8", mode: 0o755 },
-  );
-  await fs.writeFile(
-    path.join(packageRoot, "dist", "worker", "workspace-rsync-receiver.mjs"),
-    "export const receiver = true;\n",
-    { encoding: "utf8", mode: 0o755 },
-  );
+  for (const [artifactName, contents] of [
+    ["github-exec-launcher.mjs", "export const launcher = true;\n"],
+    ["service-child-group-anchor.mjs", "export const anchor = true;\n"],
+    ["service-child-relay.mjs", "export const relay = true;\n"],
+    ["worker.mjs", workerSource],
+    ["workspace-rsync-receiver.mjs", "export const receiver = true;\n"],
+  ] as const) {
+    await fs.writeFile(path.join(packageRoot, "dist", "worker", artifactName), contents, {
+      encoding: "utf8",
+      mode: 0o755,
+    });
+  }
 }
 
 async function listTarball(tarballPath: string): Promise<string[]> {
@@ -132,18 +130,28 @@ describe("worker bundle producer", () => {
       expect(second.bundleHash).toBe(first.bundleHash);
       await expect(listTarball(first.tarballPath)).resolves.toEqual([
         "github-exec-launcher.mjs",
+        "service-child-group-anchor.mjs",
+        "service-child-relay.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]);
       const extractRoot = path.join(root, "extract");
       await fs.mkdir(extractRoot);
       await tar.extract({ file: first.tarballPath, cwd: extractRoot });
-      await expect(fs.readFile(path.join(extractRoot, "worker.mjs"), "utf8")).resolves.toContain(
-        "worker = true",
-      );
-      await expect(
-        fs.readFile(path.join(extractRoot, "workspace-rsync-receiver.mjs"), "utf8"),
-      ).resolves.toContain("receiver = true");
+      for (const [artifactName, expectedContents] of [
+        ["github-exec-launcher.mjs", "export const launcher = true;\n"],
+        ["service-child-group-anchor.mjs", "export const anchor = true;\n"],
+        ["service-child-relay.mjs", "export const relay = true;\n"],
+        ["worker.mjs", "export const worker = true;\n"],
+        ["workspace-rsync-receiver.mjs", "export const receiver = true;\n"],
+      ] as const) {
+        await expect(fs.readFile(path.join(extractRoot, artifactName), "utf8")).resolves.toBe(
+          expectedContents,
+        );
+        if (process.platform !== "win32") {
+          expect((await fs.stat(path.join(extractRoot, artifactName))).mode & 0o777).toBe(0o700);
+        }
+      }
       await expect(fs.access(path.join(extractRoot, "package.json"))).rejects.toThrow();
       await expect(fs.access(path.join(extractRoot, "node_modules"))).rejects.toThrow();
     });
@@ -163,26 +171,22 @@ describe("worker bundle producer", () => {
       const unrelated = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
       expect(unrelated.bundleHash).toBe(first.bundleHash);
 
-      await fs.writeFile(
-        path.join(packageRoot, "dist", "worker", "worker.mjs"),
-        "export const value = 2;\n",
-      );
-      const changed = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
-      expect(changed.bundleHash).not.toBe(first.bundleHash);
-
-      await fs.writeFile(
-        path.join(packageRoot, "dist", "worker", "workspace-rsync-receiver.mjs"),
-        "export const receiver = false;\n",
-      );
-      const receiverChanged = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
-      expect(receiverChanged.bundleHash).not.toBe(changed.bundleHash);
-
-      await fs.writeFile(
-        path.join(packageRoot, "dist", "worker", "github-exec-launcher.mjs"),
-        "export const launcher = false;\n",
-      );
-      const launcherChanged = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
-      expect(launcherChanged.bundleHash).not.toBe(receiverChanged.bundleHash);
+      let previousHash = first.bundleHash;
+      for (const artifactName of [
+        "github-exec-launcher.mjs",
+        "service-child-group-anchor.mjs",
+        "service-child-relay.mjs",
+        "worker.mjs",
+        "workspace-rsync-receiver.mjs",
+      ]) {
+        await fs.writeFile(
+          path.join(packageRoot, "dist", "worker", artifactName),
+          "export const changed = true;\n",
+        );
+        const changed = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+        expect(changed.bundleHash, artifactName).not.toBe(previousHash);
+        previousHash = changed.bundleHash;
+      }
     });
   });
 
@@ -441,6 +445,8 @@ describe("worker bundle producer", () => {
       expect(repaired.bundleHash).toBe(first.bundleHash);
       await expect(listTarball(repaired.tarballPath)).resolves.toEqual([
         "github-exec-launcher.mjs",
+        "service-child-group-anchor.mjs",
+        "service-child-relay.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]);
@@ -450,6 +456,8 @@ describe("worker bundle producer", () => {
   it.skipIf(process.platform === "win32")("rejects symlinked deploy artifacts", async () => {
     for (const artifactName of [
       "github-exec-launcher.mjs",
+      "service-child-group-anchor.mjs",
+      "service-child-relay.mjs",
       "worker.mjs",
       "workspace-rsync-receiver.mjs",
     ]) {

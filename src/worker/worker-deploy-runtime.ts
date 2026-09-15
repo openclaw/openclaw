@@ -7,4 +7,8 @@ registerSealedRuntimeProcessEntrypoint(
   "githubExec",
   new URL("./github-exec-launcher.mjs", import.meta.url),
 );
+registerSealedRuntimeProcessEntrypoint(
+  "serviceChildRelay",
+  new URL("./service-child-relay.mjs", import.meta.url),
+);
 setWorkerDeployHighlightJsLoader(loadHighlightJsRuntime);

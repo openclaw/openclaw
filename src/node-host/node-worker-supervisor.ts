@@ -19,7 +19,7 @@ import type { NodeWorkerContainerEngine } from "./node-worker-container-engine.j
 import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
 import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
 import {
-  observeNodeWorkerChildOutput,
+  observeNodeWorkerChild,
   type NodeWorkerTerminalOutcome,
 } from "./node-worker-launch-observation.js";
 import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
@@ -39,6 +39,7 @@ import {
   nodeWorkerEnvironmentBinding,
   nodeWorkerEnvironmentKey,
   nodeWorkerEnvironmentMatches,
+  nodeWorkerObservedTerminal,
   nodeWorkerReceiptMatchesOwner,
   type NodeWorkerActiveOwnership,
   type NodeWorkerEnvironmentBinding,
@@ -339,8 +340,10 @@ class NodeWorkerSupervisor {
     await this.initialize();
     const turn = this.turns.get(launchId);
     if (turn) {
+      const owner = this.active.get(turn.ownerLaunchId);
       if (
-        this.active.get(turn.ownerLaunchId)?.state === "observed" ||
+        owner?.state === "observed" ||
+        (owner?.state === "running" && owner.deferredOutcome) ||
         turn.state === "pending" ||
         turn.state === "running"
       ) {
@@ -358,6 +361,10 @@ class NodeWorkerSupervisor {
       return this.reconcileActiveTerminal(active);
     }
     if (active?.state === "running") {
+      if (active.deferredOutcome && !active.container) {
+        this.reconcileDeferredOutcome(active);
+        return this.store.get(launchId);
+      }
       if (active.container) {
         const inspection = await this.requireContainerLifecycle().inspect(active.container, active);
         if (inspection === "unknown") {
@@ -379,9 +386,7 @@ class NodeWorkerSupervisor {
         } else {
           await this.cleanupActiveContainer(active);
           await active.done;
-          if (active.deferredOutcome) {
-            this.observeTerminalOutcome(active, active.deferredOutcome);
-          }
+          this.reconcileDeferredOutcome(active);
         }
         const observed = this.active.get(launchId);
         return observed?.state === "observed"
@@ -556,14 +561,7 @@ class NodeWorkerSupervisor {
       await startup;
       return await this.cancelOwner(expected);
     }
-    return await recoverNodeWorkerLaunch({
-      receipt,
-      store: this.store,
-      capacity: this.capacity,
-      containerLifecycle: this.containerLifecycle,
-      notifyCapacity: true,
-      state: "cancelled",
-    });
+    return await this.recoverRunning(receipt, true, "cancelled");
   }
 
   close(): Promise<void> {
@@ -631,6 +629,7 @@ class NodeWorkerSupervisor {
   private async recoverRunning(
     receipt: NodeWorkerLaunchReceipt,
     notifyCapacity = true,
+    state?: NodeWorkerStopState,
   ): Promise<NodeWorkerLaunchReceipt> {
     return await recoverNodeWorkerLaunch({
       receipt,
@@ -638,44 +637,30 @@ class NodeWorkerSupervisor {
       capacity: this.capacity,
       containerLifecycle: this.containerLifecycle,
       notifyCapacity,
+      state,
     });
   }
 
   private async observeChild(active: NodeWorkerRunningChild): Promise<void> {
-    const outcome = await observeNodeWorkerChildOutput(
+    const observation = await observeNodeWorkerChild(
       active,
       (frame) => settleNodeWorkerTurn(active, frame, this.turns),
       () => active.turn?.claim.launchId,
+      active.container ? () => this.cleanupActiveContainer(active) : undefined,
     );
-    if (active.container) {
-      try {
-        await this.cleanupActiveContainer(active);
-      } catch {
-        // Keep the launch running until a later cancel/status can prove the
-        // container was removed; failed cleanup must never release its slot.
-        active.deferredOutcome = outcome;
-        return;
-      }
+    if (observation.kind === "deferred") {
+      active.deferredOutcome = observation.outcome;
+      return;
     }
-    this.observeTerminalOutcome(active, outcome);
+    active.adapter.dispose();
+    this.observeTerminalOutcome(active, observation.outcome);
   }
 
   private observeTerminalOutcome(
     active: NodeWorkerRunningChild,
     outcome: NodeWorkerTerminalOutcome,
   ): void {
-    const observed: NodeWorkerObservedTerminal = {
-      state: "observed",
-      binding: active.binding,
-      gatewayNamespace: active.gatewayNamespace,
-      launchId: active.launchId,
-      planHash: active.planHash,
-      supervisor: active.supervisor,
-      worker: active.worker,
-      ...(active.container ? { container: active.container } : {}),
-      outcome,
-      ...(!active.stopState && active.turn?.cancelled ? { cancelledTurn: active.turn.claim } : {}),
-    };
+    const observed = nodeWorkerObservedTerminal(active, outcome);
     if (this.active.get(active.launchId) !== active) {
       return;
     }
@@ -687,6 +672,20 @@ class NodeWorkerSupervisor {
     }
     active.turn?.settle();
     active.turn = undefined;
+  }
+
+  private reconcileDeferredOutcome(active: NodeWorkerRunningChild): void {
+    if (!active.deferredOutcome) {
+      return;
+    }
+    if (!active.container && !active.adapter.confirmExtinction?.()) {
+      throw new Error(
+        "node worker process cleanup remains unconfirmed; retry status after cleanup finishes",
+        { cause: active.deferredOutcome.errorText },
+      );
+    }
+    active.adapter.dispose();
+    this.observeTerminalOutcome(active, active.deferredOutcome);
   }
 
   private async cleanupActiveContainer(active: NodeWorkerRunningChild): Promise<void> {
@@ -718,9 +717,7 @@ class NodeWorkerSupervisor {
     forceKill.unref?.();
     try {
       await active.done;
-      if (active.deferredOutcome) {
-        this.observeTerminalOutcome(active, active.deferredOutcome);
-      }
+      this.reconcileDeferredOutcome(active);
     } finally {
       clearTimeout(forceKill);
     }

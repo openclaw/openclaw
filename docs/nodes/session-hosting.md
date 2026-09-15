@@ -87,6 +87,12 @@ worker encounters an error while stopping. Worker diagnostics retain the shutdow
 failure separately. A worker slot becomes available only after its process tree
 or container has finished cleanup.
 
+Current Linux and macOS node hosts also retain that cleanup ownership when the application
+worker or node host crashes. Update and restart the node host to receive this
+protection; installing a new worker bundle from the Gateway alone does not update
+the node's supervisor. Recovery keeps capacity occupied while the previous
+owner finishes stopping its commands.
+
 The picker derives every device row from `environments.list`. Every selected
 runtime requires an available, connected paired session host. OpenClaw worker
 turns additionally require valid exact worker slots with at least one free

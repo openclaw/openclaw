@@ -1,10 +1,15 @@
+import { supportsNodeWorkerProcessOwner } from "../process/supervisor/service-child-protocol.js";
 import type { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import type { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
 import type { NodeWorkerLaunchReceipt, NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
-import { inspectNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
+import {
+  inspectNodeWorkerProcessIdentity,
+  inspectNodeWorkerProcessRole,
+} from "./node-worker-process-identity.js";
 import { nodeWorkerReceiptMatchesOwner } from "./node-worker-supervisor-ownership.js";
 import {
   inspectOwnedNodeWorkerTree,
+  signalOwnedNodeWorkerAnchor,
   signalOwnedNodeWorkerTree,
   waitForOwnedNodeWorkerTreeDeath,
 } from "./node-worker-tree-control.js";
@@ -79,15 +84,41 @@ export async function recoverNodeWorkerLaunch(params: {
       if (!stillOwned()) {
         return latest();
       }
-      await signalOwnedNodeWorkerTree(receipt.worker, "SIGTERM");
-      workerState = await waitForOwnedNodeWorkerTreeDeath(receipt.worker, STOP_GRACE_MS);
-    }
-    if (workerState === "live") {
+      const role = supportsNodeWorkerProcessOwner()
+        ? inspectNodeWorkerProcessRole(receipt.worker)
+        : "legacy";
       if (!stillOwned()) {
         return latest();
       }
-      await signalOwnedNodeWorkerTree(receipt.worker, "SIGKILL");
-      workerState = await waitForOwnedNodeWorkerTreeDeath(receipt.worker, FORCE_STOP_WAIT_MS);
+      if (role === "unknown") {
+        workerState = inspectOwnedNodeWorkerTree(receipt.worker);
+        if (workerState !== "dead") {
+          throw new Error(
+            "node worker cleanup owner could not be verified; inspect the remaining worker processes before retrying recovery",
+          );
+        }
+      } else {
+        if (role === "owned-anchor") {
+          signalOwnedNodeWorkerAnchor(receipt.worker, stillOwned);
+        } else {
+          await signalOwnedNodeWorkerTree(receipt.worker, "SIGTERM");
+        }
+        // The anchor retains nested cleanup evidence after its node host dies. Killing
+        // that observer would discard the only surviving proof before releasing capacity.
+        workerState = await waitForOwnedNodeWorkerTreeDeath(
+          receipt.worker,
+          role === "owned-anchor" ? undefined : STOP_GRACE_MS,
+          stillOwned,
+        );
+        if (workerState === "live" && role === "legacy") {
+          // Retain group recovery while active pre-anchor launch records remain supported.
+          if (!stillOwned()) {
+            return latest();
+          }
+          await signalOwnedNodeWorkerTree(receipt.worker, "SIGKILL");
+          workerState = await waitForOwnedNodeWorkerTreeDeath(receipt.worker, FORCE_STOP_WAIT_MS);
+        }
+      }
     }
     if (workerState !== "dead") {
       return latest();

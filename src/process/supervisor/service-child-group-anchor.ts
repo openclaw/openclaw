@@ -6,6 +6,7 @@ import { pipeline, type Readable } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
+import { INHERITED_PROCESS_LINEAGE_FD_ENV } from "./inherited-process-lineage.js";
 import { hasLiveOwnedProcessGroupMembers } from "./service-child-group-ownership.js";
 import {
   encodeServiceChildMessage,
@@ -16,11 +17,12 @@ import {
 } from "./service-child-protocol.js";
 
 type AnchorState = "starting" | "active" | "closing" | "closed";
-type StdioEntry = "ignore" | "inherit" | "pipe" | number;
+type StdioEntry = "ignore" | "inherit" | "pipe" | "ipc" | number;
 
 function commandStdio(start: ServiceChildStart): {
   stdio: StdioEntry[];
   lineageFd: number;
+  inheritedLineageFds: number[];
 } {
   const stdio: StdioEntry[] = [start.stdinMode === "inherit" ? "inherit" : "pipe", "pipe", "pipe"];
   if (start.secretFd !== undefined) {
@@ -37,7 +39,22 @@ function commandStdio(start: ServiceChildStart): {
     stdio.push("ignore");
   }
   stdio[lineageFd] = start.lineageFd ?? "pipe";
-  return { stdio, lineageFd };
+  const inheritedLineageFds = [lineageFd];
+  for (const inheritedFd of start.parentLineageFds ?? []) {
+    let parentLineageFd = 3;
+    while (stdio[parentLineageFd] !== undefined && stdio[parentLineageFd] !== "ignore") {
+      parentLineageFd += 1;
+    }
+    while (stdio.length <= parentLineageFd) {
+      stdio.push("ignore");
+    }
+    stdio[parentLineageFd] = inheritedFd;
+    inheritedLineageFds.push(parentLineageFd);
+  }
+  if (start.ownedWorker) {
+    stdio.push("ipc");
+  }
+  return { stdio, lineageFd, inheritedLineageFds };
 }
 
 function delay(ms: number): Promise<void> {
@@ -53,6 +70,7 @@ export function runServiceChildGroupAnchor(): void {
   let sequence = 0;
   let lastHostSequence = 0;
   let command: ChildProcess | undefined;
+  let workerStarted = false;
   let control: Socket | WriteStream | undefined;
   let rootSettlementStarted = false;
   let rootResultDelivery: Promise<void> | undefined;
@@ -158,6 +176,24 @@ export function runServiceChildGroupAnchor(): void {
     forceCleanup = signal === "SIGKILL";
     const cleanupDeadline = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
     const termGraceDone = delay(GRACEFUL_CANCEL_TIMEOUT_MS);
+    if (start.ownedWorker) {
+      if (!forceCleanup) {
+        process.kill(0, "SIGTERM");
+      }
+      const settled = Promise.all([rootExited.promise, lineageDone.promise]);
+      if (!forceCleanup) {
+        await Promise.race([settled, termGraceDone, forceCleanupRequested.promise]);
+      }
+      if (!rootExit) {
+        command?.kill("SIGKILL");
+      }
+      // The application may die before its detached command owners. The journaled
+      // anchor keeps its own lineage reader until their existing cleanup completes.
+      await settled;
+      await rootResultDelivery;
+      await closeAuthority(reason, true);
+      return;
+    }
     if (!forceCleanup) {
       // The anchor catches its own signal while every command-group member receives it.
       process.kill(0, "SIGTERM");
@@ -240,6 +276,28 @@ export function runServiceChildGroupAnchor(): void {
       markHostLineageClosed?.();
       return;
     }
+    if (message.type === "worker-close") {
+      if (start.ownedWorker && command?.connected) {
+        command.disconnect();
+      }
+      return;
+    }
+    if (message.type === "worker-start") {
+      if (!start.ownedWorker || workerStarted || state !== "active") {
+        return;
+      }
+      if (!command?.connected) {
+        void requestCleanup("parent-lost");
+        return;
+      }
+      workerStarted = true;
+      command.send({ type: "openclaw-worker-start-v1" }, (error) => {
+        if (error) {
+          void requestCleanup("parent-lost");
+        }
+      });
+      return;
+    }
     void requestCleanup("cancel", message.signal);
   };
 
@@ -281,9 +339,8 @@ export function runServiceChildGroupAnchor(): void {
       }
     });
     const onControlLoss = () => {
-      if (state === "closed") {
-        retirementReady.resolve(false);
-      } else {
+      retirementReady.resolve(false);
+      if (state !== "closed") {
         void requestCleanup("parent-lost");
       }
     };
@@ -294,11 +351,13 @@ export function runServiceChildGroupAnchor(): void {
       control.once("error", onControlLoss);
     }
 
-    const { stdio, lineageFd } = commandStdio(start);
+    const { stdio, lineageFd, inheritedLineageFds } = commandStdio(start);
     try {
       command = spawn(start.command, start.args, {
         cwd: start.cwd,
-        env: start.env,
+        env: start.ownedWorker
+          ? { ...start.env, [INHERITED_PROCESS_LINEAGE_FD_ENV]: inheritedLineageFds.join(",") }
+          : start.env,
         argv0: start.argv0,
         stdio,
         detached: false,
@@ -388,9 +447,20 @@ export function runServiceChildGroupAnchor(): void {
       const input = process.stdin;
       const destination = command.stdin;
       const endInput = () => destination.end();
+      let inputClosed = false;
+      const stopInput = () => {
+        input.unpipe(destination);
+        input.off("end", endInput);
+        input.destroy();
+        if (!inputClosed) {
+          inputClosed = true;
+          void send({ type: "stdin-closed" });
+        }
+      };
+      destination.once("error", stopInput);
+      destination.once("close", stopInput);
       // Own EOF explicitly: pipe's default end check initializes global Bun output writers.
       input.pipe(destination, { end: false });
-      destination.once("close", () => input.off("end", endInput));
       if (input.readableEnded) {
         endInput();
       } else {
@@ -402,6 +472,13 @@ export function runServiceChildGroupAnchor(): void {
         void reportStartupFailure(error.message);
       }
     });
+    if (start.ownedWorker) {
+      command.on("message", (message: unknown) => {
+        if (state === "active") {
+          void send({ type: "worker-message", message });
+        }
+      });
+    }
     if (command.pid && state === "starting") {
       state = "active";
       void send({

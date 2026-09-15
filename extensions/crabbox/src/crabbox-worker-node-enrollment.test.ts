@@ -312,7 +312,7 @@ echo 123
 
 async function expectSetupPhases(result: ReturnType<typeof enroll>) {
   const completed = await result;
-  expect(completed.code).toBe(0);
+  expect(completed.code, completed.output).toBe(0);
   const lines = completed.output.trim().split("\n");
   // Crabbox consumes these stream markers; successful bootstrap emits no other data.
   expect(lines.every((line) => /^CRABBOX_PHASE:[a-z.-]{1,80}$/.test(line))).toBe(true);

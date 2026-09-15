@@ -1,7 +1,11 @@
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { Duplex, PassThrough } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as childAdapter from "./adapters/child.js";
 import { createStubChild, firstMockArg } from "./adapters/child.test-support.js";
@@ -26,6 +30,7 @@ const nextTurn = () =>
     setImmediate(resolve);
   });
 const cleanups: Array<() => void> = [];
+const tempDirs = createTempDirTracker();
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) {
     cleanup();
@@ -35,6 +40,7 @@ afterEach(async () => {
   platformMock = undefined;
   mocks.spawn.mockReset();
   vi.restoreAllMocks();
+  tempDirs.cleanup();
 });
 
 async function createRelay(platform: "linux" | "darwin" | "win32", retainLineage = false) {
@@ -175,6 +181,118 @@ function createWritableRelayChild() {
   mocks.spawn.mockReturnValue(stub.child);
   return { ...stub, control };
 }
+
+it
+  .runIf(process.platform === "linux" || process.platform === "darwin")
+  .each(["open", "close-before-open", "stdin-closed"] as const)(
+  "keeps a real owned worker behind the legacy IPC start gate (%s)",
+  async (action) => {
+    const { spawn } =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    mocks.spawn.mockImplementation(spawn);
+    const home = tempDirs.make("openclaw-owned-worker-gate-");
+    const marker = path.join(home, "started.txt");
+    const onWorkerMessage = vi.fn<(message: unknown) => void>();
+    let adapter: Awaited<ReturnType<typeof createServiceChildRelayAdapter>> | undefined;
+    let cleanup: Promise<void> | undefined;
+    let output = "";
+    let stderr = "";
+    try {
+      const workerArgs = [
+        "-e",
+        `
+            const fs = require("node:fs");
+            process.on("message", (message) => {
+              if (JSON.stringify(message) !== '{"type":"openclaw-worker-start-v1"}') {
+                process.exit(42);
+              }
+              fs.appendFileSync(${JSON.stringify(marker)}, "started\\n");
+              process.send({ phase: "started", message }, () => {
+                process.stdout.write("owned worker finished\\n", () => process.disconnect());
+              });
+            });
+            process.send({ phase: "waiting", pid: process.pid, parentPid: process.ppid });
+          `,
+      ];
+      adapter = await createServiceChildRelayAdapter({
+        command: action === "stdin-closed" ? "/bin/sh" : process.execPath,
+        // Redirect the inherited pipe before Node initializes its standard stream handles.
+        args:
+          action === "stdin-closed"
+            ? ["-c", 'exec "$@" < /dev/null', "owned-worker-stdin", process.execPath, ...workerArgs]
+            : workerArgs,
+        cwd: home,
+        env: {
+          HOME: home,
+          PATH: process.env.PATH,
+          OPENCLAW_STATE_DIR: path.join(home, "state"),
+          OPENCLAW_CONFIG_PATH: path.join(home, "openclaw.json"),
+        },
+        stdinMode: "pipe-open",
+        oomScoreWrapperSelected: false,
+        ownedWorker: true,
+        onWorkerMessage,
+        onSpawnCleanup: (pending) => {
+          cleanup = pending;
+          void pending.catch(() => undefined);
+        },
+      });
+      adapter.onStdout((chunk) => {
+        output += chunk;
+      });
+      adapter.onStderr((chunk) => {
+        stderr = (stderr + chunk).slice(-8192);
+      });
+      const ownerPid = adapter.pid;
+      await vi.waitFor(() => {
+        expect(onWorkerMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ phase: "waiting", parentPid: ownerPid }),
+        );
+      });
+      const waiting = onWorkerMessage.mock.calls.find(
+        ([message]) => isRecord(message) && message.phase === "waiting",
+      )?.[0];
+      expect(waiting).not.toMatchObject({ pid: adapter.pid });
+      expect(existsSync(marker)).toBe(false);
+
+      if (action !== "close-before-open") {
+        if (action === "stdin-closed") {
+          await vi.waitFor(async () => {
+            await new Promise<void>((resolve) => {
+              adapter!.stdin!.write("probe", () => resolve());
+            });
+            expect(adapter!.stdin!.destroyed).toBe(true);
+          });
+          expect(stderr).toBe("");
+        }
+        await Promise.all([adapter.openStartGate!(), adapter.openStartGate!()]);
+        await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+        expect(onWorkerMessage).toHaveBeenCalledWith({
+          phase: "started",
+          message: { type: "openclaw-worker-start-v1" },
+        });
+        expect(onWorkerMessage).toHaveBeenCalledTimes(2);
+        expect(await readFile(marker, "utf8")).toBe("started\n");
+        expect(output).toBe("owned worker finished\n");
+      } else {
+        adapter.closeStartGate!();
+        await expect(adapter.openStartGate!()).rejects.toThrow("closed before startup");
+        await adapter.waitForExtinction();
+        expect(existsSync(marker)).toBe(false);
+        expect(onWorkerMessage).toHaveBeenCalledTimes(1);
+        expect(output).toBe("");
+      }
+    } finally {
+      adapter?.kill("SIGKILL");
+      await adapter?.wait().catch(() => undefined);
+      await cleanup?.catch((error: unknown) => {
+        throw new Error(`owned worker cleanup failed: ${stderr}`, { cause: error });
+      });
+      adapter?.dispose();
+    }
+  },
+  20_000,
+);
 
 it.each(["before", "after"] as const)(
   "checks launch policy %s relay start dispatch",
@@ -402,6 +520,7 @@ describe.each(["linux", "win32"] as const)("service closing authority (%s)", (pl
   it("acknowledges the exact POSIX receipt without certifying extinction", async () => {
     const { adapter, start, acknowledgements, emit, completeRoot, close } =
       await createRelay(platform);
+    expect(adapter.pid).toBe(1234);
     expect(start.acknowledgeClosing).toBe(platform === "linux" ? true : undefined);
     completeRoot();
     await adapter.wait();

@@ -1,5 +1,6 @@
 import { enableConsoleCapture, routeLogsToStderr } from "../logging/console.js";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { consumeInheritedProcessLineageFd } from "../process/supervisor/inherited-process-lineage.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import {
   NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
@@ -28,6 +29,7 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
   let disposed = false;
   let started = false;
   let settled = false;
+  const releaseLineage = consumeInheritedProcessLineageFd();
   let resolveStarted!: (started: boolean) => void;
   let rejectStarted!: (error: Error) => void;
   const startedPromise = new Promise<boolean>((resolve, reject) => {
@@ -96,6 +98,7 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
         return;
       }
       disposed = true;
+      releaseLineage?.();
       process.off("message", onMessage);
       process.off("disconnect", onDisconnect);
       if (process.connected) {

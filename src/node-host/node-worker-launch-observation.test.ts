@@ -5,7 +5,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { onDecodedOutput } from "../process/decoded-output.js";
 import type { WorkerProcessResult } from "../worker/worker-process-protocol.js";
 import {
-  observeNodeWorkerChildOutput,
+  observeNodeWorkerChild,
   type NodeWorkerTerminalOutcome,
 } from "./node-worker-launch-observation.js";
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
@@ -38,13 +38,13 @@ function observationHarness() {
   const exit = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
   const unsubscribe: Array<() => void> = [];
   const kill = vi.fn();
-  const dispose = vi.fn(() => {
+  const dispose = () => {
     for (const stop of unsubscribe) {
       stop();
     }
     stdout.destroy();
     stderr.destroy();
-  });
+  };
   const adapter = {
     supportsRawOutput: true,
     onStdout: (listener, onRaw) => {
@@ -60,7 +60,7 @@ function observationHarness() {
     dispose,
   } satisfies NodeWorkerChildAdapter;
   const frames: WorkerProcessResult[] = [];
-  const outcome = observeNodeWorkerChildOutput(
+  const outcome = observeNodeWorkerChild(
     {
       adapter,
       journalReady: journal.promise,
@@ -69,7 +69,10 @@ function observationHarness() {
     },
     (frame) => frames.push(frame),
     () => undefined,
-  );
+  ).then((observation) => {
+    expect(observation.kind).toBe("confirmed");
+    return observation.outcome;
+  });
   let closing: Promise<NodeWorkerTerminalOutcome> | undefined;
   const close = () =>
     (closing ??= (async () => {
@@ -78,13 +81,21 @@ function observationHarness() {
       await Promise.all([finished(stdout), finished(stderr)]);
       journal.resolve();
       exit.resolve({ code: 0, signal: null });
-      return await outcome;
+      try {
+        return await outcome;
+      } finally {
+        dispose();
+      }
     })());
   return {
     stdout,
     frames,
     kill,
-    dispose,
+    outcome,
+    failWait: (error: Error) => {
+      journal.resolve();
+      exit.reject(error);
+    },
     close,
     releaseJournal: async () => {
       journal.resolve();
@@ -111,7 +122,18 @@ describe("node worker output framing", () => {
       });
       expect(harness.frames).toEqual([resultFrame("first", "hello 漢😀")]);
       expect(harness.kill).not.toHaveBeenCalled();
-      expect(harness.dispose).toHaveBeenCalledOnce();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("does not accept late results while the owner still drains a failed worker", async () => {
+    const harness = observationHarness();
+    try {
+      harness.failWait(new Error("worker wait failed"));
+      expect(await harness.outcome).toMatchObject({ state: "failed" });
+      harness.stdout.write(encodeResult("late"));
+      expect(harness.frames).toEqual([]);
     } finally {
       await harness.close();
     }

@@ -22,7 +22,7 @@ import { VERSION } from "../../version.js";
 import { collectWorkerBundleManifest, type WorkerBundleManifestEntry } from "./bundle-staging.js";
 
 export { WORKER_BUNDLE_MANIFEST_VERSION };
-const OPENCLAW_NPM_REGISTRY = "https://registry.npmjs.org/";
+const NPM_REGISTRY_URL = "https://registry.npmjs.org/";
 const NPM_RELEASE_PROOF_TIMEOUT_MS = 60_000;
 const NPM_SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
 const BUNDLE_TARBALL_NAME_PATTERN = /^([a-f0-9]{64})\.tgz$/u;
@@ -211,7 +211,7 @@ async function verifyPublishedNpmRelease(params: {
             "version",
             "dist.integrity",
             "--json",
-            `--registry=${OPENCLAW_NPM_REGISTRY}`,
+            `--registry=${NPM_REGISTRY_URL}`,
           ],
           cwd: temporaryRoot,
           failureMessage: `OpenClaw ${params.version} is not published; use the worker bundle install`,
@@ -237,7 +237,7 @@ async function verifyPublishedNpmRelease(params: {
         temporaryRoot,
         "--ignore-scripts",
         "--json",
-        `--registry=${OPENCLAW_NPM_REGISTRY}`,
+        `--registry=${NPM_REGISTRY_URL}`,
       ],
       cwd: temporaryRoot,
       failureMessage:

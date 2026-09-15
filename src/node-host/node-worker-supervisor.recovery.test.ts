@@ -6,6 +6,8 @@ import { pathToFileURL } from "node:url";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readUnixProcessGroupMembers } from "../process/kill-tree.js";
+import { OWNED_NODE_WORKER_ANCHOR_ARG } from "../process/supervisor/service-child-protocol.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -15,6 +17,7 @@ import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.
 import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
+  inspectNodeWorkerProcessRole,
   requireNodeWorkerProcessIdentity,
   type NodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
@@ -330,6 +333,9 @@ describe("node worker supervisor recovery", () => {
       spawned.add(workerProcess);
       const worker = requireNodeWorkerProcessIdentity(workerProcess.pid!);
       ownedProcessGroups.push(worker);
+      if (process.platform === "linux" || process.platform === "darwin") {
+        expect(inspectNodeWorkerProcessRole(worker)).toBe("legacy");
+      }
       await vi.waitFor(() => expect(fs.readFileSync(marker, "utf8")).toMatch(/^[1-9]\d*$/u));
       const grandchild = requireNodeWorkerProcessIdentity(Number(fs.readFileSync(marker, "utf8")));
       const input = testWorkerLaunchInput(workspaceDir, "stale-running-launch", "wait");
@@ -362,6 +368,205 @@ describe("node worker supervisor recovery", () => {
       await supervisor.close();
     },
   );
+
+  it.runIf(process.platform === "linux" || process.platform === "darwin")(
+    "retains a stale owned anchor until its cleanup finishes beyond the legacy TERM grace",
+    async () => {
+      const { env, root, workspaceDir } = fixture("node-worker-anchor-recovery-");
+      const cleanupMarker = path.join(root, "cleanup-completed");
+      const workerProcess = spawn(
+        process.execPath,
+        [
+          "-e",
+          `
+            const fs = require("node:fs");
+            process.once("SIGTERM", () => {
+              setTimeout(() => {
+                fs.writeFileSync(${JSON.stringify(cleanupMarker)}, "settled");
+                process.exit(0);
+              }, 1500);
+            });
+            process.stdout.write("ready\\n");
+            setInterval(() => {}, 1000);
+          `,
+          "--",
+          OWNED_NODE_WORKER_ANCHOR_ARG,
+        ],
+        {
+          detached: true,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { HOME: root, PATH: process.env.PATH },
+        },
+      );
+      spawned.add(workerProcess);
+      await waitForChildLine(workerProcess);
+      const worker = requireNodeWorkerProcessIdentity(workerProcess.pid!);
+      ownedProcessGroups.push(worker);
+      expect(inspectNodeWorkerProcessRole(worker)).toBe("owned-anchor");
+      expect(inspectNodeWorkerProcessRole({ ...worker, startTime: worker.startTime + 1 })).toBe(
+        "unknown",
+      );
+      const input = testWorkerLaunchInput(workspaceDir, "anchor-recovery-launch", "wait");
+      const store = new NodeWorkerLaunchStore({ env });
+      store.get("schema-probe");
+      insertLaunch({
+        env,
+        input,
+        state: "running",
+        supervisor: { pid: 2_147_483_647, startTime: 1 },
+        worker,
+      });
+      const releasedAfterCleanup: boolean[] = [];
+      const capacity = new NodeWorkerCapacity(store, {
+        capacity: 1,
+        onCapacityChanged: (snapshot) => {
+          if (snapshot.available > 0) {
+            releasedAfterCleanup.push(fs.existsSync(cleanupMarker));
+          }
+        },
+      });
+      const signals = vi.spyOn(process, "kill");
+      try {
+        const recovered = await recoverNodeWorkerLaunch({
+          receipt: store.get(input.launchId)!,
+          store,
+          capacity,
+          notifyCapacity: true,
+        });
+        expect(recovered).toMatchObject({ state: "interrupted", worker });
+        expect(fs.readFileSync(cleanupMarker, "utf8")).toBe("settled");
+        expect(releasedAfterCleanup).toEqual([true]);
+        expect(signals).toHaveBeenCalledWith(worker.pid, "SIGTERM");
+        expect(signals).not.toHaveBeenCalledWith(-worker.pid, "SIGTERM");
+        expect(signals).not.toHaveBeenCalledWith(worker.pid, "SIGKILL");
+        expect(signals).not.toHaveBeenCalledWith(-worker.pid, "SIGKILL");
+        await waitForChildExit(workerProcess);
+      } finally {
+        signals.mockRestore();
+      }
+    },
+    20_000,
+  );
+
+  it.runIf(process.platform === "linux" || process.platform === "darwin").each([
+    { owner: "live worker with unreadable role", rootDead: false },
+    { owner: "dead legacy worker with a live process group", rootDead: true },
+  ])("retains the receipt and capacity for a $owner", async ({ rootDead }) => {
+    const { env, root, workspaceDir } = fixture("node-worker-unreadable-role-");
+    const input = testWorkerLaunchInput(workspaceDir, "unreadable-role-launch", "wait");
+    const store = new NodeWorkerLaunchStore({ env });
+    store.get("schema-probe");
+    const workerProcess = spawn(
+      process.execPath,
+      [
+        "-e",
+        `
+            const { spawn } = require("node:child_process");
+            const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+              detached: false,
+              stdio: "ignore",
+            });
+            child.once("spawn", () => process.stdout.write(String(child.pid) + "\\n"));
+            setInterval(() => {}, 1000);
+          `,
+      ],
+      {
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: { HOME: root, PATH: process.env.PATH },
+      },
+    );
+    spawned.add(workerProcess);
+    let descendant: NodeWorkerProcessIdentity | undefined;
+    let restoreRole: (() => void) | undefined;
+    let failure: { error: unknown } | undefined;
+    try {
+      const descendantPid = Number(await waitForChildLine(workerProcess));
+      const worker = requireNodeWorkerProcessIdentity(workerProcess.pid!);
+      descendant = requireNodeWorkerProcessIdentity(descendantPid);
+      expect(readUnixProcessGroupMembers(worker.pid)).toEqual(
+        expect.arrayContaining([worker.pid, descendant.pid]),
+      );
+      expect(inspectNodeWorkerProcessRole(worker)).toBe("legacy");
+      insertLaunch({
+        env,
+        input,
+        state: "running",
+        supervisor: { pid: 2_147_483_647, startTime: 1 },
+        worker,
+      });
+      const receipt = store.get(input.launchId)!;
+      if (rootDead) {
+        const rootExited = waitForChildExit(workerProcess);
+        workerProcess.kill("SIGKILL");
+        await rootExited;
+        expect(inspectNodeWorkerProcessIdentity(worker)).toBe("dead");
+        expect(inspectNodeWorkerProcessRole(worker)).toBe("unknown");
+        expect(process.kill(-worker.pid, 0)).toBe(true);
+      } else {
+        const identityRuntime = await import("./node-worker-process-identity.js");
+        const role = vi
+          .spyOn(identityRuntime, "inspectNodeWorkerProcessRole")
+          .mockReturnValue("unknown");
+        restoreRole = () => role.mockRestore();
+      }
+      expect(inspectNodeWorkerProcessIdentity(descendant)).toBe("live");
+      const publications = vi.fn();
+      await expect(
+        recoverNodeWorkerLaunch({
+          receipt,
+          store,
+          capacity: new NodeWorkerCapacity(store, {
+            capacity: 1,
+            onCapacityChanged: publications,
+          }),
+          notifyCapacity: true,
+        }),
+      ).rejects.toThrow("cleanup owner could not be verified");
+      expect(store.get(input.launchId)).toEqual(receipt);
+      expect(store.nonterminalCount()).toBe(1);
+      expect(publications).not.toHaveBeenCalled();
+      expect(inspectNodeWorkerProcessIdentity(descendant)).toBe("live");
+    } catch (error) {
+      failure = { error };
+    } finally {
+      restoreRole?.();
+    }
+    try {
+      try {
+        if (descendant) {
+          if (inspectNodeWorkerProcessIdentity(descendant) === "live") {
+            try {
+              process.kill(descendant.pid, "SIGKILL");
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+                throw error;
+              }
+            }
+          }
+          const identity = descendant;
+          await vi.waitFor(
+            () => expect(["dead", "reused"]).toContain(inspectNodeWorkerProcessIdentity(identity)),
+            { timeout: 5_000 },
+          );
+        }
+      } finally {
+        workerProcess.kill("SIGKILL");
+        await waitForChildExit(workerProcess);
+      }
+    } catch (error) {
+      failure = {
+        error: failure
+          ? new AggregateError([failure.error, error], "worker recovery and cleanup failed", {
+              cause: error,
+            })
+          : error,
+      };
+    }
+    if (failure) {
+      throw failure.error;
+    }
+  });
 
   it("returns a live foreign running receipt from a real second process without mutation", async () => {
     const { bundleRoot, env, root, workspaceDir } = fixture("node-worker-live-replay-");

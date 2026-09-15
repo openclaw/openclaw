@@ -5,21 +5,20 @@ import { StringDecoder } from "node:string_decoder";
 import { setTimeout as delay } from "node:timers/promises";
 import { toErrorObject } from "../../infra/errors.js";
 import { withTimeout } from "../../infra/fs-safe.js";
-import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../infra/runtime-worker-url.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { onDecodedOutput } from "../decoded-output.js";
 import { pipeProcessOutput } from "../pipe-output.js";
 import { prepareSecretInputStdio } from "../spawn-secret-input.js";
 import { createManagedChildStdin } from "./adapters/child-stdin.js";
 import { toStringEnv } from "./adapters/env.js";
-import { createProcessAdapterEvents } from "./adapters/process-events.js";
+import { createOutputRelay, createProcessAdapterEvents } from "./adapters/process-events.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
+import { getInheritedProcessLineageFds } from "./inherited-process-lineage.js";
+import { isOwnedProcessGroupGone } from "./service-child-group-ownership.js";
 import {
   encodeServiceChildMessage,
+  supportsNodeWorkerProcessOwner,
   type ServiceChildAnchorMessage,
   type ServiceChildControlMessage,
   type ServiceChildRelayMessage,
@@ -29,11 +28,13 @@ import type { ProcessAdapterConstruction, SpawnProcessAdapter, SpawnSecretInput 
 
 type ServiceChildRelayAdapter = SpawnProcessAdapter<NodeJS.Signals | null> & {
   waitForExtinction: () => Promise<void>;
+  confirmExtinction: () => boolean;
+  openStartGate?: () => Promise<void>;
+  closeStartGate?: () => void;
 } & Required<Pick<SpawnProcessAdapter<NodeJS.Signals | null>, "onExit" | "onError">>;
 type AuthorityState = "starting" | "active" | "closing" | "closed" | "identity-lost";
 type StdioEntry = "ignore" | "inherit" | "ipc" | "pipe" | number;
 
-const PUSHED_OUTPUT_BUFFER_LIMIT_BYTES = 256 * 1024;
 const CONTROL_PENDING_LINE_LIMIT_BYTES = 256 * 1024;
 
 function readChildMessage(raw: unknown): ServiceChildRelayMessage | ServiceChildAnchorMessage {
@@ -53,84 +54,6 @@ function reserveStdioEntry(stdio: StdioEntry[], value: StdioEntry): number {
   return fd;
 }
 
-function createOutputRelay(stream?: Readable, piped = false) {
-  const listeners = new Set<(chunk: string) => void>();
-  const rawListeners = new Set<(chunk: Buffer) => void>();
-  const pending: Array<string | Buffer> = [];
-  let pendingBytes = 0;
-  let active = false;
-  let ended = false;
-  const deliver = (chunk: string | Buffer) => {
-    if (typeof chunk === "string") {
-      listeners.forEach((listener) => listener(chunk));
-    } else {
-      rawListeners.forEach((listener) => listener(chunk));
-    }
-  };
-  const activate = (keepOutput: boolean) => {
-    if (active || piped) {
-      return;
-    }
-    active = true;
-    if (keepOutput) {
-      pending.forEach(deliver);
-    }
-    pending.length = 0;
-    pendingBytes = 0;
-    stream?.resume();
-  };
-  const push = (chunk: string | Buffer) => {
-    if (active) {
-      deliver(chunk);
-      return true;
-    }
-    const chunkBytes = Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk);
-    if (!stream && pendingBytes + chunkBytes > PUSHED_OUTPUT_BUFFER_LIMIT_BYTES) {
-      return false;
-    }
-    pending.push(chunk);
-    if (!stream || Buffer.isBuffer(chunk)) {
-      pendingBytes += chunkBytes;
-    }
-    if (stream && pendingBytes >= stream.readableHighWaterMark) {
-      // POSIX can retain later output in its native pipe until subscription.
-      stream.pause();
-    }
-    return true;
-  };
-  const end = () => {
-    ended = true;
-  };
-  if (stream) {
-    if (!piped) {
-      onDecodedOutput(stream, push, push);
-    }
-    stream.once("end", end);
-    stream.once("close", end);
-  }
-  return {
-    get ended() {
-      return ended;
-    },
-    push,
-    end,
-    subscribe: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => {
-      listeners.add(listener);
-      if (onRaw) {
-        rawListeners.add(onRaw);
-      }
-      activate(true);
-    },
-    drain: () => activate(false),
-    clear: () => {
-      listeners.clear();
-      rawListeners.clear();
-      pending.length = 0;
-      pendingBytes = 0;
-    },
-  };
-}
-
 export async function createServiceChildRelayAdapter(
   params: ProcessAdapterConstruction & {
     command: string;
@@ -143,16 +66,19 @@ export async function createServiceChildRelayAdapter(
     secretInput?: SpawnSecretInput;
     stderrDestination?: Writable;
     oomScoreWrapperSelected: boolean;
+    ownedWorker?: true;
+    onWorkerMessage?: (message: unknown) => void;
     windowsShellCommand?: string;
   },
 ): Promise<ServiceChildRelayAdapter> {
   const generation = randomUUID();
   const useWindowsJobAnchor =
     process.platform === "win32" && params.windowsShellCommand !== undefined;
-  const workerUrl = resolveRuntimeWorkerUrl(
-    useWindowsJobAnchor
-      ? runtimeProcessEntrypoints.serviceChildWindowsJobAnchor
-      : runtimeProcessEntrypoints.serviceChildRelay,
+  if (params.ownedWorker && !supportsNodeWorkerProcessOwner()) {
+    throw new Error("Owned worker relay requires Linux or macOS");
+  }
+  const workerUrl = resolveRuntimeProcessEntrypointUrl(
+    useWindowsJobAnchor ? "serviceChildWindowsJobAnchor" : "serviceChildRelay",
   );
   const stdio: StdioEntry[] = useWindowsJobAnchor
     ? ["ignore", "ignore", "ignore"]
@@ -163,6 +89,9 @@ export async function createServiceChildRelayAdapter(
   );
   const controlFd = useWindowsJobAnchor ? undefined : reserveStdioEntry(stdio, "pipe");
   const lineageFd = useWindowsJobAnchor ? undefined : reserveStdioEntry(stdio, "pipe");
+  const parentLineageFds = useWindowsJobAnchor
+    ? []
+    : getInheritedProcessLineageFds().map((fd) => reserveStdioEntry(stdio, fd));
   reserveStdioEntry(stdio, "ipc");
 
   if (params.abortSignal?.aborted) {
@@ -174,9 +103,9 @@ export async function createServiceChildRelayAdapter(
     stdio,
     // A detached Windows Job owner survives host loss long enough to clean up.
     // Keep its child handle referenced so an idle host can finish admission and lineage cleanup.
-    detached: useWindowsJobAnchor,
+    detached: useWindowsJobAnchor || params.ownedWorker === true || parentLineageFds.length > 0,
     windowsHide: true,
-    env: process.env,
+    env: params.ownedWorker ? params.env : process.env,
   });
   const extinctionCompletion = createDeferredCore();
   void extinctionCompletion.promise.catch(() => {});
@@ -278,7 +207,9 @@ export async function createServiceChildRelayAdapter(
     }
     settleWait();
     extinctionCompletion.reject(waitError);
-    lineage?.destroy();
+    if (!params.ownedWorker) {
+      lineage?.destroy();
+    }
   };
 
   const sendChildMessage = (
@@ -423,14 +354,12 @@ export async function createServiceChildRelayAdapter(
     for (;;) {
       try {
         // Observation only: signalling a retired numeric PGID could hit a reused group.
-        process.kill(-anchorPid, 0);
-      } catch (cause) {
-        // SAFETY: process.kill throws Node system errors; only the exact ESRCH code certifies absence.
-        if ((cause as NodeJS.ErrnoException).code === "ESRCH") {
+        if (isOwnedProcessGroupGone(anchorPid)) {
           finishAuthorityClose(missingReceiptError);
-        } else {
-          loseIdentity("owned process group disappearance could not be confirmed", { cause });
+          return;
         }
+      } catch (cause) {
+        loseIdentity("owned process group disappearance could not be confirmed", { cause });
         return;
       }
       const remainingMs = deadline - Date.now();
@@ -459,11 +388,20 @@ export async function createServiceChildRelayAdapter(
       state = "active";
       startup.resolve();
     } else if (message.type === "root-result") {
+      stdin?.destroy?.();
       if (!resultError && !rootResult) {
         rootResult = { code: message.code, signal: message.signal };
         events.emitExit(message.code, message.signal);
       }
       settleWait();
+    } else if (message.type === "stdin-closed") {
+      stdin?.destroy?.();
+    } else if (message.type === "worker-message" && params.ownedWorker) {
+      try {
+        params.onWorkerMessage?.(message.message);
+      } catch {
+        // Worker diagnostics cannot change child supervision.
+      }
     } else if (message.type === "result-error") {
       resultError ??= new Error(`service child result unavailable: ${message.error}`);
       settleWait();
@@ -633,8 +571,10 @@ export async function createServiceChildRelayAdapter(
     stdinMode: params.stdinMode,
     secretFd: params.secretInput?.fd,
     controlFd,
-    lineageFd,
+    lineageFd: params.ownedWorker ? undefined : lineageFd,
+    parentLineageFds: params.ownedWorker ? [lineageFd!, ...parentLineageFds] : parentLineageFds,
     ...(control ? { acknowledgeClosing: true as const } : {}),
+    ...(params.ownedWorker ? { ownedWorker: true as const } : {}),
     windowsShellCommand: params.windowsShellCommand,
   };
   const stdin = createManagedChildStdin(child.stdin);
@@ -704,8 +644,24 @@ export async function createServiceChildRelayAdapter(
     });
   };
 
+  let startGate: Promise<void> | undefined;
+  let startGateClosed = false;
+  const openStartGate = params.ownedWorker
+    ? () => {
+        if (startGateClosed || state !== "active" || requestedSignal) {
+          return Promise.reject(new Error("worker lifecycle closed before startup"));
+        }
+        return (startGate ??= sendControlMessage({
+          type: "worker-start",
+          generation,
+          sequence: ++outboundSequence,
+        }));
+      }
+    : undefined;
+
   return {
-    pid: commandPid,
+    // Worker journals bind the physical group owner; ordinary callers retain the command PID.
+    pid: params.ownedWorker ? anchorPid : commandPid,
     stdin,
     oomScoreWrapperSelected: params.oomScoreWrapperSelected,
     supportsRawOutput: !useWindowsJobAnchor,
@@ -721,7 +677,34 @@ export async function createServiceChildRelayAdapter(
       return await resultCompletion.promise;
     },
     waitForExtinction: async () => await extinctionCompletion.promise,
+    confirmExtinction: () => {
+      if (state === "closed") {
+        return true;
+      }
+      return Boolean(
+        !useWindowsJobAnchor &&
+        anchorPid &&
+        childExited &&
+        lineage?.readableEnded &&
+        isOwnedProcessGroupGone(anchorPid),
+      );
+    },
     kill,
+    openStartGate,
+    closeStartGate: params.ownedWorker
+      ? () => {
+          startGateClosed = true;
+          void sendControlMessage({
+            type: "worker-close",
+            generation,
+            sequence: ++outboundSequence,
+          }).catch((error: unknown) => {
+            if (state === "active") {
+              loseIdentity("worker startup channel could not be closed", { cause: error });
+            }
+          });
+        }
+      : undefined,
     dispose: () => {
       if (unpipeStderr) {
         unpipeStderr();

@@ -1,13 +1,27 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, createWriteStream } from "node:fs";
-import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { setTimeout as delay } from "node:timers/promises";
 import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../infra/runtime-worker-url.js";
-import type { ServiceChildRelayMessage, ServiceChildStart } from "./service-child-protocol.js";
+  registerSealedRuntimeProcessEntrypoint,
+  resolveRuntimeProcessEntrypointUrl,
+} from "../../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../../infra/runtime-worker-url.js";
+import { isOwnedProcessGroupGone } from "./service-child-group-ownership.js";
+import {
+  OWNED_NODE_WORKER_ANCHOR_ARG,
+  type ServiceChildRelayMessage,
+  type ServiceChildStart,
+} from "./service-child-protocol.js";
 
 type StdioEntry = "ignore" | "inherit" | "ipc" | number;
+declare const WORKER_DEPLOY_BUILD: boolean;
+
+if (typeof WORKER_DEPLOY_BUILD === "boolean" && WORKER_DEPLOY_BUILD) {
+  registerSealedRuntimeProcessEntrypoint(
+    "serviceChildGroupAnchor",
+    new URL("./service-child-group-anchor.mjs", import.meta.url),
+  );
+}
 
 function reserveIpcFd(stdio: StdioEntry[]): void {
   let fd = 3;
@@ -61,17 +75,24 @@ function runServiceChildRelay(): void {
       process.exitCode = 1;
       return;
     }
-    const anchorUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor);
+    const controlFd = start.controlFd;
+    const anchorUrl = resolveRuntimeProcessEntrypointUrl("serviceChildGroupAnchor");
     const stdio: StdioEntry[] = ["inherit", "inherit", "inherit"];
-    while (stdio.length <= start.controlFd) {
+    while (stdio.length <= controlFd) {
       stdio.push("ignore");
     }
-    stdio[start.controlFd] = start.controlFd;
+    stdio[controlFd] = controlFd;
     if (start.lineageFd !== undefined) {
       while (stdio.length <= start.lineageFd) {
         stdio.push("ignore");
       }
       stdio[start.lineageFd] = start.lineageFd;
+    }
+    for (const parentLineageFd of start.parentLineageFds ?? []) {
+      while (stdio.length <= parentLineageFd) {
+        stdio.push("ignore");
+      }
+      stdio[parentLineageFd] = parentLineageFd;
     }
     if (start.secretFd !== undefined) {
       while (stdio.length <= start.secretFd) {
@@ -81,7 +102,11 @@ function runServiceChildRelay(): void {
     }
     reserveIpcFd(stdio);
     try {
-      anchor = spawn(process.execPath, resolveRuntimeWorkerArgv(anchorUrl), {
+      const argv = resolveRuntimeWorkerArgv(anchorUrl);
+      if (start.ownedWorker) {
+        argv.push(OWNED_NODE_WORKER_ANCHOR_ARG);
+      }
+      anchor = spawn(process.execPath, argv, {
         stdio,
         detached: true,
         windowsHide: true,
@@ -103,6 +128,8 @@ function runServiceChildRelay(): void {
       return;
     }
     anchor.once("spawn", () => {
+      // The runtime owns standard stream descriptors; only private channels close here.
+      closeSync(controlFd);
       // Only the anchor and command may retain the host's lineage writer.
       if (start.lineageFd !== undefined) {
         closeSync(start.lineageFd);
@@ -131,7 +158,32 @@ function runServiceChildRelay(): void {
       report({ type: "relay-error", generation: generation!, error: error.message });
     });
     anchor.once("exit", (code, signal) => {
-      process.exit(code === 0 || signal === "SIGKILL" ? 0 : 1);
+      const exitCode = code === 0 || signal === "SIGKILL" ? 0 : 1;
+      if (!start.parentLineageFds?.length) {
+        process.exit(exitCode);
+      }
+      // The worker can die before its command. Retain the enclosing lineage writer
+      // outside both groups until the detached command group has actually vanished.
+      void (async () => {
+        let reportedFailure = false;
+        for (;;) {
+          try {
+            if (isOwnedProcessGroupGone(anchor!.pid!)) {
+              process.exit(exitCode);
+            }
+          } catch (error) {
+            if (!reportedFailure) {
+              reportedFailure = true;
+              report({
+                type: "relay-error",
+                generation: start.generation,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
+          await delay(100);
+        }
+      })();
     });
   });
 }

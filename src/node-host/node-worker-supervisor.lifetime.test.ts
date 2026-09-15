@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
-import * as processTree from "../process/kill-tree.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { completeWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import {
@@ -14,6 +13,7 @@ import {
   serializeWorkerProcessInput,
 } from "../worker/worker-process-protocol.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
+import * as workerLaunchTransport from "./node-worker-launch-transport.js";
 import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
@@ -140,6 +140,15 @@ describe("node worker environment lifetime", () => {
         fs.readFileSync(path.join(workspaceDir, `${first.launchId}.background.json`), "utf8"),
       ) as { pid: number; url: string };
       const server = requireNodeWorkerProcessIdentity(background.pid);
+      const started = JSON.parse(
+        fs.readFileSync(path.join(workspaceDir, `${first.launchId}.started.json`), "utf8"),
+      ) as { pid: number; starts: number };
+      const application = requireNodeWorkerProcessIdentity(started.pid);
+      expect(started.starts).toBe(1);
+      expect(application.pid === running.worker!.pid).toBe(
+        process.platform !== "linux" && process.platform !== "darwin",
+      );
+      expect(inspectNodeWorkerProcessIdentity(application)).toBe("live");
       connection = await observeBackgroundConnection(background.url);
       expect(completed.state).toBe("completed");
       expect(store.get(first.launchId)).toMatchObject({ state: "running", worker: running.worker });
@@ -151,7 +160,7 @@ describe("node worker environment lifetime", () => {
         JSON.parse(
           fs.readFileSync(path.join(workspaceDir, `${first.launchId}.started.json`), "utf8"),
         ),
-      ).toEqual({ pid: running.worker!.pid, starts: 1 });
+      ).toEqual(started);
 
       const poll = nextTurn("preview-poll", "background-poll");
       poll.descriptor.assignment.systemPrompt = '"\\\0\n漢😀';
@@ -170,6 +179,11 @@ describe("node worker environment lifetime", () => {
         worker: running.worker,
       });
       expect((await waitForTerminal(supervisor, poll.launchId)).state).toBe("completed");
+      expect(
+        JSON.parse(
+          fs.readFileSync(path.join(workspaceDir, `${poll.launchId}.started.json`), "utf8"),
+        ),
+      ).toEqual({ pid: application.pid, starts: 1 });
       expect(
         JSON.parse(
           fs.readFileSync(path.join(workspaceDir, `${poll.launchId}.background.json`), "utf8"),
@@ -200,6 +214,11 @@ describe("node worker environment lifetime", () => {
         worker: running.worker,
       });
       expect((await waitForTerminal(supervisor, afterCancel.launchId)).state).toBe("completed");
+      expect(
+        JSON.parse(
+          fs.readFileSync(path.join(workspaceDir, `${afterCancel.launchId}.started.json`), "utf8"),
+        ),
+      ).toEqual({ pid: application.pid, starts: 1 });
       expect(store.listNonterminal()).toHaveLength(1);
       expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
 
@@ -212,7 +231,9 @@ describe("node worker environment lifetime", () => {
         expect(inspectNodeWorkerProcessIdentity(running.worker!)).toBe("live");
       }
       await supervisor.stopEnvironment(environment);
-      await vi.waitFor(() => expectBackgroundRetired(connection!, running.worker!, server));
+      await vi.waitFor(() =>
+        expectBackgroundRetired(connection!, running.worker!, application, server),
+      );
       expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 1 });
       expect(await supervisor.status(first.launchId)).toEqual(completed);
       expect((await supervisor.status(waiting.launchId))?.state).toBe("cancelled");
@@ -236,13 +257,19 @@ describe("node worker environment lifetime", () => {
         fs.readFileSync(path.join(workspaceDir, `${input.launchId}.background.json`), "utf8"),
       ) as { pid: number; url: string };
       const server = requireNodeWorkerProcessIdentity(background.pid);
+      const started = JSON.parse(
+        fs.readFileSync(path.join(workspaceDir, `${input.launchId}.started.json`), "utf8"),
+      ) as { pid: number; starts: number };
+      const application = requireNodeWorkerProcessIdentity(started.pid);
       connection = await observeBackgroundConnection(background.url);
       expect(await (await fetch(background.url)).text()).toBe("preview-ready");
 
       await supervisor.close();
 
       expect(await supervisor.status(input.launchId)).toEqual(completed);
-      await vi.waitFor(() => expectBackgroundRetired(connection!, running.worker!, server));
+      await vi.waitFor(() =>
+        expectBackgroundRetired(connection!, running.worker!, application, server),
+      );
     } finally {
       try {
         await supervisor.close();
@@ -399,8 +426,19 @@ describe("node worker environment lifetime", () => {
     const next = structuredClone(first);
     next.launchId = next.descriptor.assignment.turnId = "held-next";
     next.descriptor.admission.ownerEpoch += 1;
-    const signalTree = processTree.signalProcessTree;
-    const heldSignals: Array<Parameters<typeof signalTree>> = [];
+    const prepare = workerLaunchTransport.prepareNodeWorkerLaunchTransport;
+    let ownerAdapter: workerLaunchTransport.NodeWorkerChildAdapter | undefined;
+    const captureAdapter = vi
+      .spyOn(workerLaunchTransport, "prepareNodeWorkerLaunchTransport")
+      .mockImplementation(async (options) => {
+        const transport = await prepare(options);
+        if (transport.kind === "started") {
+          ownerAdapter ??= transport.adapter;
+        }
+        return transport;
+      });
+    let killOwner: workerLaunchTransport.NodeWorkerChildAdapter["kill"] | undefined;
+    const heldSignals: Array<NodeJS.Signals | undefined> = [];
     let connection: BackgroundConnection | undefined;
     let restoreSignals: (() => void) | undefined;
     let restoreClose: (() => void) | undefined;
@@ -410,12 +448,17 @@ describe("node worker environment lifetime", () => {
     const releaseSignals = () => {
       restoreSignals?.();
       restoreSignals = undefined;
-      for (const args of heldSignals.splice(0)) {
-        signalTree(...args);
+      for (const signal of heldSignals.splice(0)) {
+        killOwner!(signal);
       }
     };
     try {
       const original = await supervisor.launch(first, TEST_WORKER_ENDPOINT);
+      captureAdapter.mockRestore();
+      if (!ownerAdapter || ownerAdapter.pid !== original.worker!.pid) {
+        throw new Error("missing original physical worker adapter");
+      }
+      killOwner = ownerAdapter.kill;
       await waitForTerminal(supervisor, first.launchId);
       const background = JSON.parse(
         fs.readFileSync(path.join(workspaceDir, `${first.launchId}.background.json`), "utf8"),
@@ -434,12 +477,8 @@ describe("node worker environment lifetime", () => {
         return emit(event, ...args);
       });
       restoreClose = () => close.mockRestore();
-      const signals = vi.spyOn(processTree, "signalProcessTree").mockImplementation((...args) => {
-        if (args[0] !== original.worker!.pid) {
-          signalTree(...args);
-          return;
-        }
-        heldSignals.push(args);
+      const signals = vi.spyOn(ownerAdapter, "kill").mockImplementation((signal) => {
+        heldSignals.push(signal);
       });
       restoreSignals = () => signals.mockRestore();
       const assertRetired = () => expectBackgroundRetired(connection!, original.worker!, server);
@@ -485,6 +524,7 @@ describe("node worker environment lifetime", () => {
       restoreIdentity = undefined;
       assertRetired();
     } finally {
+      captureAdapter.mockRestore();
       restoreIdentity?.();
       releaseSignals();
       restoreClose?.();

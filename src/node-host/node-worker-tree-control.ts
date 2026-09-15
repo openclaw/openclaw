@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { signalProcessTree } from "../process/kill-tree.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -67,13 +68,34 @@ export async function signalOwnedNodeWorkerTree(
   });
 }
 
+/** A recognized cleanup observer owns delivery to its child and must not receive group escalation. */
+export function signalOwnedNodeWorkerAnchor(
+  worker: NodeWorkerProcessIdentity,
+  isOwnerCurrent: () => boolean,
+): void {
+  if (!isOwnerCurrent() || inspectNodeWorkerProcessIdentity(worker) !== "live") {
+    return;
+  }
+  try {
+    process.kill(worker.pid, "SIGTERM");
+  } catch (error) {
+    if (extractErrorCode(error) !== "ESRCH") {
+      throw error;
+    }
+  }
+}
+
 export async function waitForOwnedNodeWorkerTreeDeath(
   worker: NodeWorkerProcessIdentity,
-  timeoutMs: number,
+  timeoutMs?: number,
+  isOwnerCurrent?: () => boolean,
 ): Promise<NodeWorkerTreeState> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = timeoutMs === undefined ? Infinity : Date.now() + timeoutMs;
   let state = inspectOwnedNodeWorkerTree(worker);
   while (state === "live" && Date.now() < deadline) {
+    if (isOwnerCurrent?.() === false) {
+      break;
+    }
     await delay(RECOVERY_POLL_MS);
     state = inspectOwnedNodeWorkerTree(worker);
   }
