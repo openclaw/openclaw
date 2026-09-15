@@ -414,6 +414,16 @@ export const dispatchTelegramMessage = async (
     dispatchWasSuperseded = isDispatchSuperseded();
   }
 
+  // Name the accepted inbound text even when the reply pipeline finishes without
+  // dispatch or a visible answer, or is superseded mid-flight. Keep this after the
+  // pre-pipeline fence and cleanup; first-turn eligibility was captured before dispatch.
+  scheduleDmTopicLabel({
+    bot,
+    cfg,
+    context: dispatchContext,
+    isFirstTurnInSession,
+    telegramCfg,
+  });
   if (turnDispatched === false) {
     return { kind: "completed" };
   }
@@ -502,13 +512,6 @@ export const dispatchTelegramMessage = async (
     return { kind: "completed" };
   }
 
-  scheduleDmTopicLabel({
-    bot,
-    cfg,
-    context: dispatchContext,
-    isFirstTurnInSession,
-    telegramCfg,
-  });
   if (status.controller) {
     status.finalizeInBackground(
       {
