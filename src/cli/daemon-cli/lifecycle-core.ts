@@ -312,6 +312,7 @@ export async function runServiceStart(params: {
           defaultRuntime.log(warning);
         }
       }
+      await params.postStartCheck?.({ json, stdout, warnings, warn, fail });
       emitDaemonAlreadyRunning({
         serviceNoun: params.serviceNoun,
         service: params.service,
@@ -356,8 +357,7 @@ export async function runServiceStart(params: {
       );
       return;
     }
-    const serviceLoaded = startResult.state.loadState.status === "loaded";
-    await emitStarted({ loaded: serviceLoaded });
+    await emitStarted({ loaded: startResult.state.loadState.status === "loaded" });
   } catch (err) {
     fail(`${params.serviceNoun} start failed: ${String(err)}`, params.renderStartHints());
   }

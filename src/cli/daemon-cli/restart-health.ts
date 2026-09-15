@@ -28,7 +28,11 @@ import {
   DEFAULT_RESTART_HEALTH_DELAY_MS,
 } from "./restart-health.constants.js";
 import type { GatewayRestartSnapshot, GatewayRestartWaitOutcome } from "./restart-health.types.js";
-import { hasListenerAttributionGap, listenerOwnedByRuntimePid } from "./restart-port-ownership.js";
+import {
+  allListenersOwnedByRuntimePid,
+  hasListenerAttributionGap,
+  listenerOwnedByRuntimePid,
+} from "./restart-port-ownership.js";
 export {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
@@ -53,6 +57,8 @@ function finalizeGatewayRestartSnapshot(
   expectedVersion: string | undefined,
   expectedBuildId: string | undefined,
   requirePluginHealth: boolean,
+  requireUnavailablePlugins: boolean,
+  channelHealthRequired: boolean,
 ): GatewayRestartSnapshot {
   if (expectedVersion) {
     snapshot.expectedVersion = expectedVersion;
@@ -80,8 +86,10 @@ function finalizeGatewayRestartSnapshot(
     }
   }
   if (
-    (requirePluginHealth && snapshot.activatedPluginErrors?.length) ||
-    snapshot.channelProbeErrors?.length
+    (requirePluginHealth &&
+      (snapshot.activatedPluginErrors?.length ||
+        (requireUnavailablePlugins && snapshot.unavailablePlugins?.length))) ||
+    (channelHealthRequired && snapshot.channelProbeErrors?.length)
   ) {
     snapshot.healthy = false;
   }
@@ -95,6 +103,8 @@ export async function inspectGatewayRestart(params: {
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
   requirePluginHealth?: boolean;
+  includePluginHealth?: boolean;
+  includeChannelHealth?: boolean;
   probeContext?: GatewayRestartProbeContext;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
@@ -117,8 +127,13 @@ export async function inspectGatewayRestart(params: {
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
   const expectedBuildId = normalizeOptionalString(params.expectedBuildId);
   const requiresGatewayProbe = Boolean(
-    expectedVersion || expectedBuildId || params.requirePluginHealth === false,
+    expectedVersion ||
+    expectedBuildId ||
+    params.requirePluginHealth === false ||
+    params.includePluginHealth === true ||
+    params.includeChannelHealth === true,
   );
+  const channelHealthRequired = params.includeChannelHealth !== false;
   let reachability: GatewayReachability | null = null;
   let probeError: string | undefined;
   let activatedPluginErrors: PluginHealthErrorSummary[] = [];
@@ -183,9 +198,7 @@ export async function inspectGatewayRestart(params: {
           ...(reachable.activatedPluginErrors.length > 0
             ? { activatedPluginErrors: reachable.activatedPluginErrors }
             : {}),
-          ...(reachable.unavailablePlugins.length > 0
-            ? { unavailablePlugins: reachable.unavailablePlugins }
-            : {}),
+          ...(unavailablePlugins.length > 0 ? { unavailablePlugins } : {}),
           ...(reachable.channelProbeErrors.length > 0
             ? { channelProbeErrors: reachable.channelProbeErrors }
             : {}),
@@ -193,6 +206,8 @@ export async function inspectGatewayRestart(params: {
         expectedVersion,
         expectedBuildId,
         params.requirePluginHealth !== false,
+        params.includePluginHealth === true,
+        channelHealthRequired,
       );
     }
   }
@@ -267,6 +282,8 @@ export async function inspectGatewayRestart(params: {
     expectedVersion,
     expectedBuildId,
     params.requirePluginHealth !== false,
+    params.includePluginHealth === true,
+    channelHealthRequired,
   );
 }
 
@@ -321,6 +338,8 @@ export async function waitForGatewayHealthyRestart(params: {
   requirePluginHealth?: boolean;
   supervisorKeepsAlive?: boolean;
   isStartupMigrationActive?: typeof hasActiveStartupMigrationLease;
+  includePluginHealth?: boolean;
+  includeChannelHealth?: boolean;
   probeHosts?: readonly string[];
   signal?: AbortSignal;
 }): Promise<GatewayRestartSnapshot> {
@@ -355,6 +374,8 @@ export async function waitForGatewayHealthyRestart(params: {
     expectedVersion: params.expectedVersion,
     expectedBuildId: params.expectedBuildId,
     requirePluginHealth: params.requirePluginHealth,
+    includePluginHealth: params.includePluginHealth === true,
+    includeChannelHealth: params.includeChannelHealth,
     probeContext,
     configuredProbe,
     probeHosts,
@@ -373,6 +394,9 @@ export async function waitForGatewayHealthyRestart(params: {
   let migrationActive = false;
   let nextMigrationActivityPollMs = 0;
   let healthyStreak: { snapshot: GatewayRestartSnapshot; probes: number } | undefined;
+  let failureStreak:
+    | { snapshot: GatewayRestartSnapshot; outcome: GatewayRestartWaitOutcome; probes: number }
+    | undefined;
   let updateStartupDeadlineMs: number | undefined;
   let observedOwner: string | undefined;
 
@@ -420,17 +444,56 @@ export async function waitForGatewayHealthyRestart(params: {
       // Callers consume snapshot.healthy; a partial settle must not report recovery at timeout.
       snapshot.healthy = false;
     }
-    if (params.requirePluginHealth !== false && snapshot.activatedPluginErrors?.length) {
-      return withWaitContext(snapshot, "plugin-errors", elapsedMs);
-    }
-    if (snapshot.channelProbeErrors?.length) {
-      return withWaitContext(snapshot, "channel-errors", elapsedMs);
-    }
     if (snapshot.versionMismatch) {
       return withWaitContext(snapshot, "version-mismatch", elapsedMs);
     }
     if (snapshot.buildIdMismatch) {
       return withWaitContext(snapshot, "build-id-mismatch", elapsedMs);
+    }
+    const runtimePid = snapshot.runtime.pid;
+    const serviceRuntimeReady =
+      !params.requireRunningService ||
+      (snapshot.runtime.status === "running" &&
+        typeof runtimePid === "number" &&
+        snapshot.portUsage.status === "busy" &&
+        allListenersOwnedByRuntimePid(snapshot.portUsage.listeners, runtimePid));
+    let failureOutcome: GatewayRestartWaitOutcome | undefined;
+    if (
+      serviceRuntimeReady &&
+      params.requirePluginHealth !== false &&
+      snapshot.activatedPluginErrors?.length
+    ) {
+      failureOutcome = "plugin-errors";
+    } else if (
+      serviceRuntimeReady &&
+      params.requirePluginHealth !== false &&
+      params.includePluginHealth === true &&
+      snapshot.unavailablePlugins?.length
+    ) {
+      failureOutcome = "plugin-unavailable";
+    } else if (
+      serviceRuntimeReady &&
+      params.includeChannelHealth !== false &&
+      snapshot.channelProbeErrors?.length
+    ) {
+      failureOutcome = "channel-errors";
+    }
+    // Degraded readiness also needs a settled generation: a retiring boot can
+    // still own the listener while an asynchronous restart is taking effect.
+    if (failureOutcome) {
+      if (
+        failureStreak?.outcome === failureOutcome &&
+        isSameGatewayRestartGeneration(failureStreak.snapshot, snapshot)
+      ) {
+        failureStreak.probes += 1;
+      } else {
+        failureStreak = { snapshot, outcome: failureOutcome, probes: 1 };
+      }
+      if (failureStreak.probes >= settleProbes) {
+        return withWaitContext(snapshot, failureOutcome, elapsedMs);
+      }
+    } else {
+      failureStreak = undefined;
     }
     if (snapshot.staleGatewayPids.length > 0 && snapshot.runtime.status !== "running") {
       return withWaitContext(snapshot, "stale-pids", elapsedMs);
@@ -507,6 +570,8 @@ export async function waitForGatewayHealthyRestart(params: {
       expectedVersion: params.expectedVersion,
       expectedBuildId: params.expectedBuildId,
       requirePluginHealth: params.requirePluginHealth,
+      includePluginHealth: params.includePluginHealth === true,
+      includeChannelHealth: params.includeChannelHealth,
       probeContext,
       configuredProbe,
       probeHosts,

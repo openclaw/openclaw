@@ -6,10 +6,10 @@ import {
   createHealthyRestartSnapshot,
   failRestartCheck,
   expectRestartError,
-  type RestartHealthSnapshot,
   requireMockCallArg,
   type RestartParams,
 } from "./lifecycle.test-helpers.js";
+import type { GatewayRestartSnapshot as RestartHealthSnapshot } from "./restart-health.types.js";
 
 const service = {
   readCommand: vi.fn(),
@@ -556,6 +556,7 @@ describe("runDaemonRestart health checks", () => {
         staleGatewayPids: [1993],
         runtime: { status: "stopped" },
         portUsage: { port: 18789, status: "busy", listeners: [], hints: [] },
+        unavailablePlugins: [{ id: "fixture", reason: "missing", detail: "not installed" }],
       };
       waitForGatewayHealthyRestart.mockResolvedValueOnce(unhealthy);
       waitForGatewayHealthyRestart.mockResolvedValueOnce(createHealthyRestartSnapshot());
@@ -613,6 +614,7 @@ describe("runDaemonRestart health checks", () => {
       staleGatewayPids: [],
       runtime: { status: "stopped" },
       portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+      unavailablePlugins: [{} as never],
       waitOutcome: "timeout",
       elapsedMs: 60_000,
     };
@@ -655,10 +657,12 @@ describe("runDaemonRestart health checks", () => {
       attempts?: unknown;
       delayMs?: unknown;
       port?: unknown;
+      requireRunningService?: unknown;
     };
     expect(waitParams.attempts).toBe(360);
     expect(waitParams.delayMs).toBe(500);
     expect(waitParams.port).toBe(18789);
+    expect(waitParams.requireRunningService).toBe(true);
   });
 
   it("fails restart with a stopped-free message when the waiter exits early", async () => {
@@ -869,6 +873,7 @@ describe("runDaemonRestart health checks", () => {
       env: process.env,
       attempts: 960,
       delayMs: 500,
+      includePluginHealth: true,
       previousLockIdentity: {
         pid: 4200,
         ownerId: "gateway-owner-old",
@@ -913,6 +918,7 @@ describe("runDaemonRestart health checks", () => {
       env: process.env,
       attempts: 420,
       delayMs: 500,
+      includePluginHealth: true,
       previousLockIdentity: {
         pid: 4200,
         createdAt: "2026-07-16T12:00:00.000Z",
@@ -982,19 +988,7 @@ describe("runDaemonRestart health checks", () => {
       message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
     });
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
-    runServiceRestart.mockImplementation(
-      async (params: RestartParams & { onNotLoaded?: () => Promise<unknown> }) => {
-        const activationAccepted = Boolean(await params.onNotLoaded?.());
-        await params.postRestartCheck?.({
-          activationAccepted,
-          json: Boolean(params.opts?.json),
-          stdout: process.stdout,
-          warnings: [],
-          fail: failRestartCheck,
-        });
-        return true;
-      },
-    );
+    mockUnmanagedRestart({ runPostRestartCheck: true });
 
     await runDaemonRestart({ json: true });
 

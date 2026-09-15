@@ -1,7 +1,28 @@
 import { formatPortDiagnostics } from "../../infra/ports.js";
 import type { GatewayPortHealthSnapshot, GatewayRestartSnapshot } from "./restart-health.types.js";
+import { allListenersOwnedByRuntimePid } from "./restart-port-ownership.js";
 
-function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
+function renderPluginDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
+  const lines: string[] = [];
+  if (snapshot.activatedPluginErrors?.length) {
+    lines.push("Activated plugin load errors:");
+    for (const plugin of snapshot.activatedPluginErrors) {
+      lines.push(`- ${plugin.id}: ${plugin.error}`);
+    }
+  }
+  if (snapshot.unavailablePlugins?.length) {
+    lines.push("Configured plugins unavailable:");
+    for (const plugin of snapshot.unavailablePlugins) {
+      lines.push(`- ${plugin.id}: ${plugin.detail}`);
+    }
+  }
+  return lines;
+}
+
+function renderPortUsageDiagnostics(
+  snapshot: GatewayPortHealthSnapshot,
+  includePluginDiagnostics = true,
+): string[] {
   const lines: string[] = [];
   if (snapshot.portUsage.status === "busy") {
     lines.push(...formatPortDiagnostics(snapshot.portUsage));
@@ -13,6 +34,9 @@ function renderPortUsageDiagnostics(snapshot: GatewayPortHealthSnapshot): string
   }
   if (snapshot.probeError) {
     lines.push(`Gateway probe failed: ${snapshot.probeError}`);
+  }
+  if (includePluginDiagnostics) {
+    lines.push(...renderPluginDiagnostics(snapshot));
   }
   return lines;
 }
@@ -36,12 +60,6 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
       `Gateway build mismatch: expected ${snapshot.buildIdMismatch.expected}, running gateway reported ${actual}.`,
     );
   }
-  if (snapshot.activatedPluginErrors?.length) {
-    lines.push("Activated plugin load errors:");
-    for (const plugin of snapshot.activatedPluginErrors) {
-      lines.push(`- ${plugin.id}: ${plugin.error}`);
-    }
-  }
   if (snapshot.channelProbeErrors?.length) {
     lines.push("Channel health probe errors:");
     for (const channel of snapshot.channelProbeErrors) {
@@ -59,7 +77,13 @@ export function renderRestartDiagnostics(snapshot: GatewayRestartSnapshot): stri
   if (runtimeSummary) {
     lines.push(`Service runtime: ${runtimeSummary}`);
   }
-  lines.push(...renderPortUsageDiagnostics(snapshot));
+  const runtimePid = snapshot.runtime.pid;
+  const pluginOwnershipAccepted =
+    snapshot.runtime.status === "running" &&
+    typeof runtimePid === "number" &&
+    snapshot.portUsage.status === "busy" &&
+    allListenersOwnedByRuntimePid(snapshot.portUsage.listeners, runtimePid);
+  lines.push(...renderPortUsageDiagnostics(snapshot, pluginOwnershipAccepted));
   return lines;
 }
 

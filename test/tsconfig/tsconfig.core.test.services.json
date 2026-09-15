@@ -8,8 +8,6 @@
     "../../src/infra/update-*.test.tsx",
     "../../src/infra/package-update-*.test.ts",
     "../../src/infra/package-update-*.test.tsx",
-    "../../src/cli/daemon-cli/**/*.test.ts",
-    "../../src/cli/daemon-cli/**/*.test.tsx",
     "../../src/cron/**/*.test.ts",
     "../../src/cron/**/*.test.tsx",
     "../../src/daemon/**/*.test.ts",
