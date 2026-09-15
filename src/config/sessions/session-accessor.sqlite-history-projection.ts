@@ -144,23 +144,24 @@ export function resolveVisibleHistoryProjection(
       ])
       .orderBy("active.active_position", "asc"),
   ).rows;
-  const readNextMessage = prepareSqliteQuerySync<
-    number,
-    { active_position: number; message_position: number | null }
-  >(projection.database.db, (parameter) =>
-    db
-      .selectFrom("session_transcript_active_events")
-      .select(["active_position", "message_position"])
-      .where("session_id", "=", projection.resolved.sessionId)
-      .where(
-        "active_position",
-        ">",
-        parameter((position) => position),
-      )
-      .where("message_position", "is not", null)
-      .orderBy("active_position", "asc")
-      .limit(1),
-  );
+  const prepareNextMessage = () =>
+    prepareSqliteQuerySync<number, { active_position: number; message_position: number | null }>(
+      projection.database.db,
+      (parameter) =>
+        db
+          .selectFrom("session_transcript_active_events")
+          .select(["active_position", "message_position"])
+          .where("session_id", "=", projection.resolved.sessionId)
+          .where(
+            "active_position",
+            ">",
+            parameter((position) => position),
+          )
+          .where("message_position", "is not", null)
+          .orderBy("active_position", "asc")
+          .limit(1),
+    );
+  let readNextMessage: ReturnType<typeof prepareNextMessage> | undefined;
   let nextMessage: { active_position: number; message_position: number | null } | undefined;
   let searched = false;
   const boundaries = rows.map((row, index): VisibleHistoryBoundary => {
@@ -169,6 +170,7 @@ export function resolveVisibleHistoryProjection(
       // Ordered markers share the next message until its position is crossed.
       // Scan each intervening gap once, including an exhausted trailing gap.
       if (!searched || (nextMessage && nextMessage.active_position < row.active_position)) {
+        readNextMessage ??= prepareNextMessage();
         nextMessage = readNextMessage(row.active_position).rows[0];
         searched = true;
       }
