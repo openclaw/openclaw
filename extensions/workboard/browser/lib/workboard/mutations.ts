@@ -64,6 +64,7 @@ function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): b
 }
 
 type DeleteInteractionState = {
+  selectionScope: Set<string>;
   selectedCardIds: Set<string>;
   bulkDialog: WorkboardBulkDialog | null;
   pendingCardIds: Set<string>;
@@ -126,6 +127,7 @@ function observeDeleteInteraction(
 ): boolean {
   const unchanged =
     !interaction.userChanged &&
+    interaction.selectionScope === state.selectedCardIds &&
     sameStringSet(state.selectedCardIds, projectDeleteSelection(state, interaction)) &&
     sameBulkDialogProjection(state.bulkDialog, projectDeleteBulkDialog(state, interaction));
   if (!unchanged) {
@@ -138,6 +140,7 @@ function beginDeleteInteraction(state: WorkboardUiState, cardId: string): Delete
   let interaction = deleteInteractions.get(state);
   if (!interaction) {
     interaction = {
+      selectionScope: state.selectedCardIds,
       selectedCardIds: new Set(state.selectedCardIds),
       bulkDialog: cloneBulkDialog(state.bulkDialog),
       pendingCardIds: new Set(),
