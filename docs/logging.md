@@ -893,6 +893,26 @@ Two adjacent surfaces:
 
 For OTLP export to a collector, see [OpenTelemetry export](/gateway/opentelemetry).
 
+### Stuck-session recovery outcomes
+
+The `session.recovery.completed` event distinguishes a run that acknowledged an
+abort from a forced removal of its recovery ownership:
+
+| Outcome                                                                    | `status`        | `action`                   |
+| -------------------------------------------------------------------------- | --------------- | -------------------------- |
+| Abort acknowledged and cleanup drained                                     | `aborted`       | `abort_embedded_run`       |
+| Ownership force-cleared, including cleanup timeout after an accepted abort | `force_cleared` | `force_clear_embedded_run` |
+
+A force-clear releases recovery ownership; it does not prove the original work
+stopped. The diagnostic log retains the separate `aborted` and `drained` flags.
+
+The OpenTelemetry `openclaw.session.recovery.completed` counter exports these
+values as `openclaw.status` and `openclaw.action`. After upgrading, queries that
+previously counted all run reclaims with only `status=aborted` must include
+`status=force_cleared` as well. Action-only filters likewise need both actions.
+Keep the values separate when measuring confirmed aborts versus forced cleanup;
+do not rename force-clears back to aborts. Recovery queue accounting is unchanged.
+
 ## Troubleshooting tips
 
 - **Gateway not reachable?** Run `openclaw doctor` first.
