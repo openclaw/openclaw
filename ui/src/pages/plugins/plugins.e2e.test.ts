@@ -74,7 +74,15 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(await gateway.getRequests("plugins.catalog.browse", { query: "matrix" })).toEqual([]);
       const duringDebounce = await labels();
       await page.clock.runFor(250);
-      await gateway.waitForRequest("plugins.catalog.browse", { match: { query: "matrix" } });
+      const searchRequest = await gateway.waitForRequest("plugins.catalog.browse", {
+        match: { query: "matrix" },
+      });
+      expect(searchRequest.params).toEqual({
+        intent: "all",
+        query: "matrix",
+        pageSize: 100,
+        searchSource: "openclaw-control-ui",
+      });
       await gateway.resolveDeferred("plugins.catalog.browse", {
         items: [
           {
@@ -629,7 +637,12 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         after: 0,
         match: { intent: "all", query: "matrix", pageSize: 100 },
       });
-      expect(searchRequest.params).toEqual({ intent: "all", query: "matrix", pageSize: 100 });
+      expect(searchRequest.params).toEqual({
+        intent: "all",
+        query: "matrix",
+        pageSize: 100,
+        searchSource: "openclaw-control-ui",
+      });
       expect(await explore.locator(".plugin-catalog-section").count()).toBe(0);
       expect(
         await explore.locator(".plugin-catalog-grid--results .plugin-catalog-card").count(),

@@ -92,10 +92,11 @@ export class PluginDiscoveryController {
           this.intent,
           this.category,
           this.committedQuery,
+          false,
         ] as const,
-      task: ([client, intent, category, query], { signal }) =>
+      task: ([client, intent, category, query, manual], { signal }) =>
         client
-          ? this.fetchAvailablePage({ client, intent, category, query, signal })
+          ? this.fetchAvailablePage({ client, intent, category, query, manual, signal })
           : initialState, // Lit returns to INITIAL without invoking onComplete.
       onComplete: (page) => {
         this.result = {
@@ -176,6 +177,7 @@ export class PluginDiscoveryController {
     intent: PluginDiscoveryIntent;
     category: string | null;
     query: string;
+    manual?: boolean;
     cursor?: string;
     signal?: AbortSignal;
   }): Promise<CatalogPageLoad & { requestedCursor?: string }> {
@@ -187,6 +189,7 @@ export class PluginDiscoveryController {
         intent: params.intent,
         ...(params.category ? { category: params.category } : {}),
         ...(params.query ? { query: params.query } : {}),
+        ...(params.manual ? { searchSource: "openclaw-control-ui" } : {}),
         ...(params.cursor ? { cursor: params.cursor } : {}),
         pageSize: CATALOG_PAGE_SIZE,
       },
@@ -224,14 +227,16 @@ export class PluginDiscoveryController {
   }
 
   invalidate(): void {
-    void this.browseTask.run([null, this.intent, this.category, this.committedQuery]);
+    // Reconnects reload the latest input without replaying its manual observation.
+    this.disconnect();
+    this.committedQuery = this.query.trim();
+    void this.browseTask.run([null, this.intent, this.category, this.committedQuery, false]);
     this.result = null;
     this.error = null;
     this.remoteError = null;
     this.featured = [];
     this.trending = [];
     this.loadMoreError = null;
-    void this.loadMoreTask.run([null, this.intent, this.category, this.committedQuery, null]);
   }
 
   disconnect(): void {
@@ -242,7 +247,7 @@ export class PluginDiscoveryController {
     void this.loadMoreTask.run([null, this.intent, this.category, this.committedQuery, null]);
   }
 
-  async refresh(): Promise<void> {
+  async refresh(manual = false): Promise<void> {
     const client = this.gateway.getClient();
     if (!client || !this.gateway.isConnected()) {
       return;
@@ -251,7 +256,7 @@ export class PluginDiscoveryController {
     this.remoteError = null;
     this.loadMoreError = null;
     void this.loadMoreTask.run([null, this.intent, this.category, this.committedQuery, null]);
-    await this.browseTask.run([client, this.intent, this.category, this.committedQuery]);
+    await this.browseTask.run([client, this.intent, this.category, this.committedQuery, manual]);
   }
 
   async loadMore(): Promise<void> {
@@ -294,8 +299,11 @@ export class PluginDiscoveryController {
     }
     this.searchTimer = setTimeout(() => {
       this.searchTimer = null;
-      this.committedQuery = query.trim();
-      void this.refresh();
+      const nextQuery = query.trim();
+      // Whitespace edits and repeated input refresh results without recording another search.
+      const manual = nextQuery !== this.committedQuery && nextQuery.length >= 2;
+      this.committedQuery = nextQuery;
+      void this.refresh(manual);
     }, 250);
   }
 }

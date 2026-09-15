@@ -102,7 +102,11 @@ it("switches filtered tabs to All when starting a unified search", async () => {
   expect(controller.intent).toBe("all");
   expect(request).toHaveBeenCalledWith(
     "plugins.catalog.browse",
-    expect.objectContaining({ intent: "all", query: "memory" }),
+    expect.objectContaining({
+      intent: "all",
+      query: "memory",
+      searchSource: "openclaw-control-ui",
+    }),
     expect.anything(),
   );
 });
@@ -153,6 +157,64 @@ it("does not expose continuation for search results", async () => {
   await vi.runAllTimersAsync();
 
   expect(controller.result).toEqual({ items: [entry(1)] });
+});
+
+it("counts only settled manual searches across refresh, filters and connection invalidation", async () => {
+  vi.useFakeTimers();
+  const { controller, request } = setup([], async () => ({ items: [entry(1)] }));
+  controller.updateQuery("m");
+  await vi.advanceTimersByTimeAsync(250);
+  expect(request.mock.lastCall?.[1]).not.toHaveProperty("searchSource");
+  request.mockClear();
+
+  controller.updateQuery("mem");
+  await vi.advanceTimersByTimeAsync(200);
+  controller.updateQuery("memory");
+  await vi.advanceTimersByTimeAsync(249);
+  expect(request).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(request).toHaveBeenCalledOnce();
+  expect(request.mock.lastCall?.[1]).toEqual({
+    intent: "all",
+    query: "memory",
+    pageSize: 100,
+    searchSource: "openclaw-control-ui",
+  });
+  expect(controller.result?.items).toEqual([entry(1)]);
+
+  for (const query of ["memory ", " memory", "memory"]) {
+    request.mockClear();
+    controller.updateQuery(query);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", query: "memory", pageSize: 100 });
+    expect(controller.result?.items).toEqual([entry(1)]);
+  }
+
+  request.mockClear();
+  await controller.refresh();
+  controller.selectCategory("memory");
+  await vi.advanceTimersByTimeAsync(0);
+  controller.selectIntent("official");
+  await vi.advanceTimersByTimeAsync(0);
+  controller.updateQuery("");
+  await vi.advanceTimersByTimeAsync(250);
+  for (const [, params] of request.mock.calls) {
+    expect(params).not.toHaveProperty("searchSource");
+  }
+
+  request.mockClear();
+  controller.updateQuery("calendar");
+  controller.invalidate();
+  await vi.advanceTimersByTimeAsync(250);
+  expect(request).not.toHaveBeenCalled();
+  controller.ensureInitial();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", query: "calendar", pageSize: 100 });
+  request.mockClear();
+  controller.updateQuery("notion");
+  controller.disconnect();
+  await vi.advanceTimersByTimeAsync(250);
+  expect(request).not.toHaveBeenCalled();
 });
 
 it("loads one bounded page initially and continues only after explicit expansion", async () => {
