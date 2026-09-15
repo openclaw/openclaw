@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@openclaw/fs-safe": "0.11.0",
+    "@openclaw/fs-safe": "0.12.0",
     "p-limit": "7.3.2",
     "zod": "4.5.4"
   },

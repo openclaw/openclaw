@@ -71,12 +71,12 @@ async function withNewSessionPage(
   options: BrowserContextOptions,
   run: (page: Page) => Promise<void>,
 ): Promise<void> {
-  const context = await suite.browser.newContext(options);
-  try {
-    await run(await context.newPage());
-  } finally {
-    await context.close();
-  }
+  await suite.withPage(
+    options,
+    ({ page }) => run(page),
+    // Callers release held modules in finally; join their fetch/fulfill work before closing.
+    ({ page }) => page.unrouteAll({ behavior: "wait" }),
+  );
 }
 
 type MockGateway = Awaited<ReturnType<typeof installMockGateway>>;
@@ -554,14 +554,14 @@ suite.define(() => {
           };
         });
         const chatModule = await holdModuleResponse(page, /\/assets\/chat-page-[^/]+\.js/);
-        const sessionKey = "agent:main:late-recovery-scope";
-        const gateway = await installMockGateway(page, {
-          deferredMethods: ["sessions.create"],
-          methodResponses: {
-            "sessions.create": { key: sessionKey, runStarted: true, runId: "late-scope-run" },
-          },
-        });
         try {
+          const sessionKey = "agent:main:late-recovery-scope";
+          const gateway = await installMockGateway(page, {
+            deferredMethods: ["sessions.create"],
+            methodResponses: {
+              "sessions.create": { key: sessionKey, runStarted: true, runId: "late-scope-run" },
+            },
+          });
           await page.goto(`${suite.server.baseUrl}new`);
           const message = page.locator(".new-session-page__message");
           const start = page.locator("button.new-session-page__start-submit");

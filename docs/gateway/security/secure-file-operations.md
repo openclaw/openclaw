@@ -1,5 +1,5 @@
 ---
-summary: "How OpenClaw handles local file access safely, and why optional fs-safe native acceleration is off by default"
+summary: "How OpenClaw handles local file access safely, including native Windows credential checks"
 read_when:
   - Changing file access, archive extraction, workspace storage, or plugin filesystem helpers
 title: "Secure file operations"
@@ -9,21 +9,22 @@ OpenClaw uses [`@openclaw/fs-safe`](https://github.com/openclaw/fs-safe) for sec
 
 It is a **library guardrail** for trusted OpenClaw code that receives untrusted path names, not a sandbox. Host filesystem permissions, OS users, containers, and the agent/tool policy still define the real blast radius.
 
-## Default: JavaScript fallback
+<a id="default-javascript-fallback" />
 
-OpenClaw sets fs-safe's optional native helper to **off** by default:
+## Platform defaults
 
-- the guarded JavaScript paths support OpenClaw's normal filesystem operations.
-- disabling native loading keeps runtime behavior deterministic across desktop, Docker, CI, and bundled-app environments.
+OpenClaw sets fs-safe's native helper to **off** by default on macOS and Linux. Guarded JavaScript paths support normal filesystem operations there and keep runtime behavior deterministic across desktop, Docker, CI, and bundled-app environments.
 
-fs-safe publishes prebuilt native helpers as optional platform packages for Linux x64/arm64 (glibc and musl), macOS x64/arm64, and Windows x64. A normal package install selects the matching package without a compiler. OpenClaw loads it through fs-safe's own dependency scope, including nested pnpm installs. Installs that omit optional dependencies retain the guarded JavaScript path. The `require` mode fails when the binding is unavailable.
+On Windows, OpenClaw retains fs-safe's **auto** default. Secure credential reads need the matching native helper to verify ownership and ACLs on the same open file descriptor that supplies the bytes. This also enables other fs-safe native operations when the Windows helper is available.
+
+fs-safe publishes prebuilt native helpers as optional platform packages for Linux x64/arm64 (glibc and musl), macOS x64/arm64, and Windows x64. A normal package install selects the matching package without a compiler. OpenClaw loads it through fs-safe's own dependency scope, including nested pnpm installs. Windows secure reads fail with `permission-unverified` when the helper is missing, outdated, disabled, or unsupported; there is no pathname-based permission fallback. This includes installs that omit optional dependencies and native Windows ARM64 runtimes. File SecretRef providers and GitHub identity credentials require these secure reads. Other operations retain their documented JavaScript fallback when native support is unavailable in `auto` mode.
 
 Managed worktree acceleration uses isolated native helpers for APFS and Btrfs, without enabling native primitives in the Gateway process. These helpers use fs-safe's automatic native selection and honor the explicit mode settings below. See [Managed worktrees](/concepts/managed-worktrees#filesystem-acceleration).
 
 OpenClaw only changes the _default_. An explicit setting always wins:
 
 ```bash
-# Default OpenClaw behavior: guarded JavaScript fs-safe paths.
+# Guarded JavaScript paths; Windows secure credential reads become unavailable.
 OPENCLAW_FS_SAFE_NATIVE_MODE=off
 
 # Prefer native primitives when the installed platform helper loads.
@@ -39,7 +40,7 @@ The generic fs-safe environment name also works: `FS_SAFE_NATIVE_MODE`.
 
 fs-safe still maps the retired `FS_SAFE_PYTHON_MODE` and `OPENCLAW_FS_SAFE_PYTHON_MODE` values to native modes with a deprecation warning. Replace them with `FS_SAFE_NATIVE_MODE` or `OPENCLAW_FS_SAFE_NATIVE_MODE`. Python interpreter path settings are no longer used.
 
-Use `require` (not `auto`) when native primitives are part of your security posture. `auto` uses the guarded JavaScript implementation when the platform binding is unavailable.
+Use `require` when all native-capable operations must fail if the platform binding is unavailable. `auto` allows documented JavaScript fallbacks; Windows secure credential reads always require descriptor-bound native verification.
 
 ## What stays protected without native acceleration
 
@@ -57,7 +58,7 @@ This covers OpenClaw's normal threat model: trusted gateway code handling untrus
 
 ## What native acceleration adds
 
-The native helper provides policy-free filesystem primitives. fs-safe uses them for create-only writes, guarded hard-link publication, asynchronous sidecar creation, and explicit no-replace rename publication. Linux uses `openat2` and `renameat2`. macOS uses descriptor-relative component checks and `renameatx_np`. Windows uses handle-relative operations and replacement-disabled rename.
+The native helper provides policy-free filesystem primitives. fs-safe uses them for create-only writes, guarded hard-link publication, asynchronous sidecar creation, and explicit no-replace rename publication. Linux uses `openat2` and `renameat2`. macOS uses descriptor-relative component checks and `renameatx_np`. Windows uses handle-relative operations, replacement-disabled rename, and descriptor-bound ACL inspection for secure credential reads.
 
 The TypeScript layer still owns policy, validation, retries, cleanup, and fallback decisions. Native support narrows filesystem race windows. It does not turn fs-safe into a sandbox.
 
@@ -67,7 +68,7 @@ If your package deployment requires those native primitives, set:
 OPENCLAW_FS_SAFE_NATIVE_MODE=require
 ```
 
-In `require` mode, an unavailable or unloadable helper causes `helper-unavailable` instead of silently using the JavaScript path. Standalone sealed worker bundles have no dependency tree. They explicitly disable native loading, even when the host sets a mode override.
+In `require` mode, an unavailable or unloadable helper normally causes `helper-unavailable`; Windows secure credential reads report `permission-unverified`. Standalone sealed worker bundles have no dependency tree. They explicitly disable native loading, even when the host sets a mode override.
 
 ## Plugin and core guidance
 

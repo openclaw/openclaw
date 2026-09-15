@@ -184,8 +184,9 @@ they impose resource limits. Third-party dependencies remain external except for
 the always-bundled OpenClaw packages. fs-safe remains external so its native loader
 resolves the optional platform package from fs-safe's own dependency scope, including
 nested pnpm installs. Compiled workers use that same installed package; they do not
-copy native binaries. The default stays off, and the existing `off`/`auto`/`require`
-opt-ins retain their behavior. Sealed portable worker bundles use guarded JavaScript
+copy native binaries. Native defaults stay off on macOS/Linux and auto on Windows,
+where secure credential reads require the matching native helper. Explicit
+`off`/`auto`/`require` settings retain precedence. Sealed portable worker bundles use guarded JavaScript
 only and explicitly disable native loading.
 
 Watch mode deliberately keeps the existing live-source path, including tsx for
