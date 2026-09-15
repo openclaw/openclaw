@@ -315,7 +315,7 @@ resolved approver list for authorization even when native approval delivery is d
 
 ### Native approval delivery
 
-Some channels can also act as native approval clients: Discord, Slack, Telegram, Matrix, and QQ bot.
+Some channels can also act as native approval clients: Discord, Slack, Telegram, Matrix, LINE, and QQ bot.
 Native clients add approver DMs, origin-chat fanout, and channel-specific interactive approval UX on
 top of the shared same-chat `/approve` flow.
 
@@ -342,6 +342,9 @@ Generic model:
   `defaultTo`; they do not use reaction events for decisions
 - WhatsApp and Signal reaction approval delivery are gated by `approvals.exec` and
   `approvals.plugin`; they do not have `channels.<channel>.execApprovals` blocks
+- LINE native approval cards are gated by `approvals.exec` and `approvals.plugin` forwarding in
+  `session` or `both` mode plus approver user IDs in `channels.line.allowFrom`; LINE has no
+  `channels.line.execApprovals` block
 
 For channels with an `execApprovals` block, enable native delivery by setting
 `enabled: true` or `"auto"` and configuring resolvable approvers. Defaults vary by
@@ -363,6 +366,9 @@ FAQ: [Why are there two exec approval configs for chat approvals?](/help/faq-fir
   `channels.googlechat.defaultTo`; no `execApprovals` block is required
 - WhatsApp: use `approvals.exec` and `approvals.plugin` to route approval prompts to WhatsApp
 - Signal: use `approvals.exec` and `approvals.plugin` to route approval prompts to Signal
+- LINE: forward with `approvals.exec` and `approvals.plugin` in `session` or `both` mode and list
+  approver user IDs in `channels.line.allowFrom`; no `execApprovals` block is required. See
+  [LINE native approval cards](/channels/line#native-approval-cards)
 
 Native-client-specific routing:
 

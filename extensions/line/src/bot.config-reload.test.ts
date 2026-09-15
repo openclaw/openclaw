@@ -15,7 +15,14 @@ type DeliverFn = (
 const { createLineWebhookSpoolMock, handleLineWebhookEventsMock } = vi.hoisted(() => ({
   createLineWebhookSpoolMock: vi.fn(),
   handleLineWebhookEventsMock: vi.fn(
-    async (_events: webhook.Event[], _context: { cfg: OpenClawConfig; historyLimit: number }) => {},
+    async (
+      _events: webhook.Event[],
+      _context: {
+        cfg: OpenClawConfig;
+        resolveConfig?: () => OpenClawConfig;
+        historyLimit: number;
+      },
+    ) => {},
   ),
 }));
 
@@ -39,7 +46,11 @@ function configWithHistoryLimit(historyLimit: number): OpenClawConfig {
 
 // Capture the spool callback so a reload can land between creation and delivery.
 function createDeliverableBot(startupConfig: OpenClawConfig): {
-  deliverOnce: () => Promise<{ cfg: OpenClawConfig; historyLimit: number }>;
+  deliverOnce: () => Promise<{
+    cfg: OpenClawConfig;
+    resolveConfig?: () => OpenClawConfig;
+    historyLimit: number;
+  }>;
 } {
   let deliver: DeliverFn | undefined;
   createLineWebhookSpoolMock.mockImplementation((spoolOptions: { deliver: DeliverFn }) => {
@@ -65,7 +76,11 @@ function createDeliverableBot(startupConfig: OpenClawConfig): {
       if (!context) {
         throw new Error("handleLineWebhookEvents was not called");
       }
-      return { cfg: context.cfg, historyLimit: context.historyLimit };
+      return {
+        cfg: context.cfg,
+        resolveConfig: context.resolveConfig,
+        historyLimit: context.historyLimit,
+      };
     },
   };
 }
@@ -92,6 +107,20 @@ describe("the config a delivered LINE event is handled with", () => {
 
     expect(handled.cfg).toBe(reloaded);
     expect(handled.historyLimit).toBe(75);
+  });
+
+  // An approval tap checks authority after awaited work, so handlers need a reader for
+  // a reload that lands after delivery, not a copy of the config delivery saw.
+  it("gives handlers a reader that sees a reload landing after delivery", async () => {
+    const startupConfig = configWithHistoryLimit(10);
+    setRuntimeConfigSnapshot(startupConfig, configWithHistoryLimit(10));
+    const handled = await createDeliverableBot(startupConfig).deliverOnce();
+
+    const later = configWithHistoryLimit(75);
+    setRuntimeConfigSnapshot(later, configWithHistoryLimit(75));
+
+    expect(handled.cfg).toBe(startupConfig);
+    expect(handled.resolveConfig?.()).toBe(later);
   });
 
   // A distinct supplied config is scoped. A missing source snapshot cannot prove

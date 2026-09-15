@@ -511,6 +511,95 @@ falls back to that content, and an unusable alternative image becomes a text box
 Invalid template thumbnails are removed. Carousel thumbnails are removed together
 so every column keeps the same image layout. Text and action buttons stay intact.
 
+## Native approval cards
+
+LINE delivers exec, plugin, and OpenClaw-change approval requests as a Flex card in each
+approver's one-to-one chat, with one button per decision the request allows. The card names
+the command or requested action, the reason the run was interrupted, and the approval ID and
+its expiry.
+
+Cards use the existing top-level approval forwarding settings and the LINE DM allowlist;
+there is no LINE-specific approval configuration. Enable forwarding with `mode` `session`
+or `both` for each approval type (OpenClaw-change approvals follow `approvals.exec`), and
+list the approvers as LINE user IDs:
+
+```json5
+{
+  approvals: {
+    exec: { enabled: true, mode: "session" },
+    plugin: { enabled: true, mode: "session" },
+  },
+  channels: {
+    line: {
+      allowFrom: ["U00000000000000000000000000000000"],
+    },
+  },
+}
+```
+
+- **With forwarding on and approvers listed**, every approver receives the card in their
+  one-to-one chat for a request raised from a LINE conversation. A request raised in an
+  approver's own chat shows the card there; a group, or another user's chat, gets a notice
+  that the request went to LINE DMs. Only listed approvers can then decide that approval type
+  from LINE, including with typed `/approve`. While the account's card handler is running,
+  a chat that gets the card or that notice does not also get the forwarded text prompt;
+  other forwarding targets, such as an operations group, still do, and if the handler is
+  not running, every forwarded prompt is delivered. Requests raised elsewhere, such as the
+  Control UI, reach LINE only as the text prompt of a `targets` or `both` forwarding target.
+- **Otherwise** (forwarding off, only `targets` forwarding, or no approvers listed, for
+  example `allowFrom: ["*"]`), no card is drawn. A request raised from a LINE chat stays
+  pending, `/approve <id> <decision>` sent from that chat decides it, and command
+  authorization decides who can use it. Listing users in `allowFrom` for DM access does not
+  limit `/approve` until cards are on for that approval type.
+
+Approvers are the `U` user IDs written in `channels.line.allowFrom`, with or without a
+`line:` or `line:user:` prefix. Users admitted through pairing and `accessGroup:` entries can
+message the bot but are not approvers, so a setup that lists only those gets no cards. Every
+listed approver receives every card and every outcome notice. Each one is a push message
+that counts against the channel's monthly message quota; once the quota is used up, cards
+and their fallback text are not delivered and only the Gateway log records it.
+
+Upgrade check: a setup that already forwards `approvals.exec` or `approvals.plugin` in
+`session` or `both` mode and lists LINE user IDs in `allowFrom` turns cards on when it
+upgrades. Group members who are not listed then can no longer decide that approval type with
+`/approve`. Before upgrading, list the members who should keep deciding (which also admits
+their DMs), or plan to decide those approvals from the Control UI.
+
+Typed `/approve` in LINE decides only exec and plugin requests that belong to that LINE
+account: requests raised from it, or forwarded to it. Approve a request raised on another
+channel or another LINE account where it was raised. Decide an OpenClaw-change approval with
+its card or from the Control UI.
+
+Restart the Gateway after changing forwarding so the LINE account picks it up. Until then,
+cards follow the forwarding settings the account started with. If no approval type had cards
+on when the account started, forwarded text prompts are delivered as before. Otherwise, a
+request raised from a LINE chat that only the new settings would send as a card gets a notice
+in that chat naming the `/approve` command to use instead; decide an OpenClaw-change approval
+from the Control UI. A change
+to `channels.line`, such as removing an approver, waits for active runs and replies to finish
+before it takes effect; until then the previous configuration still decides.
+
+Two behaviors follow from the platform rather than from a choice:
+
+- **Cards never go to a group, and a button decides only for a listed approver.** A LINE
+  postback in a group carries no `userId` (LINE includes it only in message events), so a
+  card tapped in a group could not name who decided. A tap from someone who is not a listed
+  approver is refused, and a card tapped after cards were turned off or every approver was
+  removed answers with the `/approve` command to use instead (for an OpenClaw-change approval,
+  the Control UI), if that chat is still allowed to message the bot. A tap is checked against
+  the configuration in force when the decision is sent, not when the tap arrived.
+- **A decision arrives as a new message, not as an edited card.** LINE cannot edit a
+  message it has sent, so the outcome is published below the card, and the card's buttons
+  stay on screen. The first decision stands; tapping a button on a card that is no longer
+  waiting changes nothing and replies that the approval is no longer waiting. Each button is
+  tied to the account's channel secret, so after the secret changes, a tap on an earlier
+  card decides nothing and replies that the button could not be verified, and approvals still
+  waiting are not sent again as new cards. Decide those from the Control UI, or, for exec and
+  plugin approvals, with `/approve <id> <decision>` using the approval ID shown on the card.
+
+For forwarding modes and supported decisions, see
+[Approval forwarding to chat channels](/tools/exec-approvals-advanced#approval-forwarding-to-chat-channels).
+
 ## ACP support
 
 LINE supports ACP (Agent Communication Protocol) conversation bindings:
