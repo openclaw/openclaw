@@ -472,6 +472,7 @@ export function createSessionsSearchTool(opts?: {
           displayAction: "search",
           requesterAgentId,
           requesterSessionKey: effectiveRequesterKey,
+          sessionReadScopeKey: opts?.sessionReadScopeKey ? effectiveRequesterKey : undefined,
           mainSessionKey,
           authorizationTargetSessionKey,
           targetAgentId: agentId,

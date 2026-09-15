@@ -564,6 +564,7 @@ export function createSessionsHistoryTool(opts?: {
         action: "history",
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        sessionReadScopeKey: opts?.sessionReadScopeKey ? effectiveRequesterKey : undefined,
         mainSessionKey,
         authorizationTargetSessionKey: authorizationKey,
         targetAgentId,
