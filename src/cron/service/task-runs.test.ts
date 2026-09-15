@@ -522,6 +522,91 @@ describe("cron task run terminal records", () => {
     );
   });
 
+  it("keeps the operator cancellation reason when a late skipped outcome arrives", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-cron-cancelled-skip-" },
+      async () => {
+        resetTaskRegistryForTests();
+        const startedAt = 2_100;
+        const job: CronJob = {
+          id: "cancelled-skip-job",
+          name: "cancelled skip job",
+          enabled: true,
+          createdAtMs: 100,
+          updatedAtMs: 100,
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: 100 },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "work" },
+          state: { nextRunAtMs: 60_000 },
+        };
+        const state = createCronServiceState({
+          storePath: "/tmp/jobs.json",
+          cronEnabled: true,
+          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          nowMs: () => startedAt + 100,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        });
+        const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
+        if (!taskRunId) {
+          throw new Error("expected cron task run id");
+        }
+        // Operator cancellation settles first and owns the task reason.
+        finalizeTaskRunByRunIdCore({
+          runId: taskRunId,
+          runtime: "cron",
+          status: "cancelled",
+          endedAt: startedAt + 50,
+          error: "Cancelled by operator.",
+        });
+
+        // A late skipped heartbeat outcome must not overwrite the operator
+        // reason, even though the skipped status maps to cancelled.
+        tryFinishCronTaskRun(state, {
+          taskRunId,
+          job,
+          event: {
+            jobId: job.id,
+            action: "finished",
+            job,
+            status: "skipped",
+            error: "heartbeat skipped: empty-heartbeat-file",
+            runAtMs: startedAt,
+            durationMs: 100,
+          },
+        });
+
+        const [row] = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+          runtime: "cron",
+          sourceId: job.id,
+        });
+        expect(row).toMatchObject({
+          status: "cancelled",
+          error: "Cancelled by operator.",
+          detail: {
+            kind: "cron-run",
+            status: "skipped",
+            error: "heartbeat skipped: empty-heartbeat-file",
+          },
+        });
+        expect(
+          readCronTaskRunHistoryPage({
+            storeKey: cronStoreKey(state.deps.storePath),
+            jobId: job.id,
+          }).entries,
+        ).toEqual([
+          expect.objectContaining({
+            jobId: job.id,
+            status: "skipped",
+            error: "heartbeat skipped: empty-heartbeat-file",
+          }),
+        ]);
+      },
+    );
+  });
+
   it("retries the original outcome after an empty finalization result", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-task-retry-" },
