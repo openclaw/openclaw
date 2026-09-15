@@ -31,7 +31,7 @@ extensions/anthropic/session-catalog-continue.ts	1
 extensions/anthropic/session-catalog-discovery.ts	1
 extensions/anthropic/session-catalog-history.ts	2
 extensions/anthropic/session-catalog-listing.ts	1
-extensions/anthropic/session-catalog-parsing.ts	7
+extensions/anthropic/session-catalog-parsing.ts	5
 extensions/anthropic/session-catalog-registration.ts	3
 extensions/anthropic/session-catalog-runtime.ts	1
 extensions/anthropic/stream-wrappers.ts	5
