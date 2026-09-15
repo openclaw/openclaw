@@ -1,6 +1,7 @@
 // Whatsapp plugin module normalizes inbound identity and access facts.
 import type { AnyMessageContent, WAMessage } from "baileys";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { classifyWhatsAppJid } from "../whatsapp-jid.js";
 import {
   checkInboundAccessControl,
   type AcceptedInboundAccessControlResult,
@@ -8,7 +9,6 @@ import {
 import { isRecentOutboundMessage } from "./dedupe.js";
 import { hasInboundUserContent } from "./extract.js";
 import type { WhatsAppGroupMetadataCacheOwner } from "./group-metadata-cache.js";
-import { isJidGroup } from "./runtime-api.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
 
 export type WhatsAppNormalizedInboundMessage = {
@@ -62,7 +62,7 @@ export function createWhatsAppInboundMessageNormalizer(options: {
       return null;
     }
 
-    const group = isJidGroup(remoteJid) === true;
+    const group = classifyWhatsAppJid(remoteJid).kind === "group";
     // Gateway-originated echoes must never become new inbound work, including
     // self-chat replies that return on the same upsert stream.
     if (shouldSkipRecentOutboundEcho(msg)) {

@@ -9,6 +9,7 @@ import {
   parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import type { WhatsAppOutboundMessageIdentity } from "./inbound/outbound-message-cache.js";
 
 export type WhatsAppSocketTimingOptions = {
   keepAliveIntervalMs?: number;
@@ -21,12 +22,17 @@ export type WhatsAppSocketOperationAdapter = {
     jid: string,
     content: AnyMessageContent,
     options?: MiscMessageGenerationOptions,
+    identity?: WhatsAppOutboundMessageIdentity,
   ) => Promise<WAMessage | undefined>;
   sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
 };
 
 type WhatsAppSocketOperationTimeoutHooks = {
-  onSendMessageTimeout?: (params: { jid: string; promise: Promise<WAMessage | undefined> }) => void;
+  onSendMessageTimeout?: (params: {
+    jid: string;
+    promise: Promise<WAMessage | undefined>;
+    identity?: WhatsAppOutboundMessageIdentity;
+  }) => void;
 };
 
 const socketSendMessageQueueTails = new WeakMap<WhatsAppSocketOperationAdapter, Promise<void>>();
@@ -129,7 +135,7 @@ export function createWhatsAppSocketOperationTimeoutAdapter(
 ): WhatsAppSocketOperationAdapter {
   const operationTimeoutMs = resolveWhatsAppSocketOperationTimeoutMs(timeoutMs);
   return {
-    sendMessage: (jid, content, options) => {
+    sendMessage: (jid, content, options, identity) => {
       return runSerializedSocketSendMessage(sock, () => {
         const send = options
           ? sock.sendMessage(jid, content, options)
@@ -139,7 +145,7 @@ export function createWhatsAppSocketOperationTimeoutAdapter(
           send,
           operationTimeoutMs,
           hooks?.onSendMessageTimeout
-            ? () => hooks.onSendMessageTimeout?.({ jid, promise: send })
+            ? () => hooks.onSendMessageTimeout?.({ jid, promise: send, identity })
             : undefined,
         );
       });

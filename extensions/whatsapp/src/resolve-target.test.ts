@@ -38,8 +38,10 @@ describe("normalizeWhatsAppTarget", () => {
     );
   });
 
-  it("normalizes direct JIDs to E.164", () => {
+  it("normalizes standard and legacy PN JIDs to E.164", () => {
     expect(normalizeWhatsAppTarget("1555123@s.whatsapp.net")).toBe("+1555123");
+    expect(normalizeWhatsAppTarget("1555123@c.us")).toBe("+1555123");
+    expect(normalizeWhatsAppTarget("1555123:4@c.us")).toBe("+1555123");
   });
 
   it("normalizes user JIDs with device suffix to E.164", () => {
@@ -48,9 +50,11 @@ describe("normalizeWhatsAppTarget", () => {
     expect(normalizeWhatsAppTarget("41796666864@s.whatsapp.net")).toBe("+41796666864");
   });
 
-  it("normalizes LID JIDs to E.164", () => {
-    expect(normalizeWhatsAppTarget("123456789@lid")).toBe("+123456789");
-    expect(normalizeWhatsAppTarget("123456789@LID")).toBe("+123456789");
+  it("preserves hosted and LID routing identities while stripping devices", () => {
+    expect(normalizeWhatsAppTarget("1555123:4@hosted")).toBe("1555123@hosted");
+    expect(normalizeWhatsAppTarget("123456789:2@lid")).toBe("123456789@lid");
+    expect(normalizeWhatsAppTarget("123456789@LID")).toBe("123456789@lid");
+    expect(normalizeWhatsAppTarget("123456789:3@hosted.lid")).toBe("123456789@hosted.lid");
   });
 
   it("rejects invalid targets", () => {
@@ -62,6 +66,8 @@ describe("normalizeWhatsAppTarget", () => {
     expect(normalizeWhatsAppTarget("group:abc@g.us")).toBeNull();
     expect(normalizeWhatsAppTarget("group:120363401234567890@newsletter")).toBeNull();
     expect(normalizeWhatsAppTarget("abc@s.whatsapp.net")).toBeNull();
+    expect(normalizeWhatsAppTarget("123:bad@s.whatsapp.net")).toBeNull();
+    expect(normalizeWhatsAppTarget("123:1:2@hosted")).toBeNull();
     expect(normalizeWhatsAppTarget("abc@newsletter")).toBeNull();
   });
 
@@ -82,8 +88,11 @@ describe("isWhatsAppUserTarget", () => {
   it("detects user JIDs with various formats", () => {
     expect(isWhatsAppUserTarget("41796666864:0@s.whatsapp.net")).toBe(true);
     expect(isWhatsAppUserTarget("1234567890@s.whatsapp.net")).toBe(true);
+    expect(isWhatsAppUserTarget("1234567890:3@c.us")).toBe(true);
+    expect(isWhatsAppUserTarget("1234567890:3@hosted")).toBe(true);
     expect(isWhatsAppUserTarget("123456789@lid")).toBe(true);
     expect(isWhatsAppUserTarget("123456789@LID")).toBe(true);
+    expect(isWhatsAppUserTarget("123456789:4@hosted.lid")).toBe(true);
     expect(isWhatsAppUserTarget("123@lid:0")).toBe(false);
     expect(isWhatsAppUserTarget("abc@s.whatsapp.net")).toBe(false);
     expect(isWhatsAppUserTarget("123456789-987654321@g.us")).toBe(false);
@@ -127,6 +136,8 @@ describe("normalizeWhatsAppAllowFromEntries", () => {
       normalizeWhatsAppAllowFromEntries([
         " +1 (555) 123-4567 ",
         "15551234567@s.whatsapp.net",
+        "15551234567:3@hosted",
+        "15551234567@lid",
         15551234567,
         " ",
         "invalid",
@@ -155,5 +166,35 @@ describe("resolveWhatsAppOutboundTarget", () => {
         mode: "explicit",
       }),
     ).toEqual({ ok: true, to: "120363401234567890@g.us" });
+  });
+
+  it("preserves hosted PN targets while applying the E.164 allowlist policy", () => {
+    expect(
+      resolveWhatsAppOutboundTarget({
+        to: "15551230000:4@hosted",
+        allowFrom: ["+15551230000"],
+        mode: "explicit",
+      }),
+    ).toEqual({ ok: true, to: "15551230000@hosted" });
+  });
+
+  it("does not equate an unmapped LID with the same digits in an E.164 allowlist", () => {
+    expect(
+      resolveWhatsAppOutboundTarget({
+        to: "15551230000@lid",
+        allowFrom: ["+15551230000"],
+        mode: "explicit",
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("fails closed when configured allowlist entries are not E.164 identities", () => {
+    expect(
+      resolveWhatsAppOutboundTarget({
+        to: "+15551230000",
+        allowFrom: ["15551230000@lid", "not-a-phone"],
+        mode: "explicit",
+      }),
+    ).toMatchObject({ ok: false });
   });
 });

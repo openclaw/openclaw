@@ -4,6 +4,7 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { classifyWhatsAppJid } from "../whatsapp-jid.js";
 import {
   readWhatsAppBaileysCacheEntry,
   rememberWhatsAppBaileysCacheEntry,
@@ -16,7 +17,6 @@ import {
   resolveWhatsAppOutboundMentions,
   type WhatsAppOutboundMentionParticipant,
 } from "./outbound-mentions.js";
-import { isJidGroup } from "./runtime-api.js";
 
 const GROUP_META_TTL_MS = 5 * 60 * 1000;
 const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
@@ -210,7 +210,7 @@ export function createWhatsAppGroupMetadataCacheOwner(params: GroupMetadataCache
     jid: string,
     text: string,
   ): Promise<{ text: string; mentionedJids: string[] }> => {
-    if (isJidGroup(jid) !== true || !mayContainWhatsAppOutboundMention(text)) {
+    if (classifyWhatsAppJid(jid).kind !== "group" || !mayContainWhatsAppOutboundMention(text)) {
       return { text, mentionedJids: [] };
     }
     const meta = await get(jid);

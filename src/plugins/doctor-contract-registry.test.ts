@@ -203,6 +203,7 @@ describe("doctor-contract-registry module loader", () => {
     expect(applyPluginDoctorCompatibilityMigrations({}, { env: {} })).toEqual({
       config: { repaired: true },
       changes: ["repaired config"],
+      warnings: [],
     });
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
   });

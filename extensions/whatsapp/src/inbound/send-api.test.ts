@@ -109,6 +109,13 @@ describe("createWebSendApi", () => {
     expectRecordFields(requireSendContent(callIndex), fields);
   }
 
+  function expectSendIdentity(callIndex: number, remoteE164: string) {
+    expect(requireMockArg(sendMessage, callIndex, 3, "sent message identity")).toEqual({
+      remoteE164,
+      remoteJids: [`${remoteE164.slice(1)}@s.whatsapp.net`],
+    });
+  }
+
   function expectSendResultFields(result: WhatsAppSendResult, fields: Record<string, unknown>) {
     expectRecordFields(requireRecord(result, "send result"), fields);
   }
@@ -181,15 +188,13 @@ describe("createWebSendApi", () => {
       asDocument: true,
       fileName: "promo.png",
     });
-    expect(sendMessage).toHaveBeenCalledWith(
-      "1555@s.whatsapp.net",
-      expect.objectContaining({
-        document: payload,
-        fileName: "promo.png",
-        caption: "promo",
-        mimetype: "image/png",
-      }),
-    );
+    expectFirstSendJid("1555@s.whatsapp.net");
+    expectSendContentFields(0, {
+      document: payload,
+      fileName: "promo.png",
+      caption: "promo",
+      mimetype: "image/png",
+    });
   });
 
   it("uses MIME-aware filename fallback for forced visual documents", async () => {
@@ -198,15 +203,13 @@ describe("createWebSendApi", () => {
       asDocument: true,
     });
 
-    expect(sendMessage).toHaveBeenCalledWith(
-      "1555@s.whatsapp.net",
-      expect.objectContaining({
-        document: payload,
-        fileName: "file.png",
-        caption: "promo",
-        mimetype: "image/png",
-      }),
-    );
+    expectFirstSendJid("1555@s.whatsapp.net");
+    expectSendContentFields(0, {
+      document: payload,
+      fileName: "file.png",
+      caption: "promo",
+      mimetype: "image/png",
+    });
   });
 
   it("does not force audio media onto the document branch", async () => {
@@ -216,7 +219,8 @@ describe("createWebSendApi", () => {
       fileName: "voice.ogg",
     });
 
-    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+    expectFirstSendJid("1555@s.whatsapp.net");
+    expectSendContentFields(0, {
       audio: payload,
       ptt: true,
       mimetype: "audio/ogg",
@@ -225,7 +229,9 @@ describe("createWebSendApi", () => {
 
   it("sends plain text messages", async () => {
     const res = await api.sendMessage("+1555", "hello");
-    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", { text: "hello" });
+    expectFirstSendJid("1555@s.whatsapp.net");
+    expectSendContentFields(0, { text: "hello" });
+    expectSendIdentity(0, "+1555");
     expectSendResultFields(res, {
       kind: "text",
       messageId: "msg-1",
@@ -245,7 +251,8 @@ describe("createWebSendApi", () => {
       vcard: "BEGIN:VCARD\nFN:QA Contact\nEND:VCARD",
     });
 
-    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+    expectFirstSendJid("1555@s.whatsapp.net");
+    expectSendContentFields(0, {
       contacts: {
         displayName: "QA Contact",
         contacts: [
@@ -275,7 +282,8 @@ describe("createWebSendApi", () => {
       name: "QA Location",
     });
 
-    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+    expectFirstSendJid("1555@s.whatsapp.net");
+    expectSendContentFields(0, {
       location: {
         address: undefined,
         degreesLatitude: 37.7749,
@@ -294,7 +302,8 @@ describe("createWebSendApi", () => {
     const payload = Buffer.from("webp");
     const res = await api.sendSticker("+1555", payload);
 
-    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+    expectFirstSendJid("1555@s.whatsapp.net");
+    expectSendContentFields(0, {
       sticker: payload,
       mimetype: "image/webp",
     });
@@ -324,7 +333,8 @@ describe("createWebSendApi", () => {
 
     await api.sendMessage("120363000000000000@g.us", "ping @+5511976136970");
 
-    expect(sendMessage).toHaveBeenCalledWith("120363000000000000@g.us", {
+    expectFirstSendJid("120363000000000000@g.us");
+    expectSendContentFields(0, {
       text: "ping @277038292303944",
       mentions: ["277038292303944@lid"],
     });
@@ -498,9 +508,8 @@ describe("createWebSendApi", () => {
       ptt: true,
       mimetype: "audio/ogg",
     });
-    expect(sendMessage).toHaveBeenNthCalledWith(2, "1555@s.whatsapp.net", {
-      text: "voice text",
-    });
+    expect(requireMockArg(sendMessage, 1, 0, "sent voice text")).toBe("1555@s.whatsapp.net");
+    expectSendContentFields(1, { text: "voice text" });
     expectSendResultFields(res, {
       kind: "media",
       messageId: "voice-1",
@@ -799,9 +808,8 @@ describe("createWebSendApi", () => {
 
   it("preserves newsletter JIDs for outbound sends", async () => {
     await api.sendMessage("120363401234567890@newsletter", "hello");
-    expect(sendMessage).toHaveBeenCalledWith("120363401234567890@newsletter", {
-      text: "hello",
-    });
+    expectFirstSendJid("120363401234567890@newsletter");
+    expectSendContentFields(0, { text: "hello" });
   });
 
   it("sends media as document when mediaType is undefined", async () => {
@@ -819,7 +827,8 @@ describe("createWebSendApi", () => {
   it("does not set mediaType when mediaBuffer is absent", async () => {
     await api.sendMessage("123", "hello");
 
-    expect(sendMessage).toHaveBeenCalledWith("123@s.whatsapp.net", { text: "hello" });
+    expectFirstSendJid("123@s.whatsapp.net");
+    expectSendContentFields(0, { text: "hello" });
   });
 
   it("preserves the quoted remoteJid provided by the outbound adapter", async () => {
@@ -882,6 +891,10 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
     vi.clearAllMocks();
     authDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-lid-"));
     fs.writeFileSync(path.join(authDir, "lid-mapping-15555550000.json"), JSON.stringify("987654"));
+    fs.writeFileSync(
+      path.join(authDir, "lid-mapping-987654_reverse.json"),
+      JSON.stringify("15555550000"),
+    );
   });
 
   afterEach(() => {
@@ -895,7 +908,12 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
       authDir,
     });
     await api.sendMessage("+15555550000", "hello");
-    expect(sendMessage).toHaveBeenCalledWith("987654@lid", { text: "hello" });
+    expect(requireMockArg(sendMessage, 0, 0, "mapped send")).toBe("987654@lid");
+    expect(requireMockArg(sendMessage, 0, 1, "mapped send")).toEqual({ text: "hello" });
+    expect(requireMockArg(sendMessage, 0, 3, "mapped send identity")).toEqual({
+      remoteE164: "+15555550000",
+      remoteJids: ["15555550000@s.whatsapp.net", "987654@lid"],
+    });
   });
 
   it("falls back to PN s.whatsapp.net when no LID mapping exists", async () => {
@@ -905,7 +923,47 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
       authDir,
     });
     await api.sendMessage("+33123456789", "hello");
-    expect(sendMessage).toHaveBeenCalledWith("33123456789@s.whatsapp.net", { text: "hello" });
+    expect(requireMockArg(sendMessage, 0, 0, "unmapped send")).toBe("33123456789@s.whatsapp.net");
+    expect(requireMockArg(sendMessage, 0, 1, "unmapped send")).toEqual({ text: "hello" });
+  });
+
+  it.each([
+    {
+      target: "987654@lid",
+      mappedPn: "15555550000@s.whatsapp.net",
+    },
+    {
+      target: "987654@hosted.lid",
+      mappedPn: "15555550000@hosted",
+    },
+  ])(
+    "prepares the verified PN alias for an explicit $target send",
+    async ({ target, mappedPn }) => {
+      const api = createWebSendApi({
+        sock: { sendMessage, sendPresenceUpdate },
+        defaultAccountId: "main",
+        authDir,
+      });
+      await api.sendMessage(target, "hello");
+      expect(requireMockArg(sendMessage, 0, 0, "mapped send")).toBe(target);
+      expect(requireMockArg(sendMessage, 0, 3, "mapped send identity")).toEqual({
+        remoteE164: "+15555550000",
+        remoteJids: [target, mappedPn],
+      });
+    },
+  );
+
+  it("keeps an unmapped same-digit LID distinct from its apparent PN", async () => {
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      authDir,
+    });
+    await api.sendMessage("15555550000@lid", "hello");
+    expect(requireMockArg(sendMessage, 0, 3, "unmapped send identity")).toEqual({
+      remoteE164: undefined,
+      remoteJids: ["15555550000@lid"],
+    });
   });
 
   it("resolves PN to LID for sendPoll", async () => {
@@ -972,6 +1030,7 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
       // authDir intentionally omitted
     });
     await api.sendMessage("+15555550000", "hello");
-    expect(sendMessage).toHaveBeenCalledWith("15555550000@s.whatsapp.net", { text: "hello" });
+    expect(requireMockArg(sendMessage, 0, 0, "PN-only send")).toBe("15555550000@s.whatsapp.net");
+    expect(requireMockArg(sendMessage, 0, 1, "PN-only send")).toEqual({ text: "hello" });
   });
 });

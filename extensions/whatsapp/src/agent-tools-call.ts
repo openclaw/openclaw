@@ -18,6 +18,7 @@ import { Type } from "typebox";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { getWhatsAppConnectionController } from "./connection-controller-runtime-context.js";
 import { resolveJidToE164 } from "./targets-runtime.js";
+import { classifyWhatsAppJid } from "./whatsapp-jid.js";
 
 const MEOWCALLER_COMMAND = "meowcaller";
 const SESSION_DATABASE = "wa-voip.db";
@@ -147,7 +148,11 @@ async function resolveRequesterE164(params: {
   requesterSenderId: string;
 }): Promise<string | null> {
   const senderId = params.requesterSenderId.trim();
-  if (!senderId.includes("@")) {
+  const classified = classifyWhatsAppJid(senderId);
+  if (classified.kind !== "pn" && classified.kind !== "lid") {
+    if (senderId.includes("@")) {
+      return null;
+    }
     try {
       return normalizeE164(senderId.replace(/^whatsapp:/i, ""));
     } catch {
@@ -158,7 +163,7 @@ async function resolveRequesterE164(params: {
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId });
   const lidLookup = getWhatsAppConnectionController(params.accountId)?.getCurrentSock()
     ?.signalRepository.lidMapping;
-  return await resolveJidToE164(senderId, { authDir: account.authDir, lidLookup });
+  return await resolveJidToE164(classified.jid, { authDir: account.authDir, lidLookup });
 }
 
 async function resolveLinkedWhatsAppSelfE164(params: {

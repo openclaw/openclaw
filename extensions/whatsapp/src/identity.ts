@@ -1,8 +1,7 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 // Whatsapp plugin module implements identity behavior.
 import { jidToE164, normalizeE164 } from "./text-runtime.js";
-
-const WHATSAPP_LID_RE = /@(lid|hosted\.lid)$/i;
+import { areSameWhatsAppJid, classifyWhatsAppDirectJid } from "./whatsapp-jid.js";
 
 export type WhatsAppIdentity = {
   jid?: string | null;
@@ -16,6 +15,11 @@ export type WhatsAppSelfIdentity = {
   jid?: string | null;
   lid?: string | null;
   e164?: string | null;
+};
+
+export type PreparedWhatsAppInboundActor = {
+  transportJid: string;
+  e164: string | null;
 };
 
 export type WhatsAppReplyContext = {
@@ -64,22 +68,15 @@ type LegacyMentionsLike = {
   };
 };
 
-function normalizeDeviceScopedJid(jid: string | null | undefined): string | null {
-  return jid ? jid.replace(/:\d+/, "") : null;
-}
-
-function isLidJid(jid: string | null | undefined): boolean {
-  return Boolean(jid && WHATSAPP_LID_RE.test(jid));
-}
-
 export function resolveComparableIdentity(
   identity: WhatsAppIdentity | WhatsAppSelfIdentity | null | undefined,
   authDir?: string,
 ): WhatsAppIdentity {
-  const rawJid = normalizeDeviceScopedJid(identity?.jid);
-  const rawLid = normalizeDeviceScopedJid(identity?.lid);
-  const lid = rawLid ?? (isLidJid(rawJid) ? rawJid : null);
-  const jid = rawJid && !isLidJid(rawJid) ? rawJid : null;
+  const rawJid = classifyWhatsAppDirectJid(identity?.jid);
+  const rawLid = classifyWhatsAppDirectJid(identity?.lid);
+  const lid =
+    (rawLid?.kind === "lid" ? rawLid.jid : null) ?? (rawJid?.kind === "lid" ? rawJid.jid : null);
+  const jid = rawJid?.kind === "pn" ? rawJid.jid : null;
   const e164 =
     identity?.e164 != null
       ? normalizeE164(identity.e164)
@@ -90,6 +87,28 @@ export function resolveComparableIdentity(
     jid,
     lid,
     e164,
+  };
+}
+
+export function prepareWhatsAppInboundActor(params: {
+  primaryJid: string | null | undefined;
+  alternateJid?: string | null;
+}): PreparedWhatsAppInboundActor | null {
+  const transportJid = params.primaryJid?.trim();
+  if (!transportJid) {
+    return null;
+  }
+  const primary = classifyWhatsAppDirectJid(transportJid);
+  if (!primary) {
+    return null;
+  }
+  const alternate = classifyWhatsAppDirectJid(params.alternateJid);
+  // Baileys has already observed this PN/LID pair on the inbound envelope.
+  // Keep the primary transport identity while carrying its PN fact forward.
+  const phone = primary.kind === "pn" ? primary : alternate?.kind === "pn" ? alternate : null;
+  return {
+    transportJid,
+    e164: phone ? `+${phone.user}` : null,
   };
 }
 
@@ -106,11 +125,15 @@ export function identitiesOverlap(
   left: WhatsAppIdentity | WhatsAppSelfIdentity | null | undefined,
   right: WhatsAppIdentity | WhatsAppSelfIdentity | null | undefined,
 ): boolean {
-  const leftValues = new Set(getComparableIdentityValues(left));
-  if (leftValues.size === 0) {
+  const leftValues = getComparableIdentityValues(left);
+  if (leftValues.length === 0) {
     return false;
   }
-  return getComparableIdentityValues(right).some((value) => leftValues.has(value));
+  return getComparableIdentityValues(right).some((rightValue) =>
+    leftValues.some(
+      (leftValue) => leftValue === rightValue || areSameWhatsAppJid(leftValue, rightValue),
+    ),
+  );
 }
 
 export function getSenderIdentity(msg: LegacySenderLike, authDir?: string): WhatsAppIdentity {

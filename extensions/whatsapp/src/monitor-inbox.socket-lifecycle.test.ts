@@ -1,4 +1,6 @@
 // WhatsApp monitor inbox behavior split by ownership.
+import fs from "node:fs";
+import path from "node:path";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { describe, expect, it, vi } from "vitest";
@@ -17,13 +19,14 @@ import {
 import {
   buildNotifyMessageUpsert,
   DEFAULT_ACCOUNT_ID,
+  getAuthDir,
   settleInboundWork,
   startInboxMonitor,
   waitForMessageCalls,
   type InboxMonitorOptions,
   type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
-import { lookupInboundMessageMeta } from "./quoted-message.js";
+import { lookupInboundMessageMeta, lookupInboundMessageMetaForTarget } from "./quoted-message.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 function createAcceptedSendMessageMock() {
@@ -460,6 +463,30 @@ describe("web monitor inbox socket lifecycle", () => {
     expect(
       lookupInboundMessageMeta(DEFAULT_ACCOUNT_ID, "999@s.whatsapp.net", "outbound-cached"),
     ).toMatchObject({ fromMe: true, body: "pong" });
+
+    await listener.close();
+  });
+
+  it("socket session records the prepared PN identity for a LID-routed send", async () => {
+    fs.writeFileSync(path.join(getAuthDir(), "lid-mapping-1555.json"), JSON.stringify("987654"));
+    const { listener, sock } = await startInboxMonitor(
+      vi.fn(async () => undefined) as InboxOnMessage,
+    );
+    sock.sendMessage.mockResolvedValueOnce({
+      key: { id: "lid-routed" },
+      message: { conversation: "hello" },
+    });
+
+    await listener.sendMessage("+1555", "hello");
+
+    expect(sock.sendMessage).toHaveBeenCalledWith("987654@lid", { text: "hello" });
+    expect(
+      lookupInboundMessageMetaForTarget(DEFAULT_ACCOUNT_ID, "1555@s.whatsapp.net", "lid-routed"),
+    ).toMatchObject({
+      remoteJid: "987654@lid",
+      fromMe: true,
+      body: "hello",
+    });
 
     await listener.close();
   });

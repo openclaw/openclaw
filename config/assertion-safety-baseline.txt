@@ -1318,7 +1318,7 @@ extensions/whatsapp/src/inbound/message-delivery.ts	1
 extensions/whatsapp/src/inbound/message-enrichment.ts	3
 extensions/whatsapp/src/inbound/outbound-mentions.ts	1
 extensions/whatsapp/src/inbound/send-api.ts	5
-extensions/whatsapp/src/inbound/socket-session.ts	3
+extensions/whatsapp/src/inbound/socket-session.ts	1
 extensions/whatsapp/src/qa-driver.runtime.ts	1
 extensions/whatsapp/src/quoted-message.ts	1
 extensions/whatsapp/src/reconnect.ts	1
@@ -1327,7 +1327,6 @@ extensions/whatsapp/src/send.ts	1
 extensions/whatsapp/src/session-errors.ts	20
 extensions/whatsapp/src/session.ts	6
 extensions/whatsapp/src/setup-finalize.ts	4
-extensions/whatsapp/src/targets-runtime.ts	2
 extensions/workboard/browser/lib/workboard/metadata-contract-normalization.ts	1
 extensions/workboard/browser/lib/workboard/normalization.ts	5
 extensions/workboard/browser/pages/workboard/view-card-actions.ts	2

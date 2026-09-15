@@ -3,6 +3,7 @@
 import { isChannelConfigMetadataKey } from "../../../channels/config-metadata.js";
 import { getBootstrapChannelPlugin } from "../../../channels/plugins/bootstrap-registry.js";
 import { loadBundledChannelDoctorContractApi } from "../../../channels/plugins/doctor-contract-api.js";
+import type { ChannelDoctorConfigMutation } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
@@ -12,14 +13,9 @@ import {
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 
-type ChannelDoctorCompatibilityMutation = {
-  config: OpenClawConfig;
-  changes: string[];
-};
-
 type ChannelDoctorCompatibilityNormalizer = (params: {
   cfg: OpenClawConfig;
-}) => ChannelDoctorCompatibilityMutation;
+}) => ChannelDoctorConfigMutation;
 
 function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: string[]): void {
   const channels = isRecord(raw.channels) ? raw.channels : null;
@@ -110,9 +106,11 @@ export function applyChannelDoctorCompatibilityMigrations(
 ): {
   next: Record<string, unknown>;
   changes: string[];
+  warnings: string[];
 } {
   let nextCfg = cfg as OpenClawConfig;
   const changes: string[] = [];
+  const warnings: string[] = [];
   migrateHeartbeatVisibility(cfg, changes);
   const unresolvedChannelIds: string[] = [];
 
@@ -126,11 +124,14 @@ export function applyChannelDoctorCompatibilityMigrations(
       continue;
     }
     const mutation = normalizeCompatibilityConfig({ cfg: nextCfg });
-    if (!mutation || mutation.changes.length === 0) {
+    if (!mutation) {
       continue;
     }
-    nextCfg = mutation.config;
-    changes.push(...mutation.changes);
+    warnings.push(...(mutation.warnings ?? []));
+    if (mutation.changes.length > 0) {
+      nextCfg = mutation.config;
+      changes.push(...mutation.changes);
+    }
   }
 
   // Plugin id collection loads the installed-plugin registry from the shared state
@@ -146,10 +147,12 @@ export function applyChannelDoctorCompatibilityMigrations(
     });
     nextCfg = compat.config;
     changes.push(...compat.changes);
+    warnings.push(...compat.warnings);
   }
 
   return {
     next: nextCfg as OpenClawConfig & Record<string, unknown>,
     changes,
+    warnings,
   };
 }

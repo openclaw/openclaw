@@ -148,6 +148,7 @@ export function normalizeCompatibilityConfigValues(
     contextBudgetConfig,
     options.sourceRaw,
   );
+  const warnings = [...contextBudgetWarnings];
   changes.push(...reservedMcpServerNames.changes);
   let next = normalizeBaseCompatibilityConfigValues(
     reservedMcpServerNames.config,
@@ -170,6 +171,7 @@ export function normalizeCompatibilityConfigValues(
     changes.push("Removed retired runtime tuning knobs; built-in defaults now apply.");
   }
   const channelMigrations = applyChannelDoctorCompatibilityMigrations(next);
+  warnings.push(...channelMigrations.warnings);
   if (channelMigrations.changes.length > 0) {
     next = channelMigrations.next;
     changes.push(...channelMigrations.changes);
@@ -188,6 +190,6 @@ export function normalizeCompatibilityConfigValues(
   return {
     config: next,
     changes,
-    ...(contextBudgetWarnings.length > 0 ? { warnings: contextBudgetWarnings } : {}),
+    ...(warnings.length > 0 ? { warnings } : {}),
   };
 }

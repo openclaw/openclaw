@@ -130,6 +130,36 @@ describe("createWhatsAppSocketOperationTimeoutAdapter", () => {
     await expect(second).resolves.toMatchObject({ key: { id: "msg-2" } });
   });
 
+  it("preserves prepared outbound identity for late accepted sends", async () => {
+    vi.useFakeTimers();
+    const sendPromise = new Promise<WAMessage | undefined>(() => {});
+    const sendMessage = vi.fn(() => sendPromise);
+    const sock = {
+      sendMessage,
+      sendPresenceUpdate: vi.fn(async () => undefined),
+    };
+    const onSendMessageTimeout = vi.fn();
+    const identity = {
+      remoteE164: "+15551230000",
+      remoteJids: ["15551230000@s.whatsapp.net", "277038292303944@lid"],
+    };
+
+    const bounded = createWhatsAppSocketOperationTimeoutAdapter(sock, 1_000, {
+      onSendMessageTimeout,
+    }).sendMessage("277038292303944@lid", { text: "hello" }, undefined, identity);
+    const rejection = expect(bounded).rejects.toMatchObject({
+      name: "WhatsAppSocketOperationTimeoutError",
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await rejection;
+
+    expect(onSendMessageTimeout).toHaveBeenCalledWith({
+      jid: "277038292303944@lid",
+      promise: sendPromise,
+      identity,
+    });
+  });
+
   it("releases the send queue after a socket operation timeout", async () => {
     vi.useFakeTimers();
     const sendMessage = vi
