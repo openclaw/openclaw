@@ -76,7 +76,7 @@
      why this theme is opt-in. --mono already named JetBrains Mono, but nothing
      shipped it until this theme did. */
   --mono:
-    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+    "JetBrains Mono", "Noto Sans", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --font-body: var(--mono);
   --font-chat: var(--mono);
 }
@@ -150,7 +150,7 @@
   --grid-line: rgba(20, 50, 30, 0.04);
 
   --mono:
-    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+    "JetBrains Mono", "Noto Sans", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --font-body: var(--mono);
   --font-chat: var(--mono);
 }

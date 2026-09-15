@@ -95,7 +95,7 @@
   /* One face for the whole console, prose included — same opt-in character
      decision as Phosphor; the mono choice is why this theme is not a default. */
   --mono:
-    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+    "JetBrains Mono", "Noto Sans", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --font-body: var(--mono);
   --font-chat: var(--mono);
 }
@@ -170,7 +170,7 @@
   --grid-line: rgba(20, 20, 20, 0.04);
 
   --mono:
-    "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+    "JetBrains Mono", "Noto Sans", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --font-body: var(--mono);
   --font-chat: var(--mono);
 }
