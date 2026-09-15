@@ -15,7 +15,7 @@ let package = Package(
         .executable(name: "openclaw-mac", targets: ["OpenClawMacCLI"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", exact: "3.0.1"),
+        .package(url: "https://github.com/sindresorhus/KeyboardShortcuts", exact: "3.1.0"),
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.15.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6"),
