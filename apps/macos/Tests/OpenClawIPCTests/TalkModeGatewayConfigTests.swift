@@ -54,6 +54,23 @@ struct TalkModeGatewayConfigTests {
         #expect(parsed.referenceText == "reference transcript")
     }
 
+    @Test func `reads configured idle timeout seconds`() {
+        let snapshot = Self.snapshot(talk: ["idleTimeoutS": 30])
+        let parsed = Self.parse(snapshot)
+        #expect(parsed.snapshot.idleTimeoutS == 30)
+    }
+
+    @Test func `defaults idle timeout seconds to disabled`() {
+        let parsed = Self.parse(Self.snapshot(talk: [:]))
+        #expect(parsed.snapshot.idleTimeoutS == nil)
+    }
+
+    @Test func `keeps idle timeout disabled when invalid`() {
+        let snapshot = Self.snapshot(talk: ["idleTimeoutS": "30"])
+        let parsed = Self.parse(snapshot)
+        #expect(parsed.snapshot.idleTimeoutS == nil)
+    }
+
     @Test func `realtime config uses top level overrides and normalizes control values`() {
         let snapshot = Self.snapshot(talk: [
             "realtime": [

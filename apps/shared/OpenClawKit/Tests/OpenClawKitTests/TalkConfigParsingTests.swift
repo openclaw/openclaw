@@ -166,4 +166,11 @@ struct TalkConfigParsingTests {
         #expect(speakerOnly.realtime.speakerVoice == "top-speaker")
         #expect(speakerOnly.interruptOnSpeech == false)
     }
+
+    @Test func `resolvesIdleTimeoutS`() {
+        let talk: [String: AnyCodable] = ["idleTimeoutS": AnyCodable(30)]
+        #expect(TalkConfigParsing.resolvedIdleTimeoutS(talk) == 30)
+        #expect(TalkConfigParsing.resolvedIdleTimeoutS(nil) == nil)
+        #expect(TalkConfigParsing.resolvedIdleTimeoutS(["idleTimeoutS": AnyCodable(0)]) == nil)
+    }
 }

@@ -260,6 +260,7 @@ export const TARGET_KEYS = [
   "talk.consultFastMode",
   "talk.interruptOnSpeech",
   "talk.silenceTimeoutMs",
+  "talk.idleTimeoutS",
   "talk.consultThinkingLevel",
   "meta",
   "env",
