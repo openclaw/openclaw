@@ -2,6 +2,7 @@
 // stale chat buffers, expired runs, health summaries, and timer disposal.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isGatewayWorkAdmissionClosed,
@@ -82,7 +83,15 @@ function createMaintenanceTimerDeps() {
   return {
     ...createGatewayMaintenanceStateForTest(),
     logHealth: { info: vi.fn(), error: vi.fn() },
-    runWorktreeGc: vi.fn(async () => undefined),
+    runWorktreeGc: vi.fn(async () => ({
+      removed: [],
+      orphansDeleted: 0,
+      snapshotsPruned: 0,
+      outcome: "completed" as const,
+      issues: [],
+      protectedCount: 0,
+      limitsSatisfied: true,
+    })),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
     runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
   };
@@ -432,6 +441,10 @@ describe("startGatewayMaintenanceTimers", () => {
       removed: [],
       orphansDeleted: 0,
       snapshotsPruned: 0,
+      outcome: "completed",
+      issues: [],
+      protectedCount: 0,
+      limitsSatisfied: true,
     });
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const { runWorktreeGc: _runWorktreeGc, ...deps } = createMaintenanceTimerDeps();
@@ -446,6 +459,43 @@ describe("startGatewayMaintenanceTimers", () => {
     });
     await stopMaintenanceTimers(timers);
   });
+
+  it.each(["partial", "deferred"] as const)(
+    "reports resolved %s cleanup without adding retries",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const result: ManagedWorktreeGcResult = {
+        removed: ["removed-id"],
+        orphansDeleted: 2,
+        snapshotsPruned: 3,
+        outcome,
+        issues: [
+          { stage: "idle", outcome: outcome === "partial" ? "failed" : "deferred", count: 4 },
+        ],
+        protectedCount: 5,
+        limitsSatisfied: false,
+      };
+      const runWorktreeGc = vi.fn(async () => result);
+      const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+      const deps = { ...createMaintenanceTimerDeps(), runWorktreeGc };
+      const timers = startGatewayMaintenanceTimers(deps);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(runWorktreeGc).toHaveBeenCalledTimes(1);
+        const log = outcome === "partial" ? deps.logHealth.error : deps.logHealth.info;
+        expect(log).toHaveBeenCalledWith(
+          expect.stringContaining(`Cleanup ${outcome}: worktrees removed: 1;`),
+        );
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("protected 5; limits exceeded"));
+        await vi.advanceTimersByTimeAsync(60 * 60_000 - 1);
+        expect(runWorktreeGc).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(runWorktreeGc).toHaveBeenCalledTimes(2);
+      } finally {
+        await stopMaintenanceTimers(timers);
+      }
+    },
+  );
 
   it("updates attachment cleanup policy between sweeps without restarting maintenance", async () => {
     vi.useFakeTimers();
@@ -939,63 +989,6 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(deps.chatRunState.runs.has(runId)).toBe(false);
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("keeps active agent dedupe entries past the normal ttl", async () => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
-    deps.chatAbortControllers.set("active-agent", createActiveRun("agent:main:main", "agent"));
-    deps.dedupe.set("agent:active-agent", {
-      ts: now - DEDUPE_TTL_MS - 1,
-      ok: true,
-      payload: { runId: "active-agent", status: "accepted" },
-    });
-    deps.dedupe.set("agent:stale-agent", {
-      ts: now - DEDUPE_TTL_MS - 1,
-      ok: true,
-      payload: { runId: "stale-agent", status: "accepted" },
-    });
-
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.dedupe.has("agent:active-agent")).toBe(true);
-    expect(deps.dedupe.has("agent:stale-agent")).toBe(false);
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it("keeps pending accepted agent dedupe entries until their run expiry", async () => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
-    deps.dedupe.set("agent:pending-agent", {
-      ts: now - DEDUPE_TTL_MS - 1,
-      ok: true,
-      payload: {
-        runId: "pending-agent",
-        sessionKey: "agent:main:main",
-        status: "accepted",
-        expiresAtMs: now + 120_000,
-      },
-    });
-    deps.dedupe.set("agent:expired-pending-agent", {
-      ts: now - DEDUPE_TTL_MS - 1,
-      ok: true,
-      payload: {
-        runId: "expired-pending-agent",
-        sessionKey: "agent:main:main",
-        status: "accepted",
-        expiresAtMs: now - 1,
-      },
-    });
-
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expect(deps.dedupe.has("agent:pending-agent")).toBe(true);
-    expect(deps.dedupe.has("agent:expired-pending-agent")).toBe(false);
 
     await stopMaintenanceTimers(timers);
   });

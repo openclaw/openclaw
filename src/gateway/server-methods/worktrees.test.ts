@@ -3,10 +3,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  ErrorShapeSchema,
+  WorktreesGcResultSchema,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { WorktreeSnapshotError } from "../../agents/worktrees/service.js";
-import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import type {
+  ManagedWorktreeGcResult,
+  ManagedWorktreeRecord,
+} from "../../agents/worktrees/types.js";
 import { registerProjectRegistry, removeProjectRegistry } from "../../projects/project-registry.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -61,15 +69,55 @@ async function call(
 const adminClient = { connect: { scopes: ["operator.admin"] } };
 const writeClient = { connect: { scopes: ["operator.write"] } };
 const emptyConfigContext = { getRuntimeConfig: () => ({}) };
+const completedGc: ManagedWorktreeGcResult = {
+  removed: [],
+  orphansDeleted: 0,
+  snapshotsPruned: 0,
+  outcome: "completed",
+  issues: [],
+  protectedCount: 0,
+  limitsSatisfied: true,
+};
 
 describe("worktrees gateway methods", () => {
+  it.each(["partial", "deferred"] as const)(
+    "returns %s progress in a non-retryable error",
+    async (outcome) => {
+      const result: ManagedWorktreeGcResult = {
+        removed: [record.id],
+        orphansDeleted: 1,
+        snapshotsPruned: 2,
+        outcome,
+        issues: [
+          { stage: "snapshots", outcome: outcome === "partial" ? "failed" : "deferred", count: 1 },
+        ],
+        protectedCount: 3,
+        limitsSatisfied: true,
+      };
+      const gc = vi.fn(async () => result);
+      const handlers = createWorktreesHandlers({ gc } as never);
+      const response = await call(handlers, "worktrees.gc", {}, { context: emptyConfigContext });
+      expect(response).toEqual([
+        false,
+        undefined,
+        expect.objectContaining({ code: "UNAVAILABLE", details: result, retryable: false }),
+      ]);
+      expect(Value.Check(ErrorShapeSchema, response?.[2])).toBe(true);
+      expect(gc).toHaveBeenCalledTimes(1);
+    },
+  );
   it("routes every operation through the managed worktree service", async () => {
     const service = {
       list: vi.fn(async () => [record]),
       create: vi.fn(async () => record),
       remove: vi.fn(async () => ({ removed: true, snapshotRef: "refs/snapshot" })),
       restore: vi.fn(async () => ({ ...record, snapshotRef: "refs/snapshot" })),
-      gc: vi.fn(async () => ({ removed: [record.id], orphansDeleted: 1, snapshotsPruned: 2 })),
+      gc: vi.fn(async () => ({
+        ...completedGc,
+        removed: [record.id],
+        orphansDeleted: 1,
+        snapshotsPruned: 2,
+      })),
     };
     const handlers = createWorktreesHandlers(service as never);
 
@@ -100,11 +148,13 @@ describe("worktrees gateway methods", () => {
       "worktree restore response",
     );
     expect(expectDefined(restoreResult[0], "worktree restore success flag")).toBe(true);
-    expect(await call(handlers, "worktrees.gc", {}, { context: emptyConfigContext })).toEqual([
+    const gcResponse = await call(handlers, "worktrees.gc", {}, { context: emptyConfigContext });
+    expect(gcResponse).toEqual([
       true,
       { removed: [record.id], orphansDeleted: 1, snapshotsPruned: 2 },
       undefined,
     ]);
+    expect(Value.Check(WorktreesGcResultSchema, gcResponse?.[1])).toBe(true);
     expect(service.gc).toHaveBeenCalledWith({
       limits: { maxCount: 100 },
       shouldProtectOwner: expect.any(Function),
@@ -250,7 +300,7 @@ describe("worktrees gateway methods", () => {
 
   it("uses the built-in cleanup policy for gc", async () => {
     const service = {
-      gc: vi.fn(async () => ({ removed: [], orphansDeleted: 0, snapshotsPruned: 0 })),
+      gc: vi.fn(async () => completedGc),
     };
     const handlers = createWorktreesHandlers(service as never);
     const context = { getRuntimeConfig: () => ({}) };

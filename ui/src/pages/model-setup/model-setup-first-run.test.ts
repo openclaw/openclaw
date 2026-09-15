@@ -109,7 +109,9 @@ describe("ModelSetupPage first-run inference", () => {
       client,
       firstRun: true,
     });
-    const checkAgain = page.querySelector<HTMLButtonElement>(".model-setup__intro .btn");
+    const checkAgain = [
+      ...page.querySelectorAll<HTMLButtonElement>(".model-setup__intro .btn"),
+    ].find((button) => button.textContent?.trim() === "Check again");
     expect(checkAgain?.textContent).toContain("Check again");
     checkAgain?.click();
     await waitForFast(() => expect(page.textContent).toContain("openai/newly-available"));

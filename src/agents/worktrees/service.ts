@@ -4,7 +4,7 @@ import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
-import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
+import { hasErrnoCode, isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
 import { startGitOperationTiming } from "../../infra/git-operation-timing.js";
 import { runGitReadOperation } from "../../infra/git-read-cache.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
@@ -12,7 +12,10 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createCommandError } from "../../process/command-error.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
-import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
+import {
+  OpenClawStateLeaseError,
+  withOpenClawStateLease,
+} from "../../state/openclaw-state-lease.js";
 import { createCrustaceanSlug } from "../session-slug.js";
 import { resolveWorktreeBase } from "./base-ref.js";
 import {
@@ -150,6 +153,47 @@ type ManagedWorktreeGcParams = {
   shouldRemoveOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
   limits?: WorktreeCleanupLimits;
 };
+
+class WorktreeGcProgress {
+  readonly result: ManagedWorktreeGcResult = {
+    removed: [],
+    orphansDeleted: 0,
+    snapshotsPruned: 0,
+    outcome: "completed",
+    issues: [],
+    protectedCount: 0,
+    limitsSatisfied: null,
+  };
+  private readonly protectedIds = new Set<string>();
+
+  protect(id: string): void {
+    this.protectedIds.add(id);
+    this.result.protectedCount = this.protectedIds.size;
+  }
+
+  recordError(stage: ManagedWorktreeGcResult["issues"][number]["stage"], error: unknown): void {
+    const reason = classifyWorktreeRemovalError(error);
+    const outcome =
+      reason === "busy" ||
+      reason === "foreign-lock" ||
+      (error instanceof OpenClawStateLeaseError && error.code === "OPENCLAW_STATE_LEASE_TIMEOUT")
+        ? "deferred"
+        : "failed";
+    const issue = this.result.issues.find(
+      (entry) => entry.stage === stage && entry.outcome === outcome,
+    );
+    if (issue) {
+      issue.count += 1;
+    } else {
+      this.result.issues.push({ stage, outcome, count: 1 });
+    }
+    if (outcome === "failed") {
+      this.result.outcome = "partial";
+    } else if (this.result.outcome === "completed") {
+      this.result.outcome = "deferred";
+    }
+  }
+}
 
 type WorktreeMutationGuard = Pick<CreateManagedWorktreeParams, "signal" | "commitGuard">;
 type RemoveWorktreeParams = WorktreeMutationGuard & {
@@ -1382,8 +1426,22 @@ export class ManagedWorktreeService {
 
   async gc(params: ManagedWorktreeGcParams = {}): Promise<ManagedWorktreeGcResult> {
     const now = this.now();
-    let removed: string[] = [];
-    const records = listRegistryWorktrees(this.env);
+    const progress = new WorktreeGcProgress();
+    const result = progress.result;
+    const limits = params.limits ?? resolveWorktreeCleanupLimits();
+    if (limits.maxCount === undefined && limits.maxTotalSizeBytes === undefined) {
+      result.limitsSatisfied = true;
+    }
+    let records: ManagedWorktreeRecord[];
+    try {
+      records = listRegistryWorktrees(this.env);
+    } catch (error) {
+      // An unavailable registry is not an empty registry: orphan cleanup would
+      // otherwise lose the ownership facts that protect managed checkouts.
+      progress.recordError("idle", error);
+      log.warn(`worktree inventory failed: ${String(error)}`);
+      return result;
+    }
     for (const record of records) {
       try {
         if (record.removedAt === undefined && !(await worktreePathExists(record.path))) {
@@ -1401,6 +1459,7 @@ export class ManagedWorktreeService {
           (retiredOwner || now - record.lastActiveAt > IDLE_GC_MS)
         ) {
           if (await this.isProtectedFromAutoRemoval(record, params.shouldProtectOwner)) {
+            progress.protect(record.id);
             continue;
           }
           await this.remove({
@@ -1408,9 +1467,10 @@ export class ManagedWorktreeService {
             reason: retiredOwner ? "owner-gc" : "idle-gc",
             commitGuard: () => this.assertOwnerAllowsCleanup(record, params, retiredOwner),
           });
-          removed.push(record.id);
+          result.removed.push(record.id);
         }
       } catch (error) {
+        progress.recordError("idle", error);
         log.warn(`idle cleanup failed for ${record.id}: ${String(error)}`);
       }
     }
@@ -1419,19 +1479,43 @@ export class ManagedWorktreeService {
       // the templates under the lease before retiring any artifacts.
       if (hasTemplates(this.env)) {
         await this.withAllocationLease({}, async (guard) => {
-          await collectWorktreeTemplates(this.env, now - IDLE_GC_MS, {
-            signal: guard.signal,
-            commitGuard: () => guard.commitGuard?.(),
-          });
+          await collectWorktreeTemplates(
+            this.env,
+            now - IDLE_GC_MS,
+            {
+              signal: guard.signal,
+              commitGuard: () => guard.commitGuard?.(),
+            },
+            (error) => progress.recordError("templates", error),
+          );
         });
       }
     } catch (error) {
-      log.warn(`worktree template cleanup deferred: ${String(error)}`);
+      progress.recordError("templates", error);
+      log.warn(`worktree template cleanup incomplete: ${String(error)}`);
     }
-    removed = removed.concat(await this.enforceCleanupLimits(params));
-    const orphansDeleted = await this.reconcileOrphans(records);
-    let snapshotsPruned = 0;
-    for (const record of listRegistryWorktrees(this.env)) {
+    try {
+      await this.enforceCleanupLimits(params, progress);
+    } catch (error) {
+      result.limitsSatisfied = null;
+      progress.recordError("limits", error);
+      log.warn(`worktree cleanup limits incomplete: ${String(error)}`);
+    }
+    try {
+      await this.reconcileOrphans(records, progress);
+    } catch (error) {
+      progress.recordError("orphans", error);
+      log.warn(`worktree orphan cleanup incomplete: ${String(error)}`);
+    }
+    let snapshotRecords: ManagedWorktreeRecord[];
+    try {
+      snapshotRecords = listRegistryWorktrees(this.env);
+    } catch (error) {
+      progress.recordError("snapshots", error);
+      log.warn(`snapshot inventory failed: ${String(error)}`);
+      return result;
+    }
+    for (const record of snapshotRecords) {
       if (record.removedAt === undefined || now - record.removedAt <= SNAPSHOT_RETENTION_MS) {
         continue;
       }
@@ -1474,7 +1558,7 @@ export class ManagedWorktreeService {
           }
           guard.commitGuard?.();
           deleteRegistryWorktree(this.env, current.id);
-          snapshotsPruned += 1;
+          result.snapshotsPruned += 1;
         };
         // Only owned source deletion must serialize against checkout allocation.
         // Ordinary snapshot expiry must still work when allocation is unavailable.
@@ -1484,10 +1568,11 @@ export class ManagedWorktreeService {
           await pruneSnapshot();
         }
       } catch (error) {
+        progress.recordError("snapshots", error);
         log.warn(`snapshot retention failed for ${record.id}: ${String(error)}`);
       }
     }
-    return { removed, orphansDeleted, snapshotsPruned };
+    return result;
   }
 
   /**
@@ -1540,12 +1625,17 @@ export class ManagedWorktreeService {
    * Manual worktrees count toward the totals but are never limit-evicted, so a
    * limit can stay exceeded when only protected worktrees remain.
    */
-  private async enforceCleanupLimits(params: ManagedWorktreeGcParams): Promise<string[]> {
+  private async enforceCleanupLimits(
+    params: ManagedWorktreeGcParams,
+    progress: WorktreeGcProgress,
+  ): Promise<void> {
     const limits = params.limits ?? resolveWorktreeCleanupLimits();
     if (limits.maxCount === undefined && limits.maxTotalSizeBytes === undefined) {
-      return [];
+      progress.result.limitsSatisfied = true;
+      return;
     }
     const live = listRegistryWorktrees(this.env).filter((record) => record.removedAt === undefined);
+    const inventoriedIds = new Set(live.map((record) => record.id));
     const sizes = new Map<string, number>();
     let totalBytes = 0;
     if (limits.maxTotalSizeBytes !== undefined) {
@@ -1560,6 +1650,7 @@ export class ManagedWorktreeService {
           // evicted off a bogus zero-byte reading. Aborting enforcement here
           // instead would let one unreadable directory disable the whole cap;
           // the count limit still bounds unmeasurable worktrees.
+          progress.recordError("size", error);
           log.warn(`worktree size measurement failed for ${record.id}: ${String(error)}`);
         }
       }
@@ -1568,9 +1659,20 @@ export class ManagedWorktreeService {
     const overLimit = () =>
       (limits.maxCount !== undefined && liveCount > limits.maxCount) ||
       (limits.maxTotalSizeBytes !== undefined && totalBytes > limits.maxTotalSizeBytes);
-    if (!overLimit()) {
-      return [];
-    }
+    const recordLimits = (liveIds: ReadonlySet<string>) => {
+      // Concurrent additions have no measurement in this pass. Report incomplete
+      // accounting without measuring or evicting a newly admitted checkout.
+      if (
+        limits.maxTotalSizeBytes !== undefined &&
+        [...liveIds].some((id) => !inventoriedIds.has(id))
+      ) {
+        progress.recordError("size", new Error("worktree inventory changed during cleanup"));
+      }
+      progress.result.limitsSatisfied =
+        limits.maxTotalSizeBytes !== undefined && [...liveIds].some((id) => !sizes.has(id))
+          ? null
+          : !overLimit();
+    };
     // Any concurrent removal (manual delete, run-end cleanup, competing gc)
     // must shrink the accounted pressure before the next destructive step, so
     // totals are recomputed from the registry per iteration. Sizes reuse the
@@ -1593,7 +1695,13 @@ export class ManagedWorktreeService {
       }
       return liveIds;
     };
-    const removed: string[] = [];
+    if (!overLimit()) {
+      // Measurement yields to allocation. Refresh the report even when the
+      // original inventory needs no eviction; keep that selection unchanged.
+      recordLimits(refreshTotals());
+      return;
+    }
+    const removedBefore = progress.result.removed.length;
     const candidates = live
       .filter((record) => record.ownerKind === "workboard" || record.ownerKind === "session")
       .toSorted((a, b) => a.lastActiveAt - b.lastActiveAt);
@@ -1607,6 +1715,7 @@ export class ManagedWorktreeService {
       }
       try {
         if (await this.isProtectedFromAutoRemoval(record, params.shouldProtectOwner)) {
+          progress.protect(record.id);
           continue;
         }
         await this.remove({
@@ -1615,18 +1724,18 @@ export class ManagedWorktreeService {
           commitGuard: () => this.assertOwnerAllowsCleanup(record, params),
         });
       } catch (error) {
+        progress.recordError("limits", error);
         log.warn(`cleanup limit removal failed for ${record.id}: ${String(error)}`);
         continue;
       }
-      removed.push(record.id);
+      progress.result.removed.push(record.id);
     }
-    refreshTotals();
+    recordLimits(refreshTotals());
     if (overLimit()) {
       log.warn(
-        `worktree cleanup limits still exceeded after evicting ${removed.length}; remaining worktrees are protected or manual`,
+        `worktree cleanup limits still exceeded after evicting ${progress.result.removed.length - removedBefore}; remaining worktrees are protected or manual`,
       );
     }
-    return removed;
   }
 
   private assertOwnerAllowsCleanup(
@@ -1675,7 +1784,10 @@ export class ManagedWorktreeService {
     return { ...record, repoRoot: repository.repoRoot, repoFingerprint: repository.fingerprint };
   }
 
-  private async reconcileOrphans(records: ManagedWorktreeRecord[]): Promise<number> {
+  private async reconcileOrphans(
+    records: ManagedWorktreeRecord[],
+    progress: WorktreeGcProgress,
+  ): Promise<void> {
     const managedPaths = new Set<string>();
     for (const record of records) {
       try {
@@ -1689,9 +1801,16 @@ export class ManagedWorktreeService {
     // Only the default state-owned area grants orphan cleanup authority. A custom
     // root can contain unrelated directories; its cleanup is registry-bound above.
     const worktreesRoot = path.join(resolveStateDir(this.env), "worktrees");
-    const fingerprints = await fs.readdir(worktreesRoot, { withFileTypes: true }).catch(() => []);
+    const fingerprints = await fs
+      .readdir(worktreesRoot, { withFileTypes: true })
+      .catch((error: unknown) => {
+        if (isMissingPathError(error)) {
+          return [];
+        }
+        throw error;
+      });
     if (fingerprints.length === 0) {
-      return 0;
+      return;
     }
     const defaultRoot = await canonicalPathKey(worktreesRoot);
     const customRoots = new Set<string>();
@@ -1715,7 +1834,6 @@ export class ManagedWorktreeService {
         }
       }
     }
-    let deleted = 0;
     for (const fingerprint of fingerprints) {
       if (!fingerprint.isDirectory() || fingerprint.name === WORKTREE_TEMPLATE_DIRECTORY) {
         continue;
@@ -1726,7 +1844,15 @@ export class ManagedWorktreeService {
       if (await shouldPreserveOrphanCandidate(fingerprintPath, managedPaths, customRoots)) {
         continue;
       }
-      const names = await fs.readdir(fingerprintPath, { withFileTypes: true }).catch(() => []);
+      const names = await fs
+        .readdir(fingerprintPath, { withFileTypes: true })
+        .catch((error: unknown) => {
+          if (!isMissingPathError(error)) {
+            progress.recordError("orphans", error);
+            log.warn(`worktree orphan inventory failed: ${String(error)}`);
+          }
+          return [];
+        });
       for (const name of names) {
         if (!name.isDirectory()) {
           continue;
@@ -1736,11 +1862,17 @@ export class ManagedWorktreeService {
           continue;
         }
         await fs.rm(candidate, { recursive: true, force: true });
-        deleted += 1;
+        progress.result.orphansDeleted += 1;
       }
-      await fs.rmdir(fingerprintPath).catch(() => undefined);
+      await fs.rmdir(fingerprintPath).catch((error: unknown) => {
+        // Retained children keep the container nonempty; a competing cleanup
+        // may already have removed it. Other failures leave cleanup incomplete.
+        if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTEMPTY")) {
+          progress.recordError("orphans", error);
+          log.warn(`worktree orphan container cleanup failed: ${String(error)}`);
+        }
+      });
     }
-    return deleted;
   }
 }
 

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { listGitWorktrees } from "./git.js";
 import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
@@ -44,6 +44,7 @@ describe("ManagedWorktreeService orphan reconciliation", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -70,6 +71,7 @@ describe("ManagedWorktreeService orphan reconciliation", () => {
     const result = await service.gc();
 
     expect(result.orphansDeleted).toBe(0);
+    expect(result).toMatchObject({ outcome: "completed", issues: [] });
     await expect(fs.readFile(path.join(target, "payload", "keep.txt"), "utf8")).resolves.toBe(
       `${kind}\n`,
     );
@@ -118,6 +120,101 @@ describe("ManagedWorktreeService orphan reconciliation", () => {
     expect(result.orphansDeleted).toBe(1);
     await expect(fs.stat(debris)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("retains confirmed orphan deletion counts when a later removal fails", async () => {
+    const fingerprint = path.join(stateDir, "worktrees", "fingerprint");
+    const first = path.join(fingerprint, "first");
+    const second = path.join(fingerprint, "second");
+    await fs.mkdir(first, { recursive: true });
+    await fs.mkdir(second, { recursive: true });
+    const rm = fs.rm;
+    let removals = 0;
+    vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if ((target === first || target === second) && ++removals === 2) {
+        throw Object.assign(new Error("orphan removal denied"), { code: "EACCES" });
+      }
+      return await rm(target, options);
+    });
+
+    const result = await service.gc();
+
+    expect(result).toMatchObject({
+      orphansDeleted: 1,
+      outcome: "partial",
+      issues: [{ stage: "orphans", outcome: "failed", count: 1 }],
+    });
+    expect(await fs.readdir(fingerprint)).toHaveLength(1);
+  });
+
+  it.each(["EACCES", "EIO"])(
+    "reports a parent-directory %s failure after deleting its orphan",
+    async (code) => {
+      const fingerprint = path.join(stateDir, "worktrees", "fingerprint");
+      const debris = path.join(fingerprint, "debris");
+      await fs.mkdir(debris, { recursive: true });
+      const rmdir = fs.rmdir;
+      vi.spyOn(fs, "rmdir").mockImplementation(async (target) => {
+        if (target === fingerprint) {
+          throw Object.assign(new Error("container cleanup failed"), { code });
+        }
+        return await rmdir(target);
+      });
+
+      const result = await service.gc();
+
+      expect(result).toMatchObject({
+        orphansDeleted: 1,
+        outcome: "partial",
+        issues: [{ stage: "orphans", outcome: "failed", count: 1 }],
+      });
+      expect(await fs.readdir(fingerprint)).toEqual([]);
+    },
+  );
+
+  it("accepts a fingerprint container already removed by competing cleanup", async () => {
+    const fingerprint = path.join(stateDir, "worktrees", "fingerprint");
+    const debris = path.join(fingerprint, "debris");
+    await fs.mkdir(debris, { recursive: true });
+    const rmdir = fs.rmdir;
+    vi.spyOn(fs, "rmdir").mockImplementation(async (target) => {
+      if (target === fingerprint) {
+        await rmdir(target);
+      }
+      return await rmdir(target);
+    });
+
+    const result = await service.gc();
+
+    expect(result).toMatchObject({ orphansDeleted: 1, outcome: "completed", issues: [] });
+    await expect(fs.stat(fingerprint)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["root", "fingerprint"])(
+    "reports unreadable %s inventory instead of an empty scan",
+    async (kind) => {
+      const worktreesRoot = path.join(stateDir, "worktrees");
+      const fingerprint = path.join(worktreesRoot, "fingerprint");
+      const debris = path.join(fingerprint, "debris");
+      await fs.mkdir(debris, { recursive: true });
+      const unreadable = kind === "root" ? worktreesRoot : fingerprint;
+      const readdir = fs.readdir;
+      vi.spyOn(fs, "readdir").mockImplementation((...args) => {
+        if (args[0] === unreadable) {
+          return Promise.reject(Object.assign(new Error("directory denied"), { code: "EACCES" }));
+        }
+        return Reflect.apply(readdir, fs, args);
+      });
+
+      const result = await service.gc();
+
+      expect(result).toMatchObject({
+        orphansDeleted: 0,
+        outcome: "partial",
+        issues: [{ stage: "orphans", outcome: "failed", count: 1 }],
+      });
+      await expect(fs.stat(debris)).resolves.toBeDefined();
+    },
+  );
 
   it("preserves unreadable checkout metadata without blocking later cleanup", async () => {
     let now = Date.now();

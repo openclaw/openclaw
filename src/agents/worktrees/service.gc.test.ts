@@ -7,14 +7,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import * as stateLease from "../../state/openclaw-state-lease.js";
+import * as capacity from "./capacity.js";
 import * as worktreeGit from "./git.js";
 import { requireGit } from "./git.js";
-import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.js";
+import {
+  findLiveRegistryWorktreeByPath,
+  getRegistryWorktree,
+  WorktreeRemovalContentionError,
+} from "./registry.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {
   useManagedWorktreeTestRepository,
   materializeManagedWorktreeFixture,
 } from "./service.test-support.js";
+import { listTemplates, reserveTemplate } from "./template-registry.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -74,6 +81,7 @@ describe("ManagedWorktreeService garbage collection", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -337,6 +345,11 @@ describe("ManagedWorktreeService garbage collection", () => {
     const result = await service.gc();
 
     expect(result.removed).toEqual([removable.id]);
+    expect(result).toMatchObject({
+      outcome: "partial",
+      issues: [{ stage: "idle", outcome: "failed", count: 1 }],
+      limitsSatisfied: true,
+    });
     expect(getRegistryWorktree(env, broken.id)?.removedAt).toBeUndefined();
   });
 
@@ -441,6 +454,11 @@ describe("ManagedWorktreeService garbage collection", () => {
       // The failed measurement excludes the record from the size total, so the
       // limit pass does not evict against a bogus zero-byte reading.
       expect(result.removed).toEqual([]);
+      expect(result).toMatchObject({
+        outcome: "partial",
+        issues: [{ stage: "size", outcome: "failed", count: 1 }],
+        limitsSatisfied: null,
+      });
       expect(getRegistryWorktree(env, unreadable.id)?.removedAt).toBeUndefined();
     } finally {
       await fs.chmod(locked, 0o755);
@@ -471,7 +489,7 @@ describe("ManagedWorktreeService garbage collection", () => {
       .mockImplementationOnce(async (params: Parameters<typeof realRemove>[0]) => {
         // Simulate a concurrent cleanup winning the removal claim first.
         await realRemove({ ...params, reason: "concurrent-gc" });
-        throw new Error("removal already claimed");
+        throw new WorktreeRemovalContentionError("finalized", "removal already claimed");
       });
 
     const result = await service.gc({ limits: { maxCount: 2 } });
@@ -479,6 +497,11 @@ describe("ManagedWorktreeService garbage collection", () => {
     // The stale-count correction stops the pass at two live worktrees instead
     // of evicting middle as well.
     expect(result.removed).toEqual([]);
+    expect(result).toMatchObject({
+      outcome: "deferred",
+      issues: [{ stage: "limits", outcome: "deferred", count: 1 }],
+      limitsSatisfied: true,
+    });
     expect(getRegistryWorktree(env, oldest.id)?.removedAt).toBeDefined();
     expect(getRegistryWorktree(env, middle.id)?.removedAt).toBeUndefined();
     expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
@@ -541,5 +564,208 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(result.snapshotsPruned).toBe(1);
     expect(getRegistryWorktree(env, created.id)).toBeUndefined();
     await expect(git(repo, "show-ref", "--verify", removed.snapshotRef!)).rejects.toThrow();
+  });
+
+  it("counts a protected worktree once across idle and limit passes", async () => {
+    const protectedRecord = await materializeRunOwnedFixture("protected", "session", "active");
+    now += IDLE_GC_MS + 1;
+
+    const result = await service.gc({
+      limits: { maxCount: 0 },
+      shouldProtectOwner: () => true,
+    });
+
+    expect(result).toEqual({
+      removed: [],
+      orphansDeleted: 0,
+      snapshotsPruned: 0,
+      outcome: "completed",
+      issues: [],
+      protectedCount: 1,
+      limitsSatisfied: false,
+    });
+    expect(getRegistryWorktree(env, protectedRecord.id)?.removedAt).toBeUndefined();
+  });
+
+  it("reports unknown size accounting while preserving confirmed count-limit progress", async () => {
+    const manual = await materializeDownstreamFixture("unmeasurable");
+    const removed = await materializeRunOwnedFixture("count-victim", "session");
+    const measure = capacity.directorySizeBytes;
+    vi.spyOn(capacity, "directorySizeBytes").mockImplementation(async (target, ...args) => {
+      if (target === manual.path) {
+        throw Object.assign(new Error("unreadable tree"), { code: "EACCES" });
+      }
+      return await measure(target, ...args);
+    });
+
+    const result = await service.gc({ limits: { maxCount: 1, maxTotalSizeBytes: 1024 ** 3 } });
+
+    expect(result).toMatchObject({
+      removed: [removed.id],
+      outcome: "partial",
+      issues: [{ stage: "size", outcome: "failed", count: 1 }],
+      limitsSatisfied: null,
+    });
+    await expect(fs.stat(manual.path)).resolves.toBeDefined();
+    await expect(fs.stat(removed.path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("reports a new unmeasured checkout on the under-limit path without evicting it", async () => {
+    const original = await materializeRunOwnedFixture("measured", "session");
+    const measure = capacity.directorySizeBytes;
+    vi.spyOn(capacity, "directorySizeBytes").mockImplementationOnce(async (...args) => {
+      const bytes = await measure(...args);
+      now += 1;
+      await materializeRunOwnedFixture("new-during-measurement", "session");
+      return bytes;
+    });
+
+    const result = await service.gc({ limits: { maxCount: 1, maxTotalSizeBytes: 1024 ** 3 } });
+
+    expect(result).toMatchObject({
+      removed: [],
+      outcome: "partial",
+      issues: [{ stage: "size", outcome: "failed", count: 1 }],
+      limitsSatisfied: null,
+    });
+    const live = service.listRegistryRecords().filter((record) => record.removedAt === undefined);
+    expect(live.map((record) => record.name).toSorted()).toEqual([
+      "measured",
+      "new-during-measurement",
+    ]);
+    expect(live.some((record) => record.id === original.id)).toBe(true);
+    for (const record of live) {
+      await expect(fs.stat(record.path)).resolves.toBeDefined();
+    }
+  });
+
+  it("aggregates failed and deferred limit operations without discarding progress", async () => {
+    const failed = await materializeRunOwnedFixture("failed", "session");
+    now += 1;
+    const deferred = await materializeRunOwnedFixture("deferred", "session");
+    now += 1;
+    const removed = await materializeRunOwnedFixture("removed", "session");
+    const remove = service.remove.bind(service);
+    vi.spyOn(service, "remove").mockImplementation(async (params) => {
+      if (params.id === failed.id) {
+        throw new Error("snapshot inventory output limit exceeded");
+      }
+      if (params.id === deferred.id) {
+        throw new WorktreeRemovalContentionError("busy", "another owner holds the claim");
+      }
+      return await remove(params);
+    });
+
+    const result = await service.gc({ limits: { maxCount: 0 } });
+
+    expect(result).toMatchObject({
+      removed: [removed.id],
+      outcome: "partial",
+      issues: [
+        { stage: "limits", outcome: "failed", count: 1 },
+        { stage: "limits", outcome: "deferred", count: 1 },
+      ],
+      limitsSatisfied: false,
+    });
+    expect(getRegistryWorktree(env, failed.id)?.removedAt).toBeUndefined();
+    expect(getRegistryWorktree(env, deferred.id)?.removedAt).toBeUndefined();
+  });
+
+  async function reserveGcTemplate(id: string) {
+    const templatePath = path.join(stateDir, "worktrees", ".templates", id);
+    await fs.mkdir(templatePath, { recursive: true });
+    reserveTemplate(
+      env,
+      {
+        id,
+        cacheKey: id,
+        repoRoot: path.join(root, "missing-source"),
+        commonDir: path.join(root, "missing-source", ".git"),
+        worktreeRoot: path.join(stateDir, "worktrees"),
+        path: templatePath,
+        backend: "btrfs",
+        sourceCommit: "a".repeat(40),
+        contentKey: "b".repeat(64),
+        status: "preparing",
+        createdAt: now,
+        lastUsedAt: now,
+      },
+      () => {},
+    );
+    return templatePath;
+  }
+
+  it("reports a template retirement failure while collecting another template", async () => {
+    const failed = await reserveGcTemplate("failed-template");
+    const collected = await reserveGcTemplate("collected-template");
+    const rm = fs.rm;
+    vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (target === failed) {
+        throw Object.assign(new Error("template retirement denied"), { code: "EACCES" });
+      }
+      return await rm(target, options);
+    });
+
+    const result = await service.gc({ limits: {} });
+
+    expect(result).toMatchObject({
+      outcome: "partial",
+      issues: [{ stage: "templates", outcome: "failed", count: 1 }],
+      limitsSatisfied: true,
+    });
+    expect(listTemplates(env).map((record) => record.id)).toEqual(["failed-template"]);
+    await expect(fs.stat(collected)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each([
+    ["OPENCLAW_STATE_LEASE_TIMEOUT", "deferred", "deferred"],
+    ["OPENCLAW_STATE_LEASE_STORAGE_FAILED", "partial", "failed"],
+    ["OPENCLAW_STATE_LEASE_LOST", "partial", "failed"],
+  ] as const)(
+    "reports template acquisition %s without skipping later stages",
+    async (code, outcome, issueOutcome) => {
+      await reserveGcTemplate("waiting-template");
+      const orphan = path.join(stateDir, "worktrees", "orphan-fingerprint", "debris");
+      await fs.mkdir(orphan, { recursive: true });
+      vi.spyOn(stateLease, "withOpenClawStateLease").mockRejectedValueOnce(
+        new stateLease.OpenClawStateLeaseError("allocation unavailable", { code }),
+      );
+
+      const result = await service.gc();
+
+      expect(result).toMatchObject({
+        orphansDeleted: 1,
+        outcome,
+        issues: [{ stage: "templates", outcome: issueOutcome, count: 1 }],
+        limitsSatisfied: true,
+      });
+      expect(listTemplates(env)).toHaveLength(1);
+      await expect(fs.stat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it("reports failed snapshot pruning while preserving confirmed removals", async () => {
+    const expired = await materializeDownstreamFixture("failed-snapshot");
+    const { snapshotRef } = await service.remove({ id: expired.id, reason: "retention" });
+    const idle = await materializeRunOwnedFixture("removed-before-prune", "session");
+    now += SNAPSHOT_RETENTION_MS + 1;
+    const run = worktreeGit.requireGit;
+    vi.spyOn(worktreeGit, "requireGit").mockImplementation(async (cwd, args, options) => {
+      if (args[0] === "update-ref" && args[1] === "-d" && args[2] === snapshotRef) {
+        throw new Error("snapshot ref deletion failed");
+      }
+      return await run(cwd, args, options);
+    });
+
+    const result = await service.gc();
+
+    expect(result).toMatchObject({
+      removed: [idle.id],
+      snapshotsPruned: 0,
+      outcome: "partial",
+      issues: [{ stage: "snapshots", outcome: "failed", count: 1 }],
+    });
+    expect(getRegistryWorktree(env, expired.id)?.snapshotRef).toBeTruthy();
+    await expect(fs.stat(idle.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

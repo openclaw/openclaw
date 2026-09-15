@@ -24237,6 +24237,44 @@ public struct WorktreesCreateParams: Codable, Sendable {
 
 public struct WorktreesGcParams: Codable, Sendable {}
 
+public struct WorktreesGcReport: Codable, Sendable {
+    public let removed: [String]
+    public let orphansdeleted: Int
+    public let snapshotspruned: Int
+    public let outcome: String
+    public let issues: [[String: AnyCodable]]
+    public let protectedcount: Int
+    public let limitssatisfied: AnyCodable
+
+    public init(
+        removed: [String],
+        orphansdeleted: Int,
+        snapshotspruned: Int,
+        outcome: String,
+        issues: [[String: AnyCodable]],
+        protectedcount: Int,
+        limitssatisfied: AnyCodable)
+    {
+        self.removed = removed
+        self.orphansdeleted = orphansdeleted
+        self.snapshotspruned = snapshotspruned
+        self.outcome = outcome
+        self.issues = issues
+        self.protectedcount = protectedcount
+        self.limitssatisfied = limitssatisfied
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case removed
+        case orphansdeleted = "orphansDeleted"
+        case snapshotspruned = "snapshotsPruned"
+        case outcome
+        case issues
+        case protectedcount = "protectedCount"
+        case limitssatisfied = "limitsSatisfied"
+    }
+}
+
 public struct WorktreesGcResult: Codable, Sendable {
     public let removed: [String]
     public let orphansdeleted: Int

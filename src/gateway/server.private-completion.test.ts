@@ -465,7 +465,15 @@ describe("private subagent completion processing receipts", () => {
         ...createGatewayMaintenanceStateForTest(),
         ...kernel.gatewayRequestContext,
         logHealth: { info: vi.fn(), error: vi.fn() },
-        runWorktreeGc: async () => undefined,
+        runWorktreeGc: async () => ({
+          removed: [],
+          orphansDeleted: 0,
+          snapshotsPruned: 0,
+          outcome: "completed",
+          issues: [],
+          protectedCount: 0,
+          limitsSatisfied: true,
+        }),
         runDeliveryQueueMediaGc: async () => undefined,
         runManagedOutgoingMediaGc: async () => undefined,
       });

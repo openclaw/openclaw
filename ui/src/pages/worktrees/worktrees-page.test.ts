@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  WorktreeRecord,
+  WorktreesGcResult,
+  WorktreesGcReport,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
@@ -683,8 +687,110 @@ describe("WorktreesPage lifecycle", () => {
     pendingGc.resolve({});
     await collecting;
     expect(page.loading).toBe(false);
+    expect(page.querySelector('[role="status"]')).toBeNull();
+    expect(page.querySelector('[role="alert"]')).toBeNull();
   });
 
+  it.each([
+    ["partial", "alert", "Cleanup incomplete."],
+    ["deferred", "status", "Cleanup deferred by another operation."],
+    ["completed", "status", "Cleanup completed."],
+  ] as const)(
+    "renders a %s cleanup outcome after refreshing the list",
+    async (outcome, role, message) => {
+      const result: WorktreesGcResult = {
+        removed: ["removed-worktree"],
+        orphansDeleted: 2,
+        snapshotsPruned: 3,
+      };
+      const report: WorktreesGcReport | null =
+        outcome === "completed"
+          ? null
+          : {
+              ...result,
+              outcome,
+              issues: [
+                { stage: "idle", outcome: outcome === "partial" ? "failed" : "deferred", count: 2 },
+              ],
+              protectedCount: 4,
+              limitsSatisfied: outcome === "partial" ? null : false,
+            };
+      let listRequests = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "worktrees.gc") {
+          if (report) {
+            throw new GatewayRequestError({
+              code: "UNAVAILABLE",
+              message: "Cleanup incomplete",
+              details: report,
+              retryable: false,
+            });
+          }
+          return result;
+        }
+        listRequests += 1;
+        return { worktrees: [] };
+      });
+      const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+      page.context = contextWithGateway(
+        gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+      );
+      document.body.append(page);
+      await waitForFast(() => expect(listRequests).toBe(1));
+      await waitForFast(() => expect(page.loading).toBe(false));
+
+      await page.gc();
+      await page.updateComplete;
+
+      const text = page.querySelector(`[role="${role}"]`)?.textContent;
+      expect(text).toContain(message);
+      expect(text).toContain("Worktrees removed: 1; orphans deleted: 2; snapshots pruned: 3.");
+      if (report) {
+        expect(text).toContain("Protected worktrees retained: 4.");
+        expect(text).toContain(
+          outcome === "partial" ? "Failed operations: 2" : "Failed operations: 0",
+        );
+        expect(text).toContain(
+          outcome === "partial" ? "status is unknown" : "limits remain exceeded",
+        );
+      } else {
+        expect(text).not.toContain("Protected worktrees retained:");
+        expect(text).not.toContain("limits");
+      }
+      expect(request.mock.calls.filter(([method]) => method === "worktrees.gc")).toHaveLength(1);
+      expect(listRequests).toBe(2);
+    },
+  );
+
+  it("keeps malformed GC error details as a visible error rather than inventing progress", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "worktrees.gc") {
+        throw new GatewayRequestError({
+          code: "UNAVAILABLE",
+          message: "Cleanup report unavailable",
+          details: { outcome: "partial", removed: ["unverified"], issues: [] },
+          retryable: false,
+        });
+      }
+      return { worktrees: [] };
+    });
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+    );
+    document.body.append(page);
+    await waitForFast(() => expect(request).toHaveBeenCalled());
+    await waitForFast(() => expect(page.loading).toBe(false));
+
+    await page.gc();
+    await page.updateComplete;
+
+    expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+      "Cleanup report unavailable",
+    );
+    expect(page.textContent).not.toContain("unverified");
+    expect(page.querySelector('[role="status"]')).toBeNull();
+  });
   it("locks the create draft and its toggle until create settles", async () => {
     const pendingCreate = deferred<unknown>();
     const request = vi.fn((method: string) => {

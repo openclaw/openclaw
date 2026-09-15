@@ -47,7 +47,15 @@ describe("gateway telemetry maintenance", () => {
     const timers = startGatewayMaintenanceTimers({
       ...createGatewayMaintenanceStateForTest(),
       logHealth,
-      runWorktreeGc: async () => undefined,
+      runWorktreeGc: async () => ({
+        removed: [],
+        orphansDeleted: 0,
+        snapshotsPruned: 0,
+        outcome: "completed" as const,
+        issues: [],
+        protectedCount: 0,
+        limitsSatisfied: true,
+      }),
       runDeliveryQueueMediaGc: async () => undefined,
       runManagedOutgoingMediaGc: async () => undefined,
     });
@@ -79,7 +87,15 @@ describe("gateway telemetry maintenance", () => {
       ...createGatewayMaintenanceStateForTest(),
       broadcast,
       isNixMode: true,
-      runWorktreeGc: async () => undefined,
+      runWorktreeGc: async () => ({
+        removed: [],
+        orphansDeleted: 0,
+        snapshotsPruned: 0,
+        outcome: "completed" as const,
+        issues: [],
+        protectedCount: 0,
+        limitsSatisfied: true,
+      }),
       runDeliveryQueueMediaGc: async () => undefined,
       runManagedOutgoingMediaGc: async () => undefined,
     });

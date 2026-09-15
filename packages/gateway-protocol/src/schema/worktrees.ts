@@ -93,6 +93,21 @@ export const WorktreesGcResultSchema = closedObject({
   orphansDeleted: Type.Integer({ minimum: 0 }),
   snapshotsPruned: Type.Integer({ minimum: 0 }),
 });
+/** Non-complete GC details extend the open error contract, not the closed success payload. */
+export const WorktreesGcReportSchema = closedObject({
+  ...WorktreesGcResultSchema.properties,
+  outcome: Type.String({ enum: ["deferred", "partial"] }),
+  issues: Type.Array(
+    closedObject({
+      stage: Type.String({ enum: ["idle", "templates", "limits", "size", "orphans", "snapshots"] }),
+      outcome: Type.String({ enum: ["failed", "deferred"] }),
+      count: Type.Integer({ minimum: 1 }),
+    }),
+    { minItems: 1, maxItems: 12 },
+  ),
+  protectedCount: Type.Integer({ minimum: 0 }),
+  limitsSatisfied: Type.Union([Type.Boolean(), Type.Null()]),
+});
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
@@ -105,6 +120,7 @@ export type WorktreesRemoveResult = Static<typeof WorktreesRemoveResultSchema>;
 export type WorktreesRestoreParams = Static<typeof WorktreesRestoreParamsSchema>;
 export type WorktreesGcParams = Static<typeof WorktreesGcParamsSchema>;
 export type WorktreesGcResult = Static<typeof WorktreesGcResultSchema>;
+export type WorktreesGcReport = Static<typeof WorktreesGcReportSchema>;
 export type WorktreeBranch = Static<typeof WorktreeBranchSchema>;
 export type WorktreeRepositoryStatus = (typeof WORKTREE_REPOSITORY_STATUSES)[number];
 export type WorktreesBranchesParams = Static<typeof WorktreesBranchesParamsSchema>;

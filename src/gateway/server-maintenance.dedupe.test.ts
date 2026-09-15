@@ -62,7 +62,15 @@ function createMaintenanceTimerDeps() {
   return {
     ...createGatewayMaintenanceStateForTest(),
     logHealth: { info: vi.fn(), error: vi.fn() },
-    runWorktreeGc: vi.fn(async () => undefined),
+    runWorktreeGc: vi.fn(async () => ({
+      removed: [],
+      orphansDeleted: 0,
+      snapshotsPruned: 0,
+      outcome: "completed" as const,
+      issues: [],
+      protectedCount: 0,
+      limitsSatisfied: true,
+    })),
     runDeliveryQueueMediaGc: vi.fn(async () => undefined),
     runManagedOutgoingMediaGc: cleanupManagedOutgoingMediaRecordsMock,
   };
@@ -108,6 +116,63 @@ describe("gateway dedupe maintenance", () => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
     pruneExpiredDevicePairSetupCompletionsMock.mockReset().mockResolvedValue(0);
+  });
+
+  it("keeps active agent dedupe entries past the normal ttl", async () => {
+    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
+    deps.chatAbortControllers.set("active-agent", createActiveRun("agent:main:main", "agent"));
+    deps.dedupe.set("agent:active-agent", {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: { runId: "active-agent", status: "accepted" },
+    });
+    deps.dedupe.set("agent:stale-agent", {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: { runId: "stale-agent", status: "accepted" },
+    });
+
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.dedupe.has("agent:active-agent")).toBe(true);
+    expect(deps.dedupe.has("agent:stale-agent")).toBe(false);
+
+    await stopMaintenanceTimers(timers);
+  });
+
+  it("keeps pending accepted agent dedupe entries until their run expiry", async () => {
+    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
+    deps.dedupe.set("agent:pending-agent", {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: {
+        runId: "pending-agent",
+        sessionKey: "agent:main:main",
+        status: "accepted",
+        expiresAtMs: now + 120_000,
+      },
+    });
+    deps.dedupe.set("agent:expired-pending-agent", {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: {
+        runId: "expired-pending-agent",
+        sessionKey: "agent:main:main",
+        status: "accepted",
+        expiresAtMs: now - 1,
+      },
+    });
+
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.dedupe.has("agent:pending-agent")).toBe(true);
+    expect(deps.dedupe.has("agent:expired-pending-agent")).toBe(false);
+
+    await stopMaintenanceTimers(timers);
   });
 
   it("keeps active exec approval dedupe aliases past the normal ttl", async () => {
