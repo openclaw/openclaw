@@ -906,4 +906,25 @@ describe("session upstream monitor", () => {
 
     expect(listSessionStateEventsSince(sessionKey, "main", 0, 20, database).events).toHaveLength(1);
   });
+
+  it("bounds a provider scan that never settles so the tick can still complete", async () => {
+    const database = createDatabaseOptions();
+    const sessionKey = "agent:main:adopted:stalled-provider";
+    createLink(sessionKey, "claude", database);
+    const check = vi.fn(() => new Promise<never>(() => {}));
+
+    await expect(
+      runSessionUpstreamMonitorTick({
+        ...database,
+        providers: [provider("claude", check)],
+        providerTimeoutMs: 25,
+        loadEntry: () => ({ sessionId: "session-stalled" }) as never,
+        loadOwnRecentUserTexts: async () => [],
+        isRunActive: () => false,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(listSessionStateEventsSince(sessionKey, "main", 0, 20, database).events).toEqual([]);
+  });
 });

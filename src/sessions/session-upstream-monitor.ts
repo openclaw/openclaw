@@ -10,6 +10,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { withTimeout } from "../utils/with-timeout.js";
 import {
   recordSessionHumanDirectMessage,
   recordSessionStateEvent,
@@ -25,6 +26,11 @@ const SESSION_UPSTREAM_MONITOR_INTERVAL_MS = 60_000;
 const SESSION_UPSTREAM_MONITOR_INITIAL_DELAY_MS = 15_000;
 const SESSION_UPSTREAM_OWN_USER_TEXT_LIMIT = 10;
 const SESSION_UPSTREAM_MISSING_THRESHOLD = 3;
+// A provider scan must not wedge the single-flight tick forever: the tick runs
+// under a `running` guard in startSessionUpstreamMonitor, so one never-settling
+// provider would silently stop upstream detection for every session catalog
+// until the process restarts. Bound the scan and let the next tick retry it.
+const SESSION_UPSTREAM_PROVIDER_TIMEOUT_MS = 45_000;
 
 const log = createSubsystemLogger("sessions/upstream-monitor");
 
@@ -32,6 +38,7 @@ type SessionUpstreamMonitorOptions = OpenClawStateDatabaseOptions & {
   providers?: readonly SessionCatalogProvider[];
   now?: () => number;
   signal?: AbortSignal;
+  providerTimeoutMs?: number;
   loadEntry?: typeof loadSessionEntryReadOnly;
   isRunActive?: typeof isEmbeddedAgentRunActive;
   loadOwnRecentUserTexts?: (params: {
@@ -87,6 +94,18 @@ function upstreamMonitorLinkKey(probe: {
   upstreamRef: unknown;
 }): string {
   return `${probe.sessionKey}\n${probe.agentId}\n${upstreamSourceKey(probe)}`;
+}
+
+// Bound a provider scan so a hung plugin cannot permanently stall the monitor.
+// A timed-out provider may settle later; swallow its late rejection so it does
+// not surface as an unhandled rejection after the tick already moved on.
+async function withUpstreamProviderTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  promise.catch(() => undefined);
+  return await withTimeout(promise, timeoutMs, label);
 }
 
 function loadProbeSession(
@@ -246,9 +265,14 @@ async function runSessionUpstreamMonitorTick(
       links.map((link) => [link.sessionKey, link.updatedAt]),
     );
     try {
-      const outcomes = await provider.checkUpstreamActivity(probes, {
-        allowProcessHomeFallback: allowsProcessHomeSessionScan(options.env ?? process.env),
-      });
+      const providerTimeoutMs = options.providerTimeoutMs ?? SESSION_UPSTREAM_PROVIDER_TIMEOUT_MS;
+      const outcomes = await withUpstreamProviderTimeout(
+        provider.checkUpstreamActivity(probes, {
+          allowProcessHomeFallback: allowsProcessHomeSessionScan(options.env ?? process.env),
+        }),
+        providerTimeoutMs,
+        `upstream activity scan for ${catalogId}`,
+      );
       if (options.signal?.aborted) {
         return;
       }
