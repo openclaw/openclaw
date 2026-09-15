@@ -5,6 +5,7 @@ import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { closeOwnedStdioProcess } from "../../owned-stdio.js";
 import {
   createStubChild,
   createWindowsNpmShim,
@@ -738,6 +739,30 @@ describe("createChildAdapter", () => {
       expected: { code: 0, signal: "SIGKILL" },
     });
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("does not renew the Windows hard-kill fallback or invent extinction on repeated KILL", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    signalProcessTreeMock.mockImplementationOnce(() => {}).mockImplementationOnce(() => {});
+    const { adapter } = await createAdapterHarness({ pid: 9756 });
+    const settled = vi.fn();
+    void adapter.wait().then(settled);
+    expect(adapter.waitForExtinction).toBeUndefined();
+    const closing = closeOwnedStdioProcess(adapter, { force: true });
+    const rejected = expect(closing).rejects.toThrow("cannot confirm descendant extinction");
+    await vi.advanceTimersByTimeAsync(3_000);
+    adapter.kill("SIGKILL");
+    await vi.advanceTimersByTimeAsync(999);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toHaveBeenCalledExactlyOnceWith({ code: null, signal: "SIGKILL" });
+    await rejected;
+    adapter.kill("SIGKILL");
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(settled).toHaveBeenCalledOnce();
+    expect(adapter.waitForExtinction).toBeUndefined();
+    adapter.dispose();
   });
 
   it("waits for Windows tree-kill completion before forced stream settlement", async () => {

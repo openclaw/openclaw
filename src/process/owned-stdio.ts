@@ -76,9 +76,8 @@ export async function closeOwnedStdioProcess(
     } else {
       process.kill("SIGKILL");
     }
-    if (!(await settlesWithin(settled, 500))) {
-      throw new Error("stdio process cleanup did not confirm descendant extinction");
-    }
+    // Hard cancellation has a terminal deadline at the process owner. Join it
+    // rather than imposing a shorter wait that can discard valid late cleanup.
     const failure = (await settled).find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
