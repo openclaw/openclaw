@@ -10,6 +10,7 @@ import {
 import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/registry.kernel.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { serveWorkerTasks } from "../infra/worker-task-pool.js";
+import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { withOpenClawStateReadOnlyLocation } from "./openclaw-state-db-readonly.js";
 import type {
@@ -36,6 +37,8 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
     typeof coordinatorRuntime.keepAlive === "boolean" &&
     (input.command.type === "admit" ||
       input.command.type === "fleet.list" ||
+      (input.command.type === "onboardingRecommendations.read" &&
+        typeof input.command.configKey === "string") ||
       (input.command.type === "fleet.get" && typeof input.command.tenantId === "string") ||
       (input.command.type === "mcpOAuth.statuses" &&
         Array.isArray(input.command.input) &&
@@ -73,6 +76,13 @@ serveWorkerTasks((input): OpenClawStateReadReply => {
         ({ db }) => {
           sourceAdmitted = true;
           switch (command.type) {
+            case "onboardingRecommendations.read":
+              return {
+                ok: true,
+                type: command.type,
+                sourceAdmitted,
+                record: readOnboardingRecommendationsInDatabase(db, command.configKey),
+              };
             case "fleet.list":
               return {
                 ok: true,

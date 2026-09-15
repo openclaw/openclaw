@@ -63,7 +63,7 @@ describe("guided onboarding post-inference steps", () => {
       confirm: vi.fn(async () => false),
     });
     const runAppRecommendations = vi.fn<NonNullable<GuidedOnboardingDeps["runAppRecommendations"]>>(
-      async ({ config }) => ({ config, commitResult: vi.fn() }),
+      async ({ config }) => ({ config, commitResult: vi.fn(async () => undefined) }),
     );
     const deps = setupPostInferenceDeps({ prompter, runAppRecommendations });
     const applySetup = vi.mocked(deps.applySetup);

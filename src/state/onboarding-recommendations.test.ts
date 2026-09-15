@@ -1,11 +1,15 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { OnboardingRecommendationsRecordSchema } from "./onboarding-recommendations.contract.js";
 import {
   createOnboardingRecommendationsStore,
   type OnboardingRecommendationMatch,
 } from "./onboarding-recommendations.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "./openclaw-state-db.js";
 
 const matches: OnboardingRecommendationMatch[] = [
   {
@@ -26,7 +30,91 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
+describe("onboarding recommendation record decoding", () => {
+  const pending = {
+    inventoryHash: "synthetic-inventory",
+    matches,
+    offeredAt: 0,
+    acceptedAt: null,
+    updatedAt: 0,
+  };
+
+  it.each([
+    pending,
+    { ...pending, acceptedAt: 1_234, updatedAt: 1_234 },
+    { ...pending, matches: [], updatedAt: 2_345 },
+    { ...pending, inventoryHash: "", offeredAt: -1, acceptedAt: 0, updatedAt: 0.5 },
+  ])("preserves valid pending, accepted, and retry headers: %j", (record) => {
+    expect(OnboardingRecommendationsRecordSchema.parse(record)).toEqual(record);
+  });
+
+  it("preserves extra record fields while normalizing matches as before", () => {
+    const record = {
+      ...pending,
+      extra: { retained: true },
+      matches: [
+        {
+          ...matches[0]!,
+          ignoredMatchField: true,
+          candidate: { ...matches[0]!.candidate, ignoredCandidateField: true },
+        },
+      ],
+    };
+    expect(OnboardingRecommendationsRecordSchema.parse(record)).toEqual({
+      ...pending,
+      extra: { retained: true },
+    });
+    expect(record.matches[0]).toHaveProperty("ignoredMatchField", true);
+  });
+
+  it.each([
+    { inventoryHash: 123 },
+    { offeredAt: "123" },
+    { offeredAt: undefined },
+    { acceptedAt: "123" },
+    { acceptedAt: undefined },
+    { updatedAt: null },
+    { updatedAt: undefined },
+  ])("rejects malformed header fields without opening a database: %j", (header) => {
+    expect(OnboardingRecommendationsRecordSchema.safeParse({ ...pending, ...header }).success).toBe(
+      false,
+    );
+  });
+});
+
 describe("onboarding recommendations store", () => {
+  it("captures the database and offer before asynchronous admission", async () => {
+    await withOpenClawTestState({ label: "onboarding-recommendations-capture" }, async (state) => {
+      const originalPath = state.statePath("state", "openclaw.sqlite");
+      const replacementPath = state.statePath("replacement.sqlite");
+      const database = { env: state.env, path: originalPath };
+      const store = createOnboardingRecommendationsStore({
+        workspaceDir: state.workspaceDir,
+        database,
+      });
+      const offer = {
+        inventory: [{ label: "Chat" }],
+        matches: structuredClone(matches),
+        answered: false,
+        nowMs: 1_234,
+      };
+      const writing = store.writeOffer(offer);
+      database.path = replacementPath;
+      offer.matches[0]!.reason = "Changed after admission";
+      offer.nowMs = 5_678;
+      const written = await writing;
+      expect(written).toMatchObject({ matches, offeredAt: 1_234, updatedAt: 1_234 });
+      expect(await store.read()).toBeNull();
+      expect(fs.existsSync(replacementPath)).toBe(false);
+      await closeOpenClawStateDatabaseAsync();
+      const reopened = createOnboardingRecommendationsStore({
+        workspaceDir: state.workspaceDir,
+        database: { env: state.env, path: originalPath },
+      });
+      expect(await reopened.read()).toEqual(written);
+    });
+  });
+
   it("isolates offers by workspace", async () => {
     await withOpenClawTestState({ label: "onboarding-recommendations-scopes" }, async (state) => {
       const database = { env: state.env };
@@ -39,16 +127,16 @@ describe("onboarding recommendations store", () => {
         database,
       });
 
-      const written = workspaceA.writeOffer({
+      const written = await workspaceA.writeOffer({
         inventory: [{ label: "Chat" }],
         matches,
         answered: false,
         nowMs: 1_234,
       });
 
-      expect(workspaceB.read()).toBeNull();
-      expect(workspaceB.acknowledge({ nowMs: 2_345 })).toBeNull();
-      expect(workspaceA.read()).toEqual(written);
+      expect(await workspaceB.read()).toBeNull();
+      expect(await workspaceB.acknowledge({ nowMs: 2_345 })).toBeNull();
+      expect(await workspaceA.read()).toEqual(written);
     });
   });
 
@@ -61,9 +149,9 @@ describe("onboarding recommendations store", () => {
       });
       const inventory = [{ label: "Chat", bundleId: "com.example.chat" }];
 
-      expect(store.read()).toBeNull();
+      expect(await store.read()).toBeNull();
       expect(fs.existsSync(state.statePath("state", "openclaw.sqlite"))).toBe(false);
-      const written = store.writeOffer({
+      const written = await store.writeOffer({
         inventory,
         matches,
         answered: true,
@@ -77,9 +165,9 @@ describe("onboarding recommendations store", () => {
         acceptedAt: 1_234,
         updatedAt: 1_234,
       });
-      expect(store.read()).toEqual(written);
+      expect(await store.read()).toEqual(written);
 
-      const staleCompletion = store.writeOffer({
+      const staleCompletion = await store.writeOffer({
         inventory: [{ label: "Different" }],
         matches: [],
         answered: false,
@@ -95,7 +183,7 @@ describe("onboarding recommendations store", () => {
         workspaceDir: state.workspaceDir,
         database: { env: state.env },
       });
-      const record = store.writeOffer({
+      const record = await store.writeOffer({
         inventory: [{ label: "Chat" }],
         matches,
         answered: false,
@@ -104,11 +192,11 @@ describe("onboarding recommendations store", () => {
 
       expect(record.acceptedAt).toBeNull();
 
-      const acknowledged = store.acknowledge({
+      const acknowledged = await store.acknowledge({
         nowMs: 3_456,
       });
       expect(acknowledged).toEqual({ ...record, acceptedAt: 3_456, updatedAt: 3_456 });
-      expect(store.read()).toEqual(acknowledged);
+      expect(await store.read()).toEqual(acknowledged);
     });
   });
 
@@ -119,7 +207,7 @@ describe("onboarding recommendations store", () => {
         workspaceDir: state.workspaceDir,
         database,
       });
-      const record = store.writeOffer({
+      const record = await store.writeOffer({
         inventory: [{ label: "Chat" }, { label: "Notes" }],
         matches,
         answered: false,
@@ -127,7 +215,7 @@ describe("onboarding recommendations store", () => {
       });
       const retryMatch = { ...matches[0]!, reason: "Retry this install" };
 
-      const updated = store.updatePending({
+      const updated = await store.updatePending({
         matches: [retryMatch],
         expected: record,
         nowMs: 3_000,
@@ -149,13 +237,13 @@ describe("onboarding recommendations store", () => {
         workspaceDir: state.workspaceDir,
         database,
       });
-      const original = store.writeOffer({
+      const original = await store.writeOffer({
         inventory: [{ label: "Chat" }],
         matches,
         answered: false,
         nowMs: 2_000,
       });
-      const replacement = store.writeOffer({
+      const replacement = await store.writeOffer({
         inventory: [{ label: "Notes" }],
         matches: [],
         answered: false,
@@ -163,19 +251,19 @@ describe("onboarding recommendations store", () => {
       });
 
       expect(
-        store.updatePending({
+        await store.updatePending({
           matches,
           expected: original,
           nowMs: 3_000,
         }),
       ).toBeNull();
       expect(
-        store.acknowledge({
+        await store.acknowledge({
           expected: original,
           nowMs: 3_000,
         }),
       ).toBeNull();
-      expect(store.read()).toEqual(replacement);
+      expect(await store.read()).toEqual(replacement);
     });
   });
 
@@ -188,22 +276,22 @@ describe("onboarding recommendations store", () => {
           workspaceDir: state.workspaceDir,
           database,
         });
-        const pending = store.writeOffer({
+        const pending = await store.writeOffer({
           inventory: [{ label: "Chat" }],
           matches,
           answered: false,
         });
 
-        expect(store.clearPending({ expected: pending })).toBe(true);
-        expect(store.read()).toBeNull();
+        expect(await store.clearPending({ expected: pending })).toBe(true);
+        expect(await store.read()).toBeNull();
 
-        const accepted = store.writeOffer({
+        const accepted = await store.writeOffer({
           inventory: [{ label: "Chat" }],
           matches,
           answered: true,
         });
-        expect(store.clearPending({ expected: accepted })).toBe(false);
-        expect(store.read()?.acceptedAt).toBeTypeOf("number");
+        expect(await store.clearPending({ expected: accepted })).toBe(false);
+        expect((await store.read())?.acceptedAt).toBeTypeOf("number");
       },
     );
   });
@@ -215,16 +303,16 @@ describe("onboarding recommendations store", () => {
         workspaceDir: state.workspaceDir,
         database,
       });
-      store.writeOffer({
+      await store.writeOffer({
         inventory: [{ label: "Chat" }],
         matches,
         answered: true,
         nowMs: 4_567,
       });
 
-      expect(store.clear()).toBe(true);
-      expect(store.read()).toBeNull();
-      expect(store.clear()).toBe(false);
+      expect(await store.clear()).toBe(true);
+      expect(await store.read()).toBeNull();
+      expect(await store.clear()).toBe(false);
     });
   });
 });

@@ -59,6 +59,7 @@ import {
 } from "../tasks/task-registry.store.kernel.js";
 import { readTaskRegistryStatusSnapshot } from "../tasks/task-registry.store.status.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
+import { executeOnboardingRecommendationCommand } from "./onboarding-recommendations.kernel.js";
 import {
   openClawStateDatabaseCache,
   retainOpenClawStateDatabase,
@@ -177,6 +178,19 @@ function createSharedStateWorkerBackend(
           command.input.generation,
           readStableSqliteFileGeneration(context.databasePath),
         );
+      }
+      if (
+        command.type === "onboardingRecommendations.writeOffer" ||
+        command.type === "onboardingRecommendations.acknowledge" ||
+        command.type === "onboardingRecommendations.updatePending" ||
+        command.type === "onboardingRecommendations.clearPending" ||
+        command.type === "onboardingRecommendations.clear"
+      ) {
+        return executeOnboardingRecommendationCommand(command, {
+          database: open(),
+          path: context.databasePath,
+          env: getSqliteWorkerStateContext().environment,
+        });
       }
       if (command.type === "userPreferences.read" || command.type === "userPreferences.write") {
         return executeUserPreferenceCommand(command, {

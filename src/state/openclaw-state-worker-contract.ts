@@ -27,6 +27,7 @@ import type {
 } from "../tasks/task-registry.store.types.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
 import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
+import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.contract.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
 
 type TaskLookupRecords = {
@@ -49,6 +50,7 @@ type TaskFlowReadQuery = {
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = PluginStateWorkerOperations &
   UserPreferenceWorkerOperations &
+  OnboardingRecommendationWriteOperations &
   CronStoreWorkerOperations &
   FleetRegistryWriteOperations &
   SessionDeliveryWorkerOperations &

@@ -113,7 +113,7 @@ describe("guided onboarding inference composition", () => {
       }));
       const runAppRecommendations = vi.fn(async ({ config }) => ({
         config,
-        commitResult: vi.fn(),
+        commitResult: vi.fn(async () => undefined),
       }));
       const launchHatchTui = vi.fn(async () => undefined);
       const runSystemAgentChat = vi.fn(async () => undefined);

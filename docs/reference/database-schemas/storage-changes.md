@@ -76,6 +76,17 @@ Only pending reads coalesce; completed results are not cached. Physical integrit
 verification remains with full registry restoration and Doctor, while known
 database failures and quarantine still refuse summary reads.
 
+Onboarding recommendation reads use the shared read-only worker owner, preserving
+no-create behavior and independent lifetime from the Gateway's writable actor.
+All five mutations run in the shared-state worker. Each mutation retains
+its workspace key and existing compare-and-update transaction; an answered offer
+cannot be reopened by a delayed scan, and a stale checkpoint cannot overwrite a
+changed offer. The wizard awaits selected-set persistence before installation,
+checkpoints each completed skill install, and records official plugin outcomes
+only after configuration is saved. Recommendation CLI commands await persistence
+before reporting success. Each worker owner retains its pending operations through
+native cleanup; the stored format and retention rules are unchanged.
+
 Gateway user-preference RPCs and Talk appearance reads resolve merged profile IDs
 and access preferences in the shared-state worker. Preference writes keep profile
 resolution, quota validation, and mutation in one synchronous write transaction;
