@@ -50,6 +50,7 @@ import {
   isOpenAICompletionsThinkingEnabled,
   log,
   resolvePromptCacheKey,
+  resolveQwenChatTemplateReasoningEffort,
   sortTransportToolsByName,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
@@ -212,12 +213,19 @@ function isQwenOpenAICompletionsThinkingFormat(format: string): boolean {
   return format === "qwen" || format === "qwen-chat-template";
 }
 
-function setQwenChatTemplateThinking(params: Record<string, unknown>, enabled: boolean): void {
+function setQwenChatTemplateThinking(
+  params: Record<string, unknown>,
+  enabled: boolean,
+  reasoningEffort: string | undefined,
+): void {
+  const thinking = reasoningEffort
+    ? { enable_thinking: enabled, reasoning_effort: reasoningEffort }
+    : { enable_thinking: enabled };
   const existing = params.chat_template_kwargs;
   params.chat_template_kwargs =
     existing && typeof existing === "object" && !Array.isArray(existing)
-      ? { ...(existing as Record<string, unknown>), enable_thinking: enabled }
-      : { enable_thinking: enabled };
+      ? { ...(existing as Record<string, unknown>), ...thinking }
+      : thinking;
 }
 
 function applyQwenOpenAICompletionsThinkingParams(params: {
@@ -234,7 +242,11 @@ function applyQwenOpenAICompletionsThinkingParams(params: {
   }
   const enabled = isOpenAICompletionsThinkingEnabled(params.requestedEffort);
   if (params.compatThinkingFormat === "qwen-chat-template") {
-    setQwenChatTemplateThinking(params.payload, enabled);
+    setQwenChatTemplateThinking(
+      params.payload,
+      enabled,
+      resolveQwenChatTemplateReasoningEffort(params.requestedEffort),
+    );
   } else {
     params.payload.enable_thinking = enabled;
   }

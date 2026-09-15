@@ -1,7 +1,10 @@
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import type { ResolvedOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
-import type { OpenAIModeModel } from "./openai-transport-shared.js";
+import {
+  resolveQwenChatTemplateReasoningEffort,
+  type OpenAIModeModel,
+} from "./openai-transport-shared.js";
 
 export function applyDirectCompletionsReasoningAndRouting(
   params: Record<string, unknown>,
@@ -31,9 +34,11 @@ export function applyDirectCompletionsReasoningAndRouting(
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
     params.enable_thinking = reasoningEnabled;
   } else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
+    const chatTemplateReasoningEffort = resolveQwenChatTemplateReasoningEffort(reasoningEffort);
     params.chat_template_kwargs = {
       enable_thinking: reasoningEnabled,
       preserve_thinking: true,
+      ...(chatTemplateReasoningEffort ? { reasoning_effort: chatTemplateReasoningEffort } : {}),
     };
   } else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
     params.thinking = { type: reasoningEnabled ? "enabled" : "disabled" };

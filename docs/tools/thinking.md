@@ -47,7 +47,7 @@ title: "Thinking levels"
 3. Per-agent default (`agents.entries.*.thinkingDefault` in config).
 4. Per-model default (`agents.defaults.models["<provider>/<model>"].params.thinking` in config).
 5. Global default (`agents.defaults.thinkingDefault` in config).
-6. Fallback: provider-declared default when available; otherwise reasoning-capable models resolve to `medium` or the nearest supported non-`off` level for that model, and non-reasoning models stay `off`.
+6. Fallback: provider-declared default when available; otherwise reasoning-capable models resolve to `medium` (`high` for `compat.thinkingFormat: "qwen-chat-template"` models, matching the template's default effort) or the nearest supported non-`off` level for that model, and non-reasoning models stay `off`.
 
 ## Setting a model default
 
