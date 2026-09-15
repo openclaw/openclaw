@@ -505,6 +505,7 @@ export function createCodexDynamicToolBridge(params: {
     frameImageIdentity?: string;
   };
   hookContext?: CodexDynamicToolHookContext;
+  heartbeatResponseExpected?: boolean;
   loading?: CodexDynamicToolsLoading;
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
@@ -654,6 +655,34 @@ export function createCodexDynamicToolBridge(params: {
       const toolEntry = toolMap.get(call.tool);
       if (!toolEntry) {
         const executedArguments = asNonArrayRecord(call.arguments);
+        if (
+          call.tool === HEARTBEAT_RESPONSE_TOOL_NAME &&
+          registeredToolNames.has(HEARTBEAT_RESPONSE_TOOL_NAME) &&
+          params.heartbeatResponseExpected !== true &&
+          normalizeHeartbeatToolResponse(executedArguments)?.notify === false
+        ) {
+          const ignoredResult: AgentToolResult<unknown> = {
+            content: [],
+            details: { status: "ignored", reason: "non-heartbeat-turn" },
+          };
+          finalizeToolTerminalPresentation({
+            toolCallId: call.callId,
+            runId: toolResultHookContext.runId,
+            result: ignoredResult,
+            isError: false,
+            observer: params.hookContext?.onToolOutcome,
+            toolName: call.tool,
+            toolCallOrdinal: options?.toolCallOrdinal,
+          });
+          notifyAgentToolResult(options?.onAgentToolResult, call.tool, ignoredResult, false);
+          return withDynamicToolTermination(
+            withDynamicToolExecutionState(
+              { success: true, contentItems: [] },
+              { executedArguments, executionStarted: false },
+            ),
+            true,
+          );
+        }
         const message = registeredToolNames.has(call.tool)
           ? `OpenClaw tool is not available for this turn: ${call.tool}`
           : `Unknown OpenClaw tool: ${call.tool}`;

@@ -554,6 +554,10 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         registeredWithScopedMcp,
         isHostScopedAgentToolActive("openclaw"),
       ),
+      heartbeatResponseExpected:
+        params.trigger === "heartbeat" ||
+        params.enableHeartbeatTool === true ||
+        params.forceHeartbeatTool === true,
       hookContext,
     });
     const captureCronCreatorToolAllowlist = async () => {

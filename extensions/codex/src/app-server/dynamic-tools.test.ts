@@ -860,14 +860,14 @@ describe("createCodexDynamicToolBridge", () => {
   });
 
   it("can register a durable tool schema while denying execution for the current turn", async () => {
-    const heartbeatExecute = vi.fn(async () => textToolResult("heartbeat recorded"));
+    const unavailableExecute = vi.fn(async () => textToolResult("tool executed"));
     const onAgentToolResult = vi.fn();
     const onToolOutcome = vi.fn();
     const bridge = createCodexDynamicToolBridge({
       tools: [createTool({ name: "message" })],
       registeredTools: [
         createTool({ name: "message" }),
-        createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME, execute: heartbeatExecute }),
+        createTool({ name: "registered_tool", execute: unavailableExecute }),
       ],
       signal: new AbortController().signal,
       hookContext: { runId: "run-unavailable", onToolOutcome },
@@ -875,7 +875,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     expect(specNames(bridge.availableSpecs)).toEqual(["message"]);
     expect(bridge.availableTools.map((tool) => tool.name)).toEqual(["message"]);
-    expect(specNames(bridge.specs)).toEqual([HEARTBEAT_RESPONSE_TOOL_NAME, "message"]);
+    expect(specNames(bridge.specs)).toEqual(["message", "registered_tool"]);
 
     const result = await bridge.handleToolCall(
       {
@@ -883,7 +883,7 @@ describe("createCodexDynamicToolBridge", () => {
         turnId: "turn-1",
         callId: "call-1",
         namespace: null,
-        tool: HEARTBEAT_RESPONSE_TOOL_NAME,
+        tool: "registered_tool",
         arguments: {},
       },
       { onAgentToolResult },
@@ -894,28 +894,79 @@ describe("createCodexDynamicToolBridge", () => {
       contentItems: [
         {
           type: "inputText",
-          text: `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+          text: "OpenClaw tool is not available for this turn: registered_tool",
         },
       ],
     });
     expect(result.executionStarted).toBe(false);
     expect(result.executedArguments).toEqual({});
-    expect(heartbeatExecute).not.toHaveBeenCalled();
+    expect(unavailableExecute).not.toHaveBeenCalled();
     expect(onAgentToolResult).toHaveBeenCalledWith({
-      toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
+      toolName: "registered_tool",
       result: {
         content: [
           {
             type: "text",
-            text: `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+            text: "OpenClaw tool is not available for this turn: registered_tool",
           },
         ],
         details: {
           status: "failed",
-          error: `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+          error: "OpenClaw tool is not available for this turn: registered_tool",
         },
       },
       isError: true,
+    });
+    expect(onToolOutcome).toHaveBeenLastCalledWith({
+      toolName: "registered_tool",
+      argsHash: "",
+      resultHash: "",
+      terminalPresentation: undefined,
+      presentationOnly: true,
+    });
+  });
+
+  it("terminates a stale quiet heartbeat call on a non-heartbeat turn without model recovery", async () => {
+    const heartbeatExecute = vi.fn(async () => textToolResult("heartbeat recorded"));
+    const onAgentToolResult = vi.fn();
+    const onToolOutcome = vi.fn();
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "message" })],
+      registeredTools: [
+        createTool({ name: "message" }),
+        createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME, execute: heartbeatExecute }),
+      ],
+      signal: new AbortController().signal,
+      hookContext: { runId: "run-stale-heartbeat", onToolOutcome },
+    });
+
+    const result = await bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: HEARTBEAT_RESPONSE_TOOL_NAME,
+        arguments: { outcome: "progress", notify: false, summary: "Still monitoring" },
+      },
+      { onAgentToolResult },
+    );
+
+    expect(result).toEqual({ success: true, contentItems: [] });
+    expect(result.terminate).toBe(true);
+    expect(result.executionStarted).toBe(false);
+    expect(result.executedArguments).toEqual({
+      outcome: "progress",
+      notify: false,
+      summary: "Still monitoring",
+    });
+    expect(heartbeatExecute).not.toHaveBeenCalled();
+    expect(onAgentToolResult).toHaveBeenCalledWith({
+      toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
+      result: expect.objectContaining({
+        details: { status: "ignored", reason: "non-heartbeat-turn" },
+      }),
+      isError: false,
     });
     expect(onToolOutcome).toHaveBeenLastCalledWith({
       toolName: HEARTBEAT_RESPONSE_TOOL_NAME,
@@ -924,6 +975,78 @@ describe("createCodexDynamicToolBridge", () => {
       terminalPresentation: undefined,
       presentationOnly: true,
     });
+  });
+
+  it("does not silently discard a stale heartbeat alert on a non-heartbeat turn", async () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "message" })],
+      registeredTools: [
+        createTool({ name: "message" }),
+        createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: HEARTBEAT_RESPONSE_TOOL_NAME,
+      arguments: {
+        outcome: "needs_attention",
+        notify: true,
+        summary: "Operator action required",
+        notificationText: "Operator action required",
+      },
+    });
+
+    expect(result).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+        },
+      ],
+    });
+    expect(result.terminate).toBeUndefined();
+  });
+
+  it("does not mask a missing quiet heartbeat tool when a response is expected", async () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "message" })],
+      registeredTools: [
+        createTool({ name: "message" }),
+        createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME }),
+      ],
+      heartbeatResponseExpected: true,
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: HEARTBEAT_RESPONSE_TOOL_NAME,
+      arguments: {
+        outcome: "progress",
+        notify: false,
+        summary: "Still monitoring",
+      },
+    });
+
+    expect(result).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+        },
+      ],
+    });
+    expect(result.terminate).toBeUndefined();
   });
 
   it("treats an accepted child session spawn result as a successful dynamic tool call", async () => {
