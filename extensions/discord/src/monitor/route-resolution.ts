@@ -123,6 +123,19 @@ export function resolveDiscordEffectiveRoute(params: {
   };
 }
 
+export function isDiscordRuntimeAcpThreadBinding(record?: SessionBindingRecord | null): boolean {
+  const targetSessionKey = record?.targetSessionKey?.trim();
+  const conversationId = record?.conversation.conversationId?.trim();
+  const parentConversationId = record?.conversation.parentConversationId?.trim();
+  return Boolean(
+    targetSessionKey &&
+    isAcpSessionKey(targetSessionKey) &&
+    conversationId &&
+    parentConversationId &&
+    conversationId !== parentConversationId,
+  );
+}
+
 function hasExplicitRuntimeBindingIntent(record: SessionBindingRecord): boolean {
   if (record.targetKind === "subagent") {
     return true;
