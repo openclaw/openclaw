@@ -244,16 +244,20 @@ export function formatSkillInfo(
   if (requirementGroups.length > 0) {
     lines.push("");
     lines.push(theme.heading("Requirements:"));
+    const formatStatus = (value: string, satisfied: boolean) =>
+      satisfied ? theme.success(`✓ ${value}`) : theme.error(`✗ ${value}`);
     for (const [key, label] of requirementGroups) {
+      const required = skill.requirements[key];
       const missingRequirements = skill.missing[key];
-      const requirementStatus = skill.requirements[key].map((requirement) => {
-        const missing =
-          key === "anyBins"
-            ? missingRequirements.length > 0
-            : missingRequirements.includes(requirement);
-        return missing ? theme.error(`✗ ${requirement}`) : theme.success(`✓ ${requirement}`);
-      });
-      lines.push(`${theme.muted(`  ${label}:`)} ${requirementStatus.join(", ")}`);
+      const requirementStatus =
+        key === "anyBins" || key === "os"
+          ? formatStatus(`(any of: ${required.join(", ")})`, missingRequirements.length === 0)
+          : required
+              .map((requirement) =>
+                formatStatus(requirement, !missingRequirements.includes(requirement)),
+              )
+              .join(", ");
+      lines.push(`${theme.muted(`  ${label}:`)} ${requirementStatus}`);
     }
   }
 

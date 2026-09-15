@@ -216,25 +216,26 @@ describe("skills-cli", () => {
       expect(output).toContain("openclaw skills install");
     });
 
-    it("shows detailed info for a skill", () => {
+    it.each([true, false])("shows detailed info with alternatives satisfied: %s", (satisfied) => {
       const report = createMockReport([
         createMockSkill({
           name: "detailed-skill",
           description: "A detailed description",
           homepage: "https://example.com",
+          eligible: false,
           requirements: {
             bins: ["node"],
             anyBins: ["rg", "grep"],
             env: ["API_KEY"],
             config: [],
-            os: [],
+            os: ["linux", "darwin"],
           },
           missing: {
             bins: [],
-            anyBins: [],
+            anyBins: satisfied ? [] : ["rg", "grep"],
             env: ["API_KEY"],
             config: [],
-            os: [],
+            os: satisfied ? [] : ["linux", "darwin"],
           },
         }),
       ]);
@@ -242,9 +243,10 @@ describe("skills-cli", () => {
       expect(output).toContain("detailed-skill");
       expect(output).toContain("A detailed description");
       expect(output).toContain("https://example.com");
-      expect(output).toContain("node");
-      expect(output).toContain("Any binaries");
-      expect(output).toContain("API_KEY");
+      expect(output).toContain("✓ node");
+      expect(output).toContain(`${satisfied ? "✓" : "✗"} (any of: rg, grep)`);
+      expect(output).toContain(`${satisfied ? "✓" : "✗"} (any of: linux, darwin)`);
+      expect(output).toContain("✗ API_KEY");
     });
 
     it("resolves skill info case-insensitively", () => {
