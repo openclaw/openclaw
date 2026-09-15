@@ -136,6 +136,34 @@ export function cameraTempPath(opts: {
   return path.join(tmpDir, `${CLI_NAME}-camera-${opts.kind}${facingPart}-${id}${ext}`);
 }
 
+/**
+ * Own generated batch paths until the complete result is published.
+ *
+ * A fresh directory proves these destinations were not preexisting files.
+ * Rollback names only the batch's paths; never sweep other directory entries.
+ */
+export async function withCameraArtifactBatch<T>(
+  generatedPaths: string[],
+  publish: (ownedPaths: string[]) => Promise<T>,
+): Promise<T> {
+  const firstPath = generatedPaths[0];
+  if (firstPath === undefined) {
+    return await publish([]);
+  }
+  const directory = await fs.mkdtemp(path.join(path.dirname(firstPath), ".openclaw-camera-batch-"));
+  const ownedPaths = generatedPaths.map((filePath) =>
+    path.join(directory, path.basename(filePath)),
+  );
+  try {
+    return await publish(ownedPaths);
+  } catch (error) {
+    await Promise.allSettled(ownedPaths.map((filePath) => fs.rm(filePath, { force: true })));
+    // A foreign entry or a failed unlink keeps the directory; the primary error wins.
+    await fs.rmdir(directory).catch(() => {});
+    throw error;
+  }
+}
+
 function validateCameraPayloadUrl(url: string, expectedNodeHost: string): string {
   const parsed = new URL(url);
   if (parsed.protocol !== "https:") {
