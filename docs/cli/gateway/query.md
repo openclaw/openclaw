@@ -215,7 +215,7 @@ openclaw gateway status --port 19001
 
   </Accordion>
   <Accordion title="Linux systemd auth-drift checks">
-    - Service auth drift checks read both `Environment=` and `EnvironmentFile=` from the unit (including `%h`, quoted paths, multiple files, and optional `-` files).
+    - Service auth drift checks read both `Environment=` and `EnvironmentFile=` from the unit. `Environment=` assignments may be quoted. Use one unquoted absolute path per `EnvironmentFile=` directive, including paths with spaces; multiple directives and optional `-` files are supported. `%h` expands to the service home, and `%%` represents a literal percent sign.
     - Resolves `gateway.auth.token` SecretRefs using merged runtime env (service command env first, then process env fallback).
     - Token-drift checks skip config token resolution when token auth is not effectively active (`gateway.auth.mode` explicitly `password`/`none`/`trusted-proxy`, or mode unset where password can win and no token candidate can win).
 
