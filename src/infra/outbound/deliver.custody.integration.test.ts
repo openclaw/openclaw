@@ -166,6 +166,7 @@ describe("follow-up delivery custody", () => {
           typing: {
             onReplyStart: vi.fn(async () => {}),
             startTypingLoop: vi.fn(async () => {}),
+            startTypingForVisibleDelivery: vi.fn(async () => {}),
             startTypingOnText: vi.fn(async () => {}),
             refreshTypingTtl: vi.fn(),
             isActive: () => false,

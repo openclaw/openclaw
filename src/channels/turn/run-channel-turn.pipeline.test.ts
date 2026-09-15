@@ -300,6 +300,33 @@ describe("channel turn pipeline", () => {
     expect(onDelivered).toHaveBeenCalledOnce();
   });
 
+  it("preserves deferred typing through ordinary direct delivery", async () => {
+    const startVisibleDeliveryTyping = vi.fn(async () => undefined);
+    const deliver = vi.fn(async (_payload: ReplyPayload, info) => {
+      await info.startVisibleDeliveryTyping?.();
+      return { visibleReplySent: true };
+    });
+
+    await dispatchTestAssembledTurn({
+      channel: "whatsapp",
+      routeSessionKey: "agent:main:whatsapp:group:123@g.us",
+      ctxPayload: createCtx({ Surface: "whatsapp", ChatType: "group" }),
+      recordInboundSession: createRecordInboundSession(),
+      dispatchReplyWithBufferedBlockDispatcher: createDispatch(),
+      replyOptions: { onVisibleDeliveryStart: startVisibleDeliveryTyping },
+      delivery: { deliver },
+    });
+
+    expect(deliver).toHaveBeenCalledWith(
+      { text: "reply" },
+      expect.objectContaining({
+        kind: "final",
+        startVisibleDeliveryTyping: expect.any(Function),
+      }),
+    );
+    expect(startVisibleDeliveryTyping).toHaveBeenCalledOnce();
+  });
+
   it.each([
     {
       channel: "slack",

@@ -73,6 +73,7 @@ export async function applyMixedDirectives(params: {
   const typing = {
     onReplyStart: async () => {},
     startTypingLoop: async () => {},
+    startTypingForVisibleDelivery: async () => {},
     startTypingOnText: async () => {},
     refreshTypingTtl: () => {},
     isActive: () => false,

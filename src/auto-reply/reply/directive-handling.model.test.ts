@@ -775,6 +775,7 @@ async function persistModelDirectiveForTest(params: {
     typing: {
       onReplyStart: async () => {},
       startTypingLoop: async () => {},
+      startTypingForVisibleDelivery: async () => {},
       startTypingOnText: async () => {},
       refreshTypingTtl: () => {},
       isActive: () => false,

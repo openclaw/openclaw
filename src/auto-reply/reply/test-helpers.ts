@@ -119,6 +119,7 @@ export function createMockTypingController(
   return {
     onReplyStart: vi.fn(async () => {}),
     startTypingLoop: vi.fn(async () => {}),
+    startTypingForVisibleDelivery: vi.fn(async () => {}),
     startTypingOnText: vi.fn(async () => {}),
     refreshTypingTtl: vi.fn(),
     isActive: vi.fn(() => false),

@@ -362,6 +362,13 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     suppressHookUserDelivery,
     suppressHookReplyLifecycle,
   } = sourceReplyPolicy;
+  const startReplyDispatchLifecycleAtVisibleDelivery =
+    params.replyOptions?.typingStartPolicy === "visible_delivery";
+  const suppressReplyDispatchLifecycle =
+    suppressHookReplyLifecycle || startReplyDispatchLifecycleAtVisibleDelivery;
+  const replyDispatchVisibleDeliveryStart = startReplyDispatchLifecycleAtVisibleDelivery
+    ? params.replyOptions?.onVisibleDeliveryStart
+    : undefined;
   const reasoningPayloadsEnabled = params.replyOptions?.reasoningPayloadsEnabled === true;
   const commentaryPayloadsEnabled = params.replyOptions?.commentaryPayloadsEnabled === true;
   const attachSourceReplyDeliveryMode = (
@@ -575,6 +582,8 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     deliverySuppressionReason,
     suppressHookUserDelivery,
     suppressHookReplyLifecycle,
+    suppressReplyDispatchLifecycle,
+    replyDispatchVisibleDeliveryStart,
     reasoningPayloadsEnabled,
     commentaryPayloadsEnabled,
     attachSourceReplyDeliveryMode,

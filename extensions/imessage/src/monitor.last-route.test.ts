@@ -893,6 +893,10 @@ describe("iMessage monitor last-route updates", () => {
           active = true;
           await onReplyStart?.();
         },
+        startTypingForVisibleDelivery: async () => {
+          active = true;
+          await onReplyStart?.();
+        },
         startTypingOnText: async () => {},
         refreshTypingTtl: () => {},
         isActive: () => active,

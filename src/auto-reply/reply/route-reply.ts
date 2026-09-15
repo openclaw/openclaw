@@ -123,6 +123,8 @@ type RouteReplyParams = {
   replyKind: ReplyDispatchKind;
   /** Agent run id for hook context. */
   runId?: string;
+  /** Starts deferred typing immediately before the routed platform send. */
+  onVisibleDeliveryStart?: () => Promise<void> | void;
   /** @internal Stable producer-owned block delivery intent. */
   deliveryIntentId?: string;
   /** Model/session context for response-prefix template interpolation. */
@@ -377,6 +379,13 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       },
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
+      ...(params.onVisibleDeliveryStart
+        ? {
+            onPlatformSendDispatch: async () => {
+              await params.onVisibleDeliveryStart?.();
+            },
+          }
+        : {}),
       session: outboundSession,
       signal: abortSignal,
       ...(params.deliveryIntentId

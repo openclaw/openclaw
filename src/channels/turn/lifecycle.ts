@@ -507,7 +507,13 @@ async function dispatchChannelTurnWithDeliveryOwner(
                       result: createSuppressedChannelDeliveryResult({ reason: info.reason }),
                     });
                   },
-                  deliver: async (payload: ReplyPayload, info: ChannelDeliveryInfo) => {
+                  deliver: async (payload: ReplyPayload, dispatchInfo: ChannelDeliveryInfo) => {
+                    const info = replyOptions.onVisibleDeliveryStart
+                      ? {
+                          ...dispatchInfo,
+                          startVisibleDeliveryTyping: replyOptions.onVisibleDeliveryStart,
+                        }
+                      : dispatchInfo;
                     const preparedPayloadResult = delivery.preparePayload
                       ? await delivery.preparePayload(payload, info)
                       : payload;

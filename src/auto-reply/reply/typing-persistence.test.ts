@@ -42,6 +42,24 @@ describe("typing persistence bug fix", () => {
     expect(onReplyStartSpy).not.toHaveBeenCalledTimes(2);
   });
 
+  it("allows visible-delivery typing after run and dispatcher idle", async () => {
+    const lateController = createTypingController({
+      onReplyStart: onReplyStartSpy,
+      onCleanup: onCleanupSpy,
+      typingIntervalSeconds: 6,
+      log: vi.fn(),
+    });
+
+    lateController.markRunComplete();
+    lateController.markDispatchIdle();
+
+    await lateController.startTypingForVisibleDelivery();
+    await lateController.startTypingForVisibleDelivery();
+
+    expect(onReplyStartSpy).toHaveBeenCalledTimes(1);
+    expect(onCleanupSpy).not.toHaveBeenCalled();
+  });
+
   it("keeps typing alive while keepalive ticks continue during long runs", async () => {
     const longRunCleanupSpy = vi.fn();
     const longRunController = createTypingController({

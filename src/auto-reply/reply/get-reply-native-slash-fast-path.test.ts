@@ -48,6 +48,7 @@ afterEach(() => cliBackendsTesting.resetDepsForTest());
 const createTypingController = (): TypingController => ({
   onReplyStart: async () => {},
   startTypingLoop: async () => {},
+  startTypingForVisibleDelivery: async () => {},
   startTypingOnText: async () => {},
   refreshTypingTtl: () => {},
   isActive: () => false,

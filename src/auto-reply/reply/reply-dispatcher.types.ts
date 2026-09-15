@@ -35,6 +35,8 @@ export type ReplyFollowupAdmissionBarrierTimeoutPolicy = {
 
 export type ReplyDispatchRuntimeInfo = {
   kind: ReplyDispatchKind;
+  /** Starts deferred typing immediately before an accepted visible delivery. */
+  startVisibleDeliveryTyping?: () => Promise<void>;
   assistantMessageIndex?: number;
   /** Display identity for replies in a configured multi-agent group. */
   participant?: { agentId: string; name: string };

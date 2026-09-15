@@ -110,6 +110,7 @@ function makeTypingController() {
   return {
     onReplyStart: async () => {},
     startTypingLoop: async () => {},
+    startTypingForVisibleDelivery: async () => {},
     startTypingOnText: async () => {},
     refreshTypingTtl: () => {},
     isActive: () => false,

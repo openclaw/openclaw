@@ -469,6 +469,7 @@ export async function tryDispatchAcpReplyCore(params: {
   shouldSendFullToolDetails: boolean;
   bypassForCommand: boolean;
   onReplyStart?: () => Promise<void> | void;
+  onVisibleDeliveryStart?: () => Promise<void> | void;
   onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
   userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
@@ -588,6 +589,7 @@ export async function tryDispatchAcpReplyCore(params: {
     originatingThreadId: params.originatingThreadId,
     originatingChatType: params.originatingChatType,
     onReplyStart: params.onReplyStart,
+    onVisibleDeliveryStart: params.onVisibleDeliveryStart,
     abortSignal: params.abortSignal,
     runId: params.runId,
   });

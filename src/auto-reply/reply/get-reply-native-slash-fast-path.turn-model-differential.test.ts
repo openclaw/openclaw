@@ -35,6 +35,7 @@ function createTypingController(): TypingController {
   return {
     onReplyStart: async () => {},
     startTypingLoop: async () => {},
+    startTypingForVisibleDelivery: async () => {},
     startTypingOnText: async () => {},
     refreshTypingTtl: () => {},
     isActive: () => false,

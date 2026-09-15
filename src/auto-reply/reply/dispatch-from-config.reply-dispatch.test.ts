@@ -50,6 +50,8 @@ function firstReplyDispatchCall() {
           toolsAllow?: string[];
           sendPolicy?: string;
           inboundAudio?: boolean;
+          suppressReplyLifecycle?: boolean;
+          shouldRouteToOriginating?: boolean;
         },
         {
           cfg?: unknown;

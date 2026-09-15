@@ -79,6 +79,7 @@ vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => (
 const createTypingController = (): TypingController => ({
   onReplyStart: async () => {},
   startTypingLoop: async () => {},
+  startTypingForVisibleDelivery: async () => {},
   startTypingOnText: async () => {},
   refreshTypingTtl: () => {},
   isActive: () => false,

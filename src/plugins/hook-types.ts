@@ -578,6 +578,7 @@ export type PluginHookReplyDispatchContext = {
   dispatcher: ReplyDispatcher;
   abortSignal?: AbortSignal;
   onReplyStart?: () => Promise<void> | void;
+  onVisibleDeliveryStart?: () => Promise<void> | void;
   onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
   userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
   /** Host-owned display facts applied before the assistant transcript is published. */

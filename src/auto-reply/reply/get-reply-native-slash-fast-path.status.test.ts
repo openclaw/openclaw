@@ -43,6 +43,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const createTypingController = (): TypingController => ({
   onReplyStart: async () => {},
   startTypingLoop: async () => {},
+  startTypingForVisibleDelivery: async () => {},
   startTypingOnText: async () => {},
   refreshTypingTtl: () => {},
   isActive: () => false,

@@ -74,6 +74,9 @@ export function createDirectPendingFinalCustody(
 export function toCoreManagedDeliveryInfo(info: ChannelDeliveryInfo) {
   return {
     kind: info.kind,
+    ...(info.startVisibleDeliveryTyping
+      ? { startVisibleDeliveryTyping: info.startVisibleDeliveryTyping }
+      : {}),
     ...(info.participant ? { participant: info.participant } : {}),
     ...(info.assistantMessageIndex === undefined
       ? {}

@@ -104,6 +104,7 @@ export async function tryDispatchAcpReplyHook(
     shouldSendFullToolDetails: event.shouldSendFullToolDetails,
     bypassForCommand,
     onReplyStart: ctx.onReplyStart,
+    onVisibleDeliveryStart: ctx.onVisibleDeliveryStart,
     onAgentRunStart: ctx.onAgentRunStart,
     userTurnTranscriptRecorder: ctx.userTurnTranscriptRecorder,
     prepareAssistantTranscriptMessage: ctx.prepareAssistantTranscriptMessage,

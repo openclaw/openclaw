@@ -40,6 +40,7 @@ type SendDurableMessageBatchRequest = {
   gatewayClientScopes?: readonly string[];
   runId?: string;
   executionIdentityToken?: unknown;
+  onPlatformSendDispatch?: () => Promise<void>;
 };
 
 type DeliverySupportRequest = {
@@ -93,6 +94,7 @@ describe("durable inbound reply delivery", () => {
   });
 
   it("preserves explicit null thread targets instead of falling back to context thread", async () => {
+    const onVisibleDeliveryStart = vi.fn(async () => {});
     await deliverInboundReplyWithMessageSendContextCore({
       cfg: {},
       channel: "telegram",
@@ -100,6 +102,7 @@ describe("durable inbound reply delivery", () => {
       info: { kind: "final" },
       payload: { text: "plain reply" },
       threadId: null,
+      onVisibleDeliveryStart,
       ctxPayload: ctxPayload({
         OriginatingTo: "chat-1",
         MessageThreadId: "context-thread",
@@ -114,6 +117,9 @@ describe("durable inbound reply delivery", () => {
     expect(request.threadId).toBeNull();
     expect(request.durability).toBe("best_effort");
     expect(request.gatewayClientScopes).toEqual([]);
+    expect(request.onPlatformSendDispatch).toEqual(expect.any(Function));
+    await request.onPlatformSendDispatch?.();
+    expect(onVisibleDeliveryStart).toHaveBeenCalledOnce();
   });
 
   it("does not require unknown-send reconciliation for the default best-effort final path", async () => {

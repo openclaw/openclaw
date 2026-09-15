@@ -36,7 +36,7 @@ export function runReplyDispatchHook(
                 sessionTtsAuto: state.sessionTtsAuto,
                 ttsChannel: state.deliveryChannel,
                 suppressUserDelivery: state.suppressHookUserDelivery,
-                suppressReplyLifecycle: state.suppressHookReplyLifecycle,
+                suppressReplyLifecycle: state.suppressReplyDispatchLifecycle,
                 sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
                 shouldRouteToOriginating: state.shouldRouteToOriginating,
                 originatingChannel: state.routeReplyChannel,
@@ -55,6 +55,7 @@ export function runReplyDispatchHook(
                 dispatcher: state.dispatchHookDispatcher,
                 abortSignal: state.getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
                 onReplyStart: params.replyOptions?.onReplyStart,
+                onVisibleDeliveryStart: state.replyDispatchVisibleDeliveryStart,
                 onAgentRunStart: params.replyOptions?.onAgentRunStart,
                 userTurnTranscriptRecorder: params.replyOptions?.userTurnTranscriptRecorder,
                 prepareAssistantTranscriptMessage:

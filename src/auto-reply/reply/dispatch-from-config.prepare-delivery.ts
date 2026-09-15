@@ -131,6 +131,11 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     const normalizeReplyMediaPayloadPaths = await getNormalizeReplyMediaPaths();
     return await normalizeReplyMediaPayloadPaths(payload);
   };
+  const routedVisibleDeliveryStart =
+    state.params.replyOptions?.typingStartPolicy === "visible_delivery" &&
+    state.params.replyOptions?.suppressTyping !== true
+      ? state.params.replyOptions.onVisibleDeliveryStart
+      : undefined;
 
   const routeReplyToOriginating = async (
     payload: ReplyPayload,
@@ -195,6 +200,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       runId: state.params.replyOptions?.runId,
       responsePrefixContext: options?.responsePrefixContext,
       deliveryIntentId: options?.deliveryIntentId,
+      onVisibleDeliveryStart: routedVisibleDeliveryStart,
     });
     // Routed sends settle here: the transport result is the settlement. This is
     // the single routed choke point, so every routed lane feeds the turn ledger.

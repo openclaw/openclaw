@@ -338,6 +338,8 @@ async function dispatchInboundMessageWithBufferedDispatcherCore(
     createReplyDispatcherWithTyping({
       ...params.dispatcherOptions,
       beforeDeliver,
+      suppressTyping: params.replyOptions?.suppressTyping === true,
+      typingStartPolicy: params.replyOptions?.typingStartPolicy,
       onSettled: settleDeliveries,
       onFreshSettledDelivery: undefined,
       silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,

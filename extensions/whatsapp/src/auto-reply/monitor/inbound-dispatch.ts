@@ -89,7 +89,10 @@ type WhatsAppInboundTransportContext = WhatsAppReplyTransportContext & {
   sendComposing: AdmittedWebInboundMessage["platform"]["sendComposing"];
 };
 
-type ReplyDeliveryInfo = { kind: ReplyDispatchKind };
+type ReplyDeliveryInfo = {
+  kind: ReplyDispatchKind;
+  startVisibleDeliveryTyping?: () => Promise<void>;
+};
 
 type PendingWhatsAppMediaOnlyPayload = {
   info: ReplyDeliveryInfo;
@@ -537,6 +540,39 @@ export async function prepareWhatsAppInboundContext(params: {
   };
 }
 
+function isExplicitWhatsAppCommandTurn(params: {
+  commandTurn?: FinalizedMsgContext["CommandTurn"];
+  commandSource?: "native" | "text";
+  commandAuthorized?: boolean;
+}): boolean {
+  const isNativeCommandTurn = params.commandTurn?.kind === "native";
+  const isNativeCommandSource = params.commandSource === "native";
+  const isAuthorizedTextCommandTurn =
+    params.commandTurn?.kind === "text-slash" ? params.commandTurn.authorized : false;
+  const isAuthorizedTextCommandSource =
+    params.commandSource === "text" ? Boolean(params.commandAuthorized) : false;
+
+  return (
+    isNativeCommandTurn ||
+    isNativeCommandSource ||
+    isAuthorizedTextCommandTurn ||
+    isAuthorizedTextCommandSource
+  );
+}
+
+function resolveWhatsAppTypingStartPolicy(params: {
+  chatType?: string;
+  commandTurn?: FinalizedMsgContext["CommandTurn"];
+  commandSource?: "native" | "text";
+  commandAuthorized?: boolean;
+  wasMentioned?: boolean;
+}): "visible_delivery" | undefined {
+  if (params.chatType !== "group" || params.wasMentioned === true) {
+    return undefined;
+  }
+  return isExplicitWhatsAppCommandTurn(params) ? undefined : "visible_delivery";
+}
+
 export function resolveWhatsAppDmRouteTarget(params: {
   msg: AdmittedWebInboundMessage;
   senderE164?: string;
@@ -663,6 +699,13 @@ export function createWhatsAppReplyPlan(params: {
     ctx: params.context,
     blockStreamingEnabled: resolveChannelStreamingBlockEnabled(params.cfg.channels?.whatsapp),
   });
+  const typingStartPolicy = resolveWhatsAppTypingStartPolicy({
+    chatType: params.context.ChatType,
+    commandTurn: params.context.CommandTurn,
+    commandSource: params.context.CommandSource,
+    commandAuthorized: params.context.CommandAuthorized,
+    wasMentioned: params.context.WasMentioned,
+  });
   let didSendReply = false;
   let didLogHeartbeatStrip = false;
 
@@ -686,6 +729,7 @@ export function createWhatsAppReplyPlan(params: {
     if (!reply.hasMedia && !reply.text.trim()) {
       return whatsAppReplyDeliveryVisibility(false);
     }
+    await info.startVisibleDeliveryTyping?.();
     let delivery: WhatsAppReplyDeliveryResult;
     try {
       delivery = await params.deliverReply({
@@ -802,9 +846,10 @@ export function createWhatsAppReplyPlan(params: {
           tableMode,
           chunkMode,
         },
+        onVisibleDeliveryStart: info.startVisibleDeliveryTyping,
       };
     },
-    deliver: async (payload: ReplyPayload, info: { kind: ReplyDispatchKind }) => {
+    deliver: async (payload: ReplyPayload, info: ReplyDeliveryInfo) => {
       const normalizedDeliveryPayload = payload as DeliverableWhatsAppOutboundPayload<ReplyPayload>;
       const reply = resolveSendableOutboundReplyParts(normalizedDeliveryPayload);
       if (!reply.hasMedia && !reply.text.trim()) {
@@ -859,6 +904,7 @@ export function createWhatsAppReplyPlan(params: {
       ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
       : {}),
     suppressTyping: replyPolicy.suppressTyping,
+    ...(typingStartPolicy && !replyPolicy.suppressTyping ? { typingStartPolicy } : {}),
     disableBlockStreaming: replyPolicy.disableBlockStreaming,
     ...(replyPolicy.sourceReplyDeliveryMode
       ? { sourceReplyDeliveryMode: replyPolicy.sourceReplyDeliveryMode }
