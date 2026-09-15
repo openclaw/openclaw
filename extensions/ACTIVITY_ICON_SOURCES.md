@@ -60,6 +60,7 @@ The following defaults reuse the corresponding files in [`ui/public/provider-ico
 | `openrouter`            | `ProviderIcon-openrouter.svg`  |
 | `perplexity`            | `ProviderIcon-perplexity.svg`  |
 | `pixverse`              | `ProviderIcon-pixverse.svg`    |
+| `prism`                 | [Prism mark](https://prisminference.com/images/favicon-light.png) |
 | `qianfan`               | `ProviderIcon-qianfan.svg`     |
 | `qwen`                  | `ProviderIcon-alibaba.svg`     |
 | `runway`                | `ProviderIcon-runway.svg`      |

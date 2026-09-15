@@ -2251,6 +2251,7 @@
                       "providers/opencode",
                       "providers/opencode-go",
                       "providers/perplexity-provider",
+                      "providers/prism",
                       "providers/qianfan",
                       "providers/qwen",
                       "providers/radius",

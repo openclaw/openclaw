@@ -332,6 +332,7 @@
     "!dist/extensions/opencode/**",
     "!dist/extensions/parallel/**",
     "!dist/extensions/perplexity/**",
+    "!dist/extensions/prism/**",
     "!dist/extensions/qianfan/**",
     "!dist/extensions/raft/**",
     "!dist/extensions/radius/**",

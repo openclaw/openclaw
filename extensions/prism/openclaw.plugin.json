@@ -1,0 +1,102 @@
+{
+  "id": "prism",
+  "categories": ["models"],
+  "name": "Prism",
+  "description": "OpenClaw Prism provider plugin.",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["prism"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "prism-native",
+      "hosts": ["api.prisminference.com"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "prism": {
+        "family": "prism"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "prism",
+        "envVars": ["PRISM_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "prism",
+      "method": "api-key",
+      "choiceId": "prism-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Prism API key",
+      "choiceHint": "OpenAI-compatible Prism endpoint",
+      "groupId": "prism",
+      "groupLabel": "Prism",
+      "groupHint": "OpenAI-compatible Prism endpoint",
+      "optionKey": "prismApiKey",
+      "cliFlag": "--prism-api-key",
+      "cliOption": "--prism-api-key <key>",
+      "cliDescription": "Prism API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "modelCatalog": {
+    "providers": {
+      "prism": {
+        "baseUrl": "https://api.prisminference.com/v1",
+        "api": "openai-completions",
+        "defaultModel": "deepseek-v4.1-flash",
+        "models": [
+          {
+            "id": "deepseek-v4.1-flash",
+            "name": "DeepSeek V4.1 Flash",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0.3,
+              "output": 1.2,
+              "cacheRead": 0.07,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "deepseek-v4-flash",
+            "name": "DeepSeek V4 Flash",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0.14,
+              "output": 0.28,
+              "cacheRead": 0.07,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "prism": "refreshable"
+    }
+  }
+}

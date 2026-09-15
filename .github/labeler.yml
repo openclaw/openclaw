@@ -663,6 +663,11 @@
       - any-glob-to-any-file:
           - "extensions/novita/**"
           - "docs/providers/novita.md"
+"extensions: prism":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/prism/**"
+          - "docs/providers/prism.md"
 "extensions: qianfan":
   - changed-files:
       - any-glob-to-any-file:

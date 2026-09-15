@@ -692,6 +692,10 @@
     "target": "OpenRouter"
   },
   {
+    "source": "Prism",
+    "target": "Prism"
+  },
+  {
     "source": "Model providers",
     "target": "模型提供商"
   },
