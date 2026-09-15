@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { handleToolsCommand } from "../../auto-reply/reply/commands-info.js";
+import { buildCommandTestParams } from "../../auto-reply/reply/commands.test-harness.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import {
   getCronManagementAuthority,
@@ -202,6 +204,17 @@ describe("Control UI admin automation management tool", () => {
       for (const key of ["in", "text", "mode", "contextMessages", "sessionKey"]) {
         expect(tool.parameters).not.toHaveProperty(`properties.${key}`);
       }
+      const params = buildCommandTestParams(
+        "/tools verbose",
+        { tools: { allow: ["automations"] } },
+        { Provider: "webchat", Surface: "webchat" },
+      );
+      params.provider = "";
+      params.model = "";
+      const inventory = await handleToolsCommand(params, true);
+      expect(inventory?.reply?.text).toContain("Actions: list [includeDisabled,limit,offset]");
+      expect(inventory?.reply?.text).not.toContain("add job");
+      expect(createCronTool().parameters).toEqual(tool.parameters);
       expect(tool.parameters).not.toHaveProperty("properties.job.properties.declarationKey");
       expect(tool.parameters).toHaveProperty("properties.job.properties.agentId");
       expect(JSON.stringify(tool.parameters)).not.toMatch(/action=\\?"(?:add|wake|next_check)/);

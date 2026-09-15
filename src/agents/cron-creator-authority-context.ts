@@ -140,17 +140,33 @@ export function captureActiveCronManagementAuthority(params: {
     : undefined;
 }
 
+function readActiveCronManagementScope(runId: string | undefined) {
+  const scope = activeCronCreatorAuthority.getStore();
+  return scope?.managementEntitlement &&
+    scope.active &&
+    !scope.signal.aborted &&
+    scope.isCurrent?.() !== false &&
+    (scope.managementEntitlement.source !== "channel-owner" ||
+      scope.managementEntitlement.isCurrent()) &&
+    (runId === undefined || scope.runId === runId)
+    ? scope
+    : undefined;
+}
+
+/** Inventory precedes execution binding; describing admission never grants execution. */
+export function resolveCronToolManagementMode(
+  runId: string | undefined,
+): "only" | "also" | undefined {
+  const scope = readActiveCronManagementScope(runId);
+  return scope ? (scope.callerOrigin.kind === "unknown" ? "only" : "also") : undefined;
+}
+
 /** Bind at tool construction, never rediscover authority from model arguments or routes. */
 export function bindCronManagementGrant(runId: string | undefined) {
-  const scope = activeCronCreatorAuthority.getStore();
+  const scope = readActiveCronManagementScope(runId);
   const authority = getGatewayToolCallerIdentity()?.approvalAuthority;
   if (
-    !scope?.managementEntitlement ||
-    !scope.active ||
-    scope.signal.aborted ||
-    scope.isCurrent?.() === false ||
-    (scope.managementEntitlement.source === "channel-owner" &&
-      !scope.managementEntitlement.isCurrent()) ||
+    !scope ||
     scope.runId !== runId ||
     !authority ||
     authority.operationalRunInstance.runId !== runId ||

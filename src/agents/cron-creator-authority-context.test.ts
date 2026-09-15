@@ -10,6 +10,7 @@ import {
   bindActiveCronCreatorAuthorityResolver,
   bindCronManagementGrant,
   createCronCreatorAuthorityCapability,
+  resolveCronToolManagementMode,
   runWithCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapabilityResolver,
 } from "./cron-creator-authority-context.js";
@@ -84,9 +85,14 @@ describe("bindCronManagementGrant", () => {
             approvalAuthority: authority,
           },
           async () => {
-            expect(
-              withoutGatewayToolCallerIdentity(() => bindCronManagementGrant(runId)),
-            ).toBeUndefined();
+            withoutGatewayToolCallerIdentity(() => {
+              expect(resolveCronToolManagementMode(undefined)).toBe(
+                kind === "unknown" ? "only" : "also",
+              );
+              expect(resolveCronToolManagementMode("other-run")).toBeUndefined();
+              expect(bindCronManagementGrant(runId)).toBeUndefined();
+            });
+            expect(bindCronManagementGrant(undefined)).toBeUndefined();
             const management = bindCronManagementGrant(runId)!;
             expect(management.managementOnly).toBe(kind === "unknown");
             const mint = management.mint;
