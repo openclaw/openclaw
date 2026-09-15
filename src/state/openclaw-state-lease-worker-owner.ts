@@ -52,6 +52,28 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
     }
     params.assertCurrent();
   };
+  const rethrowIfUncertain = (failure: unknown, authorityError: unknown): void => {
+    if (!uncertain) {
+      return;
+    }
+    const errors = [
+      ...new Set([
+        uncertain.error,
+        failure,
+        ...(authorityError === undefined ? [] : [authorityError]),
+      ]),
+    ];
+    if (errors.length === 1) {
+      throw uncertain.error;
+    }
+    throw unknownOutcome(
+      createSqliteLifecycleAggregateError(
+        errors,
+        "state lease operation has an unknown write outcome",
+        uncertain.error,
+      ),
+    );
+  };
   const owner: WorkerLeaseOwner = {
     run(databasePath, operation) {
       assertCurrent();
@@ -108,7 +130,18 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
         } finally {
           active = false;
         }
-      })();
+      })().then(
+        (value) => {
+          if (uncertain) {
+            rethrowIfUncertain(uncertain.error, undefined);
+          }
+          return value;
+        },
+        (failure: unknown) => {
+          rethrowIfUncertain(failure, undefined);
+          throw failure;
+        },
+      );
       pending.add(result);
       void result.then(
         () => pending.delete(result),
@@ -120,28 +153,7 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
   owners.set(params.lease, owner);
   return {
     canRelease: () => pending.size === 0 && settlements.size === 0 && !uncertain,
-    rethrowIfUncertain(failure: unknown, authorityError: unknown): void {
-      if (!uncertain) {
-        return;
-      }
-      const errors = [
-        ...new Set([
-          uncertain.error,
-          failure,
-          ...(authorityError === undefined ? [] : [authorityError]),
-        ]),
-      ];
-      if (errors.length === 1) {
-        throw uncertain.error;
-      }
-      throw unknownOutcome(
-        createSqliteLifecycleAggregateError(
-          errors,
-          "state lease operation has an unknown write outcome",
-          uncertain.error,
-        ),
-      );
-    },
+    rethrowIfUncertain,
     async drain() {
       accepting = false;
       await Promise.allSettled(pending);

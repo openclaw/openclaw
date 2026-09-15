@@ -29,10 +29,10 @@ import { parseProjectGitUrl } from "./project-git-url.js";
 import {
   listProjectRegistry,
   ProjectCheckoutError,
-  registerClonedProjectRegistry,
   registerProjectRegistry,
   removeProjectRegistry,
 } from "./project-registry.js";
+import { registerClonedProjectRegistry } from "./project-registry.test-support.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = createTempDirTracker();

@@ -17,6 +17,7 @@ import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-in
 import type { TaskFlowView } from "../plugins/runtime/task-domain-types.js";
 import type {
   ProjectRegistryIdentity,
+  ProjectRegistryInsert,
   ProjectRegistryRecord,
 } from "../projects/project-registry.kernel.js";
 import type { ManagedTaskInFlowInput } from "../tasks/task-flow-managed-run-task.kernel.js";
@@ -63,6 +64,10 @@ export type OpenClawStateWorkerOperations = PluginStateWorkerOperations &
     "backup.recordOutcome": { input: PreparedBackupRunRecord; output: void };
     "projects.findRoot": { input: { repoRoot: string }; output: string | undefined };
     "projects.list": { input: undefined; output: ProjectRegistryRecord[] };
+    "projects.insert": {
+      input: { project: ProjectRegistryInsert; lease: OpenClawStateLeaseIdentity };
+      output: ProjectRegistryRecord;
+    };
     "projects.remove": {
       input: { project: ProjectRegistryIdentity; lease: OpenClawStateLeaseIdentity };
       output: boolean;
