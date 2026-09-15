@@ -9,6 +9,7 @@ import {
   selectCurrentPluginMetadataCache,
 } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { resolveInstalledManifestRegistryIndexFingerprint } from "./manifest-registry-installed.js";
 import {
   getPluginMetadataSnapshotCache,
   getScopedPluginCaches,
@@ -227,25 +228,25 @@ export function withPluginMetadataSnapshotScope<T>(
   run: () => T,
   options: CurrentPluginMetadataSnapshotOptions = {},
 ): T {
+  const cache = getPluginMetadataSnapshotCache(snapshot);
   const workspaceDir = options.workspaceDir ?? snapshot.workspaceDir;
+  const fingerprint = (config: OpenClawConfig, policyHash: string | undefined) =>
+    resolvePluginMetadataControlPlaneFingerprint(config, {
+      env: options.env,
+      inventoryFingerprint: withPluginCache(cache, () =>
+        resolveInstalledManifestRegistryIndexFingerprint(snapshot.index),
+      ),
+      policyHash,
+      workspaceDir,
+    });
   const compatiblePolicyHashes = options.compatibleConfigs?.map((config) =>
     resolveInstalledPluginIndexPolicyHash(config, options.env),
   );
   const compatibleConfigFingerprints = options.compatibleConfigs?.map((config, index) =>
-    resolvePluginMetadataControlPlaneFingerprint(config, {
-      env: options.env,
-      index: snapshot.index,
-      policyHash: compatiblePolicyHashes?.[index],
-      workspaceDir,
-    }),
+    fingerprint(config, compatiblePolicyHashes?.[index]),
   );
   const configFingerprint = options.config
-    ? resolvePluginMetadataControlPlaneFingerprint(options.config, {
-        env: options.env,
-        index: snapshot.index,
-        policyHash: snapshot.policyHash,
-        workspaceDir,
-      })
+    ? fingerprint(options.config, snapshot.policyHash)
     : snapshot.configFingerprint;
   const configIdentities = new WeakSet<OpenClawConfig>();
   if (options.config) {
@@ -261,7 +262,6 @@ export function withPluginMetadataSnapshotScope<T>(
   for (const config of options.compatibleConfigs ?? []) {
     configIdentities.add(config);
   }
-  const cache = getPluginMetadataSnapshotCache(snapshot);
   return withPluginCache(cache, () =>
     scopedPluginMetadataSnapshot.run(
       {

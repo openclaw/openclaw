@@ -107,10 +107,19 @@ async function startGatewayServerWithSdkHost(
     releasePostReadyWork();
     return await rethrowGatewayStartupError(err, closeOnStartupFailure);
   }
-  // The public server is fully initialized now. Leave a short I/O window before
-  // background prewarms and cleanup imports compete for the startup CPU.
-  const postReadyWorkTimer = setTimeout(releasePostReadyWork, POST_READY_WORK_START_DELAY_MS);
-  postReadyWorkTimer.unref?.();
+  let postReadyWorkTimer: ReturnType<typeof setTimeout> | undefined;
+  void startupSettled.then(
+    () => {
+      if (gatewayKernel.lifecycle.closePreludeStarted) {
+        return;
+      }
+      // Deferred sidecars must finish before the I/O window for background work begins.
+      postReadyWorkTimer = setTimeout(releasePostReadyWork, POST_READY_WORK_START_DELAY_MS);
+      postReadyWorkTimer.unref?.();
+    },
+    // The caller owns deferred startup failure; close releases the background waiters.
+    () => {},
+  );
 
   let closePromise: Promise<void> | undefined;
 

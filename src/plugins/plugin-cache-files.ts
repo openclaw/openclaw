@@ -54,12 +54,24 @@ export function pluginCacheExistsSync(targetPath: string): boolean {
   return (facts.exists ??= fs.existsSync(targetPath));
 }
 
+function resolveRealpath(targetPath: string): string {
+  const absolute = path.resolve(targetPath);
+  try {
+    if (absolute === targetPath && fs.realpathSync.native(targetPath) === targetPath) {
+      return targetPath;
+    }
+  } catch {
+    // The JavaScript resolver supports paths that the native resolver may reject.
+  }
+  return fs.realpathSync(targetPath);
+}
+
 export function pluginCacheRealpathSync(targetPath: string, native = false): string | null {
   const facts = pathFacts(targetPath);
   const key = native ? "nativeRealpath" : "realpath";
   if (facts[key] === undefined) {
     try {
-      facts[key] = native ? fs.realpathSync.native(targetPath) : fs.realpathSync(targetPath);
+      facts[key] = native ? fs.realpathSync.native(targetPath) : resolveRealpath(targetPath);
       pathFacts(facts[key])[key] = facts[key];
     } catch {
       facts[key] = null;

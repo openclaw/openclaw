@@ -1630,7 +1630,7 @@ describe("discoverOpenClawPlugins", () => {
   });
 
   it("reuses one filesystem realpath lookup per package root within a discovery run", () => {
-    const stateDir = makeTempDir();
+    const stateDir = fs.realpathSync(makeTempDir());
     const packageDir = path.join(stateDir, "extensions", "pack");
     mkdirSafe(path.join(packageDir, "src"));
     mkdirSafe(path.join(packageDir, "dist"));
@@ -1645,14 +1645,16 @@ describe("discoverOpenClawPlugins", () => {
     writePluginEntry(path.join(packageDir, "dist", "one.js"));
     writePluginEntry(path.join(packageDir, "dist", "two.js"));
 
+    const nativeRealpathSync = vi.spyOn(fs.realpathSync, "native");
     const realpathSync = vi.spyOn(fs, "realpathSync");
+    Object.assign(realpathSync, { native: nativeRealpathSync });
     const { candidates } = discoverOpenClawPlugins({
       env: buildDiscoveryEnv(stateDir),
     });
 
     expectCandidateIds(candidates, { includes: ["pack/one", "pack/two"] });
     expect(
-      realpathSync.mock.calls.filter(
+      [...realpathSync.mock.calls, ...nativeRealpathSync.mock.calls].filter(
         ([targetPath]) => path.resolve(String(targetPath)) === path.resolve(packageDir),
       ),
     ).toHaveLength(1);

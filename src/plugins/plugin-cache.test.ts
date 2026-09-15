@@ -11,6 +11,7 @@ import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-recor
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import {
   pluginCacheExistsSync,
+  pluginCacheRealpathSync,
   readPluginCacheFile,
   readPluginCacheJsonFile,
 } from "./plugin-cache-files.js";
@@ -35,6 +36,44 @@ afterEach(() => {
 });
 
 describe("plugin package facts", () => {
+  it("preserves JavaScript realpath identities for canonical paths, aliases, and traversal", () => {
+    const root = fs.realpathSync(tempDirs.make("plugin-realpath-"));
+    const packageDir = path.join(root, "package");
+    const nestedDir = path.join(packageDir, "nested");
+    const alias = path.join(root, "alias");
+    fs.mkdirSync(nestedDir, { recursive: true });
+    fs.writeFileSync(path.join(root, "catalog.json"), "root");
+    fs.writeFileSync(path.join(packageDir, "catalog.json"), "package");
+    fs.symlinkSync(nestedDir, alias, process.platform === "win32" ? "junction" : "dir");
+
+    const paths = [
+      packageDir,
+      alias,
+      `${alias}${path.sep}..${path.sep}catalog.json`,
+      path.relative(process.cwd(), packageDir),
+      ...(process.platform === "win32" ? [packageDir.toUpperCase()] : []),
+    ];
+    for (const targetPath of paths) {
+      const expected = fs.realpathSync(targetPath);
+      withPluginCache(createPluginCache(), () => {
+        expect(pluginCacheRealpathSync(targetPath)).toBe(expected);
+      });
+    }
+  });
+
+  it("retains JavaScript resolution when native resolution fails without merging cache policies", () => {
+    const root = tempDirs.make("plugin-realpath-fallback-");
+    const expected = fs.realpathSync(root);
+    vi.spyOn(fs.realpathSync, "native").mockImplementation(() => {
+      throw Object.assign(new Error("native resolution unavailable"), { code: "ELOOP" });
+    });
+    withPluginCache(createPluginCache(), () => {
+      expect(pluginCacheRealpathSync(root, true)).toBeNull();
+      expect(pluginCacheRealpathSync(root)).toBe(expected);
+      expect(pluginCacheRealpathSync(root, true)).toBeNull();
+    });
+  });
+
   it("withPluginLifecycleLease refreshes enclosing operation facts while retaining its callbacks", async () => {
     const root = tempDirs.make("plugin-lease-parent-");
     const filePath = path.join(root, "catalog.json");

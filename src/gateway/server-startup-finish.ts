@@ -578,6 +578,7 @@ export async function finishGatewayStartup(params: {
         postReadyState.maintenanceTimer = null;
       },
       startMaintenance: async () => {
+        await params.waitForPostReadyWork();
         if (lifecycle.closePreludeStarted) {
           return null;
         }

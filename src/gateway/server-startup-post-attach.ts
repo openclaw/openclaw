@@ -57,7 +57,6 @@ import {
 import { startUpdateRunWatcher, wakeUpdateRunWatcher } from "./update-run-watcher.js";
 const ACP_BACKEND_READY_TIMEOUT_MS = 5_000;
 const ACP_BACKEND_READY_POLL_MS = 50;
-const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 type Awaitable<T> = T | Promise<T>;
 
@@ -1340,13 +1339,6 @@ export async function startGatewayPostAttachRuntime(
   };
   const waitForSidecarStartTurn = () =>
     new Promise<void>((resolve) => {
-      if (params.sidecarStartup === "defer") {
-        // Give startup logging and bind observers a deterministic head start
-        // when tests or callers request deferred sidecar startup.
-        const timer = setTimeout(resolve, DEFERRED_SIDECAR_START_DELAY_MS);
-        timer.unref?.();
-        return;
-      }
       setImmediate(resolve);
     });
 

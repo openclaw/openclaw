@@ -35,6 +35,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { prepareGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
+import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { applyLoggingConfig } from "../logging/logger.js";
@@ -137,38 +138,44 @@ export async function prepareGatewayServerBootstrap(input: {
       signal,
     });
   };
-  await startupTrace.measure("state.ownership", () =>
-    opts.startupOperation ? opts.startupOperation(inspectStateOwnership) : inspectStateOwnership(),
-  );
-  const {
-    OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-    OpenClawDatabaseSchemaPreflightError,
-    preflightOpenClawDatabaseSchemas,
-  } = await startupTrace.measure(
-    "state.runtime-imports",
-    () => import("../state/openclaw-database-preflight.js"),
-  );
-  const inspectDatabaseSchemas = (signal?: AbortSignal) =>
-    preflightOpenClawDatabaseSchemas({
-      signal,
-      env: process.env,
-    });
-  const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
-    opts.startupOperation
-      ? opts.startupOperation(inspectDatabaseSchemas)
-      : inspectDatabaseSchemas(),
-  );
-  if (databaseSchemas.incompatible.length > 0) {
-    throw new OpenClawDatabaseSchemaPreflightError(databaseSchemas.incompatible);
-  }
-  for (const database of databaseSchemas.indeterminate) {
-    log.warn("database schema preflight could not inspect database; continuing to real open", {
-      kind: database.kind,
-      path: database.path,
-      reason: database.reason,
-      docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-    });
-  }
+  // Reuse child imports while each check still acquires a fresh source snapshot.
+  // Join the worker before starting any network or plugin runtime.
+  await withSqliteReadOnlyWorkerScope(async () => {
+    await startupTrace.measure("state.ownership", () =>
+      opts.startupOperation
+        ? opts.startupOperation(inspectStateOwnership)
+        : inspectStateOwnership(),
+    );
+    const {
+      OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+      OpenClawDatabaseSchemaPreflightError,
+      preflightOpenClawDatabaseSchemas,
+    } = await startupTrace.measure(
+      "state.runtime-imports",
+      () => import("../state/openclaw-database-preflight.js"),
+    );
+    const inspectDatabaseSchemas = (signal?: AbortSignal) =>
+      preflightOpenClawDatabaseSchemas({
+        signal,
+        env: process.env,
+      });
+    const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
+      opts.startupOperation
+        ? opts.startupOperation(inspectDatabaseSchemas)
+        : inspectDatabaseSchemas(),
+    );
+    if (databaseSchemas.incompatible.length > 0) {
+      throw new OpenClawDatabaseSchemaPreflightError(databaseSchemas.incompatible);
+    }
+    for (const database of databaseSchemas.indeterminate) {
+      log.warn("database schema preflight could not inspect database; continuing to real open", {
+        kind: database.kind,
+        path: database.path,
+        reason: database.reason,
+        docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
+      });
+    }
+  });
   const { bootstrapGatewayNetworkRuntime } = await startupTrace.measure(
     "runtime.network-imports",
     () => import("./server-network-runtime.js"),
