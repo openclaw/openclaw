@@ -83,12 +83,16 @@ export function resolveCliRunQueueKey(params: {
     return `${params.backendId}:owner:${ownerKey}`;
   }
   if (isClaudeCliBackendId(params.backendId)) {
+    // The conversation owner, not the CLI's own session id, is the lane: a fresh
+    // run for a session (recovery retry, dropped CLI session id) carries no
+    // --resume and would otherwise spawn a second CLI process beside the
+    // session's in-flight run instead of queueing behind it.
+    if (ownerKey) {
+      return `${params.backendId}:owner:${ownerKey}`;
+    }
     const sessionId = params.cliSessionId?.trim();
     if (sessionId) {
       return `${params.backendId}:session:${sessionId}`;
-    }
-    if (ownerKey) {
-      return `${params.backendId}:owner:${ownerKey}`;
     }
     const workspaceDir = params.workspaceDir.trim();
     if (workspaceDir) {
