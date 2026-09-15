@@ -30,7 +30,10 @@ import { createCliTimeoutError } from "./cli-runner/no-output-timeout-policy.js"
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
-import { FailoverError } from "./failover-error.js";
+import {
+  FailoverError,
+  SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE,
+} from "./failover-error.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
 import {
   AgentHarnessPreflightError,
@@ -2238,6 +2241,14 @@ describe("runWithModelFallback", () => {
           cause: Object.assign(new Error("session already has an active turn claim"), {
             name: "ActiveTurnClaimError",
           }),
+        }),
+    ],
+    [
+      "aborts fallback on closed session-placement settlements",
+      () =>
+        Object.assign(new Error("session placement turn settlement is closed"), {
+          name: "AbortError",
+          code: SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE,
         }),
     ],
   ])("%s", async (_label, makeError) => {

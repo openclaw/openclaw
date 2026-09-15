@@ -10,6 +10,7 @@ vi.mock("./subagents/registry/subagent-registry.js", () => ({
 
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { resolveSessionLane } from "./embedded-agent-runner/lanes.js";
+import { SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE } from "./failover-error.js";
 import {
   captureSessionPlacementCompactionSuccessorAssertion,
   installSessionPlacementAdmissionProvider,
@@ -513,7 +514,17 @@ describe("local turn placement admission", () => {
           await running;
         }
         expect(retained).toBeDefined();
-        expect(() => retained?.()).toThrow("settlement is closed");
+        let error: unknown;
+        try {
+          retained?.();
+        } catch (caught) {
+          error = caught;
+        }
+        expect(error).toMatchObject({
+          name: "AbortError",
+          code: SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE,
+          message: "session placement turn settlement is closed",
+        });
       } finally {
         release.resolve();
         await running;
