@@ -16,6 +16,7 @@ import { createPluginInventoryModuleRefsPlugin } from "./scripts/lib/plugin-inve
 import {
   buildPluginSdkEntrySources,
   pluginSdkEntrypoints,
+  privateQaPluginSdkEntrypoints,
   productionPluginSdkEntrypoints,
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mts";
@@ -284,7 +285,7 @@ const bundledPluginBuildInventory = createBundledPluginBuildInventory();
 const bundledPluginBuildEntries = collectBundledPluginBuildEntries(bundledPluginBuildInventory);
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
 const selectedPluginSdkEntrypoints = shouldBuildPrivateQaEntries
-  ? pluginSdkEntrypoints
+  ? [...pluginSdkEntrypoints, ...privateQaPluginSdkEntrypoints]
   : productionPluginSdkEntrypoints;
 
 function buildBundledHookEntries(): Record<string, string> {
@@ -677,13 +678,6 @@ function buildUnifiedDistEntries(): Record<string, string> {
         ([entry, source]) => [`plugin-sdk/${entry}`, source],
       ),
     ),
-    ...(shouldBuildPrivateQaEntries
-      ? {
-          "plugin-sdk/qa-channel-protocol": "src/plugin-sdk/qa-channel-protocol.ts",
-          "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
-          "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
-        }
-      : {}),
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
     "extensions/browser/relay-daemon-entry": "extensions/browser/relay-daemon-entry.ts",

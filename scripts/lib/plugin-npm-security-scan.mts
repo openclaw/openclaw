@@ -153,18 +153,9 @@ const FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map<st
   ["@openclaw/codex:dangerous-exec:src/app-server/attempt-startup-retry.test.ts", 6],
   ["@openclaw/codex:dangerous-exec:src/app-server/run-attempt-one-shot-cleanup.test.ts", 3],
   ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.http.test.ts", 1],
-  [
-    "@openclaw/codex:dangerous-exec:src/app-server/test-support/transport-process-blocked-command.test-support.mjs",
-    2,
-  ],
-  [
-    "@openclaw/codex:dangerous-exec:src/app-server/test-support/transport-process-starvation.test-support.mjs",
-    1,
-  ],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-orphan.test-helper.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-orphan.test.ts", 3],
-  ["@openclaw/codex:dangerous-exec:src/app-server/transport-process-snapshot.test.ts", 3],
-  ["@openclaw/codex:dangerous-exec:src/app-server/transport-procfs.test-support.ts", 3],
+  ["@openclaw/codex:dangerous-exec:src/app-server/transport-process-snapshot.test.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-startup.test.ts", 2],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport.process.test.ts", 10],
   ["@openclaw/diagnostics-prometheus:dangerous-exec:src/install-runtime.e2e.test.ts", 2],
@@ -194,6 +185,25 @@ const RELEASE_2026_9_4_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
 // workspace to prove denied canonical destinations cannot receive mutations.
 CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
   "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.fs-bridge-composition.test.ts",
+  1,
+);
+
+// Process-inspection fixtures added after 9.4 deliberately run bounded child commands.
+// Keep their exact reviewed counts out of the already-shipped inventories above.
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/transport-process-snapshot.test.ts",
+  3,
+);
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/transport-procfs.test-support.ts",
+  3,
+);
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/test-support/transport-process-blocked-command.test-support.mjs",
+  2,
+);
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/test-support/transport-process-starvation.test-support.mjs",
   1,
 );
 
