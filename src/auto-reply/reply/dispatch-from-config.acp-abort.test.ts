@@ -26,6 +26,7 @@ import {
   internalHookMocks,
   mocks,
   noAbortResult,
+  resetReplyDispatchOutcomeMock,
   resetPluginTtsAndThreadMocks,
   sessionBindingMocks,
   sessionStoreMocks,
@@ -201,6 +202,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       }
       return (await tryDispatchAcpReplyHook(event as never, ctx as never)) ?? undefined;
     });
+    resetReplyDispatchOutcomeMock();
     hookMocks.runner.runInboundClaim.mockReset();
     hookMocks.runner.runInboundClaim.mockResolvedValue(undefined);
     hookMocks.runner.runInboundClaimForPlugin.mockReset();
@@ -380,6 +382,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       Surface: "discord",
       SessionKey: "agent:regular-tail",
       BodyForAgent: "/reset continue",
+      CommandBody: "/reset continue",
     });
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -430,6 +433,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       Surface: "discord",
       SessionKey: "agent:tail-abort",
       BodyForAgent: "/reset continue",
+      CommandBody: "/reset continue",
     });
     const dispatchPromise = dispatchReplyFromConfig({
       ctx,
@@ -635,6 +639,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       To: "C1",
       SessionKey: sourceSessionKey,
       BodyForAgent: "/reset continue",
+      CommandBody: "/reset continue",
     });
     const dispatchPromise = dispatchReplyFromConfig({
       ctx,
