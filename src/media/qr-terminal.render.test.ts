@@ -61,6 +61,7 @@ describe("renderQrTerminal (real qrcode runtime)", () => {
   it("keeps per-row ANSI sequence counts in line with typical rows", async () => {
     const sample = "https://wa.me/login/2@SAMPLE-TOKEN-1234567890ABCDEF";
     const rendered = await renderQrTerminal(sample);
+    expect(rendered).toBe(await QRCode.toString(sample, { small: false, type: "terminal" }));
     const escCounts = rendered
       .split(/\r?\n/)
       .map((line) => (line.match(ansiSgr) ?? []).length)
