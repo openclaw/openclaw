@@ -39,6 +39,25 @@ capabilities; this prevents simultaneous Gateways from issuing camera,
 location, screen, or notification commands to the same phone. Android can
 suspend the secondary connections after the app leaves the foreground.
 
+The sidebar footer opens **Add Gateway** when none are saved and Gateway
+settings when one is saved. With multiple saved Gateways, it opens a native
+quick picker with a checkmark for the focused route, **Add Gateway**, and **Manage Gateways**.
+
+**Add Gateway** opens the QR scanner without disconnecting the current Gateway
+or restarting onboarding. You can also enter a setup code, choose a QR image,
+or enter a Gateway URL manually. A valid code opens a confirmation; only
+**Connect** starts the handoff. **Cancel** returns to the previous screen without
+changing the current conversation, drafts, attachments, or saved Gateways.
+Adding an already saved Gateway uses its existing connection settings; use
+**Manage Gateways** to replace its setup.
+Saved offline entries remain listed; connection status is separate from selection.
+
+Unsent text and finished attachments stay with their Gateway, agent, and session
+when you switch away and back. Finish recording, stop dictation or Talk, and let
+media imports or pending send admission finish before using the quick picker.
+The composer stays protected during handoff, but a committed offline Gateway
+remains usable without waiting for a network connection.
+
 ## Wear OS companion
 
 The Wear OS companion uses the paired Android phone's authenticated Gateway connection; the watch never receives or stores Gateway credentials. It can select agents and sessions, read bounded transcripts, send text or dictated replies, abort an active run, start realtime Talk inside the selected session, and connect or disconnect the paired phone's Gateway. It also offers local reply notifications, dark or light appearance, and optional automatic speech for replies. Agent and Gateway controls are capability-negotiated for staggered phone/watch updates. Realtime Talk streams microphone and playback audio over a temporary Wear OS Data Layer channel and stops when the selected phone, Gateway connection, or audio channel is lost.

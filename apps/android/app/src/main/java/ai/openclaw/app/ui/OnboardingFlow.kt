@@ -1369,7 +1369,7 @@ private fun SetupCodeInstructionsScreen(
         }
         item {
           Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            ScanQrTile(
+            SetupQrScanner(
               scannerActive = scannerActive,
               cameraPermissionGranted = cameraPermissionGranted,
               scanner = scanner,
@@ -1477,7 +1477,7 @@ private fun SetupScanErrorDialog(
 }
 
 @Composable
-private fun ScanQrTile(
+internal fun SetupQrScanner(
   scannerActive: Boolean,
   cameraPermissionGranted: Boolean,
   scanner: BarcodeScanner,

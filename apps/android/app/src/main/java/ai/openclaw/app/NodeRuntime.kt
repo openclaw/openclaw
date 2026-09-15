@@ -901,6 +901,12 @@ private fun openAndroidChatStores(
     externalTranscriptCache = transcriptCache,
   )
 
+/** Presentation of the connection owner's handoff, not saved intent or network health. */
+internal data class GatewayConnectionHandoff(
+  val focusedStableId: String? = null,
+  val pending: Boolean = false,
+)
+
 internal sealed interface GatewayTargetSelection {
   class Selected(
     val isCurrent: () -> Boolean,
@@ -935,7 +941,14 @@ class NodeRuntime private constructor(
   private var gatewayConnectOperationsInFlight = 0
   private var gatewayConnectOperationsDrained = CompletableDeferred(Unit)
 
+  private val gatewayConnectionHandoffState = MutableStateFlow(GatewayConnectionHandoff())
+  internal val gatewayConnectionHandoff: StateFlow<GatewayConnectionHandoff> = gatewayConnectionHandoffState.asStateFlow()
+
   @Volatile private var connectingEndpoint: GatewayEndpoint? = null
+    set(value) {
+      field = value
+      publishGatewayConnectionHandoff()
+    }
 
   private class GatewayConnectAttempt(
     val id: Long,
@@ -943,6 +956,7 @@ class NodeRuntime private constructor(
   ) {
     val operatorReady = MutableStateFlow<GatewaySession.RequestLease?>(null)
     var operation: GatewayConnectionOperation? = null
+    var chatRestoration: Job? = null
   }
 
   private val acceptedConnectAttempt = MutableStateFlow<GatewayConnectAttempt?>(null)
@@ -1169,6 +1183,10 @@ class NodeRuntime private constructor(
 
   private val identityStore = DeviceIdentityStore.withPrefs(appContext, prefs)
   private var connectedEndpoint: GatewayEndpoint? = null
+    set(value) {
+      field = value
+      publishGatewayConnectionHandoff()
+    }
 
   // Identity owns an established connection until disconnect/replacement, independently
   // of the UI request or lifecycle sequence that originally admitted it.
@@ -1614,6 +1632,21 @@ class NodeRuntime private constructor(
   private var gatewayRetirementDisplay: GatewayConnectionDisplay? = null
   private var gatewayStandaloneDisplay: GatewayConnectionDisplay? = null
   private var gatewayConnectionOperation: GatewayConnectionOperation? = null
+    set(value) {
+      field = value
+      publishGatewayConnectionHandoff()
+    }
+
+  private fun publishGatewayConnectionHandoff() {
+    gatewayConnectionHandoffState.value =
+      GatewayConnectionHandoff(
+        focusedStableId = connectedEndpoint?.stableId,
+        // An accepted target owns TLS/trust after its queue operation finishes.
+        // Socket readiness is deliberately excluded: offline composers remain usable.
+        pending = gatewayConnectionOperation != null || connectingEndpoint != null || acceptedConnectAttempt.value?.chatRestoration?.isCompleted == false,
+      )
+  }
+
   private var tlsProbeJob: Job? = null
 
   internal class GatewayConnectionOperation(
@@ -3722,7 +3755,6 @@ class NodeRuntime private constructor(
         }
         beginConnect(endpoint, resolveGatewayConnectAuth(endpoint, explicitAuth), intent)
       }
-      chat.restoreSelectedGatewayOfflineState()
       return intent()
     } finally {
       finishGatewayConnectionOperation(intent, unlessHandedOff = true)
@@ -3889,10 +3921,15 @@ class NodeRuntime private constructor(
     setVoiceCaptureMode(if (value) VoiceCaptureMode.ManualMic else VoiceCaptureMode.Off)
   }
 
+  internal fun hasActiveGatewaySwitchAudio(): Boolean =
+    synchronized(voiceCaptureOwnershipLock) {
+      voiceNoteOwnsMic || dictationOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)
+    }
+
   internal fun tryAcquireVoiceNoteMic(): Boolean {
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
-        if (voiceNoteOwnsMic || dictationOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) return false
+        if (gatewayConnectionHandoff.value.pending || voiceNoteOwnsMic || dictationOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) return false
         voiceNoteOwnsMic = true
         createVoiceWakeSuppressionUpdateLocked(VoiceWakeSuppressionReason.VoiceNote, true)
       }
@@ -3913,6 +3950,7 @@ class NodeRuntime private constructor(
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
         if (
+          gatewayConnectionHandoff.value.pending ||
           dictationOwnsMic ||
           voiceNoteOwnsMic ||
           cameraAudioOwnsMic ||
@@ -4448,7 +4486,7 @@ class NodeRuntime private constructor(
     var ownershipEpoch = 0L
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
-        if (mode != VoiceCaptureMode.Off && (voiceNoteOwnsMic || dictationOwnsMic)) return
+        if (mode != VoiceCaptureMode.Off && (gatewayConnectionHandoff.value.pending || voiceNoteOwnsMic || dictationOwnsMic)) return
         if (mode != VoiceCaptureMode.Off && cameraAudioOwnsMic) return
         // Every mode command cancels queued PTT intent; only a real transition replaces the capture owner.
         talkPttCommandEpoch.incrementAndGet()
@@ -4720,6 +4758,20 @@ class NodeRuntime private constructor(
     }
   }
 
+  /** NodeApp holds service control before this lifecycle/microphone admission, matching Stop's lock order. */
+  internal fun beginQuickGatewayConnectionOperation(
+    createIntent: () -> (() -> Boolean),
+  ): GatewayConnectionOperation? =
+    synchronized(gatewayLifecycleIntentLock) {
+      synchronized(voiceCaptureOwnershipLock) {
+        if (gatewayConnectionHandoff.value.pending || hasActiveGatewaySwitchAudio()) {
+          null
+        } else {
+          beginGatewayConnectionOperation(createIntent())
+        }
+      }
+    }
+
   internal fun beginGatewayConnectionOperation(isCurrent: () -> Boolean): GatewayConnectionOperation? =
     synchronized(gatewayLifecycleIntentLock) {
       if (!isCurrent()) return@synchronized null
@@ -4958,6 +5010,17 @@ class NodeRuntime private constructor(
     val connectAttemptId = beginConnectAttempt(endpoint, intent)
     connectingEndpoint = endpoint
     chat.onGatewayScopeChanging()
+    val attempt = checkNotNull(acceptedConnectAttempt.value)
+    val restoration = scope.launch(start = CoroutineStart.LAZY) { chat.restoreSelectedGatewayOfflineState() }
+    attempt.chatRestoration = restoration
+    restoration.invokeOnCompletion {
+      synchronized(gatewayLifecycleIntentLock) {
+        if (acceptedConnectAttempt.value === attempt) publishGatewayConnectionHandoff()
+      }
+    }
+    // The real local-hydration job belongs to this attempt, independently of TLS admission.
+    // Do not hold the switch mutex or prevent a trust decision while the local cache loads.
+    restoration.start()
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
     if (tls?.required == true) {
@@ -4977,7 +5040,10 @@ class NodeRuntime private constructor(
                 }
               }
             } catch (error: Throwable) {
-              finishGatewayConnectionOperation(intent)
+              synchronized(gatewayLifecycleIntentLock) {
+                if (isCurrentConnectAttempt(connectAttemptId)) clearAcceptedConnectAttempt()
+                finishGatewayConnectionOperation(intent)
+              }
               throw error
             }
           synchronized(gatewayLifecycleIntentLock) {
@@ -5064,6 +5130,7 @@ class NodeRuntime private constructor(
     synchronized(gatewayLifecycleIntentLock) {
       val attempt = acceptedConnectAttempt.value
       acceptedConnectAttempt.value = null
+      attempt?.chatRestoration?.cancel()
       // Retiring the target also retires its TLS presentation, even if replacement disappears while queued.
       if (attempt != null) synchronized(gatewayStatusLock) { gatewayStandaloneDisplay = null }
       tlsProbeJob?.cancel()

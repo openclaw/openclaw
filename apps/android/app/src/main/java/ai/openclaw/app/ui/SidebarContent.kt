@@ -33,7 +33,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -82,7 +81,6 @@ import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -503,7 +501,6 @@ internal fun OpenClawSidebar(
   val recentSections = recentPresentation.recentSections
   val orderedPages = orderedSidebarDestinations(pageOrder)
   val visiblePageIdSet = visiblePageIds.toSet()
-  val connectionLabel = gatewayStatusLabel(connection)
   val setSessionPinned: (String, String?, Boolean) -> Unit = { key, ownerAgentId, pinned ->
     scope.launch {
       viewModel.patchChatSession(key = key, ownerAgentId = ownerAgentId, pinned = pinned)
@@ -941,31 +938,9 @@ internal fun OpenClawSidebar(
       }
     }
     HorizontalDivider(color = palette.hairline)
-    Row(
-      modifier =
-        Modifier
-          .fillMaxWidth()
-          .heightIn(min = 48.dp)
-          .semantics(mergeDescendants = true) {
-            stateDescription = connectionLabel
-          }.padding(horizontal = 12.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(9.dp),
-    ) {
-      Box(
-        modifier =
-          Modifier
-            .size(8.dp)
-            .clip(CircleShape)
-            .background(if (connection.isConnected) ClawTheme.colors.success else palette.muted)
-            .clearAndSetSemantics {},
-      )
-      Text(
-        text = connectionLabel,
-        style = ClawTheme.type.caption,
-        color = palette.muted,
-        maxLines = 1,
-      )
+    SidebarGatewayControl(viewModel, connection, palette) {
+      viewModel.openGatewaySettings()
+      onClose()
     }
   }
 }

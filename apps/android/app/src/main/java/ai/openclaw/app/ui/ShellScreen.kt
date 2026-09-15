@@ -148,6 +148,7 @@ fun ShellScreen(
     var commandOpen by rememberSaveable { mutableStateOf(false) }
     var conversationScreenWasActive by rememberSaveable { mutableStateOf(false) }
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
+    val gatewayAddition by viewModel.gatewayAdditionRequest.collectAsState()
     FoldAwareContent(
       features = features,
       modifier = modifier.background(ClawTheme.colors.canvas),
@@ -404,6 +405,10 @@ fun ShellScreen(
               commandOpen = false
             },
           )
+        }
+
+        gatewayAddition?.let { request ->
+          key(request) { GatewayAdditionDialog(viewModel, request) }
         }
 
         pendingTrust?.let { prompt ->
@@ -1646,7 +1651,7 @@ private fun SettingsShellScreen(
             value = nativeText("Return to setup"),
             icon = Icons.AutoMirrored.Filled.ExitToApp,
             opensRoute = false,
-            onClick = viewModel::pairNewGateway,
+            onClick = viewModel::returnToGatewaySetup,
           )
         }
       }

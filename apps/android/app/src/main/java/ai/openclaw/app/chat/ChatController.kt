@@ -1124,9 +1124,13 @@ class ChatController internal constructor(
   }
 
   /** Restores the selected gateway's local state without waiting for transport availability. */
-  fun restoreSelectedGatewayOfflineState() {
-    refresh()
-    scope.launch { publishOutbox() }
+  suspend fun restoreSelectedGatewayOfflineState() {
+    val cacheReady = CompletableDeferred<Unit>()
+    refreshCommands()
+    refreshHistoryForRecovery(forceHealth = true, cacheReady = cacheReady)
+    // Only local hydration gates the handoff. Never await live history or network health here.
+    cacheReady.await()
+    publishOutbox()
   }
 
   /** Purges cached transcripts and queued sends for one retired authentication scope. */
@@ -4477,7 +4481,10 @@ class ChatController internal constructor(
    * owned until that authoritative snapshot resolves them; resetting healthOk here
    * would block sends after reconnect.
    */
-  private fun refreshHistoryForRecovery(forceHealth: Boolean = false) {
+  private fun refreshHistoryForRecovery(
+    forceHealth: Boolean = false,
+    cacheReady: CompletableDeferred<Unit>? = null,
+  ) {
     val (key, generation) =
       synchronized(gatewayScopeApplyLock) {
         // Automatic hydration retries history failures without dismissing unrelated action errors.
@@ -4503,7 +4510,7 @@ class ChatController internal constructor(
       synchronized(pendingRuns) {
         pendingRuns + optimisticMessagesByRunId.keys + unresolvedRepliesByRunId.keys
       }
-    bootstrap(sessionKey = key, generation = generation, runIdsToReconcile = runIdsToReconcile)
+    bootstrap(sessionKey = key, generation = generation, runIdsToReconcile = runIdsToReconcile, cacheReady = cacheReady)
   }
 
   // Once a chat is selected, cancelling its UI caller must not abandon hydration.
@@ -4511,38 +4518,47 @@ class ChatController internal constructor(
     sessionKey: String,
     generation: Long,
     runIdsToReconcile: Set<String> = emptySet(),
-  ) = scope.async {
-    val healthRefresh = synchronized(gatewayScopeApplyLock) { pendingHealthRefresh?.takeIf { it.historyGeneration == generation } }
-    try {
-      // Cache-first cold open: live history always replaces cached rows wholesale.
-      primeFromCache(sessionKey, generation)
-      val historyResult =
-        fetchAndApplyHistory(
-          sessionKey,
-          generation,
-          purpose = HistoryRefreshPurpose.RestoreSession,
-          runIdsToReconcile = runIdsToReconcile,
-          refreshBranches = true,
-        )
-      if (historyResult !is HistoryRefreshResult.Applied) return@async
-      if (isSwarmEnabled()) refreshSwarmSessions()
-    } catch (err: CancellationException) {
-      throw err
-    } catch (err: Throwable) {
-      synchronized(gatewayScopeApplyLock) {
-        if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return@async
-        updateErrorText(err.message, historyGeneration = generation)
-      }
-    } finally {
-      finishHistoryHealth(healthRefresh, generation)
-      synchronized(gatewayScopeApplyLock) {
-        if (isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) {
-          _historyLoading.value = false
-          scheduleRecoveryHistoryReconciliation(sessionKey, generation, runIdsToReconcile)
+    cacheReady: CompletableDeferred<Unit>? = null,
+  ) = scope
+    .async {
+      val healthRefresh = synchronized(gatewayScopeApplyLock) { pendingHealthRefresh?.takeIf { it.historyGeneration == generation } }
+      try {
+        // Cache-first cold open: live history always replaces cached rows wholesale.
+        try {
+          primeFromCache(sessionKey, generation)
+        } finally {
+          cacheReady?.complete(Unit)
+        }
+        val historyResult =
+          fetchAndApplyHistory(
+            sessionKey,
+            generation,
+            purpose = HistoryRefreshPurpose.RestoreSession,
+            runIdsToReconcile = runIdsToReconcile,
+            refreshBranches = true,
+          )
+        if (historyResult !is HistoryRefreshResult.Applied) return@async
+        if (isSwarmEnabled()) refreshSwarmSessions()
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: Throwable) {
+        synchronized(gatewayScopeApplyLock) {
+          if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return@async
+          updateErrorText(err.message, historyGeneration = generation)
+        }
+      } finally {
+        finishHistoryHealth(healthRefresh, generation)
+        synchronized(gatewayScopeApplyLock) {
+          if (isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) {
+            _historyLoading.value = false
+            scheduleRecoveryHistoryReconciliation(sessionKey, generation, runIdsToReconcile)
+          }
         }
       }
+    }.also { hydration ->
+      // A disposed controller may cancel a queued bootstrap before its body starts.
+      hydration.invokeOnCompletion { cacheReady?.complete(Unit) }
     }
-  }
 
   private fun finishHistoryHealth(
     refresh: HealthRefresh?,
