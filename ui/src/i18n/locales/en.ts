@@ -3244,6 +3244,16 @@ export const en: TranslationMap & {
       moveToTab: "Move to tab",
       noOtherTabs: "No other tabs",
       resize: "Resize",
+      savedWidth: "Saved width: {columns} of {total} columns",
+      responsiveWidthHint: "Widgets fill narrow dashboards. Wider dashboards use the saved width.",
+      sizeLabels: {
+        sm: "SM · Quarter width",
+        md: "MD · Half width",
+        lg: "LG · Two-thirds width",
+        xl: "XL · Full width",
+      },
+      presetHeightHint:
+        "Size presets also fix the height. Choose Auto height to fit the content again.",
       autoHeight: "Auto height",
       remove: "Delete",
       needsApproval: "Needs approval",

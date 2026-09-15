@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
+import { BOARD_GRID_COLUMNS } from "../../lib/board/grid.ts";
 import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardGrantDecision } from "../../lib/board/view-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -52,6 +53,15 @@ export function renderBoardWidgetMenu(options: {
           : html`<span class="board-widget__menu-empty">${t("board.widget.noOtherTabs")}</span>`
       }
       <div class="board-widget__menu-heading">${t("board.widget.resize")}</div>
+      <div class="board-widget__menu-hint">
+        <strong class="board-widget__saved-width">
+          ${t("board.widget.savedWidth", {
+            columns: String(widget.sizeW),
+            total: String(BOARD_GRID_COLUMNS),
+          })}
+        </strong>
+      </div>
+      <div class="board-widget__menu-hint">${t("board.widget.responsiveWidthHint")}</div>
       ${Object.entries(BOARD_SIZE_PRESETS).map(
         ([label, size]) => html`
           <wa-dropdown-item
@@ -59,7 +69,7 @@ export function renderBoardWidgetMenu(options: {
             value=${`resize:${label}`}
             ?disabled=${disabled}
           >
-            ${label.toUpperCase()}
+            ${t(`board.widget.sizeLabels.${label}`)}
             <span slot="details">${size.w}×${size.h}</span>
           </wa-dropdown-item>
         `,
@@ -67,14 +77,15 @@ export function renderBoardWidgetMenu(options: {
       ${
         widget.contentKind === "html"
           ? html`<wa-dropdown-item
-              class="board-widget__preset"
-              type="checkbox"
-              value="height:auto"
-              ?checked=${widget.heightMode !== "fixed"}
-              ?disabled=${disabled}
-            >
-              ${t("board.widget.autoHeight")}
-            </wa-dropdown-item>`
+                class="board-widget__preset"
+                type="checkbox"
+                value="height:auto"
+                ?checked=${widget.heightMode !== "fixed"}
+                ?disabled=${disabled}
+              >
+                ${t("board.widget.autoHeight")}
+              </wa-dropdown-item>
+              <div class="board-widget__menu-hint">${t("board.widget.presetHeightHint")}</div>`
           : nothing
       }
       <div class="board-widget__menu-separator" role="separator"></div>

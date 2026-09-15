@@ -7,7 +7,7 @@ import {
 // Side-effect import: test-support only type-imports the component, so the
 // custom element must be registered here for mount() to render anything.
 import "./board-view.ts";
-import { boardWidget, callbacks, mount, snapshot } from "./board-view.test-support.ts";
+import { boardWidget, callbacks, mount, settleCells, snapshot } from "./board-view.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -15,6 +15,26 @@ afterEach(() => {
 });
 
 describe("board widget sizing", () => {
+  it.each([
+    { sizeW: 6, sizeH: 9, heightMode: "auto" as const },
+    { sizeW: 5, sizeH: 7, heightMode: "fixed" as const },
+    { sizeW: 12, sizeH: 8, heightMode: "fixed" as const },
+  ])("shows saved width independently of height for $sizeW columns", async (size) => {
+    const view = await mount({
+      snapshot: snapshot({ widgets: [boardWidget(size)] }),
+    });
+    const savedWidth = () => view.querySelector(".board-widget__saved-width")?.textContent;
+    expect(savedWidth()).toContain(`Saved width: ${size.sizeW} of 12 columns`);
+
+    // Acknowledged changes from any client replace the displayed saved width.
+    view.snapshot = snapshot({
+      revision: 2,
+      widgets: [boardWidget({ ...size, sizeW: 3, revision: 2 })],
+    });
+    await settleCells(view);
+    expect(savedWidth()).toContain("Saved width: 3 of 12 columns");
+  });
+
   it("snaps reported HTML heights to rows with card inset and fixed-mode fallbacks", () => {
     const card = boardWidget({ sizeH: 6 });
     expect(effectiveBoardWidgetRows(card, 98)).toBe(2);

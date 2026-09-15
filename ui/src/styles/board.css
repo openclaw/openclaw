@@ -275,6 +275,19 @@ openclaw-board-widget-cell {
   font-size: 11px;
 }
 
+.board-widget__menu-hint {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  max-width: 260px;
+  padding: 5px 9px;
+  white-space: normal;
+}
+
+.board-widget__saved-width {
+  color: var(--text);
+}
+
 .board-widget__menu-separator {
   border-top: 1px solid var(--board-line);
   margin: 5px 3px;

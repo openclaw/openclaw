@@ -129,9 +129,14 @@ never needs the agent.
   medium, large, extra large) from the widget menu. Nobody places pixels —
   not you, not the agent. On narrow boards, widgets stack at full width in
   their saved order; widening the board restores their saved column widths.
+  The widget menu shows the saved width out of 12 columns, including custom
+  widths set by dragging. Presets use a quarter (SM), half (MD), two-thirds
+  (LG), or all (XL) of the dashboard width when the board is wide enough.
 - **Automatic height.** HTML widgets adjust their height to fit their content.
   Resizing by handle or choosing a size preset fixes the height. Choose
   **Auto height** from the widget menu to fit the content again.
+  For a full-width HTML dashboard that grows with its content, choose
+  **XL · Full width**, then **Auto height**.
 - **Tabs.** A board can have several pages — say, an overview tab and a
   focused tab with one big widget. Each tab remembers its widget layout.
 - **Dashboard view.** The board can occupy the main area or a resizable side
