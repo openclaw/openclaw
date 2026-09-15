@@ -97,6 +97,10 @@ describe("normalizeSubagentRunState", () => {
         ...terminal,
         execution: { ...terminal.execution, outcome: { status: "ok" } },
       }),
+      baseRun({
+        ...terminal,
+        execution: { ...terminal.execution, outcome: { status: "timeout" } },
+      }),
       baseRun({ ...terminal, endedReason: "subagent-complete" }),
       baseRun({ ...terminal, pauseReason: "sessions_yield" }),
     ].map((entry) => normalizeSubagentRunState(entry));

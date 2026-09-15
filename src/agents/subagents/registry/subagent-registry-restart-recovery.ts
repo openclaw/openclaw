@@ -105,9 +105,6 @@ export async function recoverInterruptedSubagentRow(
     }
   }
   const initialRecoveryReceipt = params.entry.execution.restartRecovery;
-  const legacyRestartTimeout =
-    params.entry.execution.outcome?.status === "timeout" &&
-    typeof params.entry.execution.endedAt === "number";
   const acceptedRecoveryCurrent =
     initialRecoveryReceipt?.phase === "accepted" && params.isCurrent(params.runId, params.entry);
   const isRecoverySourceCurrent = () =>
@@ -132,7 +129,9 @@ export async function recoverInterruptedSubagentRow(
       return { status: "terminal", error: terminalError, endedAt: params.entry.execution.endedAt };
     }
   }
-  if (!acceptedRecoveryCurrent && !legacyRestartTimeout && !isRecoverySourceCurrent()) {
+  // Completion can win while the sweeper awaits this lazy-loaded owner.
+  // A terminal timeout is not evidence that execution was interrupted by restart.
+  if (!acceptedRecoveryCurrent && !isRecoverySourceCurrent()) {
     return { status: "ignored" };
   }
 
@@ -216,21 +215,8 @@ export async function recoverInterruptedSubagentRow(
       return { status: "ignored" };
     }
     const marker = `${sessionEntry.sessionId ?? ""}:${sessionEntry.updatedAt ?? ""}`;
-    if (typeof params.entry.execution.endedAt === "number" && !legacyRestartTimeout) {
+    if (typeof params.entry.execution.endedAt === "number") {
       return { status: "ignored" };
-    }
-    if (legacyRestartTimeout) {
-      const interruptedAt = params.entry.execution.endedAt;
-      params.entry.execution = {
-        ...params.entry.execution,
-        status: "interrupted",
-        interruptedAt,
-        interruptionReason: "gateway-restart",
-        endedAt: undefined,
-        outcome: undefined,
-      };
-      params.entry.endedReason = undefined;
-      params.entry.terminalOwner = undefined;
     }
     // The abort marker records the interruption, not the age of useful work.
     // A long-running child must survive a brief planned Gateway update.

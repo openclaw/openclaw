@@ -322,26 +322,6 @@ describe("subagent registry restart recovery", () => {
     expect(dispatchAgent).not.toHaveBeenCalled();
   });
 
-  it("reclassifies shipped restart-timeout rows before dispatch", async () => {
-    const entry = run({
-      endedReason: "subagent-error",
-      execution: {
-        status: "terminal",
-        endedAt: Date.now() - 1_000,
-        outcome: { status: "timeout" },
-      },
-    });
-
-    await expect(recover(entry)).resolves.toMatchObject({ status: "accepted" });
-    expect(entry.execution).toMatchObject({
-      status: "interrupted",
-      interruptionReason: "gateway-restart",
-      endedAt: undefined,
-      outcome: undefined,
-    });
-    expect(entry.endedReason).toBeUndefined();
-  });
-
   it("defers without consuming the dispatch path until a runtime exists", async () => {
     const entry = run();
     await expect(recover(entry, { gatewayRuntime: undefined })).resolves.toEqual({
