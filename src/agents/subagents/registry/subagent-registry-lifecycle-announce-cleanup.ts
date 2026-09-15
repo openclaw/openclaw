@@ -602,6 +602,8 @@ export const startSubagentAnnounceCleanupFlow = (
     isCompletionOwnedByRequesterYield: () =>
       entry.requesterTurnYielded === true ||
       entry.requesterSettleWake?.requesterYieldBatch === true,
+    isCompletionTaskContinuation: () =>
+      entry.taskRunId !== undefined && entry.taskRunId !== entry.runId,
     onBeforeDeleteChildSession:
       cleanup === "delete"
         ? () => {

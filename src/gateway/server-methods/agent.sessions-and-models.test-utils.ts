@@ -449,12 +449,18 @@ describe("gateway agent handler", () => {
         const childSessionKey = "agent:main:subagent:orchestrator";
         const workerSessionKey = "agent:main:subagent:worker";
         const previousRunId = "orchestrator-before-yield";
-        const runId = "orchestrator-completion-followup";
+        const runId =
+          sourceTool === "subagent_settle"
+            ? `announce:requester-settle:main:${childSessionKey}:worker:yield-1`
+            : "orchestrator-completion-followup";
         const result = "All worker results are ready.";
         const completion = createDeferred<AgentWaitResult>();
-        const announce = vi.fn<SubagentRegistryDeps["runSubagentAnnounceFlow"]>(
-          async () => "delivered",
-        );
+        const announce = vi.fn<SubagentRegistryDeps["runSubagentAnnounceFlow"]>(async (params) => {
+          if (continuesRun) {
+            expect(params.isCompletionTaskContinuation?.()).toBe(true);
+          }
+          return "delivered";
+        });
         applyGatewaySubagentRegistryTestDeps({
           callGateway: (async () =>
             await completion.promise) as SubagentRegistryDeps["callGateway"],

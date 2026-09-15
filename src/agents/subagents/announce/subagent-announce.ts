@@ -29,6 +29,7 @@ import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-rep
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
+  isAnnounceRunId,
 } from "../../announce-idempotency.js";
 import {
   formatAgentInternalEventsForPrompt,
@@ -208,6 +209,8 @@ type SubagentAnnounceFlowParams = {
   /** Live owner check for requester delivery after awaited phases. */
   isCompletionDeliveryAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
+  /** Whether this announce-prefixed run continues an adopted task owner. */
+  isCompletionTaskContinuation?: () => boolean;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
@@ -228,6 +231,17 @@ export async function runSubagentAnnounceFlow(
 async function runSubagentAnnounceFlowBound(
   params: SubagentAnnounceFlowParams,
 ): Promise<SubagentAnnounceFlowOutcome> {
+  // Delivery-only announce runs must not recursively announce themselves.
+  // Descendant wakes and requester-settle turns that adopted a paused task
+  // also use announce-prefixed IDs, but their terminal result is still owed to
+  // the original requester.
+  if (
+    isAnnounceRunId(params.childRunId) &&
+    !params.childRunId.endsWith(":wake") &&
+    params.isCompletionTaskContinuation?.() !== true
+  ) {
+    return "delivered";
+  }
   let announceOutcome: SubagentAnnounceFlowOutcome = "retryable";
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
   const announceType = params.announceType ?? "subagent task";
