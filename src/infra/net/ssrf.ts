@@ -206,11 +206,8 @@ export function ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(
   }
 }
 
-const BLOCKED_HOSTNAMES = new Set([
-  "localhost",
-  "localhost.localdomain",
-  "metadata.google.internal",
-]);
+const METADATA_HOSTNAME = "metadata.google.internal";
+const BLOCKED_HOSTNAMES = new Set(["localhost", "localhost.localdomain", METADATA_HOSTNAME]);
 
 function normalizeHostnameSet(values?: string[]): Set<string> {
   return new Set(normalizePolicyHostnames(values));
@@ -336,6 +333,12 @@ export function isBlockedHostname(hostname: string): boolean {
     return false;
   }
   return isBlockedHostnameNormalized(normalized);
+}
+
+/** True for the cloud-metadata hostname and metadata or link-local IP literals in any encoding. */
+export function isCloudMetadataHostnameOrIp(hostname: string): boolean {
+  const host = normalizeHostname(hostname);
+  return host === METADATA_HOSTNAME || isLinkLocalIpAddress(host) || isCloudMetadataIpAddress(host);
 }
 
 function isBlockedHostnameNormalized(normalized: string): boolean {

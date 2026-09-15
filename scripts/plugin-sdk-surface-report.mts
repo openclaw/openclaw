@@ -375,7 +375,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved shared widget CDN policy for core and channel presenters.
       // +13: runtime-neutral WebSocket client/server, stream, data, and option contracts.
       // +2: approved process-diagnostics predicate and lightweight subsystem logger.
-      4481,
+      // +1: exact-host trusted JSON post for operator-configured web-search endpoints.
+      4482,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -514,7 +515,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared per-connection webhook request ordering for channel listeners.
       // +4: runtime-neutral WebSocket client/server and stream constructors.
       // +2: approved process-diagnostics predicate and lightweight subsystem logger.
-      2645,
+      // +1: exact-host trusted JSON post for operator-configured web-search endpoints.
+      2646,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -534,7 +536,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       //     Slack progress-draft render) so installed plugins survive upgrade (#124041 class).
       // -18: retire the expired August compatibility exports and messaging-targets subpath.
       // +4: rendering helpers forwarded by the shipped channel-message wildcard.
-      1138,
+      // +1: exact-host trusted JSON post on the private-local provider-web-search subpath.
+      1139,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
