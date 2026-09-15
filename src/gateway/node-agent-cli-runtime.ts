@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
-import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeGatewayRequestContext } from "../plugins/runtime/gateway-request-scope.js";
 import {
   invokeNodeClaudeSkillRuntime,
   type NodeClaudeSkillRuntime,
@@ -29,7 +29,7 @@ export async function invokeNodeClaudeCliRun(params: {
   signal?: AbortSignal;
   skillRuntime?: NodeClaudeSkillRuntime;
 }): Promise<NodeInvokeResult> {
-  const context = getPluginRuntimeGatewayRequestScope()?.context;
+  const context = getPluginRuntimeGatewayRequestContext();
   if (!context) {
     return {
       ok: false,
