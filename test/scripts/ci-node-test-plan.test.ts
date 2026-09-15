@@ -3085,6 +3085,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const core = createGatewayCoreVitestConfig({});
     const server = createGatewayServerVitestConfig({});
     const methods = createGatewayMethodsVitestConfig({});
+    expect(methods.test?.pool).toBe("forks");
     expect(worker.test?.pool).toBe("forks");
     expect(core.test?.isolate).toBe(true);
     for (const shared of [worker, server, methods]) {

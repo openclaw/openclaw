@@ -3057,7 +3057,7 @@ describe("runGatewayLoop", () => {
     vi.clearAllMocks();
     reloadTaskRuntimeStateFromStore.mockReset();
     reloadTaskRuntimeStateFromStore
-      .mockImplementationOnce(() => {
+      .mockImplementationOnce(async () => {
         throw new Error("task-flow registry restore failed");
       })
       .mockImplementationOnce(() => {

@@ -13,6 +13,7 @@ import { addSessionMember } from "../../config/sessions/session-sharing-store.js
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   finalizeTaskRecordByRunId,
@@ -21,7 +22,7 @@ import {
   recordTaskProgressByRunId,
 } from "../../tasks/runtime-internal.js";
 import { updateTaskStateByRunId } from "../../tasks/task-registry-record-api.js";
-import { reloadTaskRegistryFromStore } from "../../tasks/task-registry.js";
+import { reloadTaskRegistryFromStoreAsync } from "../../tasks/task-registry-state.js";
 import { createTaskFixture } from "../../tasks/task-registry.test-support.js";
 import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
 import {
@@ -171,7 +172,7 @@ describe("tasks gateway handlers", () => {
       endedAt: base - 3_000,
     });
     seedTaskRegistryRowsForTests([justFinished, finishedEarlier]);
-    reloadTaskRegistryFromStore();
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
     const { payload } = await runTaskHandler("tasks.list", {});
 
@@ -204,7 +205,7 @@ describe("tasks gateway handlers", () => {
       endedAt: base - 500,
     });
     seedTaskRegistryRowsForTests([laterActivity, laterCompletion]);
-    reloadTaskRegistryFromStore();
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
     const { payload } = await runTaskHandler("tasks.list", {});
     const byId = new Map(payload?.tasks?.map((task) => [task.taskId, task]));
@@ -332,7 +333,7 @@ describe("tasks gateway handlers", () => {
       lastEventAt: sharedActivityAt,
     });
     seedTaskRegistryRowsForTests([laterId, earlierId]);
-    reloadTaskRegistryFromStore();
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
     const { payload } = await runTaskHandler("tasks.list", {});
 
@@ -694,7 +695,7 @@ describe("tasks gateway handlers", () => {
         "This subagent is controlled by its native harness. Use the parent session's native collaboration tools to stop it.",
       task: { id: task.taskId, status: "running" },
     });
-    reloadTaskRegistryFromStore();
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
     expect(getTaskById(task.taskId)).toEqual(task);
 
     finalizeTaskRecordByRunId({
@@ -730,7 +731,7 @@ describe("tasks gateway handlers", () => {
         agentId: "main",
       });
       seedTaskRegistryRowsForTests([task]);
-      reloadTaskRegistryFromStore();
+      await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
       cancelSessionMock.mockImplementationOnce(async () => {
         updateTaskStateByRunId({
           runId,
@@ -781,7 +782,7 @@ describe("tasks gateway handlers", () => {
       lastEventAt: 1_011,
     });
     seedTaskRegistryRowsForTests([task, siblingTask]);
-    reloadTaskRegistryFromStore();
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
     cancelSessionMock.mockResolvedValue(undefined);
 
     const { calls, payload } = await runTaskHandler("tasks.cancel", {

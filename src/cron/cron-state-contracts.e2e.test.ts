@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { reloadTaskRegistryFromStore } from "../tasks/task-registry.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { reloadTaskRegistryFromStoreAsync } from "../tasks/task-registry-state.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CronService } from "./service.js";
@@ -236,7 +237,7 @@ describe("cron state contracts", () => {
           second.stop();
           second = undefined;
           resetTaskRegistryForTests({ persist: false });
-          reloadTaskRegistryFromStore();
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
           const reloadedHistory = readCronTaskRunHistoryPage({
             storeKey: cronStoreKey(storePath),

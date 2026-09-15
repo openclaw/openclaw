@@ -18,10 +18,15 @@ import type { TaskFlowView } from "../plugins/runtime/task-domain-types.js";
 import type { ManagedTaskInFlowInput } from "../tasks/task-flow-managed-run-task.kernel.js";
 import type { RunTaskInFlowResult } from "../tasks/task-flow-managed-run-task.types.js";
 import type {
+  TaskFlowRegistryStoreSnapshot,
   TaskFlowRegistryUpdate,
   TaskFlowRegistryUpdateResult,
 } from "../tasks/task-flow-registry.store.types.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
+import type {
+  TaskRegistryRestoreResult,
+  TaskMirroredFlowSyncOutcome,
+} from "../tasks/task-registry-restore.worker.js";
 import type { TaskRegistryStatusSnapshot } from "../tasks/task-registry.store.status.js";
 import type {
   TaskRegistryMutationScope,
@@ -73,6 +78,12 @@ export type OpenClawStateWorkerOperations = PluginStateWorkerOperations &
       input: undefined;
       output: ClawInstallSchemaVersionRow[] | undefined;
     };
+    "tasks.restore": { input: undefined; output: TaskRegistryRestoreResult };
+    "flows.syncMirroredTask": {
+      input: { taskId: string; expectedParentFlowId?: string };
+      output: TaskMirroredFlowSyncOutcome;
+    };
+    "flows.snapshot": { input: undefined; output: TaskFlowRegistryStoreSnapshot };
     "tasks.statusSummary": {
       input: { now: number; preserveSourceArtifacts: boolean };
       output: TaskRegistryStatusSnapshot | undefined;

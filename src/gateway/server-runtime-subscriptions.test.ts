@@ -32,12 +32,13 @@ import {
   emitSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { reloadTaskRegistryFromStoreAsync } from "../tasks/task-registry-state.js";
 import {
   createTaskRecord,
   markTaskLostById,
   markTaskTerminalById,
   recordTaskProgressByRunId,
-  reloadTaskRegistryFromStore,
 } from "../tasks/task-registry.js";
 import { getTaskRegistryObservers } from "../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
@@ -895,7 +896,7 @@ describe("startGatewayEventSubscriptions", () => {
     const beforeRestore = readTaskUpserts(broadcast);
     expect(beforeRestore).toHaveLength(1);
     broadcast.mockClear();
-    reloadTaskRegistryFromStore();
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
     expect(broadcast).toHaveBeenCalledWith("task", { action: "restored" }, { dropIfSlow: true });
     recordTaskProgressByRunId({
       runId,

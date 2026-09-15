@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createNextAcpTaskBackingDetail } from "./task-backing-authority.js";
 import { createAcpTaskBackingDetailForTest } from "./task-backing-authority.test-support.js";
@@ -13,7 +14,7 @@ import {
   listTasksForRelatedSessionKey,
 } from "./task-registry-query.js";
 import { createTaskRecord, linkTaskToFlowById } from "./task-registry-record-api.js";
-import { reloadTaskRegistryFromStore } from "./task-registry-state.js";
+import { reloadTaskRegistryFromStoreAsync } from "./task-registry-state.js";
 import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
 import { upsertTaskWithDeliveryStateToSqlite } from "./task-registry.store.sqlite.js";
 import {
@@ -87,7 +88,7 @@ it("publishes requester membership through create, update, restore, atomic publi
   expect(updated).not.toBeNull();
   expect(await taskIds({ sessionKey: originalKey })).toEqual([]);
   expect(await taskIds({ sessionKey: task.ownerKey })).toEqual([task.taskId]);
-  reloadTaskRegistryFromStore();
+  await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
   expect(listTasksForRelatedSessionKey(task.ownerKey).map((row) => row.taskId)).toEqual([
     task.taskId,
   ]);
@@ -102,7 +103,7 @@ it("publishes requester membership through create, update, restore, atomic publi
   expect(await taskIds({ sessionKey: published.requesterSessionKey })).toEqual([task.taskId]);
   expect(await taskIds({ sessionKey: task.ownerKey })).toEqual([task.taskId]);
   expect(deleteTaskRecordById(task.taskId)).toBe(true);
-  reloadTaskRegistryFromStore();
+  await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
   for (const sessionKey of [
     originalKey,
     published.requesterSessionKey,
@@ -158,7 +159,7 @@ it("preserves owner-or-child ACP generation history when requester candidates ar
   expect(
     createNextAcpTaskBackingDetail({ childSessionKey: key, instanceId: "next" }),
   ).toMatchObject({ generation: 9 });
-  reloadTaskRegistryFromStore();
+  await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
   expect(
     createNextAcpTaskBackingDetail({ childSessionKey: key, instanceId: "after-restore" }),
   ).toMatchObject({ generation: 9 });

@@ -33,7 +33,7 @@ import { configureTaskFlowRegistryRuntime } from "../tasks/task-flow-registry.st
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
   deleteTaskFlowRecordById,
-  reloadTaskFlowRegistryFromStore,
+  reloadTaskFlowRegistryFromStoreAsync,
 } from "../tasks/task-flow-runtime-internal.js";
 import { getTaskById } from "../tasks/task-registry.js";
 import { upsertTaskWithDeliveryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
@@ -103,7 +103,7 @@ afterEach(async () => {
 
 describe("registered tasks.async runtime", () => {
   it.each(["valid", "invalid"] as const)(
-    "prepares cold %s config for a bare-owner SDK read after registry readiness",
+    "prepares a cold bare-owner SDK read with %s config without main-thread SQLite",
     async (shape) => {
       await state.writeConfig(
         shape === "valid"
@@ -120,7 +120,6 @@ describe("registered tasks.async runtime", () => {
           parentFlowId: undefined,
         }),
       });
-      expect(getTaskById("bare")?.taskId).toBe("bare");
       closeOpenClawStateDatabase();
       expect(getRuntimeConfigSnapshot()).toBeNull();
       const native = requireNodeSqlite();
@@ -306,7 +305,7 @@ describe("registered tasks.async runtime", () => {
               .set({ revision: 2, goal: "Refreshed canonical flow" })
               .where("flow_id", "=", created.flowId),
           );
-          reloadTaskFlowRegistryFromStore();
+          await reloadTaskFlowRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         }
         onEvent.mockClear();
         release.resolve();
@@ -725,7 +724,7 @@ describe("registered tasks.async runtime", () => {
     }
     expect((await managed.list()).map((record) => record.flowId)).toEqual([flowId]);
     await closeOpenClawStateDatabaseAsync();
-    reloadTaskFlowRegistryFromStore();
+    await reloadTaskFlowRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
     {
       const reopened = await managed.get(flowId);
       if (!reopened) {
@@ -767,7 +766,7 @@ describe("registered tasks.async runtime", () => {
       expect(resumed.flow.waitJson).toBeNull();
     }
     await closeOpenClawStateDatabaseAsync();
-    reloadTaskFlowRegistryFromStore();
+    await reloadTaskFlowRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
     {
       const restored = await managed.get(flowId);
       expect(restored).toMatchObject({ revision: 2, status: "running" });
@@ -992,13 +991,13 @@ describe("registered tasks.async runtime", () => {
     expect((await asyncRuns.resolve(ownerKey))?.id).toBe("owned-latest");
   });
 
-  it("retains cold admission and observes later persisted changes without replacing the sync cache", async () => {
+  it("keeps cold reads off-thread and observes later persisted changes without replacing the sync cache", async () => {
     const native = requireNodeSqlite();
     const prepare = vi.spyOn(native.DatabaseSync.prototype, "prepare");
     const runtime = createPluginRuntime();
     const runs = runtime.tasks.async.runs.bindSession({ sessionKey: ownerKey });
     expect(await runs.list()).toEqual([]);
-    expect(prepare).toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
     upsertTaskWithDeliveryStateToSqlite({ task: task("fresh") });
     expect(getTaskById("fresh")).toBeUndefined();
     prepare.mockClear();

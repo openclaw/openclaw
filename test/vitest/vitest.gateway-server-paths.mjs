@@ -1,22 +1,31 @@
 // Plugin integration tests retain Gateway runtime setup outside core source.
 export const gatewayPluginTestFiles = ["test/plugins/codex-model-catalog.gateway.test.ts"];
 
-// Native database consumers retain the Gateway runner and setup in forked processes.
+// This curated cohort retains serial forks and the extended database-worker watchdog,
+// even though ordinary Gateway methods also use forks.
 export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/config-reload.test.ts",
   "src/gateway/gateway-code-mode-clock.test.ts",
   "src/gateway/gateway.chat-redaction.test.ts",
   "src/gateway/health/collector.queue-health.test.ts",
+  "src/gateway/link-understanding.product.test.ts",
   "src/gateway/local-request-context.test.ts",
   "src/gateway/managed-image-attachments.test.ts",
   "src/gateway/server-methods/chat-send-synthetic-repair.integration.test.ts",
+  "src/gateway/server-methods/chat.abort-live-proof.test.ts",
   "src/gateway/server-methods/cron.list-scoped.test.ts",
   "src/gateway/server-methods/cron.runs.test.ts",
   "src/gateway/server-methods/cron.self-removal.test.ts",
   "src/gateway/server-methods/cron.validation.test.ts",
+  "src/gateway/server-methods/models-auth-api-key.integration.test.ts",
+  "src/gateway/server-methods/models-auth-login.catalog.integration.test.ts",
+  "src/gateway/server-methods/models-auth-refresh.catalog.integration.test.ts",
+  "src/gateway/server-methods/models-auth-refresh.integration.test.ts",
   "src/gateway/server-methods/models-auth-removal.integration.test.ts",
+  "src/gateway/server-methods/models-connect-publication.integration.test.ts",
   "src/gateway/server-methods/models-dispatch.catalog.integration.test.ts",
   "src/gateway/server-methods/models-dispatch.lifecycle.integration.test.ts",
+  "src/gateway/server-methods/models-list.discovery-lifecycle.integration.test.ts",
   "src/gateway/server-methods/models-list.freshness.integration.test.ts",
   "src/gateway/server-methods/models-list.membership.integration.test.ts",
   "src/gateway/server-methods/models-list.native-lifecycle.integration.test.ts",
@@ -41,6 +50,8 @@ export const gatewayServerBackedHttpTestFiles = [
 // Gateway methods needing native process state or a private module graph keep
 // the shared methods runner in isolated forks.
 export const gatewayMethodsIsolatedTestFiles = [
+  "src/gateway/server-methods/tasks.access.test.ts",
+  "src/gateway/server-methods/tasks.test.ts",
   "src/gateway/server-methods/agent.test.ts",
   "src/gateway/server-methods/board.runtime-boundaries.test.ts",
   "src/gateway/server-methods/chat.reset-visible-yield.test.ts",

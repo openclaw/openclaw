@@ -6,6 +6,7 @@ import { clearTaskActivity } from "./task-registry-activity.js";
 import { isActiveTaskStatus } from "./task-registry-common.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-flow-link.js";
+import { clearTaskFlowSyncRetries } from "./task-registry-flow-sync.js";
 import {
   cloneTaskRecord,
   listTasksFromIndex,
@@ -13,6 +14,7 @@ import {
   normalizeTaskTimestamps,
   compareTasksNewestFirst,
   pickPreferredRunIdTask,
+  snapshotTaskRecords,
 } from "./task-registry-records.js";
 import {
   TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY,
@@ -26,25 +28,26 @@ import {
   withTaskRegistryMutation,
   bumpTaskRegistryRevision,
   clearTaskRegistryMemory,
-  deleteOwnerKeyIndex,
-  deleteParentFlowIdIndex,
-  deleteRelatedSessionKeyIndex,
   emitTaskRegistryObserverEvent,
   ensureTaskRegistryReady,
   getTasksByRunId,
   taskRegistryLog,
   readTaskRegistryRevision,
-  rebuildRunIdIndex,
   resetTaskRegistryListenerState,
   resetTaskRegistryRestoreState,
-  snapshotTaskRecords,
   taskDeliveryStates,
   taskIdsByOwnerKey,
   taskIdsByParentFlowId,
   taskIdsByRelatedSessionKey,
   tasks,
 } from "./task-registry-state.js";
-import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
+import {
+  deleteOwnerKeyIndex,
+  deleteParentFlowIdIndex,
+  deleteRelatedSessionKeyIndex,
+  rebuildRunIdIndex,
+  getTaskRegistryProcessState,
+} from "./task-registry.process-state.js";
 import {
   tryPersistTaskDelete,
   getTaskRegistryStore,
@@ -453,6 +456,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
 }
 
 export function resetTaskRegistryForTests() {
+  clearTaskFlowSyncRetries();
   getTaskRegistryProcessState().runOwners.clear();
   clearTaskRegistryMemory();
   resetTaskRegistryRestoreState();

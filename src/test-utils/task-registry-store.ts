@@ -1,21 +1,122 @@
+import { serializeAgentSchemaInspectionError } from "../state/openclaw-agent-schema-inspection-response.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { restoreTaskExecutionSnapshot } from "../tasks/task-execution-owner.js";
 import {
   applyFlowPatch,
+  isTaskMirroredFlowSyncUnchanged,
   normalizeRestoredFlowRecord,
+  prepareTaskMirroredFlowSyncFromCurrent,
 } from "../tasks/task-flow-registry.records.js";
 import type { getTaskFlowRegistryStore } from "../tasks/task-flow-registry.store.js";
 import type {
   TaskFlowRegistryObservedUpdate,
   TaskFlowRegistryStoreSnapshot,
 } from "../tasks/task-flow-registry.store.types.js";
+import { findLatestTaskForFlowInSnapshot } from "../tasks/task-registry-records.js";
+import type {
+  TaskMirroredFlowSyncOutcome,
+  TaskRegistryRestoreResult,
+} from "../tasks/task-registry-restore.worker.js";
 import type { TaskRegistryStore, TaskRegistryStoreSnapshot } from "../tasks/task-registry.store.js";
 
 type TaskFlowRegistryStore = ReturnType<typeof getTaskFlowRegistryStore>;
 
+function syncRestoredTaskFlow(
+  taskStore: TaskRegistryStore,
+  flowStore: TaskFlowRegistryStore,
+  params: { taskId: string; expectedParentFlowId?: string },
+): TaskMirroredFlowSyncOutcome {
+  const { taskId } = params;
+  let flowId = params.expectedParentFlowId?.trim();
+  try {
+    const snapshot = taskStore.loadSnapshot();
+    const task = snapshot.tasks.get(taskId);
+    const currentParentFlowId = task?.parentFlowId?.trim();
+    if (
+      !task ||
+      !currentParentFlowId ||
+      (params.expectedParentFlowId !== undefined && currentParentFlowId !== flowId)
+    ) {
+      return { taskId, flowId, kind: "result", result: { ok: true, flow: null } };
+    }
+    flowId = currentParentFlowId;
+    if (findLatestTaskForFlowInSnapshot(snapshot.tasks, flowId)?.taskId !== taskId) {
+      return { taskId, flowId, kind: "result", result: { ok: true, flow: null } };
+    }
+    const stored = flowStore.loadSnapshot().flows.get(flowId);
+    if (!stored) {
+      return { taskId, flowId, kind: "result", result: { ok: true, flow: null } };
+    }
+    const current = normalizeRestoredFlowRecord(stored);
+    if (current.syncMode !== "task_mirrored") {
+      return { taskId, flowId, kind: "result", result: { ok: true, flow: current } };
+    }
+    const prepared = prepareTaskMirroredFlowSyncFromCurrent(task, current);
+    if (isTaskMirroredFlowSyncUnchanged(prepared)) {
+      return { taskId, flowId, kind: "result", result: { ok: true, flow: current } };
+    }
+    try {
+      flowStore.upsertFlow(prepared.next);
+      return { taskId, flowId, kind: "result", result: { ok: true, flow: prepared.next } };
+    } catch {
+      return {
+        taskId,
+        flowId,
+        kind: "result",
+        result: { ok: false, reason: "persist_failed", current },
+      };
+    }
+  } catch (error) {
+    return {
+      taskId,
+      flowId,
+      kind: "error",
+      error: serializeAgentSchemaInspectionError(error),
+    };
+  }
+}
+
 export function createInMemoryTaskRegistryStore(
   snapshot: TaskRegistryStoreSnapshot = { tasks: new Map(), deliveryStates: new Map() },
+  flowStore?: TaskFlowRegistryStore,
 ): TaskRegistryStore {
   const state = structuredClone(snapshot);
   return {
+    async withSnapshotAsync<T>(
+      this: TaskRegistryStore,
+      _context: OpenClawStateWorkerContext,
+      consume: (result: TaskRegistryRestoreResult) => T,
+    ): Promise<T> {
+      const restored = restoreTaskExecutionSnapshot(this);
+      const flowSyncs = restored.settledTasks.flatMap((task) => {
+        const flowId = task.parentFlowId?.trim();
+        if (!flowId) {
+          return [];
+        }
+        if (!flowStore) {
+          throw new Error(
+            "In-memory task restoration with linked settlements requires an explicit flow store.",
+          );
+        }
+        return [
+          syncRestoredTaskFlow(this, flowStore, {
+            taskId: task.taskId,
+            expectedParentFlowId: flowId,
+          }),
+        ];
+      });
+      return consume({ ...restored, flowSyncs });
+    },
+    async syncTaskFlowAsync(
+      this: TaskRegistryStore,
+      _context: OpenClawStateWorkerContext,
+      params: { taskId: string; expectedParentFlowId?: string },
+    ): Promise<TaskMirroredFlowSyncOutcome> {
+      if (!flowStore) {
+        throw new Error("In-memory task flow synchronization requires an explicit flow store.");
+      }
+      return syncRestoredTaskFlow(this, flowStore, params);
+    },
     loadSnapshot: () => structuredClone(state),
     upsertTaskWithDeliveryState: ({ task, deliveryState }) => {
       const nextTask = structuredClone(task);
@@ -42,6 +143,8 @@ export function createInMemoryTaskFlowRegistryStore(
 ): TaskFlowRegistryStore {
   const state = structuredClone(snapshot);
   return {
+    withSnapshotAsync: async (_context, consume) => consume(structuredClone(state)),
+    readFlowAsync: async (_context, flowId) => structuredClone(state.flows.get(flowId)),
     loadSnapshot: () => structuredClone(state),
     upsertFlow: (flow) => {
       state.flows.set(flow.flowId, structuredClone(flow));

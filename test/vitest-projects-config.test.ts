@@ -74,17 +74,9 @@ import unitFastRootConfig from "./vitest/vitest.unit-fast-root.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
-const scopedGatewayMethodsIsolatedTestFiles = [
-  "server-methods/agent.test.ts",
-  "server-methods/board.runtime-boundaries.test.ts",
-  "server-methods/chat.reset-visible-yield.test.ts",
-  "server-methods/health.owner-routing.test.ts",
-  "server-methods/system-agent-nested-inference.integration.test.ts",
-  "server-methods/system-agent-setup-control-ui.test.ts",
-  "server-methods/users-preferences.test.ts",
-  "server-methods/usage.test.ts",
-  "server-methods/usage.sessions-usage.test.ts",
-];
+const scopedGatewayMethodsIsolatedTestFiles = gatewayMethodsIsolatedTestFiles.map((file) =>
+  path.posix.relative("src/gateway", file),
+);
 
 function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
   if (!config.test) {
@@ -238,6 +230,8 @@ describe("projects vitest config", () => {
     expect(methodsIsolatedConfig.pool).toBe("forks");
     expect(normalizeConfigPath(methodsIsolatedConfig.runner)).toBe("test/non-isolated-runner.ts");
     expect(methodsIsolatedConfig.include).toEqual(scopedGatewayMethodsIsolatedTestFiles);
+    expect(methodsIsolatedConfig.include).toContain("server-methods/tasks.access.test.ts");
+    expect(methodsIsolatedConfig.include).toContain("server-methods/tasks.test.ts");
     expect(serverConfig.pool).toBe("forks");
     expect(serverConfig.isolate).toBe(false);
     expect(serverConfig.fileParallelism).toBe(false);

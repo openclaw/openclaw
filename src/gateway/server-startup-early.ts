@@ -62,7 +62,7 @@ export async function startGatewayEarlyRuntime(params: {
   if (!params.minimalTestGateway) {
     await measureStartup(params.startupTrace, "runtime.early.task-state", async () => {
       const { ensureTaskRuntimeStateReady } = await import("../tasks/runtime-internal.js");
-      ensureTaskRuntimeStateReady();
+      await ensureTaskRuntimeStateReady();
     });
   }
   // Startup failure can occur immediately after discovery; publish its owner first.

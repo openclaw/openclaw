@@ -4,8 +4,16 @@ import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../agents/run-termination.j
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { mapAgentRunTerminalOutcomeToTaskStatus } from "./task-registry-common.js";
 import { applyTaskRecordPatch, normalizeTaskTimestamps } from "./task-registry-records.js";
-import type { TaskRegistryStore, TaskRegistryStoreSnapshot } from "./task-registry.store.js";
+import type {
+  TaskExecutionRestoreStore,
+  TaskRegistryStoreSnapshot,
+} from "./task-registry.store.types.js";
 import type { TaskExecutionOwner, TaskRecord } from "./task-registry.types.js";
+
+export type TaskExecutionRestoreResult = {
+  snapshot: TaskRegistryStoreSnapshot;
+  settledTasks: TaskRecord[];
+};
 
 export function captureTaskExecutionOwner(pid = process.pid): TaskExecutionOwner | undefined {
   const startIdentity = getFileLockProcessStartTime(pid);
@@ -53,25 +61,27 @@ function settleOrphanedTaskAtRestore(task: TaskRecord, now: number): TaskRecord 
   });
 }
 
-function readRestoreSnapshot(store: TaskRegistryStore): TaskRegistryStoreSnapshot {
-  const snapshot = store.loadSnapshot();
+function readRestoreSnapshot(
+  loadSnapshot: () => TaskRegistryStoreSnapshot,
+): TaskRegistryStoreSnapshot {
+  const snapshot = loadSnapshot();
   return {
     tasks: new Map([...snapshot.tasks].map(([id, task]) => [id, normalizeTaskTimestamps(task)])),
     deliveryStates: snapshot.deliveryStates,
   };
 }
 
-export function restoreTaskExecutionSnapshot(store: TaskRegistryStore): {
-  snapshot: TaskRegistryStoreSnapshot;
-  settledTasks: TaskRecord[];
-} {
-  const snapshot = readRestoreSnapshot(store);
+export function restoreTaskExecutionSnapshot(
+  store: TaskExecutionRestoreStore,
+  loadSnapshot: () => TaskRegistryStoreSnapshot = () => store.loadSnapshot(),
+): TaskExecutionRestoreResult {
+  const snapshot = readRestoreSnapshot(loadSnapshot);
   if (![...snapshot.tasks.values()].some(hasOrphanedExecution)) {
     return { snapshot, settledTasks: [] };
   }
   const settle = () => {
     // Admission can yield to another writer; only its current rows authorize settlement.
-    const current = readRestoreSnapshot(store);
+    const current = readRestoreSnapshot(loadSnapshot);
     const settledTasks: TaskRecord[] = [];
     const now = Date.now();
     for (const [taskId, task] of current.tasks) {

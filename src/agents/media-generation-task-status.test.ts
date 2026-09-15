@@ -21,7 +21,6 @@ const taskRuntimeInternalMocks = vi.hoisted(() => {
   const mocks = {
     listTasksForOwnerKey: vi.fn(),
     listFreshTasksForOwnerKey: vi.fn(),
-    reloadTaskRegistryFromStore: vi.fn(),
   };
   mocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
     mocks.listTasksForOwnerKey(ownerKey),
@@ -49,7 +48,6 @@ describe("image generation task status", () => {
     taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
       taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
     );
-    taskRuntimeInternalMocks.reloadTaskRegistryFromStore.mockReset();
     resetRecentMediaGenerationDuplicateGuardsForTests();
   });
 
@@ -601,7 +599,6 @@ describe("video generation task status", () => {
     taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
       taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
     );
-    taskRuntimeInternalMocks.reloadTaskRegistryFromStore.mockReset();
     resetRecentMediaGenerationDuplicateGuardsForTests();
   });
 

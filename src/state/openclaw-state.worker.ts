@@ -37,12 +37,17 @@ import {
   bindTaskFlowRecord,
   listTaskFlowRecordsForOwnerReadInDatabase,
   readTaskFlowRecord,
+  readTaskFlowRegistrySnapshot,
   listTaskFlowViewRecordsForOwnerInDatabase,
   readTaskFlowViewRecordInDatabase,
   updateTaskFlowRecordInDatabase,
   upsertTaskFlowRowInDatabase,
 } from "../tasks/task-flow-registry.store.kernel.js";
 import { isTerminalTaskFlow, type TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
+import {
+  restoreTaskRegistryInDatabase,
+  syncTaskMirroredFlowInDatabase,
+} from "../tasks/task-registry-restore.worker.js";
 import {
   findTaskRecordByRunIdForViewInDatabase,
   listTaskRecordsForFlowReadInDatabase,
@@ -316,6 +321,12 @@ function createSharedStateWorkerBackend(
       if (command.type === "cron.save" || command.type === "cron.saveChanges") {
         return executeCronStoreSaveCommand(command, database);
       }
+      if (command.type === "tasks.restore") {
+        return restoreTaskRegistryInDatabase(database);
+      }
+      if (command.type === "flows.syncMirroredTask") {
+        return syncTaskMirroredFlowInDatabase(database, command.input);
+      }
       if (command.type === "deliveryQueue.countFailed") {
         return countFailedDeliveryQueueEntriesInDatabase(database);
       }
@@ -366,6 +377,8 @@ function createSharedStateWorkerBackend(
       const { db } = database;
       return runSqliteDeferredTransactionSync(db, () => {
         switch (command.type) {
+          case "flows.snapshot":
+            return readTaskFlowRegistrySnapshot(db);
           case "tasks.mutationSnapshot":
             return readTaskRegistryMutationSnapshotInDatabase(db, command.input);
           case "tasks.get":

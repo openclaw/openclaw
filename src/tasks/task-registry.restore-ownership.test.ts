@@ -4,13 +4,14 @@ import { hostname } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   createInMemoryTaskFlowRegistryStore,
   createInMemoryTaskRegistryStore,
 } from "../test-utils/task-registry-store.js";
 import { createTaskFlowForTask, getTaskFlowById } from "./task-flow-runtime-internal.js";
-import { reloadTaskRegistryFromStore } from "./task-registry-state.js";
+import { reloadTaskRegistryFromStoreAsync } from "./task-registry-state.js";
 import { getTaskById } from "./task-registry.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import { loadTaskRegistryStateFromSqlite } from "./task-registry.store.sqlite.js";
@@ -44,7 +45,10 @@ function ownerFor(pid: number): TaskExecutionOwner {
   return { host: hostname(), pid, startIdentity };
 }
 
-function restoreFixture(executionOwner?: TaskExecutionOwner, overrides?: Partial<TaskRecord>) {
+async function restoreFixture(
+  executionOwner?: TaskExecutionOwner,
+  overrides?: Partial<TaskRecord>,
+) {
   const task: TaskRecord = {
     taskId: "task-restart-proof",
     runtime: "subagent",
@@ -66,13 +70,13 @@ function restoreFixture(executionOwner?: TaskExecutionOwner, overrides?: Partial
     deliveryStates: new Map(),
   });
   configureTaskRegistryRuntime({ store });
-  reloadTaskRegistryFromStore();
+  await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
   return { task, store };
 }
 
 describe("task execution ownership on successor restore", () => {
-  it("persists the current process identity when a live task owner binds", () => {
-    const { task, store } = restoreFixture();
+  it("persists the current process identity when a live task owner binds", async () => {
+    const { task, store } = await restoreFixture();
     const release = bindTaskRunOwner(task, async () => ({
       ok: false,
       error: "Unused cancellation",
@@ -81,13 +85,13 @@ describe("task execution ownership on successor restore", () => {
       ownerFor(process.pid),
     );
     release();
-    reloadTaskRegistryFromStore();
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
     expect(getTaskById(task.taskId)?.status).toBe("running");
   });
 
-  it("does not publish a terminal restore when persistence fails", () => {
+  it("does not publish a terminal restore when persistence fails", async () => {
     const owner = ownerFor(process.pid);
-    const { task, store } = restoreFixture(owner);
+    const { task, store } = await restoreFixture(owner);
     store.upsertTaskWithDeliveryState({
       task: { ...task, executionOwner: { ...owner, startIdentity: owner.startIdentity + 1 } },
     });
@@ -99,7 +103,9 @@ describe("task execution ownership on successor restore", () => {
         },
       },
     });
-    expect(() => reloadTaskRegistryFromStore()).toThrow("synthetic write failure");
+    await expect(
+      reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext()),
+    ).rejects.toThrow("synthetic write failure");
     expect(store.loadSnapshot().tasks.get(task.taskId)?.status).toBe("running");
     expect(() => getTaskById(task.taskId)).toThrow("synthetic write failure");
   });
@@ -130,7 +136,7 @@ describe("task execution ownership on successor restore", () => {
       await exited;
       children.delete(child);
       resetTaskRegistryForTests({ persist: false });
-      reloadTaskRegistryFromStore();
+      await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
       expect((await waitForGatewayActiveWork(0)).drained).toBe(true);
       expect(loadTaskRegistryStateFromSqlite().tasks.get(task.taskId)).toMatchObject({
@@ -145,7 +151,7 @@ describe("task execution ownership on successor restore", () => {
 
   it("settles a reused PID without treating the replacement process as its owner", async () => {
     const owner = ownerFor(process.pid);
-    const { task } = restoreFixture({ ...owner, startIdentity: owner.startIdentity + 1 });
+    const { task } = await restoreFixture({ ...owner, startIdentity: owner.startIdentity + 1 });
     expect((await waitForGatewayActiveWork(0)).drained).toBe(true);
     expect(getTaskById(task.taskId)?.status).toBe("cancelled");
   });
@@ -154,7 +160,7 @@ describe("task execution ownership on successor restore", () => {
     "preserves %s ownership and the grace period",
     async (kind) => {
       const owner = kind === "legacy" ? undefined : ownerFor(process.pid);
-      const { task, store } = restoreFixture(
+      const { task, store } = await restoreFixture(
         kind === "foreign-host" && owner ? { ...owner, host: "other-host.invalid" } : owner,
       );
       configureTaskRegistryRuntime({
@@ -165,7 +171,7 @@ describe("task execution ownership on successor restore", () => {
           },
         },
       });
-      reloadTaskRegistryFromStore();
+      await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
       expect((await waitForGatewayActiveWork(0)).drained).toBe(false);
       expect(store.loadSnapshot().tasks.get(task.taskId)).toEqual(task);
       expect(getTaskById(task.taskId)?.endedAt).toBeUndefined();
@@ -174,7 +180,7 @@ describe("task execution ownership on successor restore", () => {
 
   it("rechecks execution ownership after settlement admission", async () => {
     const liveOwner = ownerFor(process.pid);
-    const { task, store } = restoreFixture(liveOwner);
+    const { task, store } = await restoreFixture(liveOwner);
     store.upsertTaskWithDeliveryState({
       task: {
         ...task,
@@ -190,7 +196,7 @@ describe("task execution ownership on successor restore", () => {
         },
       },
     });
-    reloadTaskRegistryFromStore();
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
     expect(getTaskById(task.taskId)?.executionOwner).toEqual(liveOwner);
     expect(store.loadSnapshot().tasks.get(task.taskId)?.status).toBe("running");
     expect((await waitForGatewayActiveWork(0)).drained).toBe(false);
@@ -198,9 +204,9 @@ describe("task execution ownership on successor restore", () => {
 
   it.each(["running", "succeeded"] as const)(
     "preserves a newer %s task's flow when an older execution is orphaned",
-    (successorStatus) => {
+    async (successorStatus) => {
       const owner = ownerFor(process.pid);
-      const { task } = restoreFixture(owner);
+      const { task } = await restoreFixture(owner);
       const now = Date.now();
       const successor: TaskRecord = {
         ...task,
@@ -211,7 +217,8 @@ describe("task execution ownership on successor restore", () => {
         createdAt: now - 1_000,
         ...(successorStatus === "succeeded" ? { endedAt: now } : {}),
       };
-      configureTaskFlowRegistryRuntime({ store: createInMemoryTaskFlowRegistryStore() });
+      const flowStore = createInMemoryTaskFlowRegistryStore();
+      configureTaskFlowRegistryRuntime({ store: flowStore });
       const flow = createTaskFlowForTask({ task: successor });
       if (!flow) {
         throw new Error("Fixture flow was not created");
@@ -222,15 +229,18 @@ describe("task execution ownership on successor restore", () => {
         executionOwner: { ...owner, startIdentity: owner.startIdentity + 1 },
       };
       configureTaskRegistryRuntime({
-        store: createInMemoryTaskRegistryStore({
-          tasks: new Map([
-            [older.taskId, older],
-            [successor.taskId, { ...successor, parentFlowId: flow.flowId }],
-          ]),
-          deliveryStates: new Map(),
-        }),
+        store: createInMemoryTaskRegistryStore(
+          {
+            tasks: new Map([
+              [older.taskId, older],
+              [successor.taskId, { ...successor, parentFlowId: flow.flowId }],
+            ]),
+            deliveryStates: new Map(),
+          },
+          flowStore,
+        ),
       });
-      reloadTaskRegistryFromStore();
+      await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
       expect(getTaskById(older.taskId)?.status).toBe("cancelled");
       expect(getTaskById(successor.taskId)?.status).toBe(successorStatus);
       const restoredFlow = getTaskFlowById(flow.flowId);
@@ -240,12 +250,15 @@ describe("task execution ownership on successor restore", () => {
     },
   );
 
-  it.each(["queued", "succeeded"] as const)("does not settle an already %s record", (status) => {
-    const owner = ownerFor(process.pid);
-    const { task } = restoreFixture(
-      { ...owner, startIdentity: owner.startIdentity + 1 },
-      { status },
-    );
-    expect(getTaskById(task.taskId)?.status).toBe(status);
-  });
+  it.each(["queued", "succeeded"] as const)(
+    "does not settle an already %s record",
+    async (status) => {
+      const owner = ownerFor(process.pid);
+      const { task } = await restoreFixture(
+        { ...owner, startIdentity: owner.startIdentity + 1 },
+        { status },
+      );
+      expect(getTaskById(task.taskId)?.status).toBe(status);
+    },
+  );
 });

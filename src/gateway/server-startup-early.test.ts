@@ -297,7 +297,7 @@ describe("startGatewayEarlyRuntime", () => {
     const stopDiscovery = vi.fn(async () => {});
     const swapDiscovery = vi.fn(() => null);
     mocks.startGatewayDiscovery.mockResolvedValue({ update: async () => {}, stop: stopDiscovery });
-    mocks.ensureTaskRuntimeStateReady.mockImplementationOnce(() => {
+    mocks.ensureTaskRuntimeStateReady.mockImplementationOnce(async () => {
       throw new Error("task-flow registry restore failed");
     });
 

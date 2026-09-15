@@ -7,6 +7,15 @@ export type TaskRegistryStoreSnapshot = {
   deliveryStates: Map<string, TaskDeliveryState>;
 };
 
+export type TaskExecutionRestoreStore = {
+  loadSnapshot: () => TaskRegistryStoreSnapshot;
+  withMutation?: <T>(operation: () => T) => T;
+  upsertTaskWithDeliveryState: (params: {
+    task: TaskRecord;
+    deliveryState?: TaskDeliveryState;
+  }) => void;
+};
+
 export type TaskRegistryMutationScope = {
   taskId: string;
   flowId: string;

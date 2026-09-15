@@ -253,6 +253,31 @@ describe("test runtime prerequisites", () => {
     }
   });
 
+  const catalogFile = "test/plugins/codex-model-catalog.gateway.test.ts";
+  const freshnessFile = "src/gateway/server-methods/models-list.freshness.integration.test.ts";
+  const scopedFreshnessFile = "server-methods/models-list.freshness.integration.test.ts";
+  it.each([
+    ["gateway-database-workers", [], "runtime"],
+    ["gateway-database-workers", [freshnessFile], "runtime"],
+    ["gateway-database-workers", [scopedFreshnessFile], "runtime"],
+    ["gateway-database-workers", [freshnessFile, "--exclude", scopedFreshnessFile], undefined],
+    ["gateway-methods", [catalogFile], "runtime"],
+    ["gateway-methods", [freshnessFile], undefined],
+    ["gateway-methods", ["--exclude", catalogFile], undefined],
+    ["gateway", [catalogFile], "runtime"],
+    ["gateway", [freshnessFile], "runtime"],
+    ["gateway", [freshnessFile, "--exclude", scopedFreshnessFile], undefined],
+    ["full-agentic", [freshnessFile, "--exclude", scopedFreshnessFile], undefined],
+    ["gateway", [catalogFile, "--exclude", catalogFile], undefined],
+  ] as const)("binds %s runtime prerequisites to their owner for %s", (project, args, expected) => {
+    const selections = resolveVitestRuntimeCliSelections(
+      `test/vitest/vitest.${project}.config.ts`,
+      ["run", ...args],
+      {},
+    );
+    expect(resolveVitestPretestBuildMode(selections)).toBe(expected);
+  });
+
   it.each([
     ["bundled", ["src/plugins/loader.test.ts"], undefined],
     ["unit-fast", ["src/plugins/*.test.ts"], undefined],
@@ -338,18 +363,27 @@ describe("test runtime prerequisites", () => {
     expect(resolveVitestPretestBuildMode(selections)).toBe(expected);
   });
 
-  it("projects invocation-owned include files when selecting prerequisites", () => {
+  it.each([
+    [
+      "gateway-server",
+      "src/gateway/server-request-context.test.ts",
+      "src/gateway/server-sidecar-retention.test.ts",
+    ],
+    ["gateway-database-workers", "src/gateway/server-methods/cron.runs.test.ts", freshnessFile],
+    ["gateway-methods", "src/gateway/server-methods/models.test.ts", catalogFile],
+    ["gateway", "src/gateway/server-request-context.test.ts", freshnessFile],
+  ])("projects invocation-owned include files under %s", (project, ordinaryFile, runtimeFile) => {
     const selections = resolveVitestRuntimeCliSelections(
-      "test/vitest/vitest.gateway-server.config.ts",
+      `test/vitest/vitest.${project}.config.ts`,
       ["run"],
       {},
     );
     for (const selection of selections) {
-      selection.includePatterns = ["src/gateway/server-request-context.test.ts"];
+      selection.includePatterns = [ordinaryFile];
     }
     expect(resolveVitestPretestBuildMode(selections)).toBeUndefined();
     for (const selection of selections) {
-      selection.includePatterns = ["src/gateway/server-sidecar-retention.test.ts"];
+      selection.includePatterns = [runtimeFile];
     }
     expect(resolveVitestPretestBuildMode(selections)).toBe("runtime");
   });

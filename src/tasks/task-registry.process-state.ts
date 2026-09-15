@@ -1,6 +1,8 @@
-// Tracks task process state transitions used to reconcile running work.
 import type { Result } from "@openclaw/normalization-core/result";
+// Tracks task process state transitions used to reconcile running work.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { TaskSummary } from "../../packages/gateway-protocol/src/schema/tasks.js";
+import { getTaskRelatedSessionIndexKeys } from "./task-registry-records.js";
 import type { TaskRegistryMutationScope } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
@@ -104,4 +106,106 @@ export function getTaskRegistryProcessState(): TaskRegistryProcessState {
     },
   };
   return globalState[TASK_REGISTRY_PROCESS_STATE_KEY];
+}
+
+export function clearTaskProgressBatches(): void {
+  const batches = getTaskRegistryProcessState().taskProgressBatches;
+  for (const batch of batches.values()) {
+    clearTimeout(batch.timer);
+  }
+  batches.clear();
+}
+
+const indexState = getTaskRegistryProcessState();
+
+export function addRunIdIndex(taskId: string, runId?: string) {
+  const trimmed = runId?.trim();
+  if (!trimmed) {
+    return;
+  }
+  let ids = indexState.taskIdsByRunId.get(trimmed);
+  if (!ids) {
+    ids = new Set<string>();
+    indexState.taskIdsByRunId.set(trimmed, ids);
+  }
+  ids.add(taskId);
+}
+
+export function deleteRunIdIndex(taskId: string, runId?: string): void {
+  if (runId?.trim()) {
+    deleteIndexedKey(indexState.taskIdsByRunId, runId.trim(), taskId);
+  }
+}
+
+function addIndexedKey(index: Map<string, Set<string>>, key: string, taskId: string) {
+  let ids = index.get(key);
+  if (!ids) {
+    ids = new Set<string>();
+    index.set(key, ids);
+  }
+  ids.add(taskId);
+}
+
+function deleteIndexedKey(index: Map<string, Set<string>>, key: string, taskId: string) {
+  const ids = index.get(key);
+  if (!ids) {
+    return;
+  }
+  ids.delete(taskId);
+  if (ids.size === 0) {
+    index.delete(key);
+  }
+}
+
+type TaskSessionKeys = Pick<TaskRecord, "requesterSessionKey" | "ownerKey" | "childSessionKey">;
+
+export function addOwnerKeyIndex(taskId: string, task: Pick<TaskRecord, "ownerKey">) {
+  const key = normalizeOptionalString(task.ownerKey);
+  if (!key) {
+    return;
+  }
+  addIndexedKey(indexState.taskIdsByOwnerKey, key, taskId);
+}
+
+export function deleteOwnerKeyIndex(taskId: string, task: Pick<TaskRecord, "ownerKey">) {
+  const key = normalizeOptionalString(task.ownerKey);
+  if (!key) {
+    return;
+  }
+  deleteIndexedKey(indexState.taskIdsByOwnerKey, key, taskId);
+}
+
+export function addParentFlowIdIndex(taskId: string, task: Pick<TaskRecord, "parentFlowId">) {
+  const key = task.parentFlowId?.trim();
+  if (!key) {
+    return;
+  }
+  addIndexedKey(indexState.taskIdsByParentFlowId, key, taskId);
+}
+
+export function deleteParentFlowIdIndex(taskId: string, task: Pick<TaskRecord, "parentFlowId">) {
+  const key = task.parentFlowId?.trim();
+  if (!key) {
+    return;
+  }
+  deleteIndexedKey(indexState.taskIdsByParentFlowId, key, taskId);
+}
+
+export function addRelatedSessionKeyIndex(taskId: string, task: TaskSessionKeys) {
+  for (const sessionKey of getTaskRelatedSessionIndexKeys(task)) {
+    addIndexedKey(indexState.taskIdsByRelatedSessionKey, sessionKey, taskId);
+  }
+}
+
+export function deleteRelatedSessionKeyIndex(taskId: string, task: TaskSessionKeys) {
+  for (const sessionKey of getTaskRelatedSessionIndexKeys(task)) {
+    deleteIndexedKey(indexState.taskIdsByRelatedSessionKey, sessionKey, taskId);
+  }
+}
+
+export function rebuildRunIdIndex() {
+  indexState.taskIdsByRunId.clear();
+  for (const [taskId, task] of indexState.tasks.entries()) {
+    addRunIdIndex(taskId, task.runId);
+  }
 }

@@ -1,5 +1,6 @@
 // Covers managed task-flow creation, lookup, ownership, and state transitions.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
 import {
@@ -11,7 +12,7 @@ import {
   getTaskFlowById,
   listTaskFlowRecords,
   requestFlowCancel,
-  reloadTaskFlowRegistryFromStore,
+  reloadTaskFlowRegistryFromStoreAsync,
   resumeFlow,
   setFlowWaiting,
   syncFlowFromTaskResult,
@@ -251,7 +252,7 @@ describe("task-flow-registry", () => {
     expect(events[2]?.flowId).toBe(created.flowId);
   });
 
-  it("keeps restore failures sticky until an explicit reload succeeds", () => {
+  it("keeps restore failures sticky until an explicit reload succeeds", async () => {
     const hiddenFlow: TaskFlowRecord = {
       flowId: "hidden-flow",
       syncMode: "managed",
@@ -278,6 +279,7 @@ describe("task-flow-registry", () => {
       store: {
         ...createInMemoryTaskFlowRegistryStore(),
         loadSnapshot,
+        withSnapshotAsync: async (_context, consume) => consume(loadSnapshot()),
         upsertFlow,
         deleteFlow,
       },
@@ -308,7 +310,7 @@ describe("task-flow-registry", () => {
     expect(upsertFlow).not.toHaveBeenCalled();
     expect(deleteFlow).not.toHaveBeenCalled();
 
-    reloadTaskFlowRegistryFromStore();
+    await reloadTaskFlowRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
     expect(loadSnapshot).toHaveBeenCalledTimes(2);
     expect(getTaskFlowRegistryRestoreFailure()).toBeNull();

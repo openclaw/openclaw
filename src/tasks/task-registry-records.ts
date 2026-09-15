@@ -62,10 +62,57 @@ export function listTasksFromIndex(
     .map(({ insertionIndex: _insertionIndex, ...task }) => task);
 }
 
+/** Build the derived flow index in snapshot order to retain the latest-task tie break. */
+export function findLatestTaskForFlowInSnapshot(
+  tasks: ReadonlyMap<string, TaskRecord>,
+  flowId: string,
+): TaskRecord | undefined {
+  const linkedTaskIds = new Set(
+    [...tasks.values()]
+      .filter((task) => task.parentFlowId?.trim() === flowId)
+      .map((task) => task.taskId),
+  );
+  return listTasksFromIndex(tasks, new Map([[flowId, linkedTaskIds]]), flowId)[0];
+}
+
 export function compareTasksForRunIdLookup(left: TaskRecord, right: TaskRecord): number {
   const leftPriority = left.runtime === "cli" ? 1 : 0;
   const rightPriority = right.runtime === "cli" ? 1 : 0;
   return leftPriority - rightPriority || left.createdAt - right.createdAt;
+}
+
+function taskRunScopeKey(
+  task: Pick<TaskRecord, "runtime" | "scopeKind" | "ownerKey" | "childSessionKey">,
+): string {
+  return [
+    task.runtime,
+    task.scopeKind,
+    normalizeOptionalString(task.ownerKey) ?? "",
+    normalizeOptionalString(task.childSessionKey) ?? "",
+  ].join("\u0000");
+}
+
+export function filterTasksByRunScope(
+  records: TaskRecord[],
+  params: { runtime?: TaskRuntime; sessionKey?: string },
+): TaskRecord[] {
+  const matches = records.filter((task) => !params.runtime || task.runtime === params.runtime);
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (sessionKey) {
+    const childMatches = matches.filter(
+      (task) => normalizeOptionalString(task.childSessionKey) === sessionKey,
+    );
+    if (childMatches.length > 0) {
+      return childMatches;
+    }
+    const ownerMatches = matches.filter(
+      (task) =>
+        task.scopeKind === "session" && normalizeOptionalString(task.ownerKey) === sessionKey,
+    );
+    return ownerMatches;
+  }
+  const scopeKeys = new Set(matches.map((task) => taskRunScopeKey(task)));
+  return scopeKeys.size <= 1 ? matches : [];
 }
 
 export function cloneTaskRecord(record: TaskRecord): TaskRecord {
@@ -80,6 +127,10 @@ export function isEquivalentTaskRecord(current: TaskRecord, next: TaskRecord): b
   const fields = (record: TaskRecord) =>
     Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
   return isDeepStrictEqual(fields(current), fields(next));
+}
+
+export function snapshotTaskRecords(source: ReadonlyMap<string, TaskRecord>): TaskRecord[] {
+  return [...source.values()].map((record) => cloneTaskRecord(record));
 }
 
 /** Observer notifications need detached metadata, never runtime-owned detail. */

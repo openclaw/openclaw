@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { globSync } from "tinyglobby";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   listVitestRuntimeConsumerFiles,
@@ -12,8 +13,11 @@ import {
 } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { withEnv } from "../../src/test-utils/env.js";
+import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
+import { createGatewayMethodsVitestConfig } from "../vitest/vitest.gateway-methods.config.ts";
 import { gatewayDatabaseWorkerTestFiles } from "../vitest/vitest.gateway-server-paths.mjs";
 import { packageContractTestFiles } from "../vitest/vitest.package-contract-paths.mjs";
+import { collectVitestExcludePatterns, matchesVitestGlob } from "../vitest/vitest.pattern-file.ts";
 
 const {
   applyParallelVitestCachePaths,
@@ -45,6 +49,67 @@ describe("test-projects args", () => {
       buildVitestRunPlans([target]);
     }
   });
+
+  const gatewayWorkerFile = "src/gateway/server-methods/cron.runs.test.ts";
+  const catalogFile = "test/plugins/codex-model-catalog.gateway.test.ts";
+  it.each<[string, string, string | undefined, boolean]>([
+    ["server-methods/cron.runs.test.ts", gatewayWorkerFile, undefined, true],
+    [gatewayWorkerFile, gatewayWorkerFile, undefined, true],
+    [catalogFile, catalogFile, undefined, true],
+    [
+      "server-methods/cron.runs.test.ts",
+      gatewayWorkerFile,
+      "server-methods/cron.runs.test.ts",
+      false,
+    ],
+    ["server-methods/cron.runs.test.ts", gatewayWorkerFile, "server-methods/*.test.ts", false],
+    [catalogFile, catalogFile, catalogFile, false],
+    [catalogFile, catalogFile, "test/plugins/**/*.test.ts", false],
+    [catalogFile, catalogFile, "unrelated.test.ts", true],
+  ])(
+    "discovers Gateway owner selector %s for %s (exclude %s)",
+    (selector, expected, exclude, visible) => {
+      const previousArgv = process.argv;
+      try {
+        process.argv = [
+          "node",
+          "vitest",
+          "run",
+          "--config",
+          expected === catalogFile
+            ? "test/vitest/vitest.gateway-methods.config.ts"
+            : "test/vitest/vitest.gateway-database-workers.config.ts",
+          selector,
+          ...(exclude ? ["--exclude", exclude] : []),
+        ];
+        const config =
+          expected === catalogFile
+            ? createGatewayMethodsVitestConfig({})
+            : createGatewayDatabaseWorkersVitestConfig({});
+        const testConfig = expectDefined(config.test, "Gateway owner test config");
+        const dir = path.resolve(config.root ?? process.cwd(), testConfig.dir ?? ".");
+        const relative = path.relative(dir, path.resolve(expected)).replaceAll("\\", "/");
+        const excludes = [
+          ...(testConfig.exclude ?? []),
+          ...collectVitestExcludePatterns(process.argv.slice(2)),
+        ];
+        // Vitest's uncached watch matcher uses paths relative to the project directory.
+        expect(
+          testConfig.include?.some((pattern) => matchesVitestGlob(relative, pattern)) &&
+            !excludes.some((pattern) => matchesVitestGlob(relative, pattern)),
+        ).toBe(visible);
+        const files = globSync(testConfig.include ?? [], {
+          cwd: dir,
+          ignore: excludes,
+          expandDirectories: false,
+          dot: true,
+        }).map((file) => path.resolve(dir, file));
+        expect(files).toEqual(visible ? [path.resolve(expected)] : []);
+      } finally {
+        process.argv = previousArgv;
+      }
+    },
+  );
 
   it("keeps memory CLI runtime preparation with its infra test owner", () => {
     const file = "src/entry.memory-json.test.ts";

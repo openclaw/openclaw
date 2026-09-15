@@ -19,19 +19,21 @@ import {
 import {
   withTaskRegistryMutation,
   syncFlowFromTaskAfterTaskMutation,
-  addOwnerKeyIndex,
-  addParentFlowIdIndex,
-  addRelatedSessionKeyIndex,
   bumpTaskRegistryRevision,
-  deleteOwnerKeyIndex,
-  deleteParentFlowIdIndex,
-  deleteRelatedSessionKeyIndex,
   emitTaskRegistryObserverEvent,
   taskRegistryLog,
-  rebuildRunIdIndex,
   taskDeliveryStates,
   tasks,
 } from "./task-registry-state.js";
+import {
+  addOwnerKeyIndex,
+  deleteOwnerKeyIndex,
+  addParentFlowIdIndex,
+  deleteParentFlowIdIndex,
+  addRelatedSessionKeyIndex,
+  deleteRelatedSessionKeyIndex,
+  rebuildRunIdIndex,
+} from "./task-registry.process-state.js";
 import { tryPersistTaskDeliveryStateUpsert, tryPersistTaskUpsert } from "./task-registry.store.js";
 import {
   isTerminalTaskStatus,

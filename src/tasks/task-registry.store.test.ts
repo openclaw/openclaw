@@ -25,6 +25,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -41,6 +42,7 @@ import {
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskRegistryMaintenanceSnapshot } from "./task-registry-maintenance-snapshot.js";
+import { reloadTaskRegistryFromStoreAsync } from "./task-registry-state.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
   deleteTaskRecordById,
@@ -51,7 +53,6 @@ import {
   listTaskRecords,
   markTaskTerminalById,
   publishTaskRecordAfterAtomicStore,
-  reloadTaskRegistryFromStore,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import {
@@ -327,7 +328,7 @@ describe("task-registry store runtime", () => {
     );
   });
 
-  it("blocks writes until an explicit reload recovers the registry", () => {
+  it("blocks writes until an explicit reload recovers the registry", async () => {
     const storedTask = createStoredTask();
     let restoreShouldFail = true;
     const loadSnapshot = vi.fn(() => {
@@ -366,7 +367,7 @@ describe("task-registry store runtime", () => {
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
 
     restoreShouldFail = false;
-    reloadTaskRegistryFromStore();
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
     expect(getTaskById(storedTask.taskId)).toMatchObject({ taskId: storedTask.taskId });
     expect(loadSnapshot).toHaveBeenCalledTimes(2);
@@ -740,7 +741,7 @@ describe("task-registry store runtime", () => {
           let restoredPolicy: TaskNotifyPolicy | null = null;
           let restoreError: string | null = null;
           try {
-            reloadTaskRegistryFromStore();
+            await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
             restoredPolicy = getTaskById(created.taskId)?.notifyPolicy ?? null;
           } catch (error) {
             restoreError = error instanceof Error ? error.message : String(error);
@@ -797,7 +798,7 @@ describe("task-registry store runtime", () => {
           expect(
             updateTaskNotifyPolicyById({ taskId: created.taskId, notifyPolicy })?.notifyPolicy,
           ).toBe(notifyPolicy);
-          reloadTaskRegistryFromStore();
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           expect(getTaskById(created.taskId)?.notifyPolicy).toBe(notifyPolicy);
         },
       );

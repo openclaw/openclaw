@@ -7,9 +7,10 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { deleteTaskRecordById } from "../../tasks/runtime-internal.js";
-import { reloadTaskRegistryFromStore } from "../../tasks/task-registry.js";
+import { reloadTaskRegistryFromStoreAsync } from "../../tasks/task-registry-state.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
@@ -90,7 +91,7 @@ describe("task page access snapshots", () => {
         }),
       );
       seedTaskRegistryRowsForTests(tasks);
-      reloadTaskRegistryFromStore();
+      await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
       if (!warm) {
         closeOpenClawAgentDatabasesForTest();
       }
@@ -195,7 +196,7 @@ describe("task page access snapshots", () => {
       }),
     );
     seedTaskRegistryRowsForTests(tasks);
-    reloadTaskRegistryFromStore();
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
     const context = {
       getRuntimeConfig: () => config,
       broadcast: () => {},

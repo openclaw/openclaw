@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import {
   getTaskById,
@@ -8,7 +9,10 @@ import {
   resetTaskRegistryForTests,
 } from "./task-registry-query.js";
 import { markTaskTerminalById } from "./task-registry-record-api.js";
-import { reloadTaskRegistryFromStore, tasks as authoritativeTasks } from "./task-registry-state.js";
+import {
+  reloadTaskRegistryFromStoreAsync,
+  tasks as authoritativeTasks,
+} from "./task-registry-state.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
@@ -20,10 +24,7 @@ afterEach(() => {
 function configureTaskSnapshot(tasks: Iterable<TaskRecord>): void {
   const snapshotTasks = new Map([...tasks].map((task) => [task.taskId, task]));
   configureTaskRegistryRuntime({
-    store: {
-      ...createInMemoryTaskRegistryStore(),
-      loadSnapshot: () => ({ tasks: snapshotTasks, deliveryStates: new Map() }),
-    },
+    store: createInMemoryTaskRegistryStore({ tasks: snapshotTasks, deliveryStates: new Map() }),
   });
 }
 
@@ -64,6 +65,7 @@ describe("listTaskRecordPage", () => {
       return get(id);
     });
     let replaced = false;
+    let replacement: Promise<void> | undefined;
     const preparedAfterReplacement: string[] = [];
     const tick = () => {
       readsPerTurn.push(reads);
@@ -72,7 +74,7 @@ describe("listTaskRecordPage", () => {
         configureTaskSnapshot([
           { ...expectDefined(records[0], "replacement fixture"), taskId: "replacement" },
         ]);
-        reloadTaskRegistryFromStore();
+        replacement = reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         replaced = true;
       }
       pending = setImmediate(tick);
@@ -96,7 +98,11 @@ describe("listTaskRecordPage", () => {
       expect(Math.max(...readsPerTurn)).toBeLessThanOrEqual(32);
     } finally {
       clearImmediate(pending);
-      spy.mockRestore();
+      try {
+        await replacement;
+      } finally {
+        spy.mockRestore();
+      }
     }
   });
 

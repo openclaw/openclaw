@@ -123,18 +123,24 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "src/plugins",
   },
-  ...[
-    "test/plugins/codex-model-catalog.gateway.test.ts",
-    "src/gateway/server-methods/models-list.freshness.integration.test.ts",
-  ].map((file) => ({
-    file,
+  {
+    file: "test/plugins/codex-model-catalog.gateway.test.ts",
     configs: [
       "test/vitest/vitest.gateway-methods.config.ts",
       "test/vitest/vitest.gateway.config.ts",
     ],
-    mode: "runtime" as const,
+    mode: "runtime",
     dir: "",
-  })),
+  },
+  {
+    file: "src/gateway/server-methods/models-list.freshness.integration.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "src/gateway",
+  },
   ...["src/config/config-startup-corpus.test.ts", "src/config/state-startup-corpus.test.ts"].map(
     (file) => ({
       file,
@@ -279,11 +285,11 @@ function includesRuntimeConfig(configs: readonly string[] | undefined, config: s
 }
 
 export function resolveVitestRuntimeConfigScopes(config: string) {
-  return runtimeConsumers.flatMap(({ configs, dir }) => {
+  return runtimeConsumers.flatMap(({ file, configs, dir }) => {
     // Preserve the matched project scope; broad roots must not apply another
     // consumer's directory to scoped exclusions.
     const selected = configs.filter((candidate) => includesRuntimeConfig([config], candidate));
-    return selected.length ? [{ configs: selected, dir }] : [];
+    return selected.length ? [{ file, configs: selected, dir }] : [];
   });
 }
 

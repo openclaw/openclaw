@@ -6,6 +6,7 @@ import {
   getAgentRunContextOwnership,
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   deleteTaskRecordById,
   getTaskById,
@@ -15,7 +16,7 @@ import { createSubagentTaskBackingDetail } from "../tasks/task-backing-authority
 import { createAcpTaskBackingDetailForTest } from "../tasks/task-backing-authority.test-support.js";
 import { finalizeTaskRunById } from "../tasks/task-executor.js";
 import { updateTask } from "../tasks/task-registry-mutation.js";
-import { reloadTaskRegistryFromStore } from "../tasks/task-registry-state.js";
+import { reloadTaskRegistryFromStoreAsync } from "../tasks/task-registry-state.js";
 import {
   configureTaskRegistryRuntime,
   getTaskRegistryObservers,
@@ -93,6 +94,7 @@ export function registerTaskSubscriptionOwnershipTests(setup: Setup): void {
     "gateway",
   ] as const)("keeps task publication current when broadcast changes %s", async (change) => {
     let replace = () => {};
+    let reload: Promise<void> | undefined;
     const broadcast = onTerminalBroadcast(() => {
       const once = replace;
       replace = () => {};
@@ -125,7 +127,7 @@ export function registerTaskSubscriptionOwnershipTests(setup: Setup): void {
           updateTask(task.taskId, { terminalSummary: "More completion detail" });
           break;
         case "reload":
-          reloadTaskRegistryFromStore();
+          reload = reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           break;
         case "revived":
           updateTask(task.taskId, { status: "running" });
@@ -140,6 +142,7 @@ export function registerTaskSubscriptionOwnershipTests(setup: Setup): void {
     };
     try {
       finalizeTaskRunById({ taskId: task.taskId, status: "succeeded", endedAt: 2_000 });
+      await reload;
       if (change === "retired" || change === "metadata" || change === "reload") {
         expect(closeTaskSessions).toHaveBeenCalledExactlyOnceWith(task.taskId);
       } else {
@@ -290,6 +293,7 @@ export function registerTaskSubscriptionOwnershipTests(setup: Setup): void {
       const pty = makeFakePty();
       const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => pty });
       let replace = () => {};
+      let restoration: Promise<void> | undefined;
       const broadcast = onTerminalBroadcast(() => {
         const once = replace;
         replace = () => {};
@@ -303,7 +307,7 @@ export function registerTaskSubscriptionOwnershipTests(setup: Setup): void {
       let opened: ReturnType<TerminalSessionManager["open"]> | undefined;
       replace = () => {
         if (reload) {
-          reloadTaskRegistryFromStore();
+          restoration = reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
         }
         const recreated = getTaskById(task.taskId)!;
         expect(deleteTaskRecordById(task.taskId)).toBe(true);
@@ -315,6 +319,7 @@ export function registerTaskSubscriptionOwnershipTests(setup: Setup): void {
       };
       try {
         finalizeTaskRunById({ taskId: task.taskId, status: "succeeded", endedAt: 2_000 });
+        await restoration;
         expect(opened).toBeDefined();
         await expect(opened).resolves.toMatchObject({ ok: true });
         expect(pty.killed).toBe(false);
