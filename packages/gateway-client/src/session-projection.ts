@@ -9,6 +9,7 @@ import {
   isSessionProjectionToolContinuation,
   readFinalContentIdentity,
   readSessionProjectionFinalMessageIdentity,
+  sameTranscriptIdentity,
 } from "./session-projection-final-identity.js";
 import {
   hasDisplayableSessionMessage,
@@ -220,31 +221,6 @@ function readEventScope(event: ScopedSessionProjectionEvent): SessionProjectionS
     }
   }
   return scope;
-}
-
-function sameTranscriptIdentity(
-  left: SessionMessageIdentity | null,
-  right: SessionMessageIdentity | null,
-): boolean {
-  if (!left || !right || left.role !== right.role) {
-    return false;
-  }
-  if (left.isImported || right.isImported) {
-    if (!left.isImported || !right.isImported) {
-      return false;
-    }
-    if (left.externalSource || right.externalSource) {
-      return Boolean(left.externalSource && left.externalSource === right.externalSource);
-    }
-    // Partial provider IDs are unsafe, but a same-scope persisted sequence is authoritative.
-    return left.sequence !== null && right.sequence !== null && left.sequence === right.sequence;
-  }
-  if (left.id || right.id) {
-    // A missing durable ID cannot adopt another canonical row by sequence alone.
-    return Boolean(left.id && right.id && left.id === right.id);
-  }
-  // A run can publish several durable messages; its ID identifies ownership, not a row.
-  return left.sequence !== null && right.sequence !== null && left.sequence === right.sequence;
 }
 
 function entryMatches(
