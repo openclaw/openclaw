@@ -35,7 +35,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
-import { trackAsyncWork } from "../../../shared/async-work-scope.js";
+import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { resetTaskFlowRegistryForTests } from "../../../tasks/task-flow-registry.test-support.js";
 import * as taskControlRuntime from "../../../tasks/task-registry-control.runtime.js";
@@ -200,8 +200,9 @@ async function createBoundParent() {
     sessionKey: parentSessionKey,
     defaultSessionId: "parent-session",
   });
+  const execution = new AsyncWorkScope();
   const context = createChatAbortContext({
-    trackExecution: trackAsyncWork,
+    trackExecution: <T>(run: () => T | Promise<T>) => execution.track(run),
     getRuntimeConfig: () => cfg,
     getSessionEventSubscriberConnIds: () => new Set(),
     broadcastToConnIds: vi.fn(),
@@ -230,7 +231,7 @@ async function createBoundParent() {
   bindGatewayContextResolver(admitted, () => gatewayBinding.current);
   const authority = getAdmittedRunDelegatedAuthority(admitted)!;
   parent.bindAgentRunDelegatedAuthority(authority);
-  return { cfg, storePath, context, admission, parent, admitted, gatewayBinding };
+  return { cfg, storePath, context, admission, parent, admitted, gatewayBinding, execution };
 }
 
 function createBoundWorker(bound: Awaited<ReturnType<typeof createBoundParent>>) {
@@ -391,6 +392,112 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
   return { context, runtime, identities, readAgentRuntimeExecutionLineage };
 }
 
+function readBoundExecutionState(
+  bound: Awaited<ReturnType<typeof createBoundParent>>,
+  childRunId?: string,
+) {
+  const context = bound.context as unknown as GatewayRequestContext;
+  const receipt = childRunId ? context.dedupe.get(`agent:${childRunId}`) : undefined;
+  const payload = asOptionalRecord(receipt?.payload);
+  const cause = asOptionalRecord(asOptionalRecord(receipt?.error)?.cause);
+  const controller = childRunId ? context.chatAbortControllers.get(childRunId) : undefined;
+  const execution = childRunId ? subagentRuns.get(childRunId)?.execution : undefined;
+  const label = (value: unknown, allowed: readonly string[]) =>
+    typeof value === "string" && allowed.includes(value) ? value : "unknown";
+  // Read bounded lifecycle facts before finally settles the synthetic model run.
+  return {
+    executionPending: bound.execution.hasPendingWork,
+    receiptPresent: receipt !== undefined,
+    receiptOk: receipt?.ok,
+    receiptStatus: label(payload?.status, ["accepted", "in_flight", "ok", "error", "timeout"]),
+    receiptErrorCode: label(receipt?.error?.code, ["UNAVAILABLE", "INVALID_REQUEST", "FORBIDDEN"]),
+    causeName: label(cause?.name, [
+      "Error",
+      "TypeError",
+      "AbortError",
+      "TimeoutError",
+      "SqliteWorkerError",
+      "FailoverError",
+    ]),
+    controllerPresent: controller !== undefined,
+    controllerAborted: controller?.controller.signal.aborted,
+    executionStarted: controller?.executionStarted,
+    executionStatus: label(execution?.status, ["queued", "running", "interrupted", "terminal"]),
+    outcomeStatus: label(execution?.outcome?.status, ["ok", "error", "timeout"]),
+    gatewayWarningCount: vi.mocked(context.logGateway.warn).mock.calls.length,
+    runtimeWarningCount: getPreparedModelRuntimeMocks().warn.mock.calls.length,
+  };
+}
+
+async function waitForEmbeddedRun(
+  bound: Awaited<ReturnType<typeof createBoundParent>>,
+  childRunId: string,
+) {
+  try {
+    await vi.waitFor(() => expect(runEmbeddedAgent).toHaveBeenCalledOnce(), { timeout: 15_000 });
+  } catch (cause) {
+    // Only report owner facts; terminal messages can contain workspace paths or private input.
+    throw new Error(
+      `Embedded execution did not arrive: ${JSON.stringify(readBoundExecutionState(bound, childRunId))}`,
+      { cause },
+    );
+  }
+}
+
+async function closeBoundGateway(
+  bound: Awaited<ReturnType<typeof createBoundParent>>,
+  runtime: Awaited<ReturnType<typeof createBoundGateway>>["runtime"],
+  childRunId?: string,
+  releaseQueuedAuthority?: () => void,
+) {
+  const failures: unknown[] = [];
+  try {
+    bound.execution.beginClose();
+    await vi.waitFor(
+      () => {
+        expect(bound.execution.hasPendingWork).toBe(false);
+        if (childRunId) {
+          expect(bound.context.chatAbortControllers.has(childRunId)).toBe(false);
+        }
+        // Fence new work in the same turn that observes idle; never start an unbounded drain.
+        return bound.execution.drain();
+      },
+      { timeout: 15_000 },
+    );
+  } catch (cause) {
+    failures.push(
+      new Error(
+        `Gateway fixture cleanup failed: ${JSON.stringify(readBoundExecutionState(bound, childRunId))}`,
+        { cause },
+      ),
+    );
+  }
+  for (const close of [
+    () => runtime.close(),
+    ...(releaseQueuedAuthority ? [releaseQueuedAuthority] : []),
+    () => bound.admission.close(),
+    () => bound.parent.cleanup(),
+  ]) {
+    try {
+      close();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  return failures;
+}
+
+function throwBoundFailures(failures: unknown[]) {
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Spawn proof and fixture cleanup failed", {
+      cause: failures[0],
+    });
+  }
+}
+
 describe("recursive spawn production boundary", () => {
   it("authorizes and admits an upgraded descendant before model execution", async () => {
     const customProvider = expectDefined(
@@ -438,6 +545,7 @@ describe("recursive spawn production boundary", () => {
     const modelRun = createDeferred<EmbeddedAgentRunResult>();
     runEmbeddedAgent.mockReturnValueOnce(modelRun.promise);
     let childRunId: string | undefined;
+    const failures: unknown[] = [];
     try {
       const result = await createBoundSpawnInvocation(bound)();
       expect(result.details, JSON.stringify(result)).toMatchObject({
@@ -447,57 +555,7 @@ describe("recursive spawn production boundary", () => {
       });
       const details = result.details as { childSessionKey: string; runId: string };
       childRunId = details.runId;
-      try {
-        await vi.waitFor(() => expect(runEmbeddedAgent).toHaveBeenCalledOnce(), {
-          timeout: 15_000,
-        });
-      } catch (error) {
-        const receipt = context.dedupe.get(`agent:${details.runId}`);
-        const payload = asOptionalRecord(receipt?.payload);
-        const cause = asOptionalRecord(asOptionalRecord(receipt?.error)?.cause);
-        const controller = context.chatAbortControllers.get(details.runId);
-        const execution = subagentRuns.get(details.runId)?.execution;
-        const label = (value: unknown, allowed: readonly string[]) =>
-          typeof value === "string" && allowed.includes(value) ? value : "unknown";
-        // Read recorded lifecycle facts before finally settles the synthetic model run.
-        console.error("Spawn admission did not reach the embedded runner", {
-          receiptPresent: receipt !== undefined,
-          receiptOk: receipt?.ok,
-          receiptStatus: label(payload?.status, [
-            "accepted",
-            "in_flight",
-            "ok",
-            "error",
-            "timeout",
-          ]),
-          receiptErrorCode: label(receipt?.error?.code, [
-            "UNAVAILABLE",
-            "INVALID_REQUEST",
-            "FORBIDDEN",
-          ]),
-          causeName: label(cause?.name, [
-            "Error",
-            "TypeError",
-            "AbortError",
-            "TimeoutError",
-            "SqliteWorkerError",
-            "FailoverError",
-          ]),
-          controllerPresent: controller !== undefined,
-          controllerAborted: controller?.controller.signal.aborted,
-          executionStarted: controller?.executionStarted,
-          executionStatus: label(execution?.status, [
-            "queued",
-            "running",
-            "interrupted",
-            "terminal",
-          ]),
-          outcomeStatus: label(execution?.outcome?.status, ["ok", "error", "timeout"]),
-          gatewayWarningCount: vi.mocked(context.logGateway.warn).mock.calls.length,
-          runtimeWarningCount: getPreparedModelRuntimeMocks().warn.mock.calls.length,
-        });
-        throw error;
-      }
+      await waitForEmbeddedRun(bound, details.runId);
       const embeddedRun = runEmbeddedAgent.mock.calls[0]?.[0];
       expect(embeddedRun).toMatchObject({
         runId: details.runId,
@@ -541,19 +599,15 @@ describe("recursive spawn production boundary", () => {
         childSessionKey: details.childSessionKey,
         requesterSessionKey: parentSessionKey,
       });
+    } catch (error) {
+      failures.push(error);
     } finally {
       modelRun.resolve({
         payloads: [{ text: "descendant complete" }],
         meta: { durationMs: 1 },
       });
-      if (childRunId) {
-        await vi.waitFor(() => expect(context.chatAbortControllers.has(childRunId!)).toBe(false), {
-          timeout: 15_000,
-        });
-      }
-      runtime.close();
-      bound.admission.close();
-      bound.parent.cleanup();
+      failures.push(...(await closeBoundGateway(bound, runtime, childRunId)));
+      throwBoundFailures(failures);
     }
   });
 
@@ -580,6 +634,7 @@ describe("recursive spawn production boundary", () => {
       const modelRun = createDeferred<EmbeddedAgentRunResult>();
       runEmbeddedAgent.mockReturnValueOnce(modelRun.promise);
       let childRunId: string | undefined;
+      const failures: unknown[] = [];
       const abortParent = () =>
         withPluginRuntimeGatewayRequestScope(
           {
@@ -647,9 +702,7 @@ describe("recursive spawn production boundary", () => {
             collectorCompletion: { status: "killed" },
           });
         } else {
-          await vi.waitFor(() => expect(runEmbeddedAgent).toHaveBeenCalledOnce(), {
-            timeout: 15_000,
-          });
+          await waitForEmbeddedRun(bound, childRunId);
           expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
             runId: childRunId,
             sessionKey: details.childSessionKey,
@@ -677,22 +730,28 @@ describe("recursive spawn production boundary", () => {
             ).toBe(true);
           }
         }
+      } catch (error) {
+        failures.push(error);
       } finally {
-        if (childRunId && subagentRuns.get(childRunId)?.execution.status === "queued") {
-          await abortParent();
+        try {
+          if (childRunId && subagentRuns.get(childRunId)?.execution.status === "queued") {
+            await abortParent();
+          }
+        } catch (error) {
+          failures.push(error);
         }
-        releaseSwarmRun("production-boundary-capacity");
+        try {
+          releaseSwarmRun("production-boundary-capacity");
+        } catch (error) {
+          failures.push(error);
+        }
         modelRun.resolve({ payloads: [{ text: "collector complete" }], meta: { durationMs: 1 } });
-        if (childRunId) {
-          await vi.waitFor(
-            () => expect(context.chatAbortControllers.has(childRunId!)).toBe(false),
-            { timeout: 15_000 },
-          );
-        }
-        runtime.close();
-        releaseAgentRunDelegatedAuthority(releaserAuthority);
-        bound.admission.close();
-        bound.parent.cleanup();
+        failures.push(
+          ...(await closeBoundGateway(bound, runtime, childRunId, () =>
+            releaseAgentRunDelegatedAuthority(releaserAuthority),
+          )),
+        );
+        throwBoundFailures(failures);
       }
     },
   );
@@ -726,6 +785,7 @@ describe("recursive spawn production boundary", () => {
     let replacementClaim: ReturnType<NonNullable<typeof worker>["store"]["claimTurn"]> | undefined;
     const results: boolean[] = [];
     const errors: unknown[] = [];
+    const failures: unknown[] = [];
     const interrupted = createDeferred();
     let work: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
     const caller = createAdmittedGatewayToolCallerIdentity({
@@ -865,17 +925,34 @@ describe("recursive spawn production boundary", () => {
         expect(worker.store.validateTurnClaim(replacementClaim)).toBe(true);
       }
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    } catch (error) {
+      failures.push(error);
     } finally {
-      work?.release();
-      bound.gatewayBinding.current = context;
-      await closeSwarmScheduler();
-      releaseSwarmRun("cleanup-capacity");
-      if (worker && worker.store.validateTurnClaim(replacementClaim ?? worker.claim)) {
-        worker.store.releaseTurn(replacementClaim ?? worker.claim);
+      try {
+        work?.release();
+      } catch (error) {
+        failures.push(error);
       }
-      runtime.close();
-      bound.admission.close();
-      bound.parent.cleanup();
+      bound.gatewayBinding.current = context;
+      try {
+        await closeSwarmScheduler();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        releaseSwarmRun("cleanup-capacity");
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        if (worker && worker.store.validateTurnClaim(replacementClaim ?? worker.claim)) {
+          worker.store.releaseTurn(replacementClaim ?? worker.claim);
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+      failures.push(...(await closeBoundGateway(bound, runtime)));
+      throwBoundFailures(failures);
     }
   });
 });

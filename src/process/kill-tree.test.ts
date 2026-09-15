@@ -840,27 +840,30 @@ describe("killProcessTree", () => {
   });
 
   it("on Unix force-escalates one attached snapshot without rebuilding it", async () => {
+    // The collector intentionally excludes the test runner's own PID.
+    const rootPid = process.pid + 1;
+    const childPid = process.pid + 2;
     const statLine = (pid: number, comm: string, starttime: string, ppid = 1) =>
       `${pid} (${comm}) S ${ppid} ${pid} ${pid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 ${starttime} 0`;
     killSpy.mockImplementation(() => true);
     readFileSyncMock.mockImplementation((filePath: string) => {
-      if (filePath === "/proc/5597/task/5597/children") {
-        return "5598";
+      if (filePath === `/proc/${rootPid}/task/${rootPid}/children`) {
+        return String(childPid);
       }
-      if (filePath === "/proc/5598/task/5598/children") {
+      if (filePath === `/proc/${childPid}/task/${childPid}/children`) {
         return "";
       }
-      if (filePath === "/proc/5597/stat") {
-        return statLine(5597, "root", "100");
+      if (filePath === `/proc/${rootPid}/stat`) {
+        return statLine(rootPid, "root", "100");
       }
-      if (filePath === "/proc/5598/stat") {
-        return statLine(5598, "child", "101", 5597);
+      if (filePath === `/proc/${childPid}/stat`) {
+        return statLine(childPid, "child", "101", rootPid);
       }
       throw new Error("unexpected proc path");
     });
 
     await withMockedPlatform("linux", async () => {
-      const termination = killProcessTree(5597, { graceMs: 10, detached: false });
+      const termination = killProcessTree(rootPid, { graceMs: 10, detached: false });
       termination?.force();
       await vi.advanceTimersByTimeAsync(10);
 
@@ -869,10 +872,10 @@ describe("killProcessTree", () => {
           ([, signal]) => signal !== 0,
         ),
       ).toEqual([
-        [5598, "SIGTERM"],
-        [5597, "SIGTERM"],
-        [5598, "SIGKILL"],
-        [5597, "SIGKILL"],
+        [childPid, "SIGTERM"],
+        [rootPid, "SIGTERM"],
+        [childPid, "SIGKILL"],
+        [rootPid, "SIGKILL"],
       ]);
     });
   });

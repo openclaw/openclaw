@@ -5,6 +5,8 @@
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
+import { escapeSkillXml } from "../../skills/loading/skill-contract.js";
+import { compactPromptSkills } from "../../skills/loading/skill-paths.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
 import type {
   SkillEligibilityContext,
@@ -12,6 +14,7 @@ import type {
   SkillUsagePath,
   SkillEntry,
 } from "../../skills/types.js";
+import { readPublishedSandboxSkills } from "../sandbox/published-skills-handoff.js";
 import type { SandboxContext } from "../sandbox/types.js";
 
 const MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS = [".openclaw", "sandbox-skills"] as const;
@@ -147,6 +150,7 @@ function mapSandboxSkillUsagePaths(params: {
 
 export function resolveSandboxSkillRuntimeInputs(params: {
   sandbox?: SandboxSkillRuntimeContext | null;
+  publishedSkillsOwner?: object;
   // Fallback skill discovery anchors to the configured agent workspace so
   // snapshot and fallback paths agree.
   skillsAnchorWorkspace: string;
@@ -175,12 +179,13 @@ export function resolveSandboxSkillRuntimeInputs(params: {
       skillsWorkspaceDir,
       skillsPromptWorkspaceDir,
     });
+    const published = readPublishedSandboxSkills(params.publishedSkillsOwner ?? params.sandbox);
     // An explicit empty snapshot excludes instructions; it has no host paths to remap.
     let selectedSnapshot =
       params.skillsSnapshot && !params.skillsSnapshot.prompt.trim()
         ? params.skillsSnapshot
         : undefined;
-    if (params.skillsSnapshot?.librarySelections?.length) {
+    if (!published && params.skillsSnapshot?.librarySelections?.length) {
       const usageBySkillName = new Map<string, SkillUsagePath>();
       for (const usage of skillUsagePaths ?? []) {
         // Duplicate names keep their first delivered path.
@@ -214,7 +219,9 @@ export function resolveSandboxSkillRuntimeInputs(params: {
         : {}),
       ...(skillUsagePaths ? { skillUsagePaths } : {}),
       skillsPromptWorkspaceDir,
-      skillsSnapshot: selectedSnapshot,
+      skillsSnapshot: published
+        ? remapPublishedSnapshot(published, skillsWorkspaceDir, skillsPromptWorkspaceDir)
+        : selectedSnapshot,
       skillsWorkspaceDir,
       workspaceOnly: true,
     };
@@ -237,4 +244,62 @@ export function remapSkillReferencePaths(
     (result, item) => result.replaceAll(item.skillFile, item.readPath),
     text,
   );
+}
+
+function remapPublishedSnapshot(
+  snapshot: SkillSnapshot,
+  source: string,
+  target: string,
+): SkillSnapshot {
+  if (source === target) {
+    return snapshot;
+  }
+  const hostSkills = snapshot.resolvedSkills ?? [];
+  const serialized = compactPromptSkills(hostSkills);
+  const resolvedSkills = hostSkills.map((skill) => ({
+    ...skill,
+    filePath:
+      mapPathFromWorkspaceToContainer({
+        filePath: skill.filePath,
+        sourceWorkspaceDir: source,
+        targetWorkspaceDir: target,
+      }) ?? skill.filePath,
+    baseDir:
+      mapPathFromWorkspaceToContainer({
+        filePath: skill.baseDir,
+        sourceWorkspaceDir: source,
+        targetWorkspaceDir: target,
+      }) ?? skill.baseDir,
+    sourceInfo: {
+      ...skill.sourceInfo,
+      path:
+        mapPathFromWorkspaceToContainer({
+          filePath: skill.sourceInfo.path,
+          sourceWorkspaceDir: source,
+          targetWorkspaceDir: target,
+        }) ?? skill.sourceInfo.path,
+      ...(skill.sourceInfo.baseDir === undefined
+        ? {}
+        : {
+            baseDir: mapPathFromWorkspaceToContainer({
+              filePath: skill.sourceInfo.baseDir,
+              sourceWorkspaceDir: source,
+              targetWorkspaceDir: target,
+            }),
+          }),
+    },
+  }));
+  let prompt = snapshot.prompt;
+  const mappedLocations = new Map(resolvedSkills.map((skill) => [skill.name, skill.filePath]));
+  // Configured roots can preserve absolute paths instead of the usual home shorthand.
+  for (const skill of [...hostSkills, ...serialized]) {
+    const location = mappedLocations.get(skill.name);
+    if (location !== undefined) {
+      prompt = prompt.replaceAll(
+        `<location>${escapeSkillXml(skill.filePath)}</location>`,
+        `<location>${escapeSkillXml(location)}</location>`,
+      );
+    }
+  }
+  return { ...snapshot, prompt, resolvedSkills };
 }

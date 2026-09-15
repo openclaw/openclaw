@@ -52,6 +52,7 @@ import {
 } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
@@ -136,6 +137,11 @@ import {
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildMediaTaskRuntimeContext } from "../runtime-facts-prompt.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
+import {
+  bindPublishedSandboxSkillsWork,
+  withPublishedSandboxSkills,
+  retainPublishedSandboxSkillsUntil,
+} from "../sandbox/published-skills-handoff.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
@@ -292,6 +298,7 @@ function prependCliSessionDriftUserContext(
 }
 
 async function resolveCliSkillsPrompt(params: {
+  skillsOwner: object;
   assertCurrent: () => void;
   agentId: string;
   config: RunCliAgentParams["config"];
@@ -315,6 +322,7 @@ async function resolveCliSkillsPrompt(params: {
     ).snapshot;
   params.assertCurrent();
   const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
+    skillsOwner: params.skillsOwner,
     skillsSnapshot,
     config: params.config,
     agentId: params.agentId,
@@ -372,6 +380,7 @@ async function resolveCliSkillsPrompt(params: {
         ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
         : {}),
     },
+    publishedSkillsOwner: sandboxWorkspace,
     skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
     skillsSnapshot,
   });
@@ -500,17 +509,37 @@ export async function prepareCliRunContext(
       await import("../../config/sessions/session-cold-storage.js");
     await restoreSessionColdTranscript(inputParams.sessionTarget);
   }
-  // Fallbacks may already have admitted this user turn; recover only prior history.
-  return runWithSessionTranscriptReadFence(
-    inputParams.sessionManager
-      ? undefined
-      : inputParams.userTurnTranscriptRecorder?.getAdmissionReceipt(),
-    () => prepareCliRunContextWithinReadFence(inputParams),
-  );
+  const result = createDeferredCore<PreparedCliRunContext>();
+  void withPublishedSandboxSkills(async (skillsOwner) => {
+    // Keep preparation's work owner open until the returned backend is cleaned up.
+    const finished = createDeferredCore();
+    const prepared = await runWithSessionTranscriptReadFence(
+      inputParams.sessionManager
+        ? undefined
+        : inputParams.userTurnTranscriptRecorder?.getAdmissionReceipt(),
+      () => prepareCliRunContextWithinReadFence(inputParams, skillsOwner),
+    );
+    const cleanup = prepared.preparedBackend.cleanup;
+    const trackCleanup = captureAsyncWorkTracker();
+    let cleaning: Promise<void> | undefined;
+    prepared.preparedBackend.cleanup = () =>
+      (cleaning ??= trackCleanup(async () => {
+        try {
+          await cleanup?.();
+        } finally {
+          finished.resolve();
+        }
+      }));
+    bindPublishedSandboxSkillsWork(prepared);
+    result.resolve(prepared);
+    await finished.promise;
+  }).catch(result.reject);
+  return await result.promise;
 }
 
 async function prepareCliRunContextWithinReadFence(
   inputParams: RunCliAgentParams,
+  skillsOwner: object,
 ): Promise<PreparedCliRunContext> {
   let params = inputParams.config ? inputParams : { ...inputParams, config: getRuntimeConfig() };
   if (params.sessionManager) {
@@ -763,6 +792,7 @@ async function prepareCliRunContextWithinReadFence(
     params.abortSignal?.throwIfAborted();
     assertRootedCurrent();
     rootedExecution = await prepareRootedExecutionCapability({
+      skillsOwner,
       rootedExecution: rootedRequest,
       config: params.config,
       agentId: workspaceResolution.agentId,
@@ -2001,6 +2031,7 @@ async function prepareCliRunContextWithinReadFence(
       : skipsTurnPreparation || nodeClaudePlacement || claudeSkillsPlugin.args.length > 0
         ? { prompt: "" }
         : await resolveCliSkillsPrompt({
+            skillsOwner,
             assertCurrent: assertSkillsCurrent,
             skillsSnapshot: params.skillsSnapshot,
             workspaceDir,
@@ -2341,12 +2372,19 @@ async function prepareCliRunContextWithinReadFence(
         try {
           if (disposalHolds.size > 0) {
             // Queued maintenance may need this foreground turn to release its lane first.
-            void trackDisposal(async () => {
-              await Promise.allSettled(disposalHolds);
-              await runCliCleanup(params, "cli-context-engine-release", async () => {
-                await ownedEngine.dispose?.();
-              });
-            }).catch((error: unknown) => {
+            void retainPublishedSandboxSkillsUntil(
+              skillsOwner,
+              trackDisposal(async () => {
+                await Promise.allSettled(disposalHolds);
+                await runCliCleanup(
+                  { ...params, skillsOwner },
+                  "cli-context-engine-release",
+                  async () => {
+                    await ownedEngine.dispose?.();
+                  },
+                );
+              }),
+            ).catch((error: unknown) => {
               cliBackendLog.warn(`CLI context engine cleanup failed: ${String(error)}`);
             });
           } else {
@@ -2462,7 +2500,7 @@ async function prepareCliRunContextWithinReadFence(
     };
   } catch (err) {
     try {
-      await runCliCleanup(params, "cli-prepare-failure", async () => {
+      await runCliCleanup({ ...params, skillsOwner }, "cli-prepare-failure", async () => {
         await cleanupPreparedResources?.();
       });
     } catch (cleanupErr) {

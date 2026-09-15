@@ -19,7 +19,7 @@ export async function prepareRootedExecutionCapability(
   params: Omit<
     WorkspaceSandboxParams,
     "workspaceDir" | "cwd" | "sessionRoot" | "requireWritableSandbox" | "requireWorkspaceOnly"
-  > & { rootedExecution: RootedExecutionRequest },
+  > & { rootedExecution: RootedExecutionRequest; skillsOwner?: object },
 ): Promise<PreparedRootedExecutionCapability> {
   const { resolveAttemptWorkspaceSandbox } = await import("./workspace-sandbox.js");
   const workspace = await resolveAttemptWorkspaceSandbox({

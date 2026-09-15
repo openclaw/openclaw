@@ -25,6 +25,7 @@ import { serializeByKey } from "./serialize.js";
 import { shouldSyncSkillPath } from "./skill-paths.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import { prepareWorkspaceSkills } from "./workspace-skill-loader.js";
+import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
@@ -127,7 +128,7 @@ async function ensureSyncedSkillsDirectory(targetSkillsDir: string): Promise<voi
   }
 }
 
-export async function syncWorkspaceSkills(params: {
+type SyncWorkspaceSkillsParams = {
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
   config?: OpenClawConfig;
@@ -138,7 +139,18 @@ export async function syncWorkspaceSkills(params: {
   bundledSkillsDir?: string;
   pluginSkillsDir?: string;
   skillsSnapshot?: SkillSnapshot;
-}): Promise<SkillUsagePath[]> {
+};
+
+export async function syncWorkspaceSkills(
+  params: SyncWorkspaceSkillsParams,
+): Promise<SkillUsagePath[]> {
+  return materializeWorkspaceSkills(params);
+}
+
+async function materializeWorkspaceSkills(
+  params: SyncWorkspaceSkillsParams,
+  onPublished?: (entries: SkillEntry[], version: number) => Promise<void>,
+): Promise<SkillUsagePath[]> {
   const sourceDir = resolveUserPath(params.sourceWorkspaceDir);
   const targetDir = resolveUserPath(params.targetWorkspaceDir);
   if (sourceDir === targetDir) {
@@ -219,7 +231,7 @@ export async function syncWorkspaceSkills(params: {
       );
     }
 
-    const usedDirNames = new Set<string>();
+    const usedDirNames = new Set<string>([".openclaw-catalogs"]);
     const plans: Array<{ destinationPath?: string; entry: SkillEntry; identity: string }> = [];
     for (const entry of entries) {
       const identity = resolveSyncedSkillIdentity(
@@ -270,16 +282,18 @@ export async function syncWorkspaceSkills(params: {
       }),
     );
     for (const child of await fsp.readdir(targetSkillsDir)) {
-      if (!preservedDestinations.has(child)) {
+      if (child !== ".openclaw-catalogs" && !preservedDestinations.has(child)) {
         await fsp.rm(path.join(targetSkillsDir, child), { recursive: true, force: true });
       }
     }
 
     const skillUsagePaths: SkillUsagePath[] = [];
+    const publishedEntries: SkillEntry[] = [];
     let copyFailed = false;
     for (const plan of plans) {
       const { destinationPath, entry } = plan;
       if (!destinationPath) {
+        publishedEntries.push(entry);
         continue;
       }
       if (!preservedDestinations.has(path.basename(destinationPath))) {
@@ -307,7 +321,7 @@ export async function syncWorkspaceSkills(params: {
             });
           }
         } catch (error) {
-          if (entry.skill.source === "openclaw-library") {
+          if (onPublished || entry.skill.source === "openclaw-library") {
             throw error;
           }
           copyFailed = true;
@@ -316,6 +330,23 @@ export async function syncWorkspaceSkills(params: {
           continue;
         }
       }
+      const filePath = path.join(
+        destinationPath,
+        path.relative(entry.skill.baseDir, entry.skill.filePath),
+      );
+      publishedEntries.push({
+        ...entry,
+        skill: {
+          ...entry.skill,
+          baseDir: destinationPath,
+          filePath,
+          sourceInfo: {
+            ...entry.skill.sourceInfo,
+            path: filePath,
+            ...(entry.skill.sourceInfo.baseDir === undefined ? {} : { baseDir: destinationPath }),
+          },
+        },
+      });
       skillUsagePaths.push({
         readPath: path.join(
           destinationPath,
@@ -326,6 +357,13 @@ export async function syncWorkspaceSkills(params: {
         skillSource: resolveSkillTelemetrySource(entry.skill),
       });
     }
+    if (
+      onPublished &&
+      getSkillsSnapshotVersion(skillRoots?.agentWorkspaceDir ?? sourceDir) !== skillsVersion
+    ) {
+      throw new Error("Skills changed while materializing the sandbox catalog.");
+    }
+    await onPublished?.(publishedEntries, skillsVersion);
     if (!copyFailed) {
       const nextManifest: SyncedSkillsManifest = {
         entryKeys: plans.map((plan) => plan.identity).toSorted(),
@@ -348,4 +386,91 @@ export async function syncWorkspaceSkills(params: {
     }
     return skillUsagePaths;
   });
+}
+
+export type PublishedWorkspaceSkills = {
+  skillUsagePaths: SkillUsagePath[];
+  skillsSnapshot: SkillSnapshot;
+  release: () => Promise<void>;
+};
+
+/** Normalize only the private exported copy, never sources or symlink targets. */
+async function makePublishedSkillsReadable(directory: string): Promise<void> {
+  for (const entry of await fsp.readdir(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await makePublishedSkillsReadable(target);
+      await fsp.chmod(target, 0o755);
+    } else if (entry.isFile()) {
+      const mode = (await fsp.lstat(target)).mode;
+      await fsp.chmod(target, mode & 0o111 ? 0o555 : 0o444);
+    }
+  }
+}
+
+/** Materialize a complete, immutable catalog owned by one execution, not a generation count. */
+export async function acquireWorkspaceSkills(
+  params: SyncWorkspaceSkillsParams,
+): Promise<PublishedWorkspaceSkills> {
+  // Stay under the existing read-only skills bind mount; never replace its mounted inode.
+  const skillsRoot = path.join(resolveUserPath(params.targetWorkspaceDir), "skills");
+  await ensureSyncedSkillsDirectory(skillsRoot);
+  const root = path.join(skillsRoot, ".openclaw-catalogs");
+  await ensureSyncedSkillsDirectory(root);
+  const publicationDir = await fsp.mkdtemp(path.join(root, "run-"));
+  let releasePending: Promise<void> | undefined;
+  const release = () => {
+    releasePending ??= fsp
+      .rm(publicationDir, { recursive: true, force: true })
+      .then(() => {
+        syncedSkillsUsageCache.delete(path.join(publicationDir, "skills"));
+      })
+      .catch((error: unknown) => {
+        releasePending = undefined;
+        throw error;
+      });
+    return releasePending;
+  };
+  try {
+    let skillsSnapshot: SkillSnapshot | undefined;
+    const explicitlyEmpty = params.skillsSnapshot && !params.skillsSnapshot.prompt.trim();
+    const skillUsagePaths =
+      explicitlyEmpty && params.skillsSnapshot?.skills.length === 0
+        ? []
+        : await materializeWorkspaceSkills(
+            { ...params, targetWorkspaceDir: publicationDir },
+            async (entries, version) => {
+              skillsSnapshot = await buildSkillSnapshot(publicationDir, {
+                entries,
+                config: params.config,
+                agentId: params.agentId,
+                skillFilter: params.skillsSnapshot?.skillFilter ?? params.skillFilter,
+                skillOverrides: params.skillsSnapshot?.skillOverrides,
+                eligibility: params.eligibility,
+                snapshotVersion: version,
+              });
+              if (params.skillsSnapshot?.librarySelections) {
+                skillsSnapshot.librarySelections = params.skillsSnapshot.librarySelections;
+              }
+            },
+          );
+    if (explicitlyEmpty) {
+      skillsSnapshot = { ...params.skillsSnapshot!, resolvedSkills: [] };
+    }
+    if (!skillsSnapshot) {
+      throw new Error("Sandbox skill catalog was not published.");
+    }
+    // Preserve traversal through the read-only mount for an explicitly configured container UID.
+    // Staging stays private until every file and the complete prompt are ready.
+    await makePublishedSkillsReadable(publicationDir);
+    await fsp.chmod(publicationDir, 0o755);
+    return { skillUsagePaths, skillsSnapshot, release };
+  } catch (error) {
+    try {
+      await release();
+    } catch {
+      /* Retain the materialization failure. */
+    }
+    throw error;
+  }
 }

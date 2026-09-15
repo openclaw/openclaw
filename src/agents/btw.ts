@@ -90,6 +90,7 @@ import {
 } from "./runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
 import { resolveSandboxContext } from "./sandbox/context.js";
+import { releasePublishedSandboxSkills } from "./sandbox/published-skills-handoff.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
 import { resolveSessionPlacementSandbox } from "./session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
@@ -721,14 +722,26 @@ async function runCliBtwSideQuestion(params: {
 /** The visible answer may finish before cooperating provider and cleanup work settles. */
 async function withBtwPreparedRuntime(
   input: Parameters<typeof acquirePublishedPreparedModelRuntime>[0],
-  run: (snapshot: PreparedModelRuntimeSnapshot) => Promise<ReplyPayload | undefined>,
+  run: (
+    snapshot: PreparedModelRuntimeSnapshot,
+    skillsOwner: object,
+  ) => Promise<ReplyPayload | undefined>,
 ): Promise<ReplyPayload | undefined> {
   return await runWithAsyncWorkResources(async (onAcquired, captureWorkContext) => {
     const lease = await acquirePublishedPreparedModelRuntime(input);
-    onAcquired({ release: () => lease[Symbol.asyncDispose]() });
+    const skillsOwner = {};
+    onAcquired({
+      release: async () => {
+        try {
+          await releasePublishedSandboxSkills(skillsOwner);
+        } finally {
+          await lease[Symbol.asyncDispose]();
+        }
+      },
+    });
     return withPluginRuntimeGenerationScope(lease.snapshot, () => {
       captureWorkContext();
-      return run(lease.snapshot);
+      return run(lease.snapshot, skillsOwner);
     });
   });
 }
@@ -768,7 +781,7 @@ export async function runBtwSideQuestion(
     // request that omits it can never match one.
     ...(params.allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true as const } : {}),
   };
-  return await withBtwPreparedRuntime(runtimeInput, async (preparedModelRuntime) => {
+  return await withBtwPreparedRuntime(runtimeInput, async (preparedModelRuntime, skillsOwner) => {
     const sessionAgentId = preparedModelRuntime.agentId ?? params.agentId;
     const workspaceDir =
       preparedModelRuntime.workspaceDir ??
@@ -1056,6 +1069,7 @@ export async function runBtwSideQuestion(
           workspaceDir,
         })) ??
         (await resolveSandboxContext({
+          skillsOwner,
           config: params.cfg,
           // An independent policy key keeps its own owner; global execution retains its prepared one.
           agentId:

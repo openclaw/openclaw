@@ -24,7 +24,9 @@ export type WorkspaceSandboxParams = Pick<
 >;
 
 /** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */
-export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxParams) {
+export async function resolveAttemptWorkspaceSandbox(
+  params: WorkspaceSandboxParams & { skillsOwner?: object },
+) {
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
@@ -41,6 +43,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
       params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
     execOverrides: params.execOverrides,
     sessionKey: sandboxSessionKey,
+    skillsOwner: params.skillsOwner,
     skillsSnapshot: params.skillsSnapshot,
     workspaceDir: resolvedWorkspace,
   });

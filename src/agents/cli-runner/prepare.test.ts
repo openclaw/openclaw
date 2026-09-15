@@ -6465,6 +6465,7 @@ describe("prepareCliRunContext", () => {
         sessionKey,
         workspaceDir: dir,
         skillsSnapshot,
+        skillsOwner: expect.any(Object),
       });
       expect(context.systemPrompt).toContain(
         "/workspace/.openclaw/sandbox-skills/skills/gog/SKILL.md",

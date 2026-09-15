@@ -1261,6 +1261,7 @@ describe("plugin sdk alias helpers", () => {
     { preference: "dist", layout: "source-only", expected: "srcFile" },
     { preference: "src", layout: "dist-only", expected: "distFile" },
     { preference: "src", layout: "missing-diagnostics", expected: "srcFile" },
+    { preference: "src", layout: "missing-model-contract", expected: "srcFile" },
     { preference: "src", layout: "no-package", expected: null },
     { preference: "dist", layout: "no-package", expected: null },
   ] as const)(
@@ -1269,6 +1270,7 @@ describe("plugin sdk alias helpers", () => {
       const fixture = createPluginSdkAliasFixture();
       const workspace = writeWorkspaceAliasFixtures(fixture.root, [
         ["@openclaw/llm-core", "llm-core", "index"],
+        ["@openclaw/llm-core/model-contracts/anthropic", "llm-core", "model-contracts/anthropic"],
         ["@openclaw/llm-core/diagnostics", "llm-core", "utils/diagnostics"],
         ["@openclaw/llm-core/event-stream", "llm-core", "utils/event-stream"],
         ["@openclaw/llm-core/types", "llm-core", "types"],
@@ -1301,6 +1303,11 @@ describe("plugin sdk alias helpers", () => {
               import: "./dist/utils/event-stream.mjs",
               default: "./dist/utils/event-stream.mjs",
             },
+            "./model-contracts/anthropic": {
+              types: "./dist/model-contracts/anthropic.d.mts",
+              import: "./dist/model-contracts/anthropic.mjs",
+              default: "./dist/model-contracts/anthropic.mjs",
+            },
             "./validation": {
               types: "./dist/validation.d.mts",
               import: "./dist/validation.mjs",
@@ -1319,17 +1326,17 @@ describe("plugin sdk alias helpers", () => {
       if (layout === "no-package") {
         fs.unlinkSync(manifest);
       }
+      const missingAlias =
+        layout === "missing-diagnostics"
+          ? "@openclaw/llm-core/diagnostics"
+          : layout === "missing-model-contract"
+            ? "@openclaw/llm-core/model-contracts/anthropic"
+            : undefined;
       for (const entry of workspace) {
-        if (
-          layout === "dist-only" ||
-          (layout === "missing-diagnostics" && entry.alias === "@openclaw/llm-core/diagnostics")
-        ) {
+        if (layout === "dist-only" || entry.alias === missingAlias) {
           fs.unlinkSync(entry.srcFile);
         }
-        if (
-          layout === "source-only" ||
-          (layout === "missing-diagnostics" && entry.alias === "@openclaw/llm-core/diagnostics")
-        ) {
+        if (layout === "source-only" || entry.alias === missingAlias) {
           fs.unlinkSync(entry.distFile);
         }
       }
@@ -1345,9 +1352,7 @@ describe("plugin sdk alias helpers", () => {
       );
       for (const entry of workspace) {
         const target = prepared.resolveAlias(entry.alias);
-        const missing =
-          expected === null ||
-          (layout === "missing-diagnostics" && entry.alias === "@openclaw/llm-core/diagnostics");
+        const missing = expected === null || entry.alias === missingAlias;
         if (missing) {
           expect(target, entry.alias).toBeUndefined();
         } else {

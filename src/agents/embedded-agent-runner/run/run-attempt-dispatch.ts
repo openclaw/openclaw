@@ -18,6 +18,7 @@ import { recordAdmittedModelRoutingDecision } from "../../model-routing-decision
 import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
+import { withPublishedSandboxSkills } from "../../sandbox/published-skills-handoff.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
 import { resolveSessionPlacementSandbox } from "../../session-placement-admission.js";
 import { resolveSessionSkillResourceSnapshot } from "../../session-placement-skill-resources.js";
@@ -255,10 +256,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
   const toolAuthProfileStore = agentHarnessBuildsOpenClawTools(runtime.agentHarness.id)
     ? attemptAuthProfileStore
     : undefined;
-  const captureRuntimeArtifact = Boolean(params.onSuccessfulAuthBinding || expectedHarnessArtifact);
-  const beforeAgentFinalizeRevisionAttempts = terminalRetryState.beforeFinalizeRevisionAttempts;
   const fallbackActive = modelId !== requestedModelId || Boolean(fallbackReason);
-  const attemptContextEngine = nativeModelOwned ? undefined : contextEngine;
   const authProfileIdSource =
     runtime.lastProfileId && runtime.lastProfileId === lockedProfileId ? "user" : "auto";
   const attemptAbortController = new AbortController();
@@ -273,438 +271,443 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     modelMaxTokens: effectiveModel.maxTokens,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
   });
-  const pluginWorkspace = runtime.pluginHarnessOwnsTransport
-    ? await resolveAttemptWorkspaceSandbox({
-        ...params,
-        agentId: workspaceResolution.agentId,
-        cwd: undefined,
-        sessionId,
-        sessionKey: resolvedSessionKey,
-        workspaceDir,
-      })
-    : undefined;
-  const promptMedia = pluginWorkspace
-    ? await prepareEmbeddedAttemptPromptExecution({
-        attempt: { ...params, model: effectiveModel },
-        mediaOwnerAgentId: pluginWorkspace.sessionAgentId,
-        effectiveFsWorkspaceOnly: pluginWorkspace.effectiveFsWorkspaceOnly,
-        effectiveWorkspace: pluginWorkspace.effectiveWorkspace,
-        prompt: "",
-        sandbox: pluginWorkspace.sandbox,
-        skipPromptSubmission: false,
-        pluginHarness: true,
-      })
-    : { images: params.images, imageOrder: params.imageOrder, media: params.media };
-  // Plugin harnesses own their tool materialization, so the host cannot attest
-  // a message tool. Finalize conservatively instead of leaking phantom guidance.
-  const pluginHarnessPrompt =
-    runtime.pluginHarnessOwnsTransport && params.finalizePromptForResolvedTools
-      ? applyResolvedToolPromptFinalizer({
-          prompt: preparedExecApprovalContinuation.prompt,
-          activeToolNames: [],
-          finalize: params.finalizePromptForResolvedTools,
+  return await withPublishedSandboxSkills(async (skillsOwner) => {
+    const pluginWorkspace = runtime.pluginHarnessOwnsTransport
+      ? await resolveAttemptWorkspaceSandbox({
+          ...params,
+          skillsOwner,
+          agentId: workspaceResolution.agentId,
+          cwd: undefined,
+          sessionId,
+          sessionKey: resolvedSessionKey,
+          workspaceDir,
         })
       : undefined;
-  const pluginSandbox = runtime.pluginHarnessOwnsTransport
-    ? ((await resolveSessionPlacementSandbox({
-        agentId: workspaceResolution.agentId,
-        config: params.config,
-        sessionId,
-        sessionKey: resolvedSessionKey,
-        workspaceDir,
-      })) ?? pluginWorkspace?.sandbox)
-    : undefined;
-  if (!params.admittedRunContext) {
-    throw new Error("embedded attempt reached dispatch without an admitted run context");
-  }
-  const admittedRunContext = params.admittedRunContext;
-  if (params.permissionMode) {
-    // Attempts narrow this shared run-owned policy before recovery can reuse it.
-    params.execOverrides ??= {};
-    params.execOverrides.mode = resolveSessionPermissionExecMode({ mode: params.permissionMode });
-  }
-  const incognitoSystemPrompt = appendIncognitoSystemPrompt({
-    agentId: workspaceResolution.agentId,
-    extraSystemPrompt: params.extraSystemPrompt,
-    sessionKey: params.sessionKey,
-    storePath: params.sessionTarget?.storePath,
-  });
-  const extraSystemPrompt = await appendProgressCardSystemPrompt({
-    agentId: workspaceResolution.agentId,
-    authProfileId: runtime.lastProfileId,
-    config: params.config,
-    extraSystemPrompt: incognitoSystemPrompt,
-    modelId,
-    provider,
-    sessionKey: params.sessionKey,
-    toolsAllow: params.toolsAllow,
-  });
-  const gitCoauthorPrompt = resolveSessionGitCoauthorPrompt({
-    config: params.config,
-    agentId: workspaceResolution.agentId,
-    sessionKey: params.sessionKey,
-    storePath: params.sessionTarget?.storePath,
-  });
-  let skillsSnapshot = resolveSessionSkillResourceSnapshot(params.skillsSnapshot);
-  let skillReferencePaths = pluginSandbox?.readOnlyResourceMounts?.map((mount) => ({
-    skillFile: path.join(mount.hostPath, "SKILL.md"),
-    readPath: path.posix.join(mount.containerPath, "SKILL.md"),
-  }));
-  if (pluginSandbox?.enabled && !pluginSandbox.readOnlyResourceMounts?.length && skillsSnapshot) {
-    const assertActiveRun = resolveAdmittedRunActiveAssertion(
-      admittedRunContext,
-      attemptAbortController.signal,
-    );
-    const prepared = await prepareEmbeddedSkills({
-      assertCurrent: () => {
-        attemptAbortController.signal.throwIfAborted();
-        assertActiveRun?.();
-      },
-      applySkillEnvironment: false,
-      includeCodeModeSkills: false,
-      attempt: {
-        bootstrapWorkspaceDir,
-        config: params.config,
-        contextTokenBudget: runtime.contextTokenBudget,
-        skillsSnapshot,
-        toolExecutionAllow: params.toolExecutionAllow,
-      },
-      effectiveWorkspace: workspaceDir,
-      sandbox: pluginSandbox,
-      sessionAgentId: workspaceResolution.agentId,
+    const promptMedia = pluginWorkspace
+      ? await prepareEmbeddedAttemptPromptExecution({
+          attempt: { ...params, model: effectiveModel },
+          mediaOwnerAgentId: pluginWorkspace.sessionAgentId,
+          effectiveFsWorkspaceOnly: pluginWorkspace.effectiveFsWorkspaceOnly,
+          effectiveWorkspace: pluginWorkspace.effectiveWorkspace,
+          prompt: "",
+          sandbox: pluginWorkspace.sandbox,
+          skipPromptSubmission: false,
+          pluginHarness: true,
+        })
+      : { images: params.images, imageOrder: params.imageOrder, media: params.media };
+    // Plugin harnesses own their tool materialization, so the host cannot attest
+    // a message tool. Finalize conservatively instead of leaking phantom guidance.
+    const pluginHarnessPrompt =
+      runtime.pluginHarnessOwnsTransport && params.finalizePromptForResolvedTools
+        ? applyResolvedToolPromptFinalizer({
+            prompt: preparedExecApprovalContinuation.prompt,
+            activeToolNames: [],
+            finalize: params.finalizePromptForResolvedTools,
+          })
+        : undefined;
+    const pluginSandbox = runtime.pluginHarnessOwnsTransport
+      ? ((await resolveSessionPlacementSandbox({
+          agentId: workspaceResolution.agentId,
+          config: params.config,
+          sessionId,
+          sessionKey: resolvedSessionKey,
+          workspaceDir,
+        })) ?? pluginWorkspace?.sandbox)
+      : undefined;
+    if (!params.admittedRunContext) {
+      throw new Error("embedded attempt reached dispatch without an admitted run context");
+    }
+    const admittedRunContext = params.admittedRunContext;
+    if (params.permissionMode) {
+      // Attempts narrow this shared run-owned policy before recovery can reuse it.
+      params.execOverrides ??= {};
+      params.execOverrides.mode = resolveSessionPermissionExecMode({ mode: params.permissionMode });
+    }
+    const incognitoSystemPrompt = appendIncognitoSystemPrompt({
+      agentId: workspaceResolution.agentId,
+      extraSystemPrompt: params.extraSystemPrompt,
+      sessionKey: params.sessionKey,
+      storePath: params.sessionTarget?.storePath,
     });
-    skillsSnapshot = {
-      ...(prepared.skillsSnapshotForRun ?? skillsSnapshot),
-      prompt: prepared.skillsPrompt,
-    };
-    skillReferencePaths = prepared.skillUsagePaths;
-  }
-  const attemptControls = createAttemptControls({
-    admittedRunContext,
-    abortSignal: attemptAbortController.signal,
-    onAbort: () => {
-      if (!params.abortSignal?.aborted) {
-        params.replyOperation?.abortByUser();
-      }
-    },
-  });
-  const pluginRefresh = captureAgentPluginRuntimeRefresh();
-  const attemptParams: EmbeddedRunAttemptInternalParams = {
-    pluginRuntimeRefreshPending: pluginRefresh.isPending,
-    registerPluginRuntimeRefreshConsumer: (isCurrent) => {
-      if (attemptControls.isCurrent()) {
-        pluginRefresh.bindConsumer(() => attemptControls.isCurrent() && isCurrent());
-      }
-    },
-    pluginRuntimeRefreshMessages: params.pluginRuntimeRefreshMessages,
-    permissionChange: input.permissionChange,
-    admittedRunContext: params.admittedRunContext,
-    startedAtMs: runInput.startedAtMs,
-    contextEngineAgentId: runInput.contextEngineAgentId,
-    ...(runtime.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
-    operation: "attempt",
-    sessionId,
-    sessionKey: resolvedSessionKey,
-    conversationRecall: params.conversationRecall,
-    promptCacheKey: params.promptCacheKey,
-    sandboxSessionKey: params.sandboxSessionKey,
-    sandboxAgentId: params.sandboxAgentId,
-    trigger: params.trigger,
-    memoryFlushWritePath: params.memoryFlushWritePath,
-    messageChannel: params.messageChannel,
-    messageProvider: params.messageProvider,
-    clientCaps: params.clientCaps,
-    gatewayUiCommandTarget: params.gatewayUiCommandTarget,
-    pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
-    toolBindings: params.toolBindings,
-    // Preserve the Gateway's tri-state capability; undefined hides both GitHub tools.
-    githubPublicationAvailable: params.githubPublicationAvailable,
-    chatType: params.chatType,
-    agentAccountId: params.agentAccountId,
-    conversationRoutePeerId: params.conversationRoutePeerId,
-    messageTo: params.messageTo,
-    messageThreadId: params.messageThreadId,
-    conversationToolPolicy: params.conversationToolPolicy,
-    messageActionTurnCapability: params.messageActionTurnCapability,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    memberRoleIds: params.memberRoleIds,
-    spawnedBy: params.spawnedBy,
-    isCanonicalWorkspace,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    senderIsOwner: params.senderIsOwner,
-    approvalReviewerDeviceId: params.approvalReviewerDeviceId,
-    currentChannelId: params.currentChannelId,
-    chatId: params.chatId,
-    channelContext: params.channelContext,
-    currentMessagingTarget: params.currentMessagingTarget,
-    currentThreadTs: params.currentThreadTs,
-    currentMessageId: params.currentMessageId,
-    currentInboundAudio: params.currentInboundAudio,
-    replyToMode: params.replyToMode,
-    hasRepliedRef: params.hasRepliedRef,
-    sessionFile,
-    ...(sessionManager ? { sessionManager } : { sessionTarget: resolvedSessionTarget }),
-    trajectoryRecorder: trajectoryRecorder ?? undefined,
-    workspaceDir,
-    bootstrapWorkspaceDir,
-    cwd: params.cwd,
-    permissionMode: params.permissionMode,
-    sessionRoot: params.sessionRoot,
-    requireWorkspaceOnly: params.requireWorkspaceOnly,
-    requireWritableSandbox: params.requireWritableSandbox,
-    agentDir,
-    preparedModelRuntime: runInput.preparedModelRuntime,
-    config: params.config,
-    toolOverrides: params.toolOverrides,
-    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-    ...(attemptContextEngine
-      ? {
-          contextEngine: attemptContextEngine,
-          contextWindowInfo: runtime.contextWindowInfo,
-        }
-      : {}),
-    ...(runtime.contextTokenBudget === undefined
-      ? {}
-      : { contextTokenBudget: runtime.contextTokenBudget }),
-    ...(runtime.modelContextWindow === undefined
-      ? {}
-      : { modelContextWindow: runtime.modelContextWindow }),
-    ...(runtime.authoredContextTokenCap === undefined
-      ? {}
-      : { authoredContextTokenCap: runtime.authoredContextTokenCap }),
-    skillsSnapshot,
-    prompt: remapSkillReferencePaths(
-      pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
-      skillReferencePaths,
-    ),
-    transcriptPrompt:
-      pluginHarnessPrompt !== undefined && params.transcriptPrompt === undefined
-        ? preparedExecApprovalContinuation.prompt
-        : preparedExecApprovalContinuation.transcriptPrompt,
-    finalizePromptForResolvedTools:
-      pluginHarnessPrompt === undefined ? params.finalizePromptForResolvedTools : undefined,
-    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
-    // The outer run-loop owns the begun lease; the inner attempt reports only
-    // the accepted candidate boundary to that owner.
-    onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
-    skipPreparedUserTurnMessage,
-    currentInboundEventKind: params.currentInboundEventKind,
-    currentInboundContext: params.currentInboundContext,
-    explicitSkillSelections: params.explicitSkillSelections?.map((selection) => ({
-      ...selection,
-      path: remapSkillReferencePaths(selection.path, skillReferencePaths),
-    })),
-    images: promptMedia.images,
-    imageOrder: promptMedia.imageOrder,
-    media: promptMedia.media,
-    clientTools: params.clientTools,
-    disableTools: params.disableTools,
-    provider,
-    modelId,
-    requestedModelId,
-    fallbackActive,
-    fallbackReason,
-    delegationCapability: resolveDelegationCapability({
-      fallbackActive,
-      inputProvenance: params.inputProvenance,
-      disableTools: params.disableTools,
+    const extraSystemPrompt = await appendProgressCardSystemPrompt({
+      agentId: workspaceResolution.agentId,
+      authProfileId: runtime.lastProfileId,
+      config: params.config,
+      extraSystemPrompt: incognitoSystemPrompt,
+      modelId,
+      provider,
+      sessionKey: params.sessionKey,
       toolsAllow: params.toolsAllow,
-    }),
-    isFinalFallbackAttempt: params.isFinalFallbackAttempt,
-    agentHarnessId: runtime.agentHarness.id,
-    agentHarnessRuntimeOverride: runtime.agentHarness.id,
-    modelSelectionLocked: params.modelSelectionLocked,
-    ...(nativeSessionRuntime
-      ? {
-          expectedSessionRuntimeOwnership: {
-            model: "native",
-            auth: nativeSessionRuntime.auth,
-            ...(nativeSessionRuntime.auth === "host"
-              ? { modelRef: nativeSessionRuntime.modelRef }
-              : {}),
-          },
-        }
-      : {}),
-    ...(captureRuntimeArtifact ? { captureRuntimeArtifact: true } : {}),
-    ...(expectedHarnessArtifact?.artifact
-      ? { expectedRuntimeArtifact: expectedHarnessArtifact?.artifact }
-      : {}),
-    ...(params.sessionKey
-      ? {
-          agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
-            requesterSessionKey: params.sessionKey,
-            gatewayContextResolver: getGatewayContextResolver(params.admittedRunContext),
-          }),
-        }
-      : {}),
-    runtimePlan,
-    observeToolTerminal: createToolTerminalObserver(params.runId),
-    model: applyAuthHeaderOverride(
-      applyLocalNoAuthHeaderOverride(effectiveModel, runtime.apiKeyInfo),
-      runtime.runtimeAuthState !== null ? null : runtime.apiKeyInfo,
-      params.config,
-    ),
-    resolvedApiKey: resolvedAttemptApiKey,
-    authProfileId: runtime.lastProfileId,
-    authProfileIdSource,
-    initialReplayState: input.replayState,
-    authStorage,
-    authProfileStore,
-    toolAuthProfileStore,
-    modelRegistry,
-    agentId: workspaceResolution.agentId,
-    thinkLevel: runtime.thinkLevel,
-    onToolOutcome: input.observeToolOutcome,
-    isTurnTainted: input.isTurnTainted,
-    allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
-    onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
-    onRunProgress: notifyRunProgress,
-    fastMode: attemptFastMode,
-    fastModeAuto: params.fastMode === "auto",
-    ...(params.fastMode === "auto"
-      ? {
-          fastModeStartedAtMs,
-          fastModeAutoOnSeconds,
-          fastModeAutoProgressState,
-        }
-      : {}),
-    verboseLevel: params.verboseLevel,
-    reasoningLevel: params.reasoningLevel,
-    toolResultFormat: resolvedToolResultFormat,
-    toolProgressDetail: params.toolProgressDetail,
-    execOverrides: params.execOverrides,
-    bashElevated: params.bashElevated,
-    timeoutMs: params.timeoutMs,
-    runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-    runId: params.runId,
-    lifecycleGeneration,
-    abortSignal: attemptControls.abortSignal,
-    onAttemptDeadlineChanged: attemptControls.onAttemptDeadlineChanged,
-    onAttemptTimeout: attemptControls.onAttemptTimeout,
-    onAttemptAbort: attemptControls.onAttemptAbort,
-    replyOperation: params.replyOperation,
-    shouldEmitToolResult: params.shouldEmitToolResult,
-    shouldEmitToolOutput: params.shouldEmitToolOutput,
-    onPartialReply: params.onPartialReply,
-    onAssistantMessageStart: params.onAssistantMessageStart,
-    onBlockReply: params.onBlockReply,
-    onBlockReplyFlush: params.onBlockReplyFlush,
-    blockReplyBreak: params.blockReplyBreak,
-    blockReplyChunking: params.blockReplyChunking,
-    onReasoningStream: params.onReasoningStream,
-    streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
-    onReasoningEnd: params.onReasoningEnd,
-    onToolResult: notifyToolResult,
-    onAgentToolResult: params.onAgentToolResult,
-    onAgentEvent: notifyAgentEvent,
-    // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
-    deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
-    onDeferredLifecycleOwner: params.onDeferredLifecycleOwner,
-    onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
-    onExecutionPhase: params.onExecutionPhase,
-    extraSystemPrompt,
-    gitCoauthorPrompt,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    silentReplyPromptMode: params.silentReplyPromptMode,
-    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
-    inputProvenance: params.inputProvenance,
-    trustedInternalHandoff: params.trustedInternalHandoff,
-    scheduledToolPolicy: params.scheduledToolPolicy,
-    runtimePluginToolGrant: params.runtimePluginToolGrant,
-    cronCreatorAuthorityCapability: params.cronCreatorAuthorityCapability,
-    cronCreatorAuthorityUnavailableReason: params.cronCreatorAuthorityUnavailableReason,
-    streamParams: params.streamParams,
-    modelRun: params.modelRun,
-    disableTrajectory: params.disableTrajectory,
-    ...resolveSkillWorkshopAttemptParams(params),
-    promptMode: params.promptMode,
-    ownerNumbers: params.ownerNumbers,
-    enforceFinalTag: params.enforceFinalTag,
-    silentExpected: params.silentExpected,
-    suppressLiveStreamOutput: params.suppressLiveStreamOutput,
-    bootstrapContextMode: params.bootstrapContextMode,
-    bootstrapContextRunKind: params.bootstrapContextRunKind,
-    jobId: params.jobId,
-    scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
-    scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
-    toolsAllow: params.toolsAllow,
-    toolExecutionAllow: params.toolExecutionAllow,
-    // Authorized prompt enrichment needs the exact prepared turn policy identity.
-    toolAuthorityFingerprint: params.toolAuthorityFingerprint,
-    sessionPersistence: params.sessionPersistence,
-    // The host loop settles all completed counts, including default/SDK runs.
-    compactionCountOwner: "caller",
-    onContextAccountingEvent: params.onContextAccountingEvent,
-    onCompactionRequestBudget: params.onCompactionRequestBudget,
-    ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
-    cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
-    oneShotCliRun: params.oneShotCliRun,
-    disableMessageTool: params.disableMessageTool,
-    swarmCollector: params.swarmCollector,
-    swarmOutputSchema: params.swarmOutputSchema,
-    forceRestartSafeTools: params.forceRestartSafeTools,
-    forceCodeModeTools: params.forceCodeModeTools,
-    codeModeOverride: params.codeModeOverride,
-    forceMessageTool: params.forceMessageTool,
-    enableHeartbeatTool: params.enableHeartbeatTool,
-    forceHeartbeatTool: params.forceHeartbeatTool,
-    requireExplicitMessageTarget: params.requireExplicitMessageTarget,
-    internalEvents: params.internalEvents,
-    runtimeContextFragments: params.runtimeContextFragments,
-    bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarningSignaturesSeen,
-    bootstrapPromptWarningSignature:
-      input.bootstrapPromptWarningSignaturesSeen[
-        input.bootstrapPromptWarningSignaturesSeen.length - 1
-      ],
-    suppressNextUserMessagePersistence,
-    beforeAgentFinalizeRevisionAttempts,
-    maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
-    suppressTranscriptOnlyAssistantPersistence: params.suppressTranscriptOnlyAssistantPersistence,
-    assistantErrorTranscript: params.assistantErrorTranscript,
-    onUserMessagePersisted: sessionPromptState.onUserMessagePersisted,
-    onUserMessagePersistenceInvalidated: () => {
-      sessionPromptState.activePrompt.persisted = false;
-    },
-    prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
-  };
-  const callerIdentity = createAdmittedGatewayToolCallerIdentity({
-    admittedRunContext: attemptParams.admittedRunContext,
-    agentId: workspaceResolution.agentId,
-    sessionKey: resolvedSessionKey,
-    turnSourceChannel: params.messageChannel ?? params.messageProvider,
-    turnSourceLocal:
-      !params.messageChannel &&
-      !params.messageProvider &&
-      params.cronCreatorAuthorityCapability?.callerOrigin.kind === "local"
-        ? true
-        : undefined,
-    turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
-    turnSourceAccountId: params.agentAccountId,
-    turnSourceThreadId: params.currentThreadTs,
-  });
-  const rawAttempt = await withGatewayToolCallerIdentity(callerIdentity, () =>
-    runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime),
-  )
-    .catch((err: unknown): never => {
-      throw input.getPostCompactionAbortError() ?? err;
-    })
-    .finally(() => {
-      attemptControls.close();
-      input.clearPostCompactionAbortController(attemptAbortController);
     });
+    const gitCoauthorPrompt = resolveSessionGitCoauthorPrompt({
+      config: params.config,
+      agentId: workspaceResolution.agentId,
+      sessionKey: params.sessionKey,
+      storePath: params.sessionTarget?.storePath,
+    });
+    let skillsSnapshot = resolveSessionSkillResourceSnapshot(params.skillsSnapshot);
+    let skillReferencePaths = pluginSandbox?.readOnlyResourceMounts?.map((mount) => ({
+      skillFile: path.join(mount.hostPath, "SKILL.md"),
+      readPath: path.posix.join(mount.containerPath, "SKILL.md"),
+    }));
+    if (pluginSandbox?.enabled && !pluginSandbox.readOnlyResourceMounts?.length && skillsSnapshot) {
+      const assertActiveRun = resolveAdmittedRunActiveAssertion(
+        admittedRunContext,
+        attemptAbortController.signal,
+      );
+      const prepared = await prepareEmbeddedSkills({
+        assertCurrent: () => {
+          attemptAbortController.signal.throwIfAborted();
+          assertActiveRun?.();
+        },
+        applySkillEnvironment: false,
+        includeCodeModeSkills: false,
+        attempt: {
+          bootstrapWorkspaceDir,
+          config: params.config,
+          contextTokenBudget: runtime.contextTokenBudget,
+          skillsSnapshot,
+          toolExecutionAllow: params.toolExecutionAllow,
+        },
+        effectiveWorkspace: workspaceDir,
+        sandbox: pluginSandbox,
+        sessionAgentId: workspaceResolution.agentId,
+      });
+      skillsSnapshot = {
+        ...(prepared.skillsSnapshotForRun ?? skillsSnapshot),
+        prompt: prepared.skillsPrompt,
+      };
+      skillReferencePaths = prepared.skillUsagePaths;
+    }
+    const attemptControls = createAttemptControls({
+      admittedRunContext,
+      abortSignal: attemptAbortController.signal,
+      onAbort: () => {
+        if (!params.abortSignal?.aborted) {
+          params.replyOperation?.abortByUser();
+        }
+      },
+    });
+    const pluginRefresh = captureAgentPluginRuntimeRefresh();
+    const attemptParams: EmbeddedRunAttemptInternalParams = {
+      pluginRuntimeRefreshPending: pluginRefresh.isPending,
+      registerPluginRuntimeRefreshConsumer: (isCurrent) => {
+        if (attemptControls.isCurrent()) {
+          pluginRefresh.bindConsumer(() => attemptControls.isCurrent() && isCurrent());
+        }
+      },
+      pluginRuntimeRefreshMessages: params.pluginRuntimeRefreshMessages,
+      permissionChange: input.permissionChange,
+      admittedRunContext: params.admittedRunContext,
+      startedAtMs: runInput.startedAtMs,
+      contextEngineAgentId: runInput.contextEngineAgentId,
+      ...(runtime.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
+      operation: "attempt",
+      sessionId,
+      sessionKey: resolvedSessionKey,
+      conversationRecall: params.conversationRecall,
+      promptCacheKey: params.promptCacheKey,
+      sandboxSessionKey: params.sandboxSessionKey,
+      sandboxAgentId: params.sandboxAgentId,
+      trigger: params.trigger,
+      memoryFlushWritePath: params.memoryFlushWritePath,
+      messageChannel: params.messageChannel,
+      messageProvider: params.messageProvider,
+      clientCaps: params.clientCaps,
+      gatewayUiCommandTarget: params.gatewayUiCommandTarget,
+      pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
+      toolBindings: params.toolBindings,
+      // Preserve the Gateway's tri-state capability; undefined hides both GitHub tools.
+      githubPublicationAvailable: params.githubPublicationAvailable,
+      chatType: params.chatType,
+      agentAccountId: params.agentAccountId,
+      conversationRoutePeerId: params.conversationRoutePeerId,
+      messageTo: params.messageTo,
+      messageThreadId: params.messageThreadId,
+      conversationToolPolicy: params.conversationToolPolicy,
+      messageActionTurnCapability: params.messageActionTurnCapability,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      memberRoleIds: params.memberRoleIds,
+      spawnedBy: params.spawnedBy,
+      isCanonicalWorkspace,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      approvalReviewerDeviceId: params.approvalReviewerDeviceId,
+      currentChannelId: params.currentChannelId,
+      chatId: params.chatId,
+      channelContext: params.channelContext,
+      currentMessagingTarget: params.currentMessagingTarget,
+      currentThreadTs: params.currentThreadTs,
+      currentMessageId: params.currentMessageId,
+      currentInboundAudio: params.currentInboundAudio,
+      replyToMode: params.replyToMode,
+      hasRepliedRef: params.hasRepliedRef,
+      sessionFile,
+      ...(sessionManager ? { sessionManager } : { sessionTarget: resolvedSessionTarget }),
+      trajectoryRecorder: trajectoryRecorder ?? undefined,
+      workspaceDir,
+      bootstrapWorkspaceDir,
+      cwd: params.cwd,
+      permissionMode: params.permissionMode,
+      sessionRoot: params.sessionRoot,
+      requireWorkspaceOnly: params.requireWorkspaceOnly,
+      requireWritableSandbox: params.requireWritableSandbox,
+      agentDir,
+      preparedModelRuntime: runInput.preparedModelRuntime,
+      config: params.config,
+      toolOverrides: params.toolOverrides,
+      allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+      ...(!nativeModelOwned && contextEngine
+        ? {
+            contextEngine,
+            contextWindowInfo: runtime.contextWindowInfo,
+          }
+        : {}),
+      ...(runtime.contextTokenBudget === undefined
+        ? {}
+        : { contextTokenBudget: runtime.contextTokenBudget }),
+      ...(runtime.modelContextWindow === undefined
+        ? {}
+        : { modelContextWindow: runtime.modelContextWindow }),
+      ...(runtime.authoredContextTokenCap === undefined
+        ? {}
+        : { authoredContextTokenCap: runtime.authoredContextTokenCap }),
+      skillsSnapshot,
+      prompt: remapSkillReferencePaths(
+        pluginHarnessPrompt ?? preparedExecApprovalContinuation.prompt,
+        skillReferencePaths,
+      ),
+      transcriptPrompt:
+        pluginHarnessPrompt !== undefined && params.transcriptPrompt === undefined
+          ? preparedExecApprovalContinuation.prompt
+          : preparedExecApprovalContinuation.transcriptPrompt,
+      finalizePromptForResolvedTools:
+        pluginHarnessPrompt === undefined ? params.finalizePromptForResolvedTools : undefined,
+      userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+      // The outer run-loop owns the begun lease; the inner attempt reports only
+      // the accepted candidate boundary to that owner.
+      onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
+      skipPreparedUserTurnMessage,
+      currentInboundEventKind: params.currentInboundEventKind,
+      currentInboundContext: params.currentInboundContext,
+      explicitSkillSelections: params.explicitSkillSelections?.map((selection) => ({
+        ...selection,
+        path: remapSkillReferencePaths(selection.path, skillReferencePaths),
+      })),
+      images: promptMedia.images,
+      imageOrder: promptMedia.imageOrder,
+      media: promptMedia.media,
+      clientTools: params.clientTools,
+      disableTools: params.disableTools,
+      provider,
+      modelId,
+      requestedModelId,
+      fallbackActive,
+      fallbackReason,
+      delegationCapability: resolveDelegationCapability({
+        fallbackActive,
+        inputProvenance: params.inputProvenance,
+        disableTools: params.disableTools,
+        toolsAllow: params.toolsAllow,
+      }),
+      isFinalFallbackAttempt: params.isFinalFallbackAttempt,
+      agentHarnessId: runtime.agentHarness.id,
+      agentHarnessRuntimeOverride: runtime.agentHarness.id,
+      modelSelectionLocked: params.modelSelectionLocked,
+      ...(nativeSessionRuntime
+        ? {
+            expectedSessionRuntimeOwnership: {
+              model: "native",
+              auth: nativeSessionRuntime.auth,
+              ...(nativeSessionRuntime.auth === "host"
+                ? { modelRef: nativeSessionRuntime.modelRef }
+                : {}),
+            },
+          }
+        : {}),
+      ...(params.onSuccessfulAuthBinding || expectedHarnessArtifact
+        ? { captureRuntimeArtifact: true }
+        : {}),
+      ...(expectedHarnessArtifact?.artifact
+        ? { expectedRuntimeArtifact: expectedHarnessArtifact?.artifact }
+        : {}),
+      ...(params.sessionKey
+        ? {
+            agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
+              requesterSessionKey: params.sessionKey,
+              gatewayContextResolver: getGatewayContextResolver(params.admittedRunContext),
+            }),
+          }
+        : {}),
+      runtimePlan,
+      observeToolTerminal: createToolTerminalObserver(params.runId),
+      model: applyAuthHeaderOverride(
+        applyLocalNoAuthHeaderOverride(effectiveModel, runtime.apiKeyInfo),
+        runtime.runtimeAuthState !== null ? null : runtime.apiKeyInfo,
+        params.config,
+      ),
+      resolvedApiKey: resolvedAttemptApiKey,
+      authProfileId: runtime.lastProfileId,
+      authProfileIdSource,
+      initialReplayState: input.replayState,
+      authStorage,
+      authProfileStore,
+      toolAuthProfileStore,
+      modelRegistry,
+      agentId: workspaceResolution.agentId,
+      thinkLevel: runtime.thinkLevel,
+      onToolOutcome: input.observeToolOutcome,
+      isTurnTainted: input.isTurnTainted,
+      allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
+      onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
+      onRunProgress: notifyRunProgress,
+      fastMode: attemptFastMode,
+      fastModeAuto: params.fastMode === "auto",
+      ...(params.fastMode === "auto"
+        ? {
+            fastModeStartedAtMs,
+            fastModeAutoOnSeconds,
+            fastModeAutoProgressState,
+          }
+        : {}),
+      verboseLevel: params.verboseLevel,
+      reasoningLevel: params.reasoningLevel,
+      toolResultFormat: resolvedToolResultFormat,
+      toolProgressDetail: params.toolProgressDetail,
+      execOverrides: params.execOverrides,
+      bashElevated: params.bashElevated,
+      timeoutMs: params.timeoutMs,
+      runTimeoutOverrideMs: params.runTimeoutOverrideMs,
+      runId: params.runId,
+      lifecycleGeneration,
+      abortSignal: attemptControls.abortSignal,
+      onAttemptDeadlineChanged: attemptControls.onAttemptDeadlineChanged,
+      onAttemptTimeout: attemptControls.onAttemptTimeout,
+      onAttemptAbort: attemptControls.onAttemptAbort,
+      replyOperation: params.replyOperation,
+      shouldEmitToolResult: params.shouldEmitToolResult,
+      shouldEmitToolOutput: params.shouldEmitToolOutput,
+      onPartialReply: params.onPartialReply,
+      onAssistantMessageStart: params.onAssistantMessageStart,
+      onBlockReply: params.onBlockReply,
+      onBlockReplyFlush: params.onBlockReplyFlush,
+      blockReplyBreak: params.blockReplyBreak,
+      blockReplyChunking: params.blockReplyChunking,
+      onReasoningStream: params.onReasoningStream,
+      streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
+      onReasoningEnd: params.onReasoningEnd,
+      onToolResult: notifyToolResult,
+      onAgentToolResult: params.onAgentToolResult,
+      onAgentEvent: notifyAgentEvent,
+      // Normalize the shipped harness alias once; attempt internals consume only the canonical flag.
+      deferTerminalLifecycle: params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
+      onDeferredLifecycleOwner: params.onDeferredLifecycleOwner,
+      onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
+      onExecutionPhase: params.onExecutionPhase,
+      extraSystemPrompt,
+      gitCoauthorPrompt,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      silentReplyPromptMode: params.silentReplyPromptMode,
+      taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+      inputProvenance: params.inputProvenance,
+      trustedInternalHandoff: params.trustedInternalHandoff,
+      scheduledToolPolicy: params.scheduledToolPolicy,
+      runtimePluginToolGrant: params.runtimePluginToolGrant,
+      cronCreatorAuthorityCapability: params.cronCreatorAuthorityCapability,
+      cronCreatorAuthorityUnavailableReason: params.cronCreatorAuthorityUnavailableReason,
+      streamParams: params.streamParams,
+      modelRun: params.modelRun,
+      disableTrajectory: params.disableTrajectory,
+      ...resolveSkillWorkshopAttemptParams(params),
+      promptMode: params.promptMode,
+      ownerNumbers: params.ownerNumbers,
+      enforceFinalTag: params.enforceFinalTag,
+      silentExpected: params.silentExpected,
+      suppressLiveStreamOutput: params.suppressLiveStreamOutput,
+      bootstrapContextMode: params.bootstrapContextMode,
+      bootstrapContextRunKind: params.bootstrapContextRunKind,
+      jobId: params.jobId,
+      scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
+      scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
+      toolsAllow: params.toolsAllow,
+      toolExecutionAllow: params.toolExecutionAllow,
+      // Authorized prompt enrichment needs the exact prepared turn policy identity.
+      toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+      sessionPersistence: params.sessionPersistence,
+      // The host loop settles all completed counts, including default/SDK runs.
+      compactionCountOwner: "caller",
+      onContextAccountingEvent: params.onContextAccountingEvent,
+      onCompactionRequestBudget: params.onCompactionRequestBudget,
+      ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
+      cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
+      oneShotCliRun: params.oneShotCliRun,
+      disableMessageTool: params.disableMessageTool,
+      swarmCollector: params.swarmCollector,
+      swarmOutputSchema: params.swarmOutputSchema,
+      forceRestartSafeTools: params.forceRestartSafeTools,
+      forceCodeModeTools: params.forceCodeModeTools,
+      codeModeOverride: params.codeModeOverride,
+      forceMessageTool: params.forceMessageTool,
+      enableHeartbeatTool: params.enableHeartbeatTool,
+      forceHeartbeatTool: params.forceHeartbeatTool,
+      requireExplicitMessageTarget: params.requireExplicitMessageTarget,
+      internalEvents: params.internalEvents,
+      runtimeContextFragments: params.runtimeContextFragments,
+      bootstrapPromptWarningSignaturesSeen: input.bootstrapPromptWarningSignaturesSeen,
+      bootstrapPromptWarningSignature:
+        input.bootstrapPromptWarningSignaturesSeen[
+          input.bootstrapPromptWarningSignaturesSeen.length - 1
+        ],
+      suppressNextUserMessagePersistence,
+      beforeAgentFinalizeRevisionAttempts: terminalRetryState.beforeFinalizeRevisionAttempts,
+      maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
+      suppressTranscriptOnlyAssistantPersistence: params.suppressTranscriptOnlyAssistantPersistence,
+      assistantErrorTranscript: params.assistantErrorTranscript,
+      onUserMessagePersisted: sessionPromptState.onUserMessagePersisted,
+      onUserMessagePersistenceInvalidated: () => {
+        sessionPromptState.activePrompt.persisted = false;
+      },
+      prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+    };
+    const callerIdentity = createAdmittedGatewayToolCallerIdentity({
+      admittedRunContext: attemptParams.admittedRunContext,
+      agentId: workspaceResolution.agentId,
+      sessionKey: resolvedSessionKey,
+      turnSourceChannel: params.messageChannel ?? params.messageProvider,
+      turnSourceLocal:
+        !params.messageChannel &&
+        !params.messageProvider &&
+        params.cronCreatorAuthorityCapability?.callerOrigin.kind === "local"
+          ? true
+          : undefined,
+      turnSourceTo: params.currentMessagingTarget ?? params.currentChannelId,
+      turnSourceAccountId: params.agentAccountId,
+      turnSourceThreadId: params.currentThreadTs,
+    });
+    const rawAttempt = await withGatewayToolCallerIdentity(callerIdentity, () =>
+      runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime),
+    )
+      .catch((err: unknown): never => {
+        throw input.getPostCompactionAbortError() ?? err;
+      })
+      .finally(() => {
+        attemptControls.close();
+        input.clearPostCompactionAbortController(attemptAbortController);
+      });
 
-  const postCompactionAbortError = input.getPostCompactionAbortError();
-  if (postCompactionAbortError) {
-    throw postCompactionAbortError;
-  }
-  return {
-    dispatchedAttempt: { rawAttempt, preparedAttempt: attemptParams },
-    runtimePlan,
-    startupStagesEmitted,
-  };
+    const postCompactionAbortError = input.getPostCompactionAbortError();
+    if (postCompactionAbortError) {
+      throw postCompactionAbortError;
+    }
+    return {
+      dispatchedAttempt: { rawAttempt, preparedAttempt: attemptParams },
+      runtimePlan,
+      startupStagesEmitted,
+    };
+  });
 }

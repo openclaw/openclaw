@@ -75,7 +75,10 @@ type PreparedProviderRuntimePluginHandle = ProviderRuntimePluginHandle & {
 
 export type EmbeddedAttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
 
-export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptParams) {
+export async function prepareEmbeddedAttemptSetup(
+  params: EmbeddedRunAttemptParams,
+  skillsOwner?: object,
+) {
   // Ultra is a logical orchestration mode, not a provider effort. Preserve it for
   // prompt/status surfaces, then lower only at agent-core and provider boundaries.
   const agentCoreThinkingLevel = mapThinkingLevel(params.thinkLevel);
@@ -119,7 +122,7 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
     }
   };
 
-  const workspace = await resolveAttemptWorkspaceSandbox(params);
+  const workspace = await resolveAttemptWorkspaceSandbox({ ...params, skillsOwner });
   const { effectiveWorkspace } = workspace;
 
   const getCurrentAttemptPluginMetadataSnapshot = (): PluginMetadataSnapshot | undefined =>

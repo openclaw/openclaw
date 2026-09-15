@@ -88,6 +88,7 @@ const INTERNAL_CORE_PACKAGE_ALIASES = [
     packageDir: "llm-core",
     subpaths: [
       ["", "index.ts"],
+      ["model-contracts/anthropic", path.join("model-contracts", "anthropic.ts")],
       ["diagnostics", path.join("utils", "diagnostics.ts")],
       ["event-stream", path.join("utils", "event-stream.ts")],
       ["types", "types.ts"],

@@ -4,6 +4,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { buildSkillSnapshot } from "../../../skills/loading/workspace-skill-prompt.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
@@ -13,6 +15,7 @@ import {
 import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { registerAgentHarness } from "../../harness/registry.js";
 import type { AgentHarness } from "../../harness/types.js";
+import { runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import { registerSandboxBackend } from "../../sandbox/backend.js";
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import { installSessionPlacementAdmissionProvider } from "../../session-placement-admission.js";
@@ -39,7 +42,10 @@ vi.mock("../../runtime-plan/build.js", () => ({
   }) => ({ resolvedRef: { provider, modelId }, auth: preparedAuthPlan }),
 }));
 
-afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
+afterEach(() => {
+  setActivePluginRegistry(createEmptyPluginRegistry());
+  vi.unstubAllEnvs();
+});
 
 it.each([
   {
@@ -132,21 +138,37 @@ it.each([
       });
       const admittedRunContext = await admission.admit("plugin-harness", "owner-test");
       setActivePluginRegistry(createEmptyPluginRegistry());
-      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (params) => ({
-        terminal: { kind: "ok" },
-        sessionIdUsed: params.sessionId,
-        messagesSnapshot: [],
-        assistantTexts: [`${params.agentId} answered`],
-        toolMetas: [],
-        lastAssistant: undefined,
-        didSendViaMessagingTool: false,
-        messagingToolSentTexts: [],
-        messagingToolSentMediaUrls: [],
-        messagingToolSentTargets: [],
-        cloudCodeAssistFormatError: false,
-        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-      }));
+      const finishCleanup = createDeferredCore();
+      const cleanupLog = { warn: vi.fn() };
+      const work = new AsyncWorkScope();
+      const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (params) => {
+        if (skillCatalog === "sandbox") {
+          vi.stubEnv("OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS", "1");
+          await runOwnedAgentCleanup({
+            runId: params.runId,
+            sessionId: params.sessionId,
+            oneShotCliRun: true,
+            step: "fixture-backend",
+            log: cleanupLog,
+            cleanup: () => finishCleanup.promise,
+          });
+        }
+        return {
+          terminal: { kind: "ok" },
+          sessionIdUsed: params.sessionId,
+          messagesSnapshot: [],
+          assistantTexts: [`${params.agentId} answered`],
+          toolMetas: [],
+          lastAssistant: undefined,
+          didSendViaMessagingTool: false,
+          messagingToolSentTexts: [],
+          messagingToolSentMediaUrls: [],
+          messagingToolSentTargets: [],
+          cloudCodeAssistFormatError: false,
+          replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+        };
+      });
       registerAgentHarness({
         id: "owner-fixture",
         label: "Owner fixture",
@@ -291,7 +313,9 @@ it.each([
         ...sandboxProvider,
       });
       try {
-        const { dispatchedAttempt: result } = await prepareAndDispatchEmbeddedRunAttempt(input);
+        const { dispatchedAttempt: result } = await work.track(() =>
+          prepareAndDispatchEmbeddedRunAttempt(input),
+        );
         expect(result.rawAttempt.terminal).toEqual({ kind: "ok" });
         expect(result.rawAttempt.assistantTexts).toEqual([`${agentId} answered`]);
         expect(runAttempt).toHaveBeenCalledExactlyOnceWith(
@@ -324,10 +348,21 @@ it.each([
           expect(sandbox).toEqual(remoteSandbox);
         } else if (skillCatalog === "sandbox") {
           const dispatched = runAttempt.mock.calls[0]?.[0];
-          const sandboxSkillPath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";
-          expect(dispatched?.skillsSnapshot?.prompt).toContain(
-            `<location>${sandboxSkillPath}</location>`,
-          );
+          const publishedFile = sandbox?.skillUsagePaths?.find(
+            (entry) => entry.skillName === "demo",
+          )?.readPath;
+          if (!publishedFile) {
+            throw new Error("missing run-owned demo catalog");
+          }
+          expect(publishedFile).toContain(`${path.sep}.openclaw-catalogs${path.sep}`);
+          expect(dispatched?.skillsSnapshot?.prompt).toContain("<name>demo</name>");
+          expect(cleanupLog.warn).toHaveBeenCalledWith(expect.stringContaining("timed out"));
+          expect(await fs.readFile(publishedFile, "utf8")).toContain("# Demo");
+          finishCleanup.resolve();
+          await work.drain();
+          await expect(fs.readFile(publishedFile, "utf8")).rejects.toMatchObject({
+            code: "ENOENT",
+          });
           expect(dispatched?.skillsSnapshot?.prompt).not.toContain(path.join(skillDir, "SKILL.md"));
           expect(params.skillsSnapshot?.prompt).toBe(skillsSnapshot?.prompt);
           expect(sandbox?.workspaceAccess).toBe("rw");
@@ -344,6 +379,8 @@ it.each([
           expect(sandbox).toBeNull();
         }
       } finally {
+        finishCleanup.resolve();
+        await work.drain();
         restorePlacement();
         admission.close();
         restoreSandbox();

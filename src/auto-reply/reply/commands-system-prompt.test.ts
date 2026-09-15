@@ -529,6 +529,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
       const result = await resolveCommandsSystemPromptBundle(params);
 
       expect(vi.mocked(ensureSandboxWorkspaceForSession)).toHaveBeenCalledWith({
+        skillsOwner: expect.any(Object),
         skillsSnapshot: vi.mocked(resolveReusableWorkspaceSkillSnapshot).mock.results[0]?.value
           .snapshot,
         config: params.cfg,

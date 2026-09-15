@@ -17,6 +17,7 @@ import {
   ensureSandboxWorkspaceForSession,
   resolveSandboxRuntimeStatus,
 } from "../../agents/sandbox.js";
+import { releasePublishedSandboxSkills } from "../../agents/sandbox/published-skills-handoff.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -109,10 +110,12 @@ async function resolveCommandSkillsPrompt(params: {
     return "";
   }
   if (params.sandboxed) {
+    const skillsOwner = {};
     try {
       // Sandboxed prompt inspection must not fall back to host skill snapshots:
       // those paths can be unreadable inside the container.
       const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
+        skillsOwner,
         skillsSnapshot,
         config: params.config,
         agentId: params.sandboxAgentId,
@@ -146,6 +149,7 @@ async function resolveCommandSkillsPrompt(params: {
               ? { workspaceAccess: sandboxWorkspace.workspaceAccess }
               : {}),
           },
+          publishedSkillsOwner: sandboxWorkspace,
           skillsAnchorWorkspace: sandboxWorkspace.workspaceDir,
           skillsSnapshot,
         });
@@ -177,6 +181,8 @@ async function resolveCommandSkillsPrompt(params: {
       // resolver yet. Preserve their previous host-snapshot inspection path.
     } catch {
       return "";
+    } finally {
+      await releasePublishedSandboxSkills(skillsOwner);
     }
   }
 

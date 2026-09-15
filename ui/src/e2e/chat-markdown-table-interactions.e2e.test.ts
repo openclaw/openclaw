@@ -315,6 +315,10 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
       };
       await expectRetainedPanes(1);
 
+      // Navigation can leave the pointer or focus on a session-reference hover target.
+      await page.mouse.move(0, 0);
+      await beta.getByRole("button", { name: "Expand table" }).focus();
+      await page.locator(".session-progress-hovercard").waitFor({ state: "hidden" });
       await beta.getByRole("button", { name: "Expand table" }).click();
       const dialog = page.locator(".markdown-table-dialog");
       await dialog.waitFor({ state: "visible" });

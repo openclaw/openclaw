@@ -7,6 +7,7 @@ import {
   getAsyncWorkSignal,
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { releasePublishedSandboxSkills } from "../sandbox/published-skills-handoff.js";
 import { executePreparedCompactionSession } from "./compaction-session-execution.js";
 import {
   prepareDirectCompactionAttempt,
@@ -21,6 +22,7 @@ import type { EmbeddedAgentCompactResult } from "./types.js";
 export async function compactEmbeddedAgentSessionDirectOnce(
   params: PreparedCompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
+  const skillsOwner = {};
   const callerResult = createDeferredCore<EmbeddedAgentCompactResult>();
   const trackOwner = captureAsyncWorkTracker();
   const parentSignal = getAsyncWorkSignal();
@@ -34,7 +36,7 @@ export async function compactEmbeddedAgentSessionDirectOnce(
   const cleanupContext = cleanupWork.run(() => AsyncLocalStorage.snapshot());
   let cleanup: PreparedCompactionCleanup | undefined;
   const runAttempt = async () => {
-    const preparation = await prepareDirectCompactionAttempt(params);
+    const preparation = await prepareDirectCompactionAttempt(params, skillsOwner);
     if (!preparation.ok) {
       return preparation.result;
     }
@@ -85,7 +87,11 @@ export async function compactEmbeddedAgentSessionDirectOnce(
               Promise.all([context(() => work.drain()), cleanupContext(() => cleanupWork.drain())]),
           );
         } finally {
-          cancellationSignal?.removeEventListener("abort", closeWork);
+          try {
+            await releasePublishedSandboxSkills(skillsOwner);
+          } finally {
+            cancellationSignal?.removeEventListener("abort", closeWork);
+          }
         }
       }
     }

@@ -57,6 +57,7 @@ export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSess
 
 export async function prepareDirectCompactionAttempt(
   params: PreparedCompactEmbeddedAgentSessionParams,
+  skillsOwner?: object,
 ) {
   const startedAt = Date.now();
   const diagId = params.diagId?.trim() || createDirectCompactionDiagId();
@@ -324,6 +325,8 @@ export async function prepareDirectCompactionAttempt(
   const sandbox =
     placementParams.sandbox === undefined
       ? await resolveSandboxContext({
+          skillsOwner,
+          skillsSnapshot: params.skillsSnapshot,
           config: params.config,
           agentId: sandboxAgentId,
           execOverrides: params.execOverrides,

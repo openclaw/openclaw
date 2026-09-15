@@ -16,6 +16,7 @@ import {
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
+import type { PublishedWorkspaceSkills } from "../../skills/loading/workspace-skill-sync.runtime.js";
 import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import { createSandboxBackend, getSandboxBackendWorkdirResolver } from "./backend.js";
@@ -25,6 +26,7 @@ import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { hashTextSha256 } from "./hash.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
+import { attachPublishedSandboxSkills } from "./published-skills-handoff.js";
 import { readRegisteredSandboxRuntimeIds } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
@@ -33,6 +35,11 @@ import type { SandboxContext, SandboxIsolationSubject, SandboxWorkspaceInfo } fr
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 const sandboxLog = createSubsystemLogger("agent/sandbox");
+
+const loadAcquireWorkspaceSkills = createLazyRuntimeNamedExport(
+  () => import("../../skills/loading/workspace-skill-sync.runtime.js"),
+  "acquireWorkspaceSkills",
+);
 
 const loadSyncWorkspaceSkills = createLazyRuntimeNamedExport(
   () => import("../../skills/loading/workspace-skill-sync.runtime.js"),
@@ -46,12 +53,17 @@ async function syncSandboxSkillsToWorkspace(params: {
   agentId: string;
   rawSessionKey: string;
   execOverrides?: ExecPolicyOverrides;
+  skillsOwner?: object;
   skillsSnapshot?: SkillSnapshot;
-}): Promise<{ eligibility?: SkillEligibilityContext; skillUsagePaths?: SkillUsagePath[] }> {
+}): Promise<{
+  eligibility?: SkillEligibilityContext;
+  skillUsagePaths?: SkillUsagePath[];
+  publication?: PublishedWorkspaceSkills;
+}> {
   try {
     const [syncWorkspaceSkills, { getRemoteSkillEligibility }, { resolveNodeExecEligibility }] =
       await Promise.all([
-        loadSyncWorkspaceSkills(),
+        params.skillsOwner ? loadAcquireWorkspaceSkills() : loadSyncWorkspaceSkills(),
         import("../../skills/runtime/remote.js"),
         import("../exec-defaults.js"),
       ]);
@@ -67,7 +79,7 @@ async function syncSandboxSkillsToWorkspace(params: {
         advertiseExecNode: nodeSkills.canExec,
       }),
     };
-    const skillUsagePaths = await syncWorkspaceSkills({
+    const result = await syncWorkspaceSkills({
       sourceWorkspaceDir: params.sourceWorkspaceDir,
       targetWorkspaceDir: params.targetWorkspaceDir,
       config: params.config,
@@ -75,11 +87,14 @@ async function syncSandboxSkillsToWorkspace(params: {
       eligibility,
       skillsSnapshot: params.skillsSnapshot,
     });
-    return { eligibility, skillUsagePaths };
+    if (Array.isArray(result)) {
+      return { eligibility, skillUsagePaths: result };
+    }
+    return { eligibility, skillUsagePaths: result.skillUsagePaths, publication: result };
   } catch (error) {
     const message = error instanceof Error ? error.message : JSON.stringify(error);
     defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
-    if (params.skillsSnapshot?.librarySelections?.length) {
+    if (params.skillsOwner || params.skillsSnapshot?.librarySelections?.length) {
       throw error;
     }
     return {};
@@ -93,6 +108,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   isolationSubject?: SandboxIsolationSubject;
   config?: OpenClawConfig;
   execOverrides?: ExecPolicyOverrides;
+  skillsOwner?: object;
   skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
 }): Promise<{
@@ -102,6 +118,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   skillsWorkspaceDir: string;
   skillsEligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
+  publication?: PublishedWorkspaceSkills;
   workspaceDir: string;
 }> {
   const { cfg, rawSessionKey } = params;
@@ -129,6 +146,7 @@ async function ensureSandboxWorkspaceLayout(params: {
       agentId: params.agentId,
       rawSessionKey,
       execOverrides: params.execOverrides,
+      skillsOwner: params.skillsOwner,
       skillsSnapshot: params.skillsSnapshot,
     });
   } else {
@@ -140,6 +158,7 @@ async function ensureSandboxWorkspaceLayout(params: {
       agentId: params.agentId,
       rawSessionKey,
       execOverrides: params.execOverrides,
+      skillsOwner: params.skillsOwner,
       skillsSnapshot: params.skillsSnapshot,
     });
   }
@@ -149,6 +168,7 @@ async function ensureSandboxWorkspaceLayout(params: {
     scopeKey,
     sandboxWorkspaceDir,
     skillsWorkspaceDir,
+    ...(syncedSkills.publication ? { publication: syncedSkills.publication } : {}),
     ...(syncedSkills.eligibility ? { skillsEligibility: syncedSkills.eligibility } : {}),
     ...(syncedSkills.skillUsagePaths ? { skillUsagePaths: syncedSkills.skillUsagePaths } : {}),
     workspaceDir,
@@ -156,6 +176,7 @@ async function ensureSandboxWorkspaceLayout(params: {
 }
 
 function resolveSandboxSession(params: {
+  skillsOwner?: object;
   skillsSnapshot?: SkillSnapshot;
   config?: OpenClawConfig;
   agentId?: string;
@@ -230,6 +251,7 @@ type ResolveSandboxContextParams = {
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   sessionKey?: string;
+  skillsOwner?: object;
   skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
 };
@@ -266,6 +288,7 @@ async function resolveProvisionedSandboxContext(
     agentWorkspaceDir,
     scopeKey,
     skillsEligibility,
+    publication,
     skillUsagePaths,
     skillsWorkspaceDir,
     workspaceDir,
@@ -276,9 +299,14 @@ async function resolveProvisionedSandboxContext(
     isolationSubject: runtime.isolationSubject,
     config: params.config,
     execOverrides: params.execOverrides,
+    skillsOwner: params.skillsOwner,
     skillsSnapshot: params.skillsSnapshot,
     workspaceDir: params.workspaceDir,
   });
+
+  if (params.skillsOwner && publication) {
+    attachPublishedSandboxSkills(params.skillsOwner, publication, publication);
+  }
 
   const docker = await resolveSandboxDockerUser({
     backend: cfg.backend,
@@ -366,6 +394,9 @@ async function resolveProvisionedSandboxContext(
     backend,
   };
 
+  if (params.skillsOwner && publication) {
+    attachPublishedSandboxSkills(params.skillsOwner, sandboxContext, publication);
+  }
   sandboxContext.fsBridge =
     backend.createFsBridge?.({ sandbox: sandboxContext }) ??
     createSandboxFsBridge({ sandbox: sandboxContext });
@@ -379,6 +410,7 @@ export async function resolveSandboxContext(params: {
   execOverrides?: ExecPolicyOverrides;
   requireCurrentConfig?: boolean;
   sessionKey?: string;
+  skillsOwner?: object;
   skillsSnapshot?: SkillSnapshot;
   workspaceDir?: string;
 }): Promise<SandboxContext | null> {
@@ -398,6 +430,7 @@ export async function resolveSandboxContext(params: {
 }
 
 export async function ensureSandboxWorkspaceForSession(params: {
+  skillsOwner?: object;
   skillsSnapshot?: SkillSnapshot;
   config?: OpenClawConfig;
   agentId?: string;
@@ -415,6 +448,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
     agentWorkspaceDir,
     scopeKey,
     skillsEligibility,
+    publication,
     skillUsagePaths,
     skillsWorkspaceDir,
     workspaceDir,
@@ -424,10 +458,14 @@ export async function ensureSandboxWorkspaceForSession(params: {
     rawSessionKey,
     isolationSubject: runtime.isolationSubject,
     config: params.config,
+    skillsOwner: params.skillsOwner,
     skillsSnapshot: params.skillsSnapshot,
     workspaceDir: params.workspaceDir,
   });
 
+  if (params.skillsOwner && publication) {
+    attachPublishedSandboxSkills(params.skillsOwner, publication, publication);
+  }
   const containerWorkdir = resolveSandboxWorkspaceInfoWorkdir({
     cfg,
     rawSessionKey,
@@ -436,7 +474,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
     agentWorkspaceDir,
     skillsWorkspaceDir,
   });
-  return {
+  const workspaceInfo: SandboxWorkspaceInfo = {
     workspaceDir,
     ...(containerWorkdir ? { containerWorkdir } : {}),
     skillsWorkspaceDir,
@@ -444,4 +482,8 @@ export async function ensureSandboxWorkspaceForSession(params: {
     ...(skillUsagePaths ? { skillUsagePaths } : {}),
     workspaceAccess: cfg.workspaceAccess,
   };
+  if (params.skillsOwner && publication) {
+    attachPublishedSandboxSkills(params.skillsOwner, workspaceInfo, publication);
+  }
+  return workspaceInfo;
 }

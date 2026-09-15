@@ -297,11 +297,13 @@ describe("ManagedWorktreeService failure diagnostics", () => {
     await fs.writeFile(path.join(created.path, "README.md"), "complete recoverable edit\n");
     const marker = path.join(root, "removal-child.pid");
     const release = path.join(root, "release-removal");
+    const removalAdmitted = createDeferredCore();
     let removalStarted = false;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       const args = gitCommandArgs(argv);
       if (args[0] === "worktree" && args[1] === "remove") {
         removalStarted = true;
+        removalAdmitted.resolve();
         // A real held child models Git after it has removed the first tracked file.
         const partial = await realRunCommand(
           [
@@ -322,11 +324,19 @@ describe("ManagedWorktreeService failure diagnostics", () => {
     });
     const abort = new AbortController();
     const pending = service.remove({ id: created.id, reason: "test", signal: abort.signal }).then(
-      () => false,
-      () => true,
+      () => {
+        removalAdmitted.reject(new Error("Removal completed before fixture child admission"));
+        return false;
+      },
+      (error: unknown) => {
+        removalAdmitted.reject(error);
+        return true;
+      },
     );
     let pid: number | undefined;
     try {
+      // Snapshot preparation is not part of the child-start readiness window.
+      await removalAdmitted.promise;
       pid = await waitForPidFile(marker);
       expect(removalStarted).toBe(true);
       expect(isPidAlive(pid)).toBe(true);

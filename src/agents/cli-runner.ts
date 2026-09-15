@@ -83,6 +83,7 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
+import { runWithPublishedSandboxSkillsWork } from "./sandbox/published-skills-handoff.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
 const cliRunnerDeps = cliRunSettlementDeps;
@@ -138,10 +139,7 @@ export async function isCliBindingFlushed(
 export function runCliAgent(paramsInput: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
   const lifecycleGeneration =
     paramsInput.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(paramsInput.runId);
-  const params = {
-    ...paramsInput,
-    lifecycleGeneration,
-  };
+  const params = { ...paramsInput, lifecycleGeneration };
   // Observability services register before turns and keep subscriptions process-stable.
   // Snapshot listener presence here so disabled installs pay no synthetic trace cost.
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
@@ -248,7 +246,9 @@ export async function runPreparedCliAgent(
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
 ): Promise<EmbeddedAgentRunResult> {
   const run = () => runPreparedCliAgentOwned(context, diagnosticLifecycle);
-  return await runWithCliHistoryWriter(context.cliHistoryWriter, run);
+  return await runWithPublishedSandboxSkillsWork(context, () =>
+    runWithCliHistoryWriter(context.cliHistoryWriter, run),
+  );
 }
 
 async function runPreparedCliAgentOwned(
