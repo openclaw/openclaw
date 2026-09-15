@@ -27,6 +27,25 @@ vi.mock("../server-startup-handler-prewarm.js", () => ({
   scheduleGatewayHandlerPrewarm: () => ({ stop() {} }),
 }));
 
+// Keep real catalog publication while excluding automatic startup work from the
+// manual-RPC root-work assertion.
+vi.mock("../server-runtime-services.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../server-runtime-services.js")>();
+  return {
+    ...actual,
+    activateGatewayScheduledServices: (
+      params: Parameters<typeof actual.activateGatewayScheduledServices>[0],
+    ) => actual.activateGatewayScheduledServices({ ...params, minimalTestGateway: true }),
+    scheduleGatewayPostReadyMaintenance: (
+      ...args: Parameters<typeof actual.scheduleGatewayPostReadyMaintenance>
+    ) => {
+      const timer = actual.scheduleGatewayPostReadyMaintenance(...args);
+      clearTimeout(timer);
+      return timer;
+    },
+  };
+});
+
 it("connect negotiates snapshots and preserves draft and saved-session catalog scopes", async () => {
   const state = await createOpenClawTestState({
     label: "models-connect-publication",

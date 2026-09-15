@@ -47,7 +47,9 @@ describe("cleanBlocksForDescendant", () => {
       {
         block_id: "text-2a",
         block_type: 2,
-        text: { elements: [{ text_run: { content: "中" } }] },
+        text: {
+          elements: [{ text_run: { content: "\ud83d" } }, { text_run: { content: "\ude00" } }],
+        },
       },
       {
         block_id: "text-2b",

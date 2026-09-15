@@ -276,7 +276,8 @@ export function resolveSessionResetCommand(params: {
     if (
       !triggerLower ||
       (normalizedResetBodyLower !== triggerLower &&
-        !normalizedResetBodyLower.startsWith(`${triggerLower} `))
+        (!normalizedResetBodyLower.startsWith(triggerLower) ||
+          !/\s/.test(normalizedResetBodyLower.charAt(triggerLower.length))))
     ) {
       continue;
     }
