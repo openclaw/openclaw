@@ -22,7 +22,6 @@ import {
   createOrResumeClientVoiceSession,
   ensureClientVoiceAgentSessionEntry,
   flushClientVoiceSessionWrites,
-  resolveClientVoiceAgentSessionId,
 } from "../../../talk/client-voice-session.js";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL } from "../../../talk/describe-view-tool.js";
 import {
@@ -36,11 +35,9 @@ import { resolveOperatorSessionCreation } from "../../server-methods/session-cre
 import type { GatewayRequestHandler, RespondFn } from "../../server-methods/types.js";
 import { assertValidParams } from "../../server-methods/validation.js";
 import { SessionMutationAuthorizationChangedError } from "../../session-sharing.js";
-import { readSessionPreviewItemsFromTranscript } from "../../session-transcript-preview.js";
 import { formatForLog } from "../../ws-log.js";
 import { createTalkClientAgentConsultRunner } from "../client-agent-consult.js";
 import {
-  boundTalkClientRealtimeInitialItems,
   createTalkClientGatewayControlOwner,
   resolveTalkAgentConsultAuthority,
 } from "../client-gateway-control.js";
@@ -51,6 +48,7 @@ import {
   isUnsupportedBrowserWebRtcSession,
   resolveTalkRealtimeProviderInstructions,
 } from "../session-config.js";
+import { readTalkRealtimeInitialItems } from "../session-history.js";
 import { requirePreparedTalkSessionTarget } from "../session-target.js";
 import {
   markTalkVoiceSessionReady,
@@ -62,8 +60,6 @@ import {
   rememberLegacyVoiceBinding,
 } from "./client-legacy-voice-bindings.js";
 
-const REALTIME_VOICE_CONTEXT_MAX_ITEMS = 16;
-const REALTIME_VOICE_CONTEXT_MAX_ITEM_CHARS = 800;
 const REALTIME_VOICE_CLIENT_SESSION_MIN_TTL_MS = 5_000;
 function rejectTalkClientRequest(
   respond: RespondFn,
@@ -212,36 +208,10 @@ export const createTalkClient: GatewayRequestHandler = async ({
     sessionMutationAuthorization?.assertCurrent();
     replacement?.assertCurrent(target);
     if (resolution.provider.createBrowserSession && transport !== "gateway-relay") {
-      const agentSessionId = resolveClientVoiceAgentSessionId(sessionTarget);
-      const { readRestoredSessionTranscript } =
-        await import("../../../config/sessions/session-cold-storage-read.js");
-      const initialItems = agentSessionId
-        ? await readRestoredSessionTranscript(
-            { ...sessionTarget, sessionId: agentSessionId },
-            () => {
-              sessionMutationAuthorization?.assertCurrent();
-              replacement?.assertCurrent(target);
-              return boundTalkClientRealtimeInitialItems(
-                readSessionPreviewItemsFromTranscript(
-                  {
-                    ...sessionTarget,
-                    sessionId: agentSessionId,
-                  },
-                  REALTIME_VOICE_CONTEXT_MAX_ITEMS,
-                  REALTIME_VOICE_CONTEXT_MAX_ITEM_CHARS,
-                  "model-context",
-                ).filter(
-                  (
-                    item,
-                  ): item is {
-                    role: "user" | "assistant";
-                    text: string;
-                  } => item.role === "user" || item.role === "assistant",
-                ),
-              );
-            },
-          )
-        : [];
+      const initialItems = await readTalkRealtimeInitialItems(target, () => {
+        sessionMutationAuthorization?.assertCurrent();
+        replacement?.assertCurrent(target);
+      });
       sessionMutationAuthorization?.assertCurrent();
       replacement?.assertCurrent(target);
       const controlSource =

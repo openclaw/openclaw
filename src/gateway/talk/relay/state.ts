@@ -236,6 +236,7 @@ export type CreateTalkRealtimeRelaySessionParams = {
   clientCapabilities?: readonly "voice-selection"[];
   voiceChangeId?: string;
   voiceSelectionVoices?: readonly string[];
+  initialItems?: Array<{ role: "user" | "assistant"; text: string }>;
   instructions: string;
   tools: RealtimeVoiceTool[];
   model?: string;

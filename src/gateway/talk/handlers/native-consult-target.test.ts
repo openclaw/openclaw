@@ -10,6 +10,7 @@ import { replyRunRegistry } from "../../../auto-reply/reply/reply-run-registry.j
 import {
   listSessionEntriesReadOnly,
   loadSessionEntry,
+  readSessionTranscriptMessageEvents,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../../config/sessions/session-accessor.js";
@@ -29,9 +30,11 @@ import {
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import type {
   RealtimeVoiceAgentConsultRunner,
+  RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceGatewayControl,
   RealtimeVoiceProviderCapabilities,
 } from "../../../talk/provider-types.js";
+import { makeBridge } from "../../../talk/session-runtime.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -50,6 +53,11 @@ import {
   rememberUnifiedTalkSession,
 } from "../session-registry.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
+import {
+  completeTalkVoiceChange,
+  requestTalkVoiceChange,
+  resolveTalkVoiceSession,
+} from "../voice-selection.js";
 import { talkClientHandlers } from "./client.js";
 import { talkSessionHandlers } from "./session.js";
 
@@ -207,7 +215,9 @@ afterEach(async () => {
     }
     cleanupTalkConnection(client.connId, context.logGateway);
     await Promise.all(
-      [...drainingRelaySessions].map((session) => session.voiceSessionClose ?? Promise.resolve()),
+      [...drainingRelaySessions].map(
+        (session) => session.closing?.completion ?? session.voiceSessionClose ?? Promise.resolve(),
+      ),
     );
   } finally {
     clientVoiceSessionTesting.reset();
@@ -217,12 +227,13 @@ afterEach(async () => {
   }
 });
 
-async function createRelayCall() {
+async function createRelayCall(params: Record<string, unknown> = {}) {
   const respond = await dispatch("talk.session.create", {
     sessionKey: "main",
     mode: "realtime",
     transport: "gateway-relay",
     brain: "agent-consult",
+    ...params,
   });
   expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
   const sessionId = (respond.mock.calls[0]![1] as { sessionId: string }).sessionId;
@@ -628,6 +639,148 @@ it("preserves status and cancellation for an owned queued chat.send reply", asyn
   } finally {
     operation.complete();
     registration.cleanup();
+  }
+});
+
+it("restores bounded relay history after the original voice provider finishes closing", async () => {
+  const configuredInstructions = "Keep native answers brief.";
+  config.talk = { ...config.talk, realtime: { instructions: configuredInstructions } };
+  const closeStarted = createDeferredCore();
+  const finishClose = createDeferredCore();
+  const requests: RealtimeVoiceBridgeCreateRequest[] = [];
+  const tailUser = "The final preference is the blue bicycle.";
+  const tailAssistant = "I will remember the blue bicycle.";
+  const provider: RealtimeVoiceProviderPlugin = {
+    id: "synthetic-voice",
+    label: "Synthetic voice",
+    voices: ["cove", "ember"],
+    capabilities: mocks.capabilities,
+    isConfigured: () => true,
+    createBridge: (request) => {
+      requests.push(request);
+      const original = requests.length === 1;
+      return makeBridge({
+        close: async () => {
+          if (original) {
+            closeStarted.resolve();
+            await finishClose.promise;
+            request.onTranscript?.("user", tailUser, true);
+            request.onTranscript?.("assistant", tailAssistant, true);
+          }
+        },
+      });
+    },
+  };
+  mocks.resolveProvider.mockReturnValue({
+    provider,
+    providerConfig: {},
+    capabilities: { ...mocks.capabilities, handlesAgentConsult: true },
+  });
+  const original = await createRelayCall({ voice: "cove", capabilities: ["voice-selection"] });
+  const originalRequest = requests[0];
+  if (!originalRequest) {
+    throw new Error("Expected original relay provider");
+  }
+  originalRequest.onReady?.();
+  const utterances = Array.from(
+    { length: 20 },
+    (_, index) =>
+      `HISTORY_ENTRY_${String(index).padStart(2, "0")}: ${`detail-${index} `.repeat(120)}`,
+  );
+  for (const text of utterances) {
+    originalRequest.onTranscript?.("user", text, true);
+  }
+  const send = vi.fn();
+  const changing = requestTalkVoiceChange({
+    session: resolveTalkVoiceSession({
+      kind: "client",
+      connId: client.connId,
+      voiceSessionId: original.sessionId,
+    }),
+    voice: "ember",
+    requesterConnId: client.connId,
+    assertCurrent: () => {},
+    send,
+  });
+  void changing.catch(() => {});
+  const changeId = send.mock.calls[0]?.[0].changeId as string;
+  const closing = dispatch("talk.session.close", { sessionId: original.sessionId });
+  try {
+    await closeStarted.promise;
+    expect(requests).toHaveLength(1);
+    finishClose.resolve();
+    expect(await closing).toHaveBeenCalledWith(true, { ok: true }, undefined);
+
+    const storedSessionId = loadSessionEntry({
+      agentId: original.target.agentId,
+      sessionKey: original.target.canonicalKey,
+      storePath: original.target.storePath,
+    })!.sessionId;
+    const transcript = readSessionTranscriptMessageEvents({
+      agentId: original.target.agentId,
+      sessionId: storedSessionId,
+      storePath: original.target.storePath,
+    });
+    expect(transcript).toHaveLength(22);
+    expect(transcript[0]?.event).toMatchObject({
+      message: { content: [{ type: "text", text: utterances[0]?.trim() }] },
+    });
+    expect(transcript.slice(-2).map(({ event }) => event)).toEqual([
+      expect.objectContaining({
+        message: expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: tailUser }],
+        }),
+      }),
+      expect.objectContaining({
+        message: expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: tailAssistant }],
+        }),
+      }),
+    ]);
+
+    const replacement = await createRelayCall({
+      voiceChangeId: changeId,
+      capabilities: ["voice-selection"],
+    });
+    const replacementRequest = requests[1];
+    if (!replacementRequest?.runAgentConsult) {
+      throw new Error("Expected replacement relay provider and consult callback");
+    }
+    replacementRequest.onReady?.();
+    await completeTalkVoiceChange({
+      changeId,
+      connId: client.connId,
+      voiceSessionId: replacement.sessionId,
+      outcome: "ready",
+    });
+    await expect(changing).resolves.toMatchObject({ status: "applied", voice: "ember" });
+
+    const instructions = replacementRequest.instructions ?? "";
+    expect(instructions).toContain(configuredInstructions);
+    expect(instructions).toContain(tailUser);
+    expect(instructions).toContain(tailAssistant);
+    expect(instructions).toContain("HISTORY_ENTRY_19");
+    expect(instructions).not.toContain("HISTORY_ENTRY_00");
+    expect([...instructions.matchAll(/HISTORY_ENTRY_\d{2}/gu)].length).toBeLessThanOrEqual(16);
+    expect(
+      Buffer.byteLength(instructions.slice(configuredInstructions.length), "utf8"),
+    ).toBeLessThanOrEqual(8_000);
+
+    await expect(
+      replacementRequest.runAgentConsult({ prompt: "What bicycle did I choose?" }),
+    ).resolves.toEqual({ text: "Synthetic consult answer" });
+    const agentPrompt = mocks.runEmbeddedAgent.mock.calls.at(-1)?.[0].prompt ?? "";
+    expect(agentPrompt).toContain(tailUser);
+    expect(agentPrompt).toContain(tailAssistant);
+    expect(agentPrompt).toContain("HISTORY_ENTRY_19");
+    expect(agentPrompt).not.toContain("HISTORY_ENTRY_00");
+  } finally {
+    finishClose.resolve();
+    await closing;
+    cleanupTalkConnection(client.connId, context.logGateway);
+    await changing.catch(() => {});
   }
 });
 

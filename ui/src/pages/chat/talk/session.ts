@@ -108,6 +108,7 @@ export class RealtimeTalkSession {
   private selectedTransport: RealtimeTalkLaunchTransport | undefined;
   private pendingStartup: Pick<RealtimeTalkTransport, "stop"> | null = null;
   private closed = false;
+  private closeCompletion: Promise<void> = Promise.resolve();
   private lifecycleGeneration = 0;
   private videoEnabled = false;
   private videoOperation = 0;
@@ -419,9 +420,9 @@ export class RealtimeTalkSession {
       : relaySession;
   }
 
-  stop(): void {
+  stop(): Promise<void> {
     try {
-      this.retireTransport();
+      return this.retireTransport();
     } finally {
       this.callbacks.onStatus?.("idle");
     }
@@ -435,7 +436,7 @@ export class RealtimeTalkSession {
     return this.closed ? undefined : this.selectedTransport;
   }
 
-  private retireTransport(): void {
+  private retireTransport(): Promise<void> {
     this.lifecycleGeneration += 1;
     this.closed = true;
     this.videoOperation += 1;
@@ -443,25 +444,32 @@ export class RealtimeTalkSession {
     activeRealtimeTalkSessions.delete(this);
     const detached = this.detachVoiceSession();
     const transport = this.transport;
+    const hadPendingStartup = this.pendingStartup !== null;
+    const completions: Array<void | Promise<void>> = [];
     this.transport = null;
     this.selectedTransport = undefined;
     try {
-      this.stopPendingStartup();
+      completions.push(this.stopPendingStartup());
     } finally {
       try {
-        transport?.stop();
+        completions.push(transport?.stop());
       } finally {
         if (detached) {
-          this.closeLogicalVoiceSession(detached);
+          completions.push(this.closeLogicalVoiceSession(detached));
         }
       }
     }
+    if (detached || transport || hadPendingStartup) {
+      this.closeCompletion = Promise.all(completions).then(() => undefined);
+      void this.closeCompletion.catch(() => undefined);
+    }
+    return this.closeCompletion;
   }
 
-  private stopPendingStartup(): void {
+  private stopPendingStartup(): void | Promise<void> {
     const pending = this.pendingStartup;
     this.pendingStartup = null;
-    pending?.stop({ emitClosed: false });
+    return pending?.stop({ emitClosed: false });
   }
 
   private closeUnadoptedVoiceSession(
@@ -650,14 +658,14 @@ export class RealtimeTalkSession {
     return detached;
   }
 
-  private closeLogicalVoiceSession(detached: DetachedVoiceSession): void {
+  private closeLogicalVoiceSession(detached: DetachedVoiceSession): Promise<void> {
     if (detached.serverOwned) {
       detached.owner?.release();
-      return;
+      return Promise.resolve();
     }
     const owner = detached.owner!;
     owner.beginDrain();
-    void detached.transcriptQueue
+    const closing = detached.transcriptQueue
       .flush()
       .then(() =>
         retryVoiceTranscriptPersistence(
@@ -677,18 +685,21 @@ export class RealtimeTalkSession {
           "Realtime Talk voice session close failed",
         ),
       )
-      .catch((error: unknown) => {
-        if (owner.closeSignal.aborted) {
-          return;
-        }
-        console.warn("Realtime Talk voice session close failed", error);
-        // Suppress if a newer transport has started: closing the old call is its own
-        // teardown and must not push the active replacement call into an error state.
-        if (this.transportGeneration === detached.generation) {
-          this.callbacks.onStatus?.("error", "Realtime Talk voice session close failed");
-        }
-      })
       .finally(owner.release);
+    void closing.catch((error: unknown) => {
+      if (owner.closeSignal.aborted) {
+        return;
+      }
+      console.warn("Realtime Talk voice session close failed", error);
+      // Suppress if a newer transport has started: closing the old call is its own
+      // teardown and must not push the active replacement call into an error state.
+      if (this.transportGeneration === detached.generation) {
+        this.callbacks.onStatus?.("error", "Realtime Talk voice session close failed");
+      }
+    });
+    const completion = closing.then(() => detached.transcriptQueue.flush({ requireSuccess: true }));
+    void completion.catch(() => undefined);
+    return completion;
   }
 
   async setVideoEnabled(enabled: boolean): Promise<void> {

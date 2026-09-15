@@ -52,6 +52,7 @@ import {
   resolveTalkRealtimeProviderInstructions,
   resolveTalkRealtimeGatewayRelayLaunch,
 } from "../session-config.js";
+import { readTalkRealtimeInitialItems } from "../session-history.js";
 import {
   forgetUnifiedTalkSession,
   getUnifiedTalkSession,
@@ -328,13 +329,19 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             resolveOperatorSessionCreation(client),
           assertCommitAllowed,
         });
-        sessionMutationCommitGuard?.();
-        sessionMutationAuthorization?.assertTargetCurrent({
-          agentId,
-          sessionKey: target.canonicalKey,
-          ensuredSessionId,
-        });
-        replacement?.assertCurrent(target);
+        const assertEnsuredTargetCurrent = () => {
+          sessionMutationCommitGuard?.();
+          sessionMutationAuthorization?.assertTargetCurrent({
+            agentId,
+            sessionKey: target.canonicalKey,
+            ensuredSessionId,
+          });
+          replacement?.assertCurrent(target);
+        };
+        const initialItems = replacement
+          ? await readTalkRealtimeInitialItems(target, assertEnsuredTargetCurrent)
+          : [];
+        assertEnsuredTargetCurrent();
         const model =
           normalizeOptionalString(relayLaunch.providerConfig.model) ??
           resolution.provider.defaultModel;
@@ -355,6 +362,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           capabilities,
           clientCapabilities: params.capabilities,
           voiceChangeId: params.voiceChangeId,
+          initialItems,
           voiceSelectionVoices: voices,
           instructions:
             controlSource === "delegation"

@@ -54,6 +54,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private unsubscribe: (() => void) | null = null;
   private closed = false;
+  private closeCompletion: Promise<void> = Promise.resolve();
   private audioAppendAbortController: AbortController | null = null;
   private readonly pendingAudioAppends = new Set<Promise<unknown>>();
   private readonly outputQueue = new RealtimeTalkPcmOutputQueue();
@@ -168,11 +169,11 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
   }
 
-  stop(): void {
+  stop(): Promise<void> {
     const wasClosed = this.closed;
     this.stopLocal();
     if (!wasClosed) {
-      void this.ctx.client
+      this.closeCompletion = this.ctx.client
         .request(
           "talk.session.close",
           {
@@ -180,8 +181,10 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           },
           { timeoutMs: RELAY_CLOSE_TIMEOUT_MS },
         )
-        .catch(() => undefined);
+        .then(() => undefined);
+      void this.closeCompletion.catch(() => undefined);
     }
+    return this.closeCompletion;
   }
 
   private stopLocal(): void {

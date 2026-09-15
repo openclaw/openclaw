@@ -85,7 +85,7 @@ export type RealtimeTalkTransportStartResult = "ready" | "cancelled";
 export type RealtimeTalkTransport = {
   start(): Promise<RealtimeTalkTransportStartResult>;
   activate?: () => void;
-  stop(options?: { emitClosed?: boolean }): void;
+  stop(options?: { emitClosed?: boolean }): void | Promise<void>;
   setVideoEnabled?: (enabled: boolean) => Promise<void>;
   switchCamera?: (videoDeviceId: string | undefined) => Promise<void>;
 };

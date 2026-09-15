@@ -51,7 +51,7 @@ describe("chat realtime actions", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
     startSpy = vi.spyOn(RealtimeTalkSession.prototype, "start").mockResolvedValue(undefined);
-    vi.spyOn(RealtimeTalkSession.prototype, "stop").mockImplementation(() => undefined);
+    vi.spyOn(RealtimeTalkSession.prototype, "stop").mockResolvedValue(undefined);
     vi.spyOn(RealtimeTalkSession.prototype, "switchCamera").mockResolvedValue(undefined);
   });
 
@@ -749,7 +749,7 @@ describe("chat realtime actions", () => {
     const firstSession = inspectSession(state);
     const stop = vi
       .spyOn(RealtimeTalkSession.prototype, "stop")
-      .mockImplementationOnce(() => firstSession.callbacks.onStatus?.("error", "late stop"));
+      .mockImplementationOnce(async () => firstSession.callbacks.onStatus?.("error", "late stop"));
 
     await state.toggleRealtimeTalk();
 

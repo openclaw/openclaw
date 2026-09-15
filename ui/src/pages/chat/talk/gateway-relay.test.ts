@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./gateway-relay.ts";
 import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
@@ -239,10 +240,15 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   });
 
   it("keeps the microphone processor inaudible locally", async () => {
+    const closed = createDeferred();
+    const client = createClient();
+    vi.mocked(client.request).mockImplementation(async (method) =>
+      method === "talk.session.close" ? await closed.promise : defaultRelayResponse(method),
+    );
     const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
       input: await prepareRealtimeTalkTestInput(),
       callbacks: {},
-      client: createClient(),
+      client,
       sessionKey: "main",
     });
 
@@ -257,8 +263,17 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     expect(processor.connect).toHaveBeenCalledWith(sink);
     expect(sink.connect).toHaveBeenCalledOnce();
 
-    transport.stop();
+    const stopping = transport.stop();
+    let stopped = false;
+    void stopping.then(() => {
+      stopped = true;
+    });
     expect(sink.disconnect).toHaveBeenCalledOnce();
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    closed.resolve();
+    await stopping;
+    expect(stopped).toBe(true);
   });
 
   it("defers relay effects until the transport is committed", async () => {

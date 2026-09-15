@@ -209,8 +209,9 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     }
     if (voiceChange) {
       const previous = state.realtimeTalkSession;
+      const previousController = state.realtimeTalkVoiceController;
       state.realtimeTalkSession = null;
-      previous?.stop();
+      const closed = previous?.stop();
       state.realtimeTalkVideoStream = null;
       state.realtimeTalkCameraDevices = [];
       state.realtimeTalkConversationState = continueRealtimeTalkConversation(
@@ -218,6 +219,16 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       );
       state.realtimeTalkConversation = state.realtimeTalkConversationState.entries;
       conversationGeneration += 1;
+      state.requestUpdate();
+      await closed;
+      if (
+        state.realtimeTalkVoiceController !== previousController ||
+        state.client !== client ||
+        state.sessionKey !== sessionKey ||
+        !state.connected
+      ) {
+        return undefined;
+      }
     } else {
       conversationGeneration = 0;
       state.realtimeTalkVoiceController?.dispose();
@@ -422,7 +433,7 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     await state.realtimeTalkVoiceController?.set(voice);
   };
   state.toggleRealtimeTalk = async () => {
-    if (state.realtimeTalkSession) {
+    if (state.realtimeTalkSession || state.realtimeTalkActive) {
       stopChatRealtimeTalk(state);
       state.requestUpdate();
       return;

@@ -14,7 +14,10 @@ During an active browser Talk call, choose a voice beside the call controls or
 ask the assistant to list the available voices or switch to one. The `talk_voice`
 tool lists the current provider, model, voice,
 and supported voice IDs for the call in the current conversation. Setting a
-voice reconnects that call while preserving its chat and captions. The assistant
+voice reconnects that call while preserving its chat and captions. The replacement
+waits for finalized speech to be saved and receives bounded conversation history,
+including speech finalized while the old connection closes. Accepted agent work
+keeps running during this handoff. The assistant
 reports success only after the replacement call is ready; unsupported changes or
 connection failures return an error. **Settings → Talk** sets the voice default
 for future calls. In a Discord realtime voice channel, ask the agent to list or
