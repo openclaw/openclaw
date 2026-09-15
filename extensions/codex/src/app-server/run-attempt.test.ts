@@ -2378,11 +2378,16 @@ describe("runCodexAppServerAttempt", () => {
     expect(sessionsYield).not.toHaveProperty("deferLoading");
   });
 
-  it("keeps the heartbeat schema deferred and stable across normal and heartbeat turns", async () => {
+  it("keeps the heartbeat schema direct and stable across normal and heartbeat turns", async () => {
     testing.setOpenClawCodingToolsFactoryForTests((options) => [
       createRuntimeDynamicTool("message"),
       ...(options?.enableHeartbeatTool === true
-        ? [createRuntimeDynamicTool("heartbeat_respond")]
+        ? [
+            {
+              ...createRuntimeDynamicTool("heartbeat_respond"),
+              catalogMode: "direct-only" as const,
+            },
+          ]
         : []),
     ]);
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -2398,7 +2403,10 @@ describe("runCodexAppServerAttempt", () => {
     };
     const registeredTools = [
       createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("heartbeat_respond"),
+      {
+        ...createRuntimeDynamicTool("heartbeat_respond"),
+        catalogMode: "direct-only" as const,
+      },
     ];
     const normalBridge = createCodexToolBridgeForTest(
       createHeartbeatRunParams(),
@@ -2411,7 +2419,13 @@ describe("runCodexAppServerAttempt", () => {
     const heartbeatParams = createHeartbeatRunParams("heartbeat");
     const heartbeatBridge = createCodexToolBridgeForTest(
       heartbeatParams,
-      [createRuntimeDynamicTool("message"), createRuntimeDynamicTool("heartbeat_respond")],
+      [
+        createRuntimeDynamicTool("message"),
+        {
+          ...createRuntimeDynamicTool("heartbeat_respond"),
+          catalogMode: "direct-only" as const,
+        },
+      ],
       registeredTools,
     );
     const heartbeatInstructions = testing.buildDeveloperInstructions(heartbeatParams, {
@@ -2429,15 +2443,15 @@ describe("runCodexAppServerAttempt", () => {
     expect(normalInstructions).not.toContain(
       "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond",
     );
-    expect(heartbeatInstructions).toContain(
-      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond.",
+    expect(heartbeatInstructions).not.toContain(
+      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond",
     );
     for (const bridge of [normalBridge, heartbeatBridge, nextNormalBridge]) {
       const heartbeat = flattenSpecsWithNamespace(bridge.specs).find(
         (tool) => tool.name === "heartbeat_respond",
       );
-      expect(heartbeat?.namespace).toBe("openclaw");
-      expect(heartbeat?.deferLoading).toBe(true);
+      expect(heartbeat?.namespace).toBe("openclaw_direct");
+      expect(heartbeat).not.toHaveProperty("deferLoading");
     }
     expect(codexDynamicToolsFingerprint(heartbeatBridge.specs)).toBe(
       codexDynamicToolsFingerprint(normalBridge.specs),

@@ -222,12 +222,18 @@ export async function buildDynamicTools(
   input: DynamicToolBuildParams,
 ): Promise<OpenClawDynamicTool[]> {
   const { params } = input;
+  const heartbeatToolEnabled =
+    params.trigger === "heartbeat" ||
+    params.enableHeartbeatTool === true ||
+    params.forceHeartbeatTool === true ||
+    input.forceHeartbeatTool === true;
   const messagePolicyParams = input.ignoreDisableMessageTool
     ? { ...params, disableMessageTool: false }
     : params;
   const toolRunContext = buildEmbeddedAttemptToolRunContext({
     ...params,
     forceMessageTool: shouldForceMessageTool(messagePolicyParams),
+    forceHeartbeatTool: heartbeatToolEnabled,
   });
   if (params.disableTools) {
     input.onWebSearchPolicyResolved?.(false);
@@ -345,8 +351,8 @@ export async function buildDynamicTools(
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     disableMessageTool: input.ignoreDisableMessageTool ? false : params.disableMessageTool,
     forceMessageTool: shouldForceMessageTool(messagePolicyParams),
-    enableHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
-    forceHeartbeatTool: params.trigger === "heartbeat" || input.forceHeartbeatTool === true,
+    enableHeartbeatTool: heartbeatToolEnabled,
+    forceHeartbeatTool: heartbeatToolEnabled,
     onYield: (message, acknowledgment) => {
       input.onYieldDetected(message, acknowledgment);
       input.onCodexAppServerEvent?.({

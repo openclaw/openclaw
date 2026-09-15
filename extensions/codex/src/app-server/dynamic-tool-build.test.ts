@@ -2539,7 +2539,10 @@ describe("Codex app-server dynamic tool build", () => {
     runtimePlan.tools.normalize = planNormalize as typeof runtimePlan.tools.normalize;
     params.runtimePlan = runtimePlan;
     const messageTool = createRuntimeDynamicTool("message");
-    const heartbeatTool = createRuntimeDynamicTool("heartbeat_respond");
+    const heartbeatTool = {
+      ...createRuntimeDynamicTool("heartbeat_respond"),
+      catalogMode: "direct-only" as const,
+    };
     const invalidTool = {
       ...createRuntimeDynamicTool("invalid_registered_tool"),
       parameters: { type: "array", items: { type: "string" } },
@@ -2579,6 +2582,48 @@ describe("Codex app-server dynamic tool build", () => {
       heartbeatTool.description,
     ]);
     expect(hoisted.resolveWebSearchToolPolicy).not.toHaveBeenCalled();
+  });
+
+  it("honors the host-prepared heartbeat tool flags without a heartbeat trigger", async () => {
+    const sessionFile = path.join(tempDir, "session-heartbeat-tool.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-heartbeat-tool");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.enableHeartbeatTool = true;
+    params.forceHeartbeatTool = true;
+    params.toolsAllow = ["read"];
+    await bindProductionCodexHostCapabilities(params);
+    setOpenClawCodingToolsFactoryForTests((options) =>
+      createOpenClawCodingTools(options).filter((tool) => tool.name === "heartbeat_respond"),
+    );
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox: null as never,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["heartbeat_respond"]);
+    expect(tools[0]?.catalogMode).toBe("direct-only");
+  });
+
+  it("preserves an explicit conversation-policy denial of the heartbeat tool", async () => {
+    const sessionFile = path.join(tempDir, "session-heartbeat-tool-denied.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-heartbeat-tool-denied");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.enableHeartbeatTool = true;
+    params.forceHeartbeatTool = true;
+    params.toolsAllow = ["read"];
+    params.conversationToolPolicy = { deny: ["heartbeat_respond"] };
+    await bindProductionCodexHostCapabilities(params);
+    setOpenClawCodingToolsFactoryForTests((options) =>
+      createOpenClawCodingTools(options).filter((tool) => tool.name === "heartbeat_respond"),
+    );
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox: null as never,
+    });
+
+    expect(tools).toEqual([]);
   });
 
   it("passes runtime config into Codex exec dynamic tool construction", async () => {
