@@ -11,9 +11,21 @@ import {
 } from "./tool-policy-shared.js";
 
 /** Snapshot one synchronous filtering operation; execution checks must prepare current policy. */
-export function createToolPolicyMatcher(policy?: SandboxToolPolicy, writeAllowsApplyPatch = true) {
+export function createToolPolicyMatcher(
+  policy?: SandboxToolPolicy,
+  writeAllowsApplyPatch = true,
+): (name: string) => boolean {
   if (!policy) {
     return () => true;
+  }
+  const restrictions = policy.allow && readToolAllowlistIntersection(policy.allow);
+  if (restrictions) {
+    const matchers = restrictions.map((allow) =>
+      allow.length > 0
+        ? createToolPolicyMatcher({ ...policy, allow }, writeAllowsApplyPatch)
+        : () => false,
+    );
+    return (name) => matchers.every((matches) => matches(name));
   }
   const deny = compileGlobPatterns({
     raw: expandToolGroups(policy.deny ?? []),

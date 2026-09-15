@@ -122,6 +122,9 @@ them:
 - OpenClaw loads `.lsp.json` plus any manifest-declared `lspServers` paths.
 - Bundle LSP config is merged into the effective embedded OpenClaw LSP
   defaults.
+- Runtime tool allowlists can select bundle LSP tools with `bundle-lsp`,
+  `group:plugins`, or matching `lsp_*` names and globs. Each independent
+  restriction must permit the tool.
 - Only supported stdio-backed LSP servers are runnable; unsupported
   transports still show up in `openclaw plugins inspect <id>`.
 - Canceling a turn or compaction cancels pending LSP startup, stops additional

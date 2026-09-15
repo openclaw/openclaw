@@ -4,10 +4,12 @@
  * and provider allowlist normalization.
  */
 import {
+  applyEmbeddedAttemptToolsAllow,
   buildAgentHookContextChannelFields,
   buildEmbeddedAttemptToolRunContext,
   embeddedAgentLog,
   filterProviderNormalizableTools,
+  getPluginToolMeta,
   isHostScopedAgentToolActive,
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
@@ -899,33 +901,22 @@ function placeDisabledNativeShellToolsInDirectNamespace<
   return tools;
 }
 /** Applies a normalized tool allowlist while preserving shell aliases for exec/process. */
-function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
+function filterCodexDynamicToolsForAllowlist<T extends OpenClawDynamicTool>(
   tools: T[],
   toolsAllow?: string[],
 ): T[] {
-  if (!toolsAllow) {
-    return tools;
-  }
-  if (toolsAllow.length === 0) {
-    return [];
-  }
-  if (hasWildcardCodexToolsAllow(toolsAllow)) {
-    return tools;
-  }
-  const allowSet = new Set(
-    toolsAllow.map((name) => normalizeCodexDynamicToolName(name)).filter(Boolean),
-  );
-  return tools.filter((tool) => {
-    const normalized = normalizeCodexDynamicToolName(tool.name);
-    return (
-      allowSet.has(normalized) ||
-      (normalized === "sandbox_exec" && allowSet.has("exec")) ||
-      (normalized === "sandbox_process" && (allowSet.has("exec") || allowSet.has("process"))) ||
-      (normalized === CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME && allowSet.has("exec")) ||
-      (normalized === CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME &&
-        (allowSet.has("exec") || allowSet.has("process"))) ||
-      (normalized === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME && allowSet.has("exec"))
-    );
+  return applyEmbeddedAttemptToolsAllow(tools, toolsAllow, {
+    toolMeta: getPluginToolMeta,
+    toolAliases: (tool) => {
+      const normalized = normalizeCodexDynamicToolName(tool.name);
+      return normalized === "sandbox_exec" ||
+        normalized === CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME ||
+        normalized === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME
+        ? ["exec"]
+        : normalized === "sandbox_process" || normalized === CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME
+          ? ["exec", "process"]
+          : [];
+    },
   });
 }
 /** Detects the wildcard allowlist marker after Codex tool-name normalization. */

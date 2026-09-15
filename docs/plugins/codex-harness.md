@@ -70,6 +70,11 @@ If native shell and filesystem access is intended, the operator can choose
 an explicit finite tool allowlist still blocks native execution. OpenClaw does
 not broaden tool access or replace externally owned threads automatically.
 
+Scheduled and other runtime tool allowlists use the same aliases, groups, and
+wildcards as the OpenClaw harness, including `cron`, `group:runtime`, and `web_*`.
+An explicit empty runtime allowlist disables tools. Independent restrictions
+must all permit a tool before OpenClaw registers it with Codex.
+
 Eligible native-shell turns also retain `gateway_exec` and `gateway_process`
 as a distinct OpenClaw execution path. Use `gateway_exec` only when a command
 needs OpenClaw-managed Gateway environment access, including Secret Store

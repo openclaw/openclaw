@@ -8,6 +8,7 @@ import {
   createCodeModeTools,
 } from "../code-mode.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { mergeForcedEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import {
   filterLocalModelLeanTools,
   resolveLocalModelLeanPreserveToolNames,
@@ -100,18 +101,12 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   });
   const toolSearchCatalogRef =
     toolSearchControlsEnabled || codeModeControlsEnabled ? createToolSearchCatalogRef() : undefined;
-  const runtimeToolAllowlist =
-    (toolSearchControlsEnabled || codeModeControlsEnabled) && params.runtimeToolAllowlist
-      ? [
-          ...new Set([
-            ...params.runtimeToolAllowlist,
-            ...(toolSearchControlsEnabled ? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES : []),
-            ...(codeModeControlsEnabled ? CODE_MODE_CONTROL_ALLOWLIST_NAMES : []),
-          ]),
-        ]
-      : params.runtimeToolAllowlist
-        ? [...params.runtimeToolAllowlist]
-        : undefined;
+  const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.runtimeToolAllowlist, {
+    forceToolNames: [
+      ...(toolSearchControlsEnabled ? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES : []),
+      ...(codeModeControlsEnabled ? CODE_MODE_CONTROL_ALLOWLIST_NAMES : []),
+    ],
+  });
   const toolSearchCatalogExecutor =
     toolSearchControlsEnabled || codeModeControlsEnabled ? params.executeTool : undefined;
   const capabilityProfile = resolveConversationCapabilityProfile({

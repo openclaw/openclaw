@@ -54,7 +54,7 @@ Skill collection review runs every 7 days. It is enabled when `skills.workshop.a
   Skip workspace bootstrap file injection.
 </ParamField>
 <ParamField path="--tools" type="string">
-  Restrict which tools the job can use, for example `--tools exec,read`.
+  Restrict which tools the job can use, for example `--tools exec,read`. Pass `--tools ""` for an empty allowlist that disables all agent tools, including tools used by a condition trigger.
 </ParamField>
 
 New jobs that can run tools always store an explicit tool policy. Jobs created by an agent

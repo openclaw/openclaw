@@ -72,6 +72,7 @@ import {
 } from "../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../embedded-agent-runner/runs.test-support.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
@@ -2119,6 +2120,13 @@ describe("runAgentHarnessAttempt", () => {
       policy: { toolsAllow: ["read"] },
       restricted: true,
       tools: ["read"],
+      denyAll: false,
+    },
+    {
+      name: "overlapping runtime globs",
+      policy: { toolsAllow: attachToolAllowlistIntersection([], [["web_*"], ["*_search"]]) },
+      restricted: true,
+      tools: [],
       denyAll: false,
     },
     {

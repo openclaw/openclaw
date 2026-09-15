@@ -37,6 +37,7 @@ import {
   expandToolGroups,
   mergeAlsoAllowPolicy,
   normalizeToolPolicyName,
+  readToolAllowlistIntersection,
   toolPolicyRestrictsTools,
 } from "../tool-policy.js";
 import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
@@ -746,8 +747,10 @@ export function resolvePluginHarnessToolPolicies(
   };
   const { policy } = capabilityProfile;
   // Runtime allowlists treat [] as deny-all; config allow: [] means unrestricted.
+  const runtimeRestrictions =
+    params.toolsAllow && (readToolAllowlistIntersection(params.toolsAllow) ?? [params.toolsAllow]);
   const requestedToolPolicy =
-    params.disableTools || params.toolsAllow?.length === 0
+    params.disableTools || runtimeRestrictions?.some((allow) => allow.length === 0)
       ? { deny: ["*"] }
       : params.toolsAllow
         ? { allow: params.toolsAllow }

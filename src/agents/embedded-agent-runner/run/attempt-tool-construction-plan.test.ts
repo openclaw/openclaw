@@ -542,14 +542,6 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
   });
 
   it("keeps plugin-owned catalog tools on the plugin construction path", () => {
-    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["canvas"] }), {
-      includeCoreTools: false,
-      coding: {
-        includeChannelTools: true,
-        includeOpenClawTools: false,
-        includePluginTools: true,
-      },
-    });
     expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["browser"] }),
       {

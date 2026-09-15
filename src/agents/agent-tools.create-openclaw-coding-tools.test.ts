@@ -55,7 +55,11 @@ import {
   createSandboxFsBridgeFromResolver,
 } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
-import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolPolicyName } from "./tool-policy.js";
+import {
+  attachToolAllowlistIntersection,
+  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  normalizeToolPolicyName,
+} from "./tool-policy.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -699,19 +703,30 @@ describe("createOpenClawCodingTools", () => {
     expect(inheritedAllow?.includes("exec")).toBe(false);
   });
 
-  it("lets direct restricted callers inherit runtime toolsAllow into subagent spawns", () => {
+  it.each([
+    {
+      label: "explicit tools",
+      toolsAllow: ["sessions_spawn", "read"],
+      expected: ["sessions_spawn", "read"],
+    },
+    {
+      label: "overlapping globs",
+      toolsAllow: attachToolAllowlistIntersection([], [["sessions_*"], ["*_spawn"]]),
+      expected: ["sessions_spawn"],
+    },
+  ])("lets direct callers inherit $label into subagent spawns", ({ toolsAllow, expected }) => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
 
     createOpenClawCodingTools({
       config: testConfig,
-      runtimeToolAllowlist: ["sessions_spawn", "read"],
+      runtimeToolAllowlist: toolsAllow,
       inheritRuntimeToolAllowlist: true,
     });
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     const inheritedAllow = latestCreateOpenClawToolsOptions().inheritedToolAllowlist;
-    expectListIncludes(inheritedAllow, ["sessions_spawn", "read"]);
+    expectListIncludes(inheritedAllow, expected);
     expect(inheritedAllow?.includes("exec")).toBe(false);
   });
 

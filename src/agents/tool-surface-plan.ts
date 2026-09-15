@@ -5,7 +5,7 @@ import {
   isCodeModeEngagedForModel,
   resolveCodeModeConfig,
 } from "./code-mode.js";
-import { normalizeToolPolicyName } from "./tool-policy-shared.js";
+import { normalizeToolPolicyName, readToolAllowlistIntersection } from "./tool-policy-shared.js";
 import { resolveAgentToolSearchRuntimeConfig } from "./tool-search-runtime-config.js";
 import type { ToolSearchConfig } from "./tool-search-types.js";
 import {
@@ -31,12 +31,16 @@ type AgentToolSurfacePlanParams = {
 };
 
 export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) {
+  const restrictions = params.toolsAllow
+    ? (readToolAllowlistIntersection(params.toolsAllow) ?? [params.toolsAllow])
+    : [];
   // Private completion replies have one message capability. Ordinary forced
   // delivery keeps message direct while other tools can still use discovery.
   const completionPrivateMessageOnly =
     params.forceDirectMessageTool &&
-    params.toolsAllow?.length === 1 &&
-    normalizeToolPolicyName(params.toolsAllow[0] ?? "") === "message";
+    restrictions.some(
+      (allow) => allow.length === 1 && normalizeToolPolicyName(allow[0] ?? "") === "message",
+    );
   const codeModeConfig = resolveCodeModeConfig(
     params.config,
     params.agentId,
@@ -58,7 +62,7 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
     getActiveAgentRingZeroTools().length === 0 &&
     params.disableTools !== true &&
     !params.isRawModelRun &&
-    params.toolsAllow?.length !== 0 &&
+    restrictions.every((allow) => allow.length > 0) &&
     !completionPrivateMessageOnly;
   const codeModeControlsEnabled =
     toolsAvailable &&

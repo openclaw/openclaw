@@ -30,6 +30,19 @@ this keeps an empty coverage list false and avoids allow-side compatibility.
 Prepare matchers for one synchronous operation; do not retain an authorization
 decision across awaited work.
 
+## Runtime tool allowlists
+
+`applyEmbeddedAttemptToolsAllow(tools, toolsAllow?, options?)` filters concrete
+runtime tools using the shared aliases, groups, and wildcard matching. An
+undefined allowlist keeps all tools; an explicit empty list disables them.
+Independent restrictions must each permit a tool.
+
+Use `options.toolMeta(tool)` to supply its owning `pluginId` for plugin-group
+matching. A harness that exposes a tool under another name can supply
+`options.toolAliases(tool)` with its accepted policy aliases. Each restriction
+can match the original name or an alias; the result retains the original tool
+objects and their execution wrappers.
+
 ## Sandbox bind parsing
 
 `openclaw/plugin-sdk/agent-harness-runtime` exports

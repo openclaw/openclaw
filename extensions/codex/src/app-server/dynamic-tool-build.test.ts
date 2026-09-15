@@ -7,6 +7,7 @@ import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
   isToolWrappedWithBeforeToolCallHook,
+  resolveAgentHarnessBeforePromptBuildResult,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -2161,45 +2162,108 @@ describe("Codex app-server dynamic tool build", () => {
     expect(messageOnlyTools.map((tool) => tool.name)).toEqual(["message"]);
   });
 
-  it("exposes Docker sandbox shell tools when native Code Mode cannot honor sandbox paths", async () => {
-    setOpenClawCodingToolsFactoryForTests(() => [
-      createRuntimeDynamicTool("exec"),
-      createRuntimeDynamicTool("process"),
-      createRuntimeDynamicTool("message"),
-    ]);
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    const resolveExecutionPolicy = vi.spyOn(
-      nativeExecutionPolicy,
-      "resolveCodexNativeExecutionPolicy",
-    );
+  it.each([
+    { allow: ["cron"], expected: ["automations"] },
+    { allow: ["group:fs"], expected: ["read", "write", "edit", "apply_patch"] },
+    { allow: ["web_*"], expected: ["web_search", "web_fetch"] },
+    { allow: ["*fetch"], expected: ["web_fetch"] },
+    { allow: ["group:runtime"], expected: ["exec", "process"] },
+  ])(
+    "preserves shared runtime selectors in Codex dynamic tools: $allow",
+    async ({ allow, expected }) => {
+      setOpenClawCodingToolsFactoryForTests(() =>
+        [
+          "automations",
+          "read",
+          "write",
+          "edit",
+          "apply_patch",
+          "web_search",
+          "web_fetch",
+          "exec",
+          "process",
+          "message",
+        ].map(createRuntimeDynamicTool),
+      );
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(path.join(tempDir, "selector-session.jsonl"), workspaceDir);
+      params.disableTools = false;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      params.execOverrides = { host: "gateway" };
+      params.toolsAllow = allow;
 
-    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-      sandbox: {
-        enabled: true,
-        backendId: "docker",
-        docker: { binds: ["/tmp/openclaw-data:/data:rw"] },
-      } as never,
-      nativeToolSurfaceEnabled: false,
-    });
+      const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+        nativeToolSurfaceEnabled: false,
+      });
 
-    expect(resolveExecutionPolicy).toHaveBeenCalledOnce();
-    expect(resolveExecutionPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ sandboxAvailable: true }),
-    );
-    expect(tools.map((tool) => tool.name)).toEqual(["message", "sandbox_exec", "sandbox_process"]);
-    expect(tools.map((tool) => tool.catalogMode)).toEqual([
-      undefined,
-      "direct-only",
-      "direct-only",
-    ]);
-    expect(tools.find((tool) => tool.name === "sandbox_exec")?.description).toContain(
-      "Docker container-path bind layout",
-    );
-  });
+      expect(tools.map((tool) => tool.name)).toEqual(expected);
+    },
+  );
+
+  it.each([
+    { allow: undefined, expected: ["message", "sandbox_exec", "sandbox_process"] },
+    { allow: ["group:runtime"], expected: ["sandbox_exec", "sandbox_process"] },
+    { allow: ["exec*"], expected: ["sandbox_exec", "sandbox_process"] },
+    { allow: ["exec"], restrictWith: ["process"], expected: ["sandbox_process"] },
+    { allow: ["sandbox_process"], restrictWith: ["process"], expected: ["sandbox_process"] },
+  ])(
+    "keeps Docker shell projections pinned for runtime selectors $allow restricted by $restrictWith",
+    async ({ allow, restrictWith, expected }) => {
+      setOpenClawCodingToolsFactoryForTests(() => [
+        createRuntimeDynamicTool("exec"),
+        createRuntimeDynamicTool("process"),
+        createRuntimeDynamicTool("message"),
+      ]);
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(sessionFile, workspaceDir);
+      params.disableTools = false;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      params.toolsAllow = allow;
+      if (restrictWith) {
+        initializeGlobalHookRunner(
+          createMockPluginRegistry([
+            { hookName: "before_prompt_build", handler: () => ({ toolsAllow: allow }) },
+            { hookName: "before_prompt_build", handler: () => ({ toolsAllow: restrictWith }) },
+          ]),
+        );
+        const result = await resolveAgentHarnessBeforePromptBuildResult({
+          prompt: params.prompt,
+          developerInstructions: "",
+          messages: [],
+          ctx: { agentId: "main", sessionKey: params.sessionKey },
+        });
+        params.toolsAllow = result.toolsAllow;
+      }
+      const resolveExecutionPolicy = vi.spyOn(
+        nativeExecutionPolicy,
+        "resolveCodexNativeExecutionPolicy",
+      );
+
+      const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+        sandbox: {
+          enabled: true,
+          backendId: "docker",
+          docker: { binds: ["/tmp/openclaw-data:/data:rw"] },
+        } as never,
+        nativeToolSurfaceEnabled: false,
+      });
+
+      expect(resolveExecutionPolicy).toHaveBeenCalledOnce();
+      expect(resolveExecutionPolicy).toHaveBeenCalledWith(
+        expect.objectContaining({ sandboxAvailable: true }),
+      );
+      expect(tools.map((tool) => tool.name)).toEqual(expected);
+      expect(tools.map((tool) => tool.catalogMode)).toEqual(
+        expected.map((name) => (name === "message" ? undefined : "direct-only")),
+      );
+      if (expected.includes("sandbox_exec")) {
+        expect(tools.find((tool) => tool.name === "sandbox_exec")?.description).toContain(
+          "Docker container-path bind layout",
+        );
+      }
+    },
+  );
 
   it("exposes node shell but not sandbox shell tools when sandbox routing is disabled", async () => {
     setOpenClawCodingToolsFactoryForTests(() => [

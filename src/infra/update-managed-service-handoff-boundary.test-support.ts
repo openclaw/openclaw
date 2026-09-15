@@ -215,8 +215,7 @@ export function createManagedServiceManagerBoundary({
         string[],
         { env: NodeJS.ProcessEnv },
       ];
-      const scriptPath = generatedArgs[0];
-      const generatedParamsPath = generatedArgs[1];
+      const [scriptPath, generatedParamsPath] = generatedArgs;
       if (!scriptPath || !generatedParamsPath) {
         throw new Error("expected generated managed handoff script and parameters");
       }

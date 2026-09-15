@@ -23,10 +23,9 @@ import {
   handleCronCliError,
   parseCronCommandArgv,
   parseCronCommandEnv,
-  parseCronFallbacks,
   parseCronIntegerOption,
   parseCronNoOutputTimeoutOption,
-  parseCronToolsAllow,
+  parseCronStringList,
   printCronJson,
   printCronList,
   warnIfCronSchedulerDisabled,
@@ -149,7 +148,7 @@ export function registerCronAddCommand(cron: Command) {
               if (typeof opts.script === "string" && !scriptPath) {
                 throw new CronCliError("--script must not be blank");
               }
-              const toolsAllow = parseCronToolsAllow(opts.tools);
+              const toolsAllow = parseCronStringList(opts.tools);
               if (optionMessage && positionalMessage && optionMessage !== positionalMessage) {
                 throw new CronCliError(
                   "Pass the automation message either positionally or with --message, not both.",
@@ -228,7 +227,7 @@ export function registerCronAddCommand(cron: Command) {
                 kind: "agentTurn" as const,
                 message,
                 model: normalizeOptionalString(opts.model),
-                fallbacks: parseCronFallbacks(opts.fallbacks),
+                fallbacks: parseCronStringList(opts.fallbacks),
                 thinking: normalizeOptionalString(opts.thinking),
                 timeoutSeconds,
                 lightContext: opts.lightContext === true ? true : undefined,

@@ -1606,6 +1606,11 @@ describe("cron cli", () => {
       args: ["--message", "hello"],
       tools: "read write",
     },
+    {
+      kind: "agentTurn",
+      args: ["--message", "hello"],
+      tools: "",
+    },
   ])(
     "preserves the requested tool allowlist for $kind cron jobs",
     async ({ kind, args, tools }) => {
@@ -1615,7 +1620,7 @@ describe("cron cli", () => {
 
       expect(params?.payload).toMatchObject({
         kind,
-        toolsAllow: ["read", "write"],
+        toolsAllow: tools ? ["read", "write"] : [],
       });
     },
   );
