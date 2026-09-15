@@ -2757,6 +2757,9 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^scripts\/github\/(?:security-sensitive-guard|guard-shared)\.mjs$/u,
     ["security-sensitive-guard-script", "security-sensitive-guard-workflow"],
   ],
+  // The shared helper's own retry behaviour is not covered by either guard suite,
+  // so name its test here or a change to the status set runs nothing that asserts it.
+  [/^scripts\/github\/guard-shared\.mjs$/u, ["test/scripts/guard-shared-api-retry.test.ts"]],
   [/^scripts\/plugin-clawhub-release-check\.ts$/u, ["release-wrapper-scripts"]],
   [
     /^scripts\/generate-runtime-sidecar-paths-baseline\.ts$/u,

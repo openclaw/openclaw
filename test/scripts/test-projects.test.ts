@@ -1709,6 +1709,9 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/dependency-guard-workflow.test.ts",
         "test/scripts/security-sensitive-guard-script.test.ts",
         "test/scripts/security-sensitive-guard-workflow.test.ts",
+        // Last because its mapping entry sits after the two guard entries, and the
+        // resolver concatenates matches in table order.
+        "test/scripts/guard-shared-api-retry.test.ts",
       ],
     );
 
