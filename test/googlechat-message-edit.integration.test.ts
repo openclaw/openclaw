@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
@@ -24,19 +25,22 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     // Keep the real guarded fetch; only send it at the loopback origin.
     fetchWithSsrFGuard: async (...args: Parameters<typeof actual.fetchWithSsrFGuard>) => {
       const [params] = args;
+      const url = new URL(params.url);
+      if (
+        url.origin !== "https://chat.googleapis.com" &&
+        url.origin !== "https://oauth2.googleapis.com"
+      ) {
+        throw new Error(`Unexpected origin in Google Chat fixture: ${url.origin}`);
+      }
       return await actual.fetchWithSsrFGuard({
         ...params,
-        url: params.url.replace("https://chat.googleapis.com", loopback.baseUrl),
+        url: `${loopback.baseUrl}${url.pathname}${url.search}`,
+        dispatcherPolicy: { mode: "direct" },
         policy: { allowPrivateNetwork: true },
       });
     },
   };
 });
-
-vi.mock("../extensions/googlechat/src/auth.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../extensions/googlechat/src/auth.js")>()),
-  getGoogleChatAccessToken: vi.fn(async () => "transport-proof-token"),
-}));
 
 import { googlechatPlugin } from "../extensions/googlechat/api.js";
 import {
@@ -60,6 +64,17 @@ beforeAll(async () => {
     });
     request.on("end", () => {
       const path = request.url ?? "";
+      if (path === "/token") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            access_token: "transport-proof-token",
+            token_type: "Bearer",
+            expires_in: 3600,
+          }),
+        );
+        return;
+      }
       requests.push({
         method: request.method ?? "",
         path,
@@ -105,14 +120,22 @@ afterAll(async () => {
 describe("session-derived Google Chat delivery", () => {
   it("sends and edits in the canonical mixed-case space recorded by the session", async () => {
     await withOpenClawTestState({ prefix: "googlechat-session-target-" }, async (state) => {
+      const { privateKey } = generateKeyPairSync("rsa", {
+        modulusLength: 2048,
+        privateKeyEncoding: { type: "pkcs8", format: "pem" },
+        publicKeyEncoding: { type: "spki", format: "pem" },
+      });
       const config: OpenClawConfig = {
         agents: { entries: { main: { workspace: state.workspaceDir } } },
         channels: {
           googlechat: {
             accounts: {
               default: {
-                serviceAccount:
-                  '{"client_email":"proof@example.iam.gserviceaccount.com","private_key":"proof-key"}',
+                serviceAccount: JSON.stringify({
+                  type: "service_account",
+                  client_email: "proof@example.iam.gserviceaccount.com",
+                  private_key: privateKey,
+                }),
               },
             },
           },
