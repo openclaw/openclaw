@@ -418,6 +418,7 @@ export function createReadToolDefinition(
         let aborted = false;
         const onAbort = () => {
           aborted = true;
+          signal?.removeEventListener("abort", onAbort);
           reject(new Error("Operation aborted"));
         };
         signal?.addEventListener("abort", onAbort, { once: true });
@@ -629,6 +630,8 @@ export function createReadToolDefinition(
             if (!aborted) {
               reject(normalizeReadError(error, path));
             }
+          } finally {
+            signal?.removeEventListener("abort", onAbort);
           }
         })();
       });
