@@ -380,7 +380,7 @@ describe("msteams messenger", () => {
             messages: [{ text: "one", mediaUrl: localFile }],
             tokenProvider: { getAccessToken: async () => "token" },
           }),
-        ).rejects.toThrow("channels.msteams.sharePointSiteId is required");
+        ).rejects.toThrow("No SharePoint site ID available");
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }
