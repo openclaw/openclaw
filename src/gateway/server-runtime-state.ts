@@ -60,6 +60,7 @@ type GatewayPluginRequestHandler = (
     gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
     gatewayRequestOperatorScopes?: readonly string[];
     gatewayRequestClientIp?: string;
+    gatewayRequestNodeCapabilityRevalidate?: () => boolean;
   },
 ) => Promise<boolean>;
 
@@ -73,6 +74,7 @@ type GatewayPluginUpgradeHandler = (
     gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
     gatewayRequestOperatorScopes?: readonly string[];
     gatewayRequestClientIp?: string;
+    gatewayRequestNodeCapabilityRevalidate?: () => boolean;
   },
 ) => Promise<boolean>;
 
