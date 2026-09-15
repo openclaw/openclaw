@@ -168,7 +168,7 @@ async function requestVoicePage(params: {
   } else {
     url.searchParams.set("sort_by", "score");
   }
-  const { assertOkOrThrowProviderError, readProviderJsonResponse } =
+  const { assertOkOrThrowProviderError, readProviderJsonObjectResponse } =
     await import("openclaw/plugin-sdk/provider-http");
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
@@ -181,9 +181,16 @@ async function requestVoicePage(params: {
   });
   try {
     await assertOkOrThrowProviderError(response, "Fish Audio voices API error");
-    return await readProviderJsonResponse<FishAudioVoicePayload>(response, "Fish Audio voices", {
+    // The voice list is paged by reading `items`/`total` off the envelope, so a
+    // non-object 2xx body (null or a bare array) must be rejected rather than
+    // dereferenced: null throws a TypeError and an array silently pages to empty.
+    const payload = await readProviderJsonObjectResponse(response, "Fish Audio voices", {
       maxBytes: FISH_AUDIO_VOICES_MAX_BYTES,
     });
+    // The Fish Audio /model envelope is an object whose `items`/`total` fields
+    // are validated by the Array.isArray checks at each read site.
+    // SAFETY: `readProviderJsonObjectResponse` has already rejected a non-object body.
+    return payload as FishAudioVoicePayload;
   } finally {
     await release();
   }
