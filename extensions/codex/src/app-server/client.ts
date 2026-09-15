@@ -32,6 +32,7 @@ import {
 } from "./protocol.js";
 import { createCodexRequestAttempt, type CodexRequestAttempt } from "./request-attempt.js";
 import { CodexAppServerRpcError } from "./rpc-error.js";
+import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client-lifecycle.js";
 import { createStdioTransport } from "./transport-stdio.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
 import {
@@ -491,15 +492,18 @@ export class CodexAppServerClient {
           throw error;
         }
         let released = false;
+        let removeExitHandler: (() => void) | undefined;
         const release = () => {
           if (released) {
             return;
           }
           released = true;
+          removeExitHandler?.();
           releaseGuard();
         };
         let releaseWhenRequestSettles = true;
         let requestMayHaveWritten = false;
+        let nativeResponded = false;
         try {
           const elapsedMs = Date.now() - guardStartedAt;
           const remainingTimeoutMs =
@@ -516,15 +520,31 @@ export class CodexAppServerClient {
             },
             (mayHaveWritten) => {
               requestMayHaveWritten = mayHaveWritten;
+              nativeResponded = !mayHaveWritten;
+            },
+            () => {
+              nativeResponded = true;
+              if (!releaseWhenRequestSettles) {
+                release();
+              }
             },
           );
         } catch (error) {
           if (requestMayHaveWritten && !(error instanceof CodexAppServerRpcError)) {
             // A local deadline cannot prove Codex stopped loading native config.
-            // Keep the fence until the physical process exits, even if shutdown
-            // itself outlives closeAndWait's bounded wait.
+            // Only the exact native response or physical exit can release the
+            // fence. A late response must never resume the abandoned caller.
             releaseWhenRequestSettles = false;
-            await this.closeAndRunAfterExit(release, method);
+            if (nativeResponded) {
+              release();
+            } else {
+              removeExitHandler = this.addTransportExitHandler(release);
+            }
+            // New acquisitions need a fresh client; existing peers can finish,
+            // including guarded helper startup after the native response arrives.
+            if (!retireSharedCodexAppServerClientIfCurrent(this)) {
+              await this.closeAndRunAfterExit(release, method);
+            }
           }
           throw error;
         } finally {
@@ -542,6 +562,7 @@ export class CodexAppServerClient {
     params: unknown,
     options: RequestOptions,
     onWriteStateChange?: (mayHaveWritten: boolean) => void,
+    onResponse?: () => void,
   ): Promise<T> {
     const deadline =
       options.timeoutMs !== undefined && Number.isFinite(options.timeoutMs)
@@ -570,6 +591,7 @@ export class CodexAppServerClient {
           },
           onWriteStateChange,
           deadline,
+          onResponse,
         );
       } catch (error) {
         // Codex emits -32001 only when ingress rejects a request before enqueue,
@@ -639,6 +661,7 @@ export class CodexAppServerClient {
     options: RequestOptions,
     onWriteStateChange?: (mayHaveWritten: boolean) => void,
     deadline?: number,
+    onResponse?: () => void,
   ): Promise<T> {
     if (this.closed) {
       return Promise.reject(this.closeError ?? new Error("codex app-server client is closed"));
@@ -685,7 +708,13 @@ export class CodexAppServerClient {
     const message: RpcRequest = { id, method, params: params as JsonValue | undefined };
     const attempt = createCodexRequestAttempt({
       method,
-      retainWritten: sharing !== undefined,
+      retainWritten: sharing !== undefined || onResponse !== undefined,
+      onResponse: onResponse
+        ? (mayHaveWritten) => {
+            onWriteStateChange?.(mayHaveWritten);
+            onResponse();
+          }
+        : undefined,
       onSettled: () => {
         if (this.pending.get(id) === attempt) {
           this.pending.delete(id);
@@ -708,7 +737,12 @@ export class CodexAppServerClient {
     if (sharedKey !== undefined) {
       sharedRequests?.set(sharedKey, attempt);
     }
-    const result = attempt.wait<T>(options, deadline);
+    // Stateful ownership assertions remain pre-write checks. A native response
+    // can arrive after authority changed; only catalog waiters revalidate here.
+    const result = attempt.wait<T>(
+      { ...options, assertCurrent: sharing ? options.assertCurrent : undefined },
+      deadline,
+    );
     if (!attempt.pending) {
       return result;
     }
@@ -966,7 +1000,8 @@ export class CodexAppServerClient {
     }
     this.pending.delete(response.id);
     if (response.error) {
-      pending.reject(new CodexAppServerRpcError(response.error, pending.method));
+      const error = new CodexAppServerRpcError(response.error, pending.method);
+      pending.reject(error, isCodexAppServerOverloadError(error));
       return;
     }
     if (

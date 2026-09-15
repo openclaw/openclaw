@@ -20,7 +20,7 @@ export type CodexRequestAttempt = {
   readonly pending: boolean;
   wait: <T>(options: CodexRequestWaitOptions, deadline?: number) => Promise<T>;
   resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
+  reject: (error: Error, definitelyNotEnqueued?: boolean) => void;
   close: (error: Error) => void;
   failLocal: (error: Error) => void;
   markWritten: () => void;
@@ -32,6 +32,8 @@ export function createCodexRequestAttempt(params: {
   method: string;
   retainWritten: boolean;
   onSettled: () => void;
+  /** A correlated native response, never local cancellation or transport closure. */
+  onResponse?: (mayHaveWritten: boolean) => void;
   cancellationError: (
     reason: "aborted" | "timed out",
     mayHaveWritten: boolean,
@@ -147,6 +149,7 @@ export function createCodexRequestAttempt(params: {
       if (!finish()) {
         return;
       }
+      params.onResponse?.(mayHaveWritten);
       for (const waiter of waiters) {
         const error = currentWaiterError(waiter);
         if (error) {
@@ -156,8 +159,14 @@ export function createCodexRequestAttempt(params: {
         }
       }
     },
-    reject(error) {
+    reject(error, definitelyNotEnqueued = false) {
       if (finish()) {
+        // Ingress rejection remains definite even if a caller's deadline has
+        // elapsed before its timer runs. Preserve that fact before projection.
+        if (definitelyNotEnqueued) {
+          mayHaveWritten = false;
+        }
+        params.onResponse?.(mayHaveWritten);
         for (const waiter of waiters) {
           waiter.reject(currentWaiterError(waiter) ?? params.localError(error, mayHaveWritten));
         }
