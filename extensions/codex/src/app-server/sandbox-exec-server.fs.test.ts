@@ -381,6 +381,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
 
     expect(copyFile).toHaveBeenCalledWith({
       sourcePath: "/workspace/source.txt",
+      expectedSourcePolicyPath: "/workspace/source.txt",
       destinationPath: "/workspace/alias/config",
       mkdir: true,
       pinnedPath: "/workspace/real/config",
@@ -653,6 +654,47 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     expect(runShellCommand).toHaveBeenCalledWith(
       expect.objectContaining({ args: ["/workspace/source-dir/subdir"] }),
     );
+    socket.close();
+  });
+
+  it("preserves lexical child paths when enforcing recursive copy policy", async () => {
+    const copyFile = vi.fn(async () => undefined);
+    const sandbox = createSandboxContext({
+      copyFile,
+      resolvePolicyPath: ({ filePath }) => filePath.replace("/workspace/alias", "/workspace/real"),
+      runShellCommand: async () => ({
+        stdout: Buffer.from("f\tsecret.txt\n"),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+      stat: async ({ filePath }) => ({
+        type: filePath.endsWith("/real") ? "directory" : "file",
+        size: 1,
+        mtimeMs: 1,
+      }),
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+    const policy = codexFsSandboxContext({
+      entries: [
+        { path: specialPath("project_roots"), access: "write" },
+        { path: globPath("alias/secret.txt"), access: "deny" },
+      ],
+    });
+
+    await expect(
+      rpc(socket, "fs/copy", {
+        sourcePath: "file:///workspace/alias",
+        destinationPath: "file:///workspace/output",
+        recursive: true,
+        sandbox: policy,
+      }),
+    ).rejects.toThrow("Codex fs sandbox denied read access to /workspace/alias/secret.txt");
+
+    expect(copyFile).not.toHaveBeenCalled();
     socket.close();
   });
 

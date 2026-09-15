@@ -8,13 +8,16 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { readFileDescriptorBounded } from "../../infra/boundary-file-read.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
 import { GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE } from "../../infra/guest-filesystem.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import type {
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
 import { runDockerSandboxShellCommand } from "./docker-backend.js";
+import { SANDBOX_FILE_POLICY_PATH } from "./file-mutation-identity.js";
 import { buildPinnedMutationPlan } from "./fs-bridge-mutation-helper.js";
 import { SandboxFsPathGuard, type PinnedSandboxEntry } from "./fs-bridge-path-safety.js";
 import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
@@ -25,7 +28,7 @@ import {
   resolveSandboxFsPathWithMounts,
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
-import { normalizeContainerPathCore } from "./path-utils.js";
+import { isPathInsideContainerRoot, normalizeContainerPathCore } from "./path-utils.js";
 
 type RunCommandOptions = {
   args?: string[];
@@ -49,8 +52,10 @@ const PINNED_MUTATION_ACTION_LABELS = {
 /** Create the filesystem bridge for local Docker-style mounted sandboxes. */
 export function createSandboxFsBridge(params: {
   sandbox: SandboxFsBridgeContext;
+  /** Test seam: runs between the opener's identity observation and descriptor admission. */
+  beforeDescriptorAdmission?: (resolvedHostPath: string) => void | Promise<void>;
 }): SandboxFsBridge {
-  return new SandboxFsBridgeImpl(params.sandbox);
+  return new SandboxFsBridgeImpl(params.sandbox, params.beforeDescriptorAdmission);
 }
 
 class SandboxFsBridgeImpl implements SandboxFsBridge {
@@ -58,7 +63,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   private readonly mounts: ReturnType<typeof buildSandboxFsMounts>;
   private readonly pathGuard: SandboxFsPathGuard;
 
-  constructor(sandbox: SandboxFsBridgeContext) {
+  constructor(
+    sandbox: SandboxFsBridgeContext,
+    beforeDescriptorAdmission?: (resolvedHostPath: string) => void | Promise<void>,
+  ) {
     this.sandbox = sandbox;
     this.mounts = buildSandboxFsMounts(sandbox);
     const mountsByContainer = [...this.mounts].toSorted(
@@ -69,6 +77,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     this.pathGuard = new SandboxFsPathGuard({
       mountsByContainer,
       runCommand: (script, options) => this.runCommand(script, options),
+      beforeDescriptorAdmission,
     });
   }
 
@@ -79,6 +88,69 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       relativePath: target.relativePath,
       containerPath: target.containerPath,
     };
+  }
+
+  [SANDBOX_FILE_POLICY_PATH](params: { filePath: string; cwd?: string }): string {
+    const target = this.resolveResolvedPath(params);
+    const identity = resolveIdentityPathViaExistingAncestorSync(target.hostPath);
+    return this.policyPathForHostIdentity(identity, target);
+  }
+
+  private policyPathForHostIdentity(identity: string, target: SandboxResolvedFsPath): string {
+    const mountIdentities = this.mounts.map((mount) => ({
+      mount,
+      canonicalHostRoot: resolveIdentityPathViaExistingAncestorSync(mount.hostRoot),
+    }));
+    const requestedMount = mountIdentities
+      .filter(({ mount }) => isPathInsideContainerRoot(mount.containerRoot, target.containerPath))
+      .toSorted((left, right) => right.mount.containerRoot.length - left.mount.containerRoot.length)
+      .find(({ mount, canonicalHostRoot }) => {
+        if (
+          !isPathInside(mount.hostRoot, target.hostPath) ||
+          !isPathInside(canonicalHostRoot, identity)
+        ) {
+          return false;
+        }
+        return !this.hostPathTraversesAlias(mount.hostRoot, target.hostPath);
+      });
+    // Preserve the caller-selected mount when canonicalization did not redirect
+    // the path. Overlapping host mounts are distinct supported policy namespaces;
+    // longest-host-root selection is only appropriate after a real alias hop.
+    const resolvedMount =
+      requestedMount ??
+      mountIdentities
+        .toSorted((left, right) => right.canonicalHostRoot.length - left.canonicalHostRoot.length)
+        .find(({ canonicalHostRoot }) => isPathInside(canonicalHostRoot, identity));
+    if (!resolvedMount) {
+      throw new Error(`Sandbox path escapes allowed mounts: ${target.containerPath}`);
+    }
+    const relativeHost = path.relative(resolvedMount.canonicalHostRoot, identity);
+    const relativePosix = relativeHost ? relativeHost.split(path.sep).join(path.posix.sep) : "";
+    return normalizeContainerPathCore(
+      relativePosix
+        ? path.posix.join(resolvedMount.mount.containerRoot, relativePosix)
+        : resolvedMount.mount.containerRoot,
+    );
+  }
+
+  private hostPathTraversesAlias(mountRoot: string, targetPath: string): boolean {
+    const relativePath = path.relative(mountRoot, targetPath);
+    let cursor = mountRoot;
+    for (const segment of relativePath.split(path.sep).filter(Boolean)) {
+      cursor = path.join(cursor, segment);
+      try {
+        if (fs.lstatSync(cursor).isSymbolicLink()) {
+          return true;
+        }
+      } catch (error) {
+        const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          return false;
+        }
+        throw error;
+      }
+    }
+    return false;
   }
 
   async resolvePinnedMutationTarget(
@@ -97,21 +169,27 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
   async readFile(params: Parameters<SandboxFsBridge["readFile"]>[0]): Promise<Buffer> {
     const target = this.resolveResolvedPath(params);
-    return this.readPinnedFile(target, params.maxBytes);
+    return this.readPinnedFile(target, params.maxBytes, params.expectedPolicyPath);
   }
 
   async readDirectory(
     params: Parameters<NonNullable<SandboxFsBridge["readDirectory"]>>[0],
   ): Promise<DirectoryEntry[]> {
     const target = this.resolveResolvedPath(params);
+    const pinned = await this.pathGuard.resolveAnchoredPinnedDirectoryEntry(
+      target,
+      "list directories",
+    );
+    this.assertExpectedPolicyPath(
+      this.policyPathForPinnedDirectory(pinned),
+      params.expectedPolicyPath,
+      target.containerPath,
+    );
     const result = await this.runCheckedCommand({
       ...buildPinnedMutationPlan({
         kind: "readdir",
         check: { target, options: { action: "list directories", allowedType: "directory" } },
-        pinned: await this.pathGuard.resolveAnchoredPinnedDirectoryEntry(
-          target,
-          "list directories",
-        ),
+        pinned,
       }),
       signal: params.signal,
     });
@@ -133,12 +211,18 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       target: destination,
       options: { action: "copy files", requireWritable: true } as const,
     };
+    const sourcePinned = await this.pathGuard.resolveAnchoredPinnedEntry(source, "copy files");
+    this.assertExpectedPolicyPath(
+      this.policyPathForPinnedEntry(sourcePinned),
+      params.expectedSourcePolicyPath,
+      source.containerPath,
+    );
     await this.runCheckedCommand({
       ...buildPinnedMutationPlan({
         kind: "copy",
         sourceCheck,
         destinationCheck,
-        source: await this.pathGuard.resolveAnchoredPinnedEntry(source, "copy files"),
+        source: sourcePinned,
         destination: await this.resolveMutationPin(destination, params.pinnedPath, "copy files"),
         mkdir: params.mkdir !== false,
       }),
@@ -311,6 +395,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   async stat(params: Parameters<SandboxFsBridge["stat"]>[0]): Promise<SandboxFsStat | null> {
     const target = this.resolveResolvedPath(params);
     const anchoredTarget = await this.pathGuard.resolveAnchoredSandboxEntry(target, "stat files");
+    const anchoredPath = normalizeContainerPathCore(
+      path.posix.join(anchoredTarget.canonicalParentPath, anchoredTarget.basename),
+    );
+    this.assertExpectedPolicyPath(anchoredPath, params.expectedPolicyPath, target.containerPath);
     const result = await this.runPlannedCommand(
       buildStatPlan(target, anchoredTarget),
       params.signal,
@@ -356,9 +444,18 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     });
   }
 
-  private async readPinnedFile(target: SandboxResolvedFsPath, maxBytes?: number): Promise<Buffer> {
+  private async readPinnedFile(
+    target: SandboxResolvedFsPath,
+    maxBytes?: number,
+    expectedPolicyPath?: string,
+  ): Promise<Buffer> {
     const opened = await this.pathGuard.openReadableFile(target);
     try {
+      this.assertExpectedPolicyPath(
+        this.policyPathForHostIdentity(opened.path, target),
+        expectedPolicyPath,
+        target.containerPath,
+      );
       if (maxBytes === undefined) {
         return await readFileAsync(opened.fd);
       }
@@ -412,6 +509,29 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   private ensureWriteAccess(target: SandboxResolvedFsPath, action: string) {
     if (this.sandbox.workspaceAccess === "ro" || !target.writable) {
       throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
+    }
+  }
+
+  private policyPathForPinnedEntry(pinned: PinnedSandboxEntry): string {
+    return normalizeContainerPathCore(
+      path.posix.join(pinned.mountRootPath, pinned.relativeParentPath, pinned.basename),
+    );
+  }
+
+  private policyPathForPinnedDirectory(pinned: {
+    mountRootPath: string;
+    relativePath: string;
+  }): string {
+    return normalizeContainerPathCore(path.posix.join(pinned.mountRootPath, pinned.relativePath));
+  }
+
+  private assertExpectedPolicyPath(
+    actualPath: string,
+    expectedPath: string | undefined,
+    requestedPath: string,
+  ): void {
+    if (expectedPath && actualPath !== normalizeContainerPathCore(expectedPath)) {
+      throw new Error(`Sandbox file identity changed after authorization: ${requestedPath}`);
     }
   }
 

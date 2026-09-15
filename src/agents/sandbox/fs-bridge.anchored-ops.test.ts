@@ -83,6 +83,34 @@ describe("sandbox fs bridge anchored ops", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects a read whose canonical parent changes after authorization",
+    async () => {
+      await withTempDir("openclaw-fs-bridge-read-identity-swap-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        const allowedDir = path.join(workspaceDir, "allowed");
+        const deniedDir = path.join(workspaceDir, "denied");
+        await fs.mkdir(allowedDir, { recursive: true });
+        await fs.mkdir(deniedDir, { recursive: true });
+        await fs.writeFile(path.join(allowedDir, "secret.txt"), "allowed");
+        await fs.writeFile(path.join(deniedDir, "secret.txt"), "denied");
+        const bridge = createSandboxFsBridge({
+          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+        });
+
+        await fs.rename(allowedDir, path.join(workspaceDir, "allowed-old"));
+        await fs.symlink(deniedDir, allowedDir);
+
+        await expect(
+          bridge.readFile({
+            filePath: "/workspace/allowed/secret.txt",
+            expectedPolicyPath: "/workspace/allowed/secret.txt",
+          }),
+        ).rejects.toThrow("Sandbox file identity changed after authorization");
+      });
+    },
+  );
+
   it.each([
     { name: "uncapped", maxBytes: undefined },
     { name: "bounded", maxBytes: 5 },
@@ -294,7 +322,7 @@ describe("sandbox fs bridge anchored ops", () => {
             return dockerExecResult("regular file|1|2");
           }
           if (getDockerArg(args, 1) === "readdir") {
-            return dockerExecResult('[{"name":"note.txt","isDirectory":false}]');
+            return dockerExecResult('[{"name":"note.txt","isDirectory":false,"isFile":true}]');
           }
           return dockerExecResult("");
         });
@@ -310,7 +338,7 @@ describe("sandbox fs bridge anchored ops", () => {
           await bridge.writeFile({ filePath: "alias/note.txt", data: "updated" });
         } else {
           await expect(bridge.readDirectory!({ filePath: "alias" })).resolves.toEqual([
-            { name: "note.txt", isDirectory: false },
+            { name: "note.txt", isDirectory: false, isFile: true },
           ]);
         }
 

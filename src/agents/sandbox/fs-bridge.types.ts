@@ -55,6 +55,8 @@ export type SandboxFsBridge = {
   readDirectory?(params: {
     filePath: string;
     cwd?: string;
+    /** Canonical policy identity authorized by the caller before final I/O. */
+    expectedPolicyPath?: string;
     signal?: AbortSignal;
   }): Promise<DirectoryEntry[]>;
   /** Reads a safely opened regular file, rejecting growth beyond an optional byte limit. */
@@ -63,6 +65,8 @@ export type SandboxFsBridge = {
     cwd?: string;
     signal?: AbortSignal;
     maxBytes?: number;
+    /** Canonical policy identity authorized by the caller before final I/O. */
+    expectedPolicyPath?: string;
   }): Promise<Buffer>;
   /** Streams a regular file within the sandbox when the backend supports native copying. */
   copyFile?(params: {
@@ -70,6 +74,8 @@ export type SandboxFsBridge = {
     destinationPath: string;
     cwd?: string;
     mkdir?: boolean;
+    /** Canonical source identity authorized by the caller before final I/O. */
+    expectedSourcePolicyPath?: string;
     /** Pre-authorized canonical destination from resolvePinnedMutationTarget. */
     pinnedPath?: string;
     signal?: AbortSignal;
@@ -119,6 +125,8 @@ export type SandboxFsBridge = {
   stat(params: {
     filePath: string;
     cwd?: string;
+    /** Canonical policy identity authorized by the caller before final I/O. */
+    expectedPolicyPath?: string;
     signal?: AbortSignal;
   }): Promise<SandboxFsStat | null>;
 };

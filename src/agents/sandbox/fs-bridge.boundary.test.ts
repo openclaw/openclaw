@@ -4,7 +4,9 @@ import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { describe, expect, it, vi } from "vitest";
+import { resolveSandboxFilePolicyPath } from "./file-mutation-identity.js";
 import {
   createHostEscapeFixture,
   createSandbox,
@@ -18,6 +20,46 @@ import {
 
 describe("sandbox fs bridge boundary validation", () => {
   installFsBridgeTestHarness();
+
+  it("distinguishes large inode values that collide as Numbers", () => {
+    // The admission window compares exact bigint identities through the fs-safe
+    // owner's comparator: the Number conversion collapses these two distinct
+    // inode values into one.
+    const largeInodeA = 9007199254740992n;
+    const largeInodeB = 9007199254740993n;
+    expect(Number(largeInodeA)).toBe(Number(largeInodeB));
+    expect(
+      sameFileIdentity(
+        { dev: 1n, ino: largeInodeA } as fsSync.BigIntStats,
+        { dev: 1n, ino: largeInodeB } as fsSync.BigIntStats,
+      ),
+    ).toBe(false);
+  });
+
+  it("matches identical bigint identities", () => {
+    expect(
+      sameFileIdentity(
+        { dev: 1n, ino: 9007199254740992n } as fsSync.BigIntStats,
+        { dev: 1n, ino: 9007199254740992n } as fsSync.BigIntStats,
+      ),
+    ).toBe(true);
+  });
+
+  it("never rejects unavailable Windows identities as mismatches", () => {
+    const known = { dev: 1n, ino: 9007199254740992n } as fsSync.BigIntStats;
+    const unknown = { dev: 0n, ino: 0n } as fsSync.BigIntStats;
+    expect(sameFileIdentity(known, unknown, "win32")).toBe(true);
+    expect(sameFileIdentity(unknown, known, "win32")).toBe(true);
+  });
+
+  it("rejects definite known-value mismatches", () => {
+    expect(
+      sameFileIdentity(
+        { dev: 1n, ino: 9007199254740992n } as fsSync.BigIntStats,
+        { dev: 1n, ino: 42n } as fsSync.BigIntStats,
+      ),
+    ).toBe(false);
+  });
 
   it("blocks writes into read-only bind mounts", async () => {
     const sandbox = createSandbox({
@@ -41,6 +83,172 @@ describe("sandbox fs bridge boundary validation", () => {
   it("allows mkdirp when boundary open reports io for an existing directory", async () => {
     await expectMkdirpAllowsExistingDirectory({ forceBoundaryIoFallback: true });
   });
+
+  it("maps host-backed aliases back to canonical policy paths", async () => {
+    await withTempDir("openclaw-fs-policy-alias-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      const privateDir = path.join(workspaceDir, "private");
+      await fs.mkdir(privateDir, { recursive: true });
+      await fs.writeFile(path.join(privateDir, "secret.txt"), "secret");
+      await fs.symlink(privateDir, path.join(workspaceDir, "alias"), "dir");
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+      });
+
+      await expect(
+        resolveSandboxFilePolicyPath({
+          bridge,
+          filePath: "/workspace/alias/secret.txt",
+        }),
+      ).resolves.toBe("/workspace/private/secret.txt");
+    });
+  });
+
+  it("preserves a symlinked mount root while reading through the canonical policy path", async () => {
+    await withTempDir("openclaw-fs-policy-root-alias-", async (stateDir) => {
+      const realWorkspaceDir = path.join(stateDir, "real-workspace");
+      const workspaceDir = path.join(stateDir, "workspace-link");
+      await fs.mkdir(realWorkspaceDir, { recursive: true });
+      await fs.writeFile(path.join(realWorkspaceDir, "note.txt"), "allowed");
+      await fs.symlink(realWorkspaceDir, workspaceDir, "dir");
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+      });
+
+      const policyPath = await resolveSandboxFilePolicyPath({
+        bridge,
+        filePath: "/workspace/note.txt",
+      });
+      expect(policyPath).toBe("/workspace/note.txt");
+      await expect(bridge.readFile({ filePath: policyPath })).resolves.toEqual(
+        Buffer.from("allowed"),
+      );
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves an explicitly requested mount when host roots overlap",
+    async () => {
+      await withTempDir("openclaw-fs-policy-overlapping-mounts-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        const nestedDir = path.join(workspaceDir, "sub");
+        await fs.mkdir(nestedDir, { recursive: true });
+        await fs.writeFile(path.join(nestedDir, "note.txt"), "allowed");
+        await fs.symlink(nestedDir, path.join(workspaceDir, "alias"), "dir");
+        const bridge = createSandboxFsBridge({
+          sandbox: createSandbox({
+            workspaceDir,
+            agentWorkspaceDir: workspaceDir,
+            docker: {
+              ...createSandbox().docker,
+              binds: [`${nestedDir}:/reference:ro`],
+            },
+          }),
+        });
+
+        await expect(
+          resolveSandboxFilePolicyPath({
+            bridge,
+            filePath: "/workspace/sub/note.txt",
+          }),
+        ).resolves.toBe("/workspace/sub/note.txt");
+        await expect(
+          resolveSandboxFilePolicyPath({
+            bridge,
+            filePath: "/workspace/alias/note.txt",
+          }),
+        ).resolves.toBe("/reference/note.txt");
+      });
+    },
+  );
+
+  it("admits an allowed read whose resolved identity is stable", async () => {
+    await withTempDir("openclaw-fs-admission-control-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      const pubDir = path.join(workspaceDir, "pub");
+      await fs.mkdir(pubDir, { recursive: true });
+      await fs.writeFile(path.join(pubDir, "note.txt"), "allowed-public");
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+      });
+
+      const policyPath = await resolveSandboxFilePolicyPath({
+        bridge,
+        filePath: "/workspace/pub/note.txt",
+      });
+      expect(policyPath).toBe("/workspace/pub/note.txt");
+      await expect(bridge.readFile({ filePath: policyPath })).resolves.toEqual(
+        Buffer.from("allowed-public"),
+      );
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a read whose target is replaced between canonical resolution and descriptor admission",
+    async () => {
+      await withTempDir("openclaw-fs-admission-swap-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        const pubDir = path.join(workspaceDir, "pub");
+        const privateDir = path.join(workspaceDir, "private");
+        await fs.mkdir(pubDir, { recursive: true });
+        await fs.mkdir(privateDir, { recursive: true });
+        await fs.writeFile(path.join(pubDir, "note.txt"), "allowed-public");
+        await fs.writeFile(path.join(privateDir, "secret.txt"), "denied-secret-content");
+        let swapApplied = false;
+        const bridge = createSandboxFsBridge({
+          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+          beforeDescriptorAdmission: () => {
+            if (swapApplied) {
+              return;
+            }
+            swapApplied = true;
+            // Replace the authorized path's object with the denied file after
+            // the opener captured the resolution-time identity but before it
+            // admitted the descriptor.
+            fsSync.renameSync(path.join(privateDir, "secret.txt"), path.join(pubDir, "note.txt"));
+          },
+        });
+
+        const policyPath = await resolveSandboxFilePolicyPath({
+          bridge,
+          filePath: "/workspace/pub/note.txt",
+        });
+        expect(policyPath).toBe("/workspace/pub/note.txt");
+
+        await expect(bridge.readFile({ filePath: policyPath })).rejects.toThrow(
+          /identity changed between canonical resolution and descriptor admission/,
+        );
+        // The denied object really did occupy the authorized path in the
+        // window, and no read effect returned any of its bytes.
+        expect(swapApplied).toBe(true);
+        expect(await fs.readFile(path.join(pubDir, "note.txt"))).toEqual(
+          Buffer.from("denied-secret-content"),
+        );
+      });
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "maps differently cased host paths back to canonical policy paths",
+    async () => {
+      await withTempDir("openclaw-fs-policy-case-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "workspace");
+        const privateDir = path.join(workspaceDir, "private");
+        await fs.mkdir(privateDir, { recursive: true });
+        await fs.writeFile(path.join(privateDir, "secret.txt"), "secret");
+        const bridge = createSandboxFsBridge({
+          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+        });
+
+        await expect(
+          resolveSandboxFilePolicyPath({
+            bridge,
+            filePath: "/workspace/PRIVATE/SECRET.txt",
+          }),
+        ).resolves.toBe("/workspace/private/secret.txt");
+      });
+    },
+  );
 
   it("rejects mkdirp when target exists as a file", async () => {
     await withTempDir("openclaw-fs-bridge-mkdirp-file-", async (stateDir) => {

@@ -3,7 +3,11 @@
  * with OpenClaw sandbox policy checks before every bridge operation.
  */
 import { posix as pathPosix } from "node:path";
-import type { SandboxFsStat } from "openclaw/plugin-sdk/sandbox";
+import {
+  implementsSandboxFilePolicyPath,
+  resolveSandboxFilePolicyPath,
+  type SandboxFsStat,
+} from "openclaw/plugin-sdk/sandbox";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import {
   assertFsSandboxAccess,
@@ -65,7 +69,8 @@ export async function openFile(
   }
 
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "read path");
-  assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
+  const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
+  assertResolvedFsSandboxAccess(fsSandboxPolicy, [{ path: filePath, access: "read" }]);
   const fsBridge = execServer.fsBridge;
   // Claim the handle before even stat so slow or cancelled stats cannot bypass
   // the connection's handle cap or lose their cancellation and ownership.
@@ -76,7 +81,18 @@ export async function openFile(
   };
   handles.set(handleId, handle);
   try {
-    const stat = await fsBridge.stat({ filePath, signal: handle.abortController.signal });
+    const readPath = await resolveCanonicalFsReadPath(
+      execServer,
+      fsSandboxPolicy,
+      filePath,
+      handle.abortController.signal,
+    );
+    const expectedPolicyPath = expectedFsReadPolicyPath(fsSandboxPolicy, readPath);
+    const stat = await fsBridge.stat({
+      filePath: readPath,
+      ...(expectedPolicyPath ? { expectedPolicyPath } : {}),
+      signal: handle.abortController.signal,
+    });
     if (handles.get(handleId) !== handle || handle.closeRequested || handles.closed) {
       throw new JsonRpcProtocolError(
         JSON_RPC_NOT_FOUND,
@@ -105,7 +121,8 @@ export async function openFile(
     // cannot overbook memory, even when a backend ignores cancellation.
     handle.reservedBytes = stat.size;
     const data = await fsBridge.readFile({
-      filePath,
+      filePath: readPath,
+      ...(expectedPolicyPath ? { expectedPolicyPath } : {}),
       maxBytes: handle.reservedBytes,
       signal: handle.abortController.signal,
     });
@@ -226,15 +243,22 @@ export async function readFile(
 ): Promise<JsonObject> {
   const record = requireObject(params, "fs/readFile params");
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "read path");
-  assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
+  const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
+  assertResolvedFsSandboxAccess(fsSandboxPolicy, [{ path: filePath, access: "read" }]);
+  const readPath = await resolveCanonicalFsReadPath(execServer, fsSandboxPolicy, filePath);
+  const expectedPolicyPath = expectedFsReadPolicyPath(fsSandboxPolicy, readPath);
   const fsBridge = execServer.fsBridge;
-  const stat = await fsBridge.stat({ filePath });
+  const stat = await fsBridge.stat({
+    filePath: readPath,
+    ...(expectedPolicyPath ? { expectedPolicyPath } : {}),
+  });
   if (!stat) {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
   }
   assertSandboxFileReadWithinLimit(stat);
   const data = await fsBridge.readFile({
-    filePath,
+    filePath: readPath,
+    ...(expectedPolicyPath ? { expectedPolicyPath } : {}),
     maxBytes: CODEX_SANDBOX_EXEC_SERVER_MAX_READ_FILE_BYTES,
   });
   return { dataBase64: data.toString("base64") };
@@ -314,9 +338,13 @@ export async function getMetadata(
 ): Promise<JsonObject> {
   const record = requireObject(params, "fs/getMetadata params");
   const filePath = resolveExecServerPath(requireString(record.path, "path"), "metadata path");
-  assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
+  const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
+  assertResolvedFsSandboxAccess(fsSandboxPolicy, [{ path: filePath, access: "read" }]);
+  const readPath = await resolveCanonicalFsReadPath(execServer, fsSandboxPolicy, filePath);
+  const expectedPolicyPath = expectedFsReadPolicyPath(fsSandboxPolicy, readPath);
   const stat = await execServer.fsBridge.stat({
-    filePath,
+    filePath: readPath,
+    ...(expectedPolicyPath ? { expectedPolicyPath } : {}),
   });
   if (!stat) {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
@@ -343,8 +371,29 @@ async function listDirectoryEntries(
   fsSandboxPolicy: ResolvedFsSandboxPolicy | undefined,
 ): Promise<DirectoryEntry[]> {
   assertResolvedFsSandboxAccess(fsSandboxPolicy, [{ path: filePath, access: "read" }]);
+  const readPath = await resolveCanonicalFsReadPath(execServer, fsSandboxPolicy, filePath);
+  const expectedPolicyPath = expectedFsReadPolicyPath(fsSandboxPolicy, readPath);
+  // Direct bridge listing is selected only for bridges that map physical
+  // identity back into the policy namespace, because those bridges validate
+  // the listed identity against the authorized policy path. A non-adopting
+  // bridge resolves directory symlinks during listing without enforcing
+  // that identity, so it keeps the non-following listing below, which never
+  // follows a symlink supplied as the source root.
+  if (execServer.fsBridge.readDirectory && implementsSandboxFilePolicyPath(execServer.fsBridge)) {
+    const entries = await execServer.fsBridge.readDirectory({
+      filePath: readPath,
+      ...(expectedPolicyPath ? { expectedPolicyPath } : {}),
+    });
+    if (entries.every((entry) => typeof entry.isFile === "boolean")) {
+      return entries.map((entry) => ({
+        fileName: entry.name,
+        isDirectory: entry.isDirectory,
+        isFile: entry.isFile === true,
+      }));
+    }
+  }
   const resolved = execServer.fsBridge.resolvePath({
-    filePath,
+    filePath: readPath,
   });
   if (!resolved) {
     throw new Error(`Cannot resolve sandbox path: ${filePath}`);
@@ -445,9 +494,24 @@ async function copySandboxPath(
     { path: params.sourcePath, access: "read" },
     { path: params.destinationPath, access: "write" },
   ]);
-  const sourceStat = await fsBridge.stat({ filePath: params.sourcePath });
+  const sourcePath = await resolveCanonicalFsReadPath(
+    execServer,
+    params.fsSandboxPolicy,
+    params.sourcePath,
+  );
+  const expectedSourcePolicyPath = expectedFsReadPolicyPath(params.fsSandboxPolicy, sourcePath);
+  const sourceStat = await fsBridge.stat({
+    filePath: sourcePath,
+    ...(expectedSourcePolicyPath ? { expectedPolicyPath: expectedSourcePolicyPath } : {}),
+  });
   if (!sourceStat) {
     throw new JsonRpcProtocolError(JSON_RPC_NOT_FOUND, "file not found");
+  }
+  if (sourceStat.type !== "file" && sourceStat.type !== "directory") {
+    // Authoritative kind check: directory listings may not classify entry
+    // kinds, so the pinned stat decides. FIFOs, sockets, and devices are never
+    // copy sources.
+    throw new Error(`Cannot copy unsupported filesystem entry: ${params.sourcePath}`);
   }
   // Authorize the canonical copy destination before pinning the mutation so a
   // symlinked parent cannot redirect an approved copy into a protected path.
@@ -471,15 +535,12 @@ async function copySandboxPath(
     // only lexical paths lets an alias hide that the destination is inside
     // the source and can make recursive copy enumerate its own output.
     const canonicalSource = await fsBridge.resolvePinnedMutationTarget?.({
-      filePath: params.sourcePath,
+      filePath: sourcePath,
       action: "mkdir",
     });
     if (
       pathContains(
-        normalizeSandboxAbsolutePath(
-          canonicalSource?.policyPath ?? params.sourcePath,
-          "copy source path",
-        ),
+        normalizeSandboxAbsolutePath(canonicalSource?.policyPath ?? sourcePath, "copy source path"),
         normalizeSandboxAbsolutePath(
           canonicalDestination?.policyPath ?? params.destinationPath,
           "copy destination path",
@@ -497,9 +558,9 @@ async function copySandboxPath(
       params.sourcePath,
       params.fsSandboxPolicy,
     )) {
-      if (!entry.isDirectory && !entry.isFile) {
-        throw new Error(`Cannot copy unsupported filesystem entry: ${entry.fileName}`);
-      }
+      // Entry kinds from listings may be unclassified; each child resolves its
+      // own authoritative kind through the pinned stat inside copySandboxPath,
+      // which declines unsupported entry kinds before any read effect.
       await copySandboxPath(execServer, {
         sourcePath: joinSandboxChildPath(params.sourcePath, entry.fileName),
         destinationPath: joinSandboxChildPath(params.destinationPath, entry.fileName),
@@ -512,7 +573,8 @@ async function copySandboxPath(
 
   if (sourceStat.type === "file" && fsBridge.copyFile) {
     await fsBridge.copyFile({
-      sourcePath: params.sourcePath,
+      sourcePath,
+      ...(expectedSourcePolicyPath ? { expectedSourcePolicyPath } : {}),
       destinationPath: params.destinationPath,
       mkdir: true,
       pinnedPath: canonicalDestination?.pinnedPath,
@@ -524,7 +586,8 @@ async function copySandboxPath(
   // buffered fallback bounded while built-in bridges use the path-native copy above.
   assertSandboxFileReadWithinLimit(sourceStat);
   const data = await fsBridge.readFile({
-    filePath: params.sourcePath,
+    filePath: sourcePath,
+    ...(expectedSourcePolicyPath ? { expectedPolicyPath: expectedSourcePolicyPath } : {}),
     maxBytes: CODEX_SANDBOX_EXEC_SERVER_MAX_READ_FILE_BYTES,
   });
   await fsBridge.writeFile({
@@ -541,6 +604,32 @@ function assertSandboxFileReadWithinLimit(stat: SandboxFsStat): void {
       `file is too large to read through Codex sandbox exec-server: ${stat.size} bytes`,
     );
   }
+}
+
+/** Re-checks read policy against the bridge's physical file identity. */
+async function resolveCanonicalFsReadPath(
+  execServer: OpenClawExecServer,
+  policy: ResolvedFsSandboxPolicy | undefined,
+  filePath: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (!policy || policy.unrestricted) {
+    return filePath;
+  }
+  const canonicalPolicyPath = await resolveSandboxFilePolicyPath({
+    bridge: execServer.fsBridge,
+    filePath,
+    signal,
+  });
+  assertResolvedFsSandboxAccess(policy, [{ path: canonicalPolicyPath, access: "read" }]);
+  return canonicalPolicyPath;
+}
+
+function expectedFsReadPolicyPath(
+  policy: ResolvedFsSandboxPolicy | undefined,
+  canonicalPath: string,
+): string | undefined {
+  return policy && !policy.unrestricted ? canonicalPath : undefined;
 }
 
 function metadataResponse(stat: SandboxFsStat | null): JsonObject {

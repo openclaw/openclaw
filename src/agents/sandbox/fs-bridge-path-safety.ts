@@ -5,6 +5,8 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
+import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import type { PathAliasPolicy } from "../../infra/path-alias-guards.js";
 import { openRootFile, type RootFileOpenResult } from "./fs-bridge-path-safety.runtime.js";
@@ -73,10 +75,16 @@ type RunCommand = (
 export class SandboxFsPathGuard {
   private readonly mountsByContainer: SandboxFsMount[];
   private readonly runCommand: RunCommand;
+  private readonly beforeDescriptorAdmission?: (resolvedHostPath: string) => void | Promise<void>;
 
-  constructor(params: { mountsByContainer: SandboxFsMount[]; runCommand: RunCommand }) {
+  constructor(params: {
+    mountsByContainer: SandboxFsMount[];
+    runCommand: RunCommand;
+    beforeDescriptorAdmission?: (resolvedHostPath: string) => void | Promise<void>;
+  }) {
     this.mountsByContainer = params.mountsByContainer;
     this.runCommand = params.runCommand;
+    this.beforeDescriptorAdmission = params.beforeDescriptorAdmission;
   }
 
   async assertPathChecks(checks: PathSafetyCheck[]): Promise<void> {
@@ -190,8 +198,32 @@ export class SandboxFsPathGuard {
     },
   ): Promise<RootFileOpenResult> {
     const lexicalMount = this.resolveRequiredMount(target.containerPath, action);
+    // Canonicalize through the same primitive the policy-identity mapper uses,
+    // then capture the object identity at resolution time. An ancestor swap
+    // between this observation and descriptor admission opens a different
+    // object, and the admission identity check below rejects it before any
+    // read effect returns.
+    let resolvedHostPath = target.hostPath;
+    try {
+      // Canonicalize the parent chain exactly like the policy-identity mapper,
+      // preserving the final component so fs-safe keeps owning final-symlink
+      // alias policy and symlink-escape classification.
+      resolvedHostPath = path.join(
+        resolveIdentityPathViaExistingAncestorSync(path.dirname(target.hostPath)),
+        path.basename(target.hostPath),
+      );
+    } catch {
+      // Keep the lexical path; openRootFile reports the boundary or IO failure.
+    }
+    // Exact bigint identity at both ends of the window: numeric dev/ino lose
+    // precision for large inode values and can compare equal after rounding.
+    const resolutionIdentity = fs.statSync(resolvedHostPath, {
+      bigint: true,
+      throwIfNoEntry: false,
+    });
+    await this.beforeDescriptorAdmission?.(resolvedHostPath);
     const guarded = await openRootFile({
-      absolutePath: target.hostPath,
+      absolutePath: resolvedHostPath,
       rootPath: lexicalMount.hostRoot,
       boundaryLabel: "sandbox mount root",
       // Follow in-mount symlink hops (fs-safe rejects them by default):
@@ -201,6 +233,19 @@ export class SandboxFsPathGuard {
       aliasPolicy: options?.aliasPolicy,
       allowedType: options?.allowedType,
     });
+    if (guarded.ok && resolutionIdentity) {
+      const admittedIdentity = fs.fstatSync(guarded.fd, { bigint: true });
+      // Exact bigint comparison via the fs-safe owner's comparator: numeric
+      // dev/ino lose precision for large inode values and can compare equal
+      // after Number rounding, while unavailable Windows identity components
+      // are not provably different and never reject a stable file.
+      if (!sameFileIdentity(resolutionIdentity, admittedIdentity)) {
+        fs.closeSync(guarded.fd);
+        throw new Error(
+          `Sandbox file identity changed between canonical resolution and descriptor admission; cannot ${action}: ${target.containerPath}`,
+        );
+      }
+    }
     return guarded;
   }
 

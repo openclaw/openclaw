@@ -4,7 +4,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type {
   SandboxBackendHandle,
   SandboxBackendCommandParams,
@@ -73,7 +74,83 @@ async function runLocalShellCommand(
   });
 }
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 describe("sandbox fs bridge local backend e2e", () => {
+  it.runIf(process.platform !== "win32")(
+    "binds metadata to the authorized parent identity",
+    async () => {
+      const stateDir = tempDirs.make("openclaw-fsbridge-stat-e2e-");
+      const workspacePath = path.join(stateDir, "workspace");
+      await fs.mkdir(workspacePath, { recursive: true });
+      const workspaceDir = await fs.realpath(workspacePath);
+      const allowedDir = path.join(workspaceDir, "allowed");
+      const deniedDir = path.join(workspaceDir, "denied");
+      const movedDir = path.join(workspaceDir, "allowed-before-swap");
+      await fs.mkdir(allowedDir, { recursive: true });
+      await fs.mkdir(deniedDir, { recursive: true });
+      await fs.writeFile(path.join(allowedDir, "note.txt"), "a");
+      await fs.writeFile(path.join(deniedDir, "note.txt"), "denied metadata target");
+      let swapBeforeStat = false;
+      const backend: SandboxBackendHandle = {
+        id: "local-test",
+        runtimeId: "local-backend-fsbridge-stat",
+        runtimeLabel: "local-backend-fsbridge-stat",
+        workdir: workspaceDir,
+        buildExecSpec: async ({ command, env }) => ({
+          argv: ["sh", "-c", command],
+          env,
+          stdinMode: "pipe-closed",
+        }),
+        runShellCommand: async (params) => {
+          if (swapBeforeStat && params.script.includes('stat -c "%F|%s|%y"')) {
+            swapBeforeStat = false;
+            await fs.rename(allowedDir, movedDir);
+            await fs.symlink(deniedDir, allowedDir, "dir");
+          }
+          return await runLocalShellCommand(params);
+        },
+      };
+
+      try {
+        const [{ createSandboxFsBridge }, { createSandboxTestContext }, identity] =
+          await Promise.all([
+            import("./fs-bridge.js"),
+            import("./test-fixtures.js"),
+            import("./file-mutation-identity.js"),
+          ]);
+        const bridge = createSandboxFsBridge({
+          sandbox: createSandboxTestContext({
+            overrides: {
+              workspaceDir,
+              agentWorkspaceDir: workspaceDir,
+              containerName: "local-backend-fsbridge-stat",
+              containerWorkdir: workspaceDir,
+              backend,
+            },
+          }),
+        });
+        const filePath = path.join(allowedDir, "note.txt");
+        const expectedPolicyPath = await identity.resolveSandboxFilePolicyPath({
+          bridge,
+          filePath,
+        });
+
+        await expect(bridge.stat({ filePath, expectedPolicyPath })).resolves.toMatchObject({
+          type: "file",
+          size: 1,
+        });
+
+        swapBeforeStat = true;
+        await expect(bridge.stat({ filePath, expectedPolicyPath })).rejects.toThrow(
+          "Sandbox file identity changed after authorization",
+        );
+      } finally {
+        await fs.rm(stateDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.runIf(process.platform !== "win32").each([
     { workspaceAccess: "rw", mutation: "write" },
     { workspaceAccess: "none", mutation: "write" },
@@ -134,12 +211,16 @@ describe("sandbox fs bridge local backend e2e", () => {
           throw new Error("The mounted bridge must support directory discovery.");
         }
         await expect(bridge.readDirectory({ filePath: "." })).resolves.toEqual([
-          { name: mutation === "write" ? "skills" : ".agents", isDirectory: true },
+          {
+            name: mutation === "write" ? "skills" : ".agents",
+            isDirectory: true,
+            isFile: false,
+          },
         ]);
         await expect(bridge.readDirectory({ filePath: "../" })).rejects.toThrow();
         await fs.symlink(path.dirname(skillPath), path.join(workspaceDir, "alias"));
         await expect(bridge.readDirectory({ filePath: "alias" })).resolves.toEqual([
-          { name: "SKILL.md", isDirectory: false },
+          { name: "SKILL.md", isDirectory: false, isFile: true },
         ]);
         await fs.symlink(stateDir, path.join(workspaceDir, "outside"));
         await expect(bridge.readDirectory({ filePath: "outside" })).rejects.toThrow();
