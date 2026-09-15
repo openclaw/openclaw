@@ -742,7 +742,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(groupNames(updated)).toEqual(groupNames(fallback));
 
       // Two complete, compatible configs share setup without changing either
-      // process envelope. Blacksmith placements request capacity for overlapping plans.
+      // process envelope. Blacksmith placements retain two capacity-gated child slots.
       const fixtureConfigs = new Set([
         "test/vitest/vitest.hooks.config.ts",
         "test/vitest/vitest.secrets.config.ts",
@@ -772,7 +772,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         );
         expect(packed[0]?.planConcurrency).toBe(profile === "github" ? 1 : 2);
         expect(packed[0]?.runner).toBe(
-          profile === "github" ? base[0]?.runner : EXTRA_LARGE_NODE_TEST_RUNNER,
+          profile === "github" ? base[0]?.runner : "blacksmith-16vcpu-ubuntu-2404",
         );
         expect(packed[0]?.predictedSeconds).toBe(profile === "hybrid" ? 296 : groupSeconds * 2);
       } finally {
@@ -790,7 +790,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         expect(shard).toMatchObject({
           planConcurrency: 2,
           requiresDist: false,
-          runner: EXTRA_LARGE_NODE_TEST_RUNNER,
+          runner: "blacksmith-16vcpu-ubuntu-2404",
         });
         expect(shard.pretestBuildMode).toBeUndefined();
         expect(shard.predictedSeconds).toBeLessThanOrEqual(360);
@@ -1462,7 +1462,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ).toBe(true);
     }
     // Timing-sensitive and runtime-building jobs stay serial. Ordinary Blacksmith
-    // placements may overlap only with the larger request; logical groups stay intact.
+    // placements retain capacity-gated child slots; logical groups stay intact.
     for (const shard of [
       ...pullRequestCompact,
       ...githubPullRequestCompact,
@@ -1511,7 +1511,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }
       if (shard.planConcurrency === 2) {
         expect(githubPullRequestCompact).not.toContain(shard);
-        expect(shard.runner).toBe(EXTRA_LARGE_NODE_TEST_RUNNER);
+        expect(shard.runner).toBe("blacksmith-16vcpu-ubuntu-2404");
         expect(shard.groups.length).toBeGreaterThan(1);
         expect(shard.pretestBuildMode).toBeUndefined();
         expect(shard.requiresDist).toBe(false);
@@ -1754,7 +1754,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     );
     expect(startupCoreJob?.runner).toBe(
       startupCoreJob?.planConcurrency === 2
-        ? EXTRA_LARGE_NODE_TEST_RUNNER
+        ? "blacksmith-16vcpu-ubuntu-2404"
         : DEFAULT_NODE_TEST_RUNNER,
     );
     expect(
@@ -4008,7 +4008,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             (shard.planConcurrency === 1 ||
               (runnerBackend !== "github" &&
                 shard.planConcurrency === 2 &&
-                shard.runner === EXTRA_LARGE_NODE_TEST_RUNNER)),
+                shard.runner === "blacksmith-16vcpu-ubuntu-2404")),
         ),
       ).toBe(true);
       expect(after.length).toBeLessThanOrEqual(80);

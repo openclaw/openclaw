@@ -6478,7 +6478,6 @@ setImmediate(() => {
       "security-fast": "ubuntu-24.04",
       "qa-smoke-ci-profile": "ubuntu-24.04",
       "skills-python": "ubuntu-24.04",
-      "check-test-types-hosted-core-shard": "ubuntu-24.04",
       "checks-windows": "windows-2025",
     } as const;
     const expectedHybridFirstAttemptRunners = {
@@ -6489,9 +6488,8 @@ setImmediate(() => {
       "checks-node-core-test-nondist-shard": "blacksmith-32vcpu-ubuntu-2404",
       "checks-ui-e2e": "blacksmith-8vcpu-ubuntu-2404",
       "checks-ui-e2e-real-gateway": "blacksmith-32vcpu-ubuntu-2404",
-      "docker-seed-e2e": "blacksmith-32vcpu-ubuntu-2404",
+      "docker-seed-e2e": "blacksmith-16vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
-      "check-test-types-hosted-core-shard": "blacksmith-32vcpu-ubuntu-2404",
       "checks-ui": "blacksmith-8vcpu-ubuntu-2404",
       "checks-windows": "blacksmith-8vcpu-windows-2025",
     } as const;
@@ -6512,6 +6510,7 @@ setImmediate(() => {
     } as const;
     expect(configurableJobs).toEqual(Object.keys(expectedHostedRunners).toSorted());
     expect(jobs["check-lint-hosted-core-shard"]?.["runs-on"]).toBe("ubuntu-24.04");
+    expect(jobs["check-test-types-hosted-core-shard"]?.["runs-on"]).toBe("ubuntu-24.04");
     // check-docs stays hosted in every mode: its ClawHub clone is unauthenticated by design.
     expect(jobs["check-docs"]?.["runs-on"]).toBe("ubuntu-24.04");
     for (const [jobName, hostedRunner] of Object.entries(expectedHostedRunners)) {
@@ -6569,7 +6568,7 @@ setImmediate(() => {
       }
     }
 
-    const widenedHybridMatrixRows = [
+    const hybridMatrixRows = [
       {
         jobName: "check-shard",
         matrix: { runner: "blacksmith-32vcpu-ubuntu-2404", task: "lint" },
@@ -6620,10 +6619,21 @@ setImmediate(() => {
         runner: "blacksmith-8vcpu-ubuntu-2404",
       },
     ] as const;
-    for (const { jobName, matrix, runner } of widenedHybridMatrixRows) {
+    for (const { jobName, matrix, runner } of hybridMatrixRows) {
       const expression = jobs[jobName]?.["runs-on"];
       for (const [label, overrides, expectedRunner] of [
-        ["hybrid attempt 1", { runnerBackend: "hybrid" }, runner],
+        [
+          "hybrid attempt 1",
+          { runnerBackend: "hybrid" },
+          jobName === "checks-node-core-test-nondist-shard" ? runner : "ubuntu-24.04",
+        ],
+        [
+          "hybrid push attempt 1",
+          { eventName: "push", runnerBackend: "hybrid" },
+          jobName === "checks-node-core-test-nondist-shard" ? runner : "ubuntu-24.04",
+        ],
+        ["Blacksmith attempt 1", { runnerBackend: "blacksmith" }, runner],
+        ["default attempt 1", { runnerBackend: "" }, runner],
         ["hybrid retry", { runnerBackend: "hybrid", runAttempt: 2 }, "ubuntu-24.04"],
         ["github backend", { runnerBackend: "github" }, "ubuntu-24.04"],
         [
@@ -14654,7 +14664,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           matrix,
           blacksmithRunner:
             matrix.task === "control-ui"
-              ? "blacksmith-32vcpu-ubuntu-2404"
+              ? "blacksmith-16vcpu-ubuntu-2404"
               : "blacksmith-8vcpu-ubuntu-2404",
         })),
       {
