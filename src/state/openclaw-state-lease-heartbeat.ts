@@ -68,32 +68,34 @@ export function startOpenClawStateLeaseHeartbeat(
     release();
     throw error;
   }
-  let handleReleaseError: Error | undefined;
-  worker.once("exit", () => {
-    try {
-      release();
-    } catch (error) {
-      handleReleaseError = new Error("state lease heartbeat handle release failed", {
-        cause: error,
-      });
-      params.onLost(handleReleaseError);
-    }
-  });
-  // Worker stdio uses parent message delivery, which maintenance can block.
-  // The heartbeat emits no normal output; drain runtime bootstrap diagnostics.
-  worker.stdout.resume();
-  worker.stderr.resume();
+  let firstFailure: Error | undefined;
+  let releaseFailure: Error | undefined;
   const ready = createDeferredCore();
   const fail = (error: Error) => {
-    if (Atomics.load(shared, state.status) === state.closed) {
+    if (firstFailure || Atomics.load(shared, state.status) === state.closed) {
       return;
     }
+    firstFailure = error;
     Atomics.store(shared, state.status, state.lost);
     Atomics.notify(shared, state.ack);
     clearTimeout(startTimer);
     ready.reject(error);
     params.onLost(error);
   };
+  worker.once("exit", () => {
+    try {
+      release();
+    } catch (error) {
+      releaseFailure = new Error("state lease heartbeat handle release failed", {
+        cause: error,
+      });
+      fail(releaseFailure);
+    }
+  });
+  // Worker stdio uses parent message delivery, which maintenance can block.
+  // The heartbeat emits no normal output; drain runtime bootstrap diagnostics.
+  worker.stdout.resume();
+  worker.stderr.resume();
   const settleStartup = (trigger: "timeout" | "message") => {
     clearTimeout(startTimer);
     // Readiness precedes notification delivery. A delayed parent must not
@@ -142,8 +144,8 @@ export function startOpenClawStateLeaseHeartbeat(
     stop() {
       close();
       return (stopping ??= worker.terminate().then((code) => {
-        if (handleReleaseError) {
-          throw handleReleaseError;
+        if (releaseFailure) {
+          throw firstFailure ?? releaseFailure;
         }
         return code;
       }));

@@ -1,5 +1,6 @@
 import type { EventEmitter } from "node:events";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import * as stateDatabaseCoordinator from "../infra/state-database-coordinator.js";
 import {
   leaseHeartbeatState as state,
   type LeaseHeartbeatWorkerData,
@@ -39,6 +40,124 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+function failHandleRelease(releaseCause: Error) {
+  const acquireHandle = stateDatabaseCoordinator.acquireStateDatabaseHandleLease;
+  return vi
+    .spyOn(stateDatabaseCoordinator, "acquireStateDatabaseHandleLease")
+    .mockImplementation((params) => {
+      const handle = acquireHandle(params);
+      const release = handle.release.bind(handle);
+      handle.release = (options) => {
+        release(options);
+        throw releaseCause;
+      };
+      return handle;
+    });
+}
+
+describe("state lease heartbeat fail idempotency", () => {
+  it("calls onLost at most once when the worker errors then exits after becoming ready", async () => {
+    const onLost = vi.fn();
+    const heartbeat = startOpenClawStateLeaseHeartbeat({
+      path: "/synthetic-private-state/lease.sqlite",
+      identity: {
+        scope: "synthetic-private-scope",
+        key: "synthetic-private-key",
+        owner: "synthetic-owner-token",
+      },
+      leaseMs: 60_000,
+      heartbeatMs: 20_000,
+      expiresAt: Date.now() + 60_000,
+      onLost,
+    });
+    const outcome = heartbeat.ready.catch((error: unknown) => error);
+    const worker = workers[0];
+    try {
+      assert(worker, "Expected the heartbeat worker to be constructed");
+      Atomics.store(worker.shared, state.status, state.ready);
+      worker.emit("message", null);
+      const error = await outcome;
+      expect(error).toBeUndefined();
+      const testError = new Error("test worker error");
+      worker.emit("error", testError);
+      worker.emit("exit", 1);
+      expect(onLost).toHaveBeenCalledTimes(1);
+      expect(onLost).toHaveBeenCalledWith(testError);
+    } finally {
+      await heartbeat.stop();
+    }
+  });
+
+  it("reports a handle release failure once and preserves it through stop", async () => {
+    const releaseCause = new Error("test handle release failure");
+    const acquireSpy = failHandleRelease(releaseCause);
+    const onLost = vi.fn();
+    const heartbeat = startOpenClawStateLeaseHeartbeat({
+      path: "/synthetic-private-state/lease.sqlite",
+      identity: {
+        scope: "synthetic-private-scope",
+        key: "synthetic-private-key",
+        owner: "synthetic-owner-token",
+      },
+      leaseMs: 60_000,
+      heartbeatMs: 20_000,
+      expiresAt: Date.now() + 60_000,
+      onLost,
+    });
+    const worker = workers[0];
+    try {
+      assert(worker, "Expected the heartbeat worker to be constructed");
+      Atomics.store(worker.shared, state.status, state.ready);
+      worker.emit("message", null);
+      await heartbeat.ready;
+      worker.emit("exit", 1);
+
+      expect(onLost).toHaveBeenCalledTimes(1);
+      const releaseError = onLost.mock.calls[0]?.[0];
+      expect(releaseError).toEqual(
+        new Error("state lease heartbeat handle release failed", { cause: releaseCause }),
+      );
+      await expect(heartbeat.stop()).rejects.toBe(releaseError);
+    } finally {
+      acquireSpy.mockRestore();
+      await heartbeat.stop().catch(() => {});
+    }
+  });
+
+  it("preserves the worker error when exit handle release also fails", async () => {
+    const acquireSpy = failHandleRelease(new Error("test handle release failure"));
+    const onLost = vi.fn();
+    const heartbeat = startOpenClawStateLeaseHeartbeat({
+      path: "/synthetic-private-state/lease.sqlite",
+      identity: {
+        scope: "synthetic-private-scope",
+        key: "synthetic-private-key",
+        owner: "synthetic-owner-token",
+      },
+      leaseMs: 60_000,
+      heartbeatMs: 20_000,
+      expiresAt: Date.now() + 60_000,
+      onLost,
+    });
+    const worker = workers[0];
+    try {
+      assert(worker, "Expected the heartbeat worker to be constructed");
+      Atomics.store(worker.shared, state.status, state.ready);
+      worker.emit("message", null);
+      await heartbeat.ready;
+      const workerError = new Error("test worker error");
+      worker.emit("error", workerError);
+      worker.emit("exit", 1);
+
+      expect(onLost).toHaveBeenCalledExactlyOnceWith(workerError);
+      await expect(heartbeat.stop()).rejects.toBe(workerError);
+    } finally {
+      acquireSpy.mockRestore();
+      await heartbeat.stop().catch(() => {});
+    }
+  });
 });
 
 describe("state lease heartbeat startup diagnostics", () => {
