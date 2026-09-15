@@ -138,6 +138,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /** Host-only synchronous guard rechecked during preparation and at every provider dispatch. */
+  assertRunAuthorization?: () => void;
   /**
    * Run-owned start timestamp captured by the embedded-run orchestrator before
    * admission. Flows onto the queue handle so recovery can project the active

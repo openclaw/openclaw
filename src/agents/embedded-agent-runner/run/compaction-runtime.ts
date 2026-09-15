@@ -326,6 +326,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
   const assertAdmittedActive = () => {
     // Preserve the caller's reason before a closed admission can replace it.
     abortSignal?.throwIfAborted();
+    params.assertRunAuthorization?.();
     if (!admittedAssertion) {
       throw new Error("compaction recovery requires an active admitted run");
     }

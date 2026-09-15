@@ -194,6 +194,18 @@ describe("agent harness runtime SDK facade", () => {
         : false
     >().toEqualTypeOf<false>();
     expectTypeOf<
+      "assertRunAuthorization" extends keyof AgentHarnessAttemptParams ? true : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      "assertRunAuthorization" extends keyof AgentHarnessAttemptParamsV2 ? true : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      "assertRunAuthorization" extends keyof EmbeddedRunAttemptParams ? true : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
+      "assertRunAuthorization" extends keyof EmbeddedRunAttemptParamsV2 ? true : false
+    >().toEqualTypeOf<false>();
+    expectTypeOf<
       Omit<EmbeddedRunAttemptParamsV2, "hostCapabilities"> extends EmbeddedRunAttemptParamsV2
         ? true
         : false

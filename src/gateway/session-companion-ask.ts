@@ -1,21 +1,19 @@
-import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionCompanionExchange } from "../../packages/gateway-protocol/src/schema/sessions.js";
-import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
-import { resolveSessionStorePathCore } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { Message, Usage } from "../llm/types.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { SessionCompanionContextReader } from "./session-companion-context.js";
 import {
-  buildSessionCompanionRunConfig,
-  SESSION_COMPANION_TOOLS,
-} from "./session-companion-policy.js";
+  runSessionCompanionDefault,
+  SESSION_COMPANION_ASK_TIMEOUT_MS,
+  SessionCompanionAskError,
+  type SessionCompanionPromptMessage,
+  type SessionCompanionRunParams,
+} from "./session-companion-run.js";
 import {
   trimSessionCompanionExchanges,
   type SessionCompanionThread,
@@ -23,32 +21,16 @@ import {
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
 import { sessionObserverScopeKey } from "./session-observer-model.js";
 
+export { SessionCompanionAskError } from "./session-companion-run.js";
+
 const companionLog = createSubsystemLogger("gateway/session-companion");
 
-const ASK_TIMEOUT_MS = 60_000;
 const ANSWER_MAX_CHARS = 1200;
 const DELTA_MAX_BYTES = 4 * 1024;
 const MAX_CONCURRENT_ASKS = 6;
 const ASK_RATE_WINDOW_MS = 60_000;
 const MAX_ASKS_PER_RATE_WINDOW = 12;
 const MAX_ASKS_PER_CONNECTION_RATE_WINDOW = 4;
-
-type SessionCompanionPromptMessage = {
-  role: "user" | "assistant";
-  content: string;
-  ts: number;
-};
-
-type SessionCompanionRunParams = {
-  cfg: OpenClawConfig;
-  agentId: string;
-  modelRef: string;
-  sessionKey: string;
-  workspaceDir: string;
-  systemPrompt: string;
-  messages: SessionCompanionPromptMessage[];
-  signal: AbortSignal;
-};
 
 export type SessionCompanionAskDeps = {
   getConfig: () => OpenClawConfig;
@@ -84,25 +66,6 @@ type SessionCompanionActiveAsk = {
   controller: AbortController;
 };
 
-type SessionCompanionAskErrorReason =
-  | "busy"
-  | "context-unavailable"
-  | "rate-limited"
-  | "session-missing"
-  | "utility-model-unavailable"
-  | "unavailable";
-
-export class SessionCompanionAskError extends Error {
-  constructor(
-    readonly reason: SessionCompanionAskErrorReason,
-    message: string,
-    readonly retryAfterMs?: number,
-  ) {
-    super(message);
-    this.name = "SessionCompanionAskError";
-  }
-}
-
 function buildSystemPrompt(sessionKey: string): string {
   return [
     `You are the read-only Side chat assistant observing session ${sessionKey}.`,
@@ -116,124 +79,6 @@ function buildSystemPrompt(sessionKey: string): string {
     "Answer from evidence in the inherited context, observer notes, and permitted tool reads; say plainly when you cannot know.",
     "Return a concise plain-text answer in American English with no markdown or JSON wrapper.",
   ].join(" ");
-}
-
-const EMPTY_USAGE: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
-function toRunnerHistoryMessage(
-  message: SessionCompanionPromptMessage,
-  selection: { provider: string; modelId: string },
-): Message {
-  if (message.role === "user") {
-    return { role: "user", content: message.content, timestamp: message.ts };
-  }
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: message.content }],
-    api: "openai-responses",
-    provider: selection.provider,
-    model: selection.modelId,
-    usage: EMPTY_USAGE,
-    stopReason: "stop",
-    timestamp: message.ts,
-  };
-}
-
-async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
-  const selection = resolveSimpleCompletionSelectionForAgent({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    modelRef: params.modelRef,
-    useUtilityModel: true,
-  });
-  if (!selection) {
-    throw new Error("No utility model is configured for this session.");
-  }
-  const current = params.messages.at(-1);
-  if (!current || current.role !== "user") {
-    throw new Error("Session companion has no current question.");
-  }
-  const runId = `session-companion-${randomUUID()}`;
-  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
-    agentId: params.agentId,
-  });
-  const { prepareInternalSessionEffectsSession, removeInternalSessionEffectsSession } =
-    await import("../agents/internal-session-effects.js");
-  const target = await prepareInternalSessionEffectsSession({
-    agentId: params.agentId,
-    cwd: params.workspaceDir,
-    runId,
-    storePath,
-  });
-  const preparedRunAdmission = prepareSystemAgentRunAdmission(
-    params.cfg,
-    runId,
-    params.agentId,
-    "session-companion.ask",
-  );
-  try {
-    const [{ SessionManager }, { runEmbeddedAgent }] = await Promise.all([
-      import("../agents/sessions/index.js"),
-      import("../agents/embedded-agent.js"),
-    ]);
-    const sessionManager = SessionManager.open(target);
-    for (const message of params.messages.slice(0, -1)) {
-      sessionManager.appendMessage(toRunnerHistoryMessage(message, selection));
-    }
-    const result = await runEmbeddedAgent({
-      preparedRunAdmission,
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
-      sandboxSessionKey: params.sessionKey,
-      agentId: params.agentId,
-      trigger: "manual",
-      workspaceDir: params.workspaceDir,
-      cwd: params.workspaceDir,
-      config: buildSessionCompanionRunConfig(params.cfg),
-      codeModeOverride: false,
-      prompt: current.content,
-      provider: selection.runtimeProvider ?? selection.provider,
-      model: selection.modelId,
-      modelFallbacksOverride: [],
-      requestedRouteResolution: "resolved",
-      agentHarnessRuntimeOverride: "openclaw",
-      authProfileId: selection.profileId,
-      authProfileIdSource: selection.profileId ? "user" : undefined,
-      timeoutMs: ASK_TIMEOUT_MS,
-      runTimeoutOverrideMs: ASK_TIMEOUT_MS,
-      runId,
-      abortSignal: params.signal,
-      extraSystemPrompt: params.systemPrompt,
-      promptMode: "minimal",
-      bootstrapContextMode: "lightweight",
-      toolsAllow: [...SESSION_COMPANION_TOOLS],
-      disableMessageTool: true,
-      disableTrajectory: true,
-      suppressLiveStreamOutput: true,
-      cleanupBundleMcpOnRunEnd: true,
-      oneShotCliRun: true,
-      inputProvenance: { kind: "internal_system", sourceTool: "session-companion" },
-    });
-    return (
-      result.meta.finalAssistantVisibleText ??
-      result.payloads
-        ?.filter((payload) => payload.isReasoning !== true && typeof payload.text === "string")
-        .map((payload) => payload.text)
-        .join("") ??
-      ""
-    );
-  } finally {
-    preparedRunAdmission.close();
-    await removeInternalSessionEffectsSession(target);
-  }
 }
 
 const PRIVATE_REFERENCE_BEGIN = "<private-session-reference>";
@@ -357,10 +202,16 @@ function contextError(
   return new SessionCompanionAskError(reason, message);
 }
 
+function assertReadAuthorized(authorize?: () => boolean): void {
+  if (authorize?.() === false) {
+    throw contextError("session-missing", "Side chat is unavailable.");
+  }
+}
+
 export function createSessionCompanionAskRuntime(params: SessionCompanionAskRuntimeParams) {
   const resolveUtilityModelRef = params.resolveUtilityModelRef ?? resolveUtilityModelRefForAgent;
   const contextReader = params.contextReader;
-  const run = params.run ?? defaultRun;
+  const run = params.run ?? runSessionCompanionDefault;
   const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
   const activeAsks = new Map<string, SessionCompanionActiveAsk>();
@@ -379,6 +230,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     sessionKey: string,
     agentId: string,
     signal: AbortSignal,
+    authorize?: () => boolean,
   ): Promise<SessionCompanionThread> => {
     const threadKey = sessionObserverScopeKey(sessionKey, agentId);
     const existing = params.threads.get(threadKey);
@@ -386,6 +238,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     if (signal.aborted) {
       throw new Error("session companion preparation was cancelled");
     }
+    assertReadAuthorized(authorize);
     if (existing && currentSessionId(sessionKey, agentId) === existing.context.sessionId) {
       return existing;
     }
@@ -396,6 +249,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     if (signal.aborted || params.isDisposed()) {
       throw new Error("session companion preparation was cancelled");
     }
+    assertReadAuthorized(authorize);
     if (result.kind === "missing") {
       throw contextError("session-missing", "The selected session is no longer available.");
     }
@@ -428,6 +282,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     sessionKey: string;
     question: string;
     connId: string;
+    authorize?: () => boolean;
     signal?: AbortSignal;
   }): Promise<{ answer: string; ts: number }> => {
     const sessionKey = request.sessionKey.trim();
@@ -469,7 +324,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         "rate-limited",
         "Side chat has reached its question limit. Try again shortly.",
         Math.max(
-          activeAsks.size >= MAX_CONCURRENT_ASKS ? ASK_TIMEOUT_MS : 0,
+          activeAsks.size >= MAX_CONCURRENT_ASKS ? SESSION_COMPANION_ASK_TIMEOUT_MS : 0,
           globalRetryAfterMs,
           connectionRetryAfterMs,
         ),
@@ -493,7 +348,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     } else {
       request.signal?.addEventListener("abort", abortRequest, { once: true });
     }
-    const timeout = setTimeoutFn(() => abort("timeout"), ASK_TIMEOUT_MS);
+    const timeout = setTimeoutFn(() => abort("timeout"), SESSION_COMPANION_ASK_TIMEOUT_MS);
     const aborted = createDeferredCore<never>();
     const onAbort = () =>
       aborted.reject(new Error("session companion ask timed out or was cancelled"));
@@ -507,7 +362,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     // Preparation shares the model's cancellation race. Late completions must
     // still pass the ownership checks before dispatching or committing an answer.
     const execute = async () => {
-      const thread = await prepareThread(sessionKey, agentId, controller.signal);
+      const thread = await prepareThread(sessionKey, agentId, controller.signal, request.authorize);
       ownedThread = thread;
       if (controller.signal.aborted) {
         throw new Error("session companion preparation was cancelled");
@@ -546,6 +401,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         referenceContext,
         now: admittedAt,
       });
+      assertReadAuthorized(request.authorize);
       const rawAnswer = await run({
         cfg,
         agentId,
@@ -554,11 +410,13 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         workspaceDir,
         systemPrompt: buildSystemPrompt(sessionKey),
         messages,
+        authorize: request.authorize,
         signal: controller.signal,
       });
       if (activeAsk.cancellation || params.isDisposed()) {
         throw new Error("session companion ask was cancelled");
       }
+      assertReadAuthorized(request.authorize);
       if (
         params.threads.get(threadKey) !== thread ||
         currentSessionId(sessionKey, agentId) !== thread.context.sessionId

@@ -137,6 +137,7 @@ export function runEmbeddedAgent(
 async function runEmbeddedAgentInternal(
   paramsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
+  paramsInput.assertRunAuthorization?.();
   const contextEngineAgentId =
     normalizeOptionalString(paramsInput.sessionTarget?.agentId) ??
     normalizeOptionalString(paramsInput.agentId);
@@ -163,6 +164,7 @@ async function runEmbeddedAgentInternal(
     missingSessionKey: "create",
     sessionKey: effectiveSessionKey,
   });
+  paramsBase.assertRunAuthorization?.();
   let params: RunEmbeddedAgentParamsWithSessionFile = withExecutionPhaseDiagnostics({
     ...paramsBase,
     // Establish one detached transcript owner for CLI dispatch and every retry.
@@ -232,6 +234,7 @@ async function runEmbeddedAgentInternal(
   }
 
   return enqueueSession(async () => {
+    params.assertRunAuthorization?.();
     throwIfAborted();
     // Same-session reads below must see any prior deferred transcript rewrite.
     // Checkpoint before the global lane so unrelated sessions can still start
@@ -244,8 +247,10 @@ async function runEmbeddedAgentInternal(
         params.replyOperation?.markDeferredMaintenanceWaitEnded();
       }
     }
+    params.assertRunAuthorization?.();
     throwIfAborted();
     return enqueueGlobal(async () => {
+      params.assertRunAuthorization?.();
       const started = Date.now();
       const refresh = createEmbeddedAgentPluginRuntimeRefresh(params);
       const usage = createUsageAccumulator();
@@ -256,6 +261,7 @@ async function runEmbeddedAgentInternal(
       const ownsAssistantErrorTranscript = params.assistantErrorTranscript === undefined;
       const onAgentEvent = params.onAgentEvent;
       const runGeneration = async (): Promise<EmbeddedAgentRunResult> => {
+        params.assertRunAuthorization?.();
         throwIfAborted();
         // Subscription-scoped claude-cli auth executes via the CLI backend;
         // resolved post-admission so dispatched runs obey the same lifecycle,
@@ -265,6 +271,7 @@ async function runEmbeddedAgentInternal(
           // Preserve the admitted writer claim alongside the already resolved storage identity.
           sessionTarget: { ...params.sessionTarget, ...runSessionTarget },
         });
+        params.assertRunAuthorization?.();
         if (cliDispatched) {
           return cliDispatched;
         }
@@ -375,6 +382,7 @@ async function runEmbeddedAgentInternal(
             laneController.setLaneTaskDeadline(undefined);
           });
           preparedRuntimeResource = preparedModelRuntimeLease;
+          params.assertRunAuthorization?.();
           startupStages.mark("prepared-runtime");
           const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
           let preparedLeaseActive = true;
@@ -503,6 +511,7 @@ async function runEmbeddedAgentInternal(
                 onDeclined: () =>
                   notifyExecutionPhase("runtime_plugins", { provider, model: modelId }),
               });
+              params.assertRunAuthorization?.();
               if (hookResult?.handled) {
                 return {
                   payloads: buildHandledBeforeAgentReplyPayloads(hookResult.reply),
