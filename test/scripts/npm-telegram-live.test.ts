@@ -276,7 +276,7 @@ describe("package Telegram live Docker E2E", () => {
 
   it("adds private SDK exports only to the trusted harness manifest", () => {
     const root = mkTempRoot();
-    const harnessManifestPath = path.join(root, "harness-package.json");
+    const harnessManifestPath = path.join(root, "package.json");
     const candidateManifestPath = path.join(root, "candidate-package.json");
     const existingGatewayExport = {
       types: "./existing/gateway-runtime.d.ts",
@@ -286,6 +286,7 @@ describe("package Telegram live Docker E2E", () => {
       harnessManifestPath,
       `${JSON.stringify({
         name: "openclaw",
+        type: "module",
         exports: {
           "./kept": "./dist/kept.js",
           "./plugin-sdk/gateway-runtime": existingGatewayExport,
@@ -302,20 +303,32 @@ describe("package Telegram live Docker E2E", () => {
     };
     expect(prepared.exports["./kept"]).toBe("./dist/kept.js");
     expect(prepared.exports["./plugin-sdk/gateway-runtime"]).toEqual(existingGatewayExport);
-    expect(prepared.exports["./plugin-sdk/qa-runtime"]).toEqual({
-      default: "./dist/plugin-sdk/qa-runtime.js",
-    });
-    expect(prepared.exports["./plugin-sdk/qa-lab"]).toEqual({
-      default: "./dist/plugin-sdk/qa-lab.js",
-    });
-    expect(prepared.exports["./plugin-sdk/qa-channel-protocol"]).toEqual({
-      default: "./dist/plugin-sdk/qa-channel-protocol.js",
-    });
     for (const subpath of privateLocalOnlyPluginSdkEntrypoints) {
       expect(prepared.exports[`./plugin-sdk/${subpath}`]).toEqual({
         default: `./dist/plugin-sdk/${subpath}.js`,
       });
     }
+    const privateQaSubpaths = ["qa-channel", "qa-channel-protocol", "qa-lab", "qa-runtime"];
+    for (const subpath of privateQaSubpaths) {
+      expect(prepared.exports[`./plugin-sdk/${subpath}`]).toEqual({
+        default: `./dist/plugin-sdk/${subpath}.js`,
+      });
+      mkdirSync(path.join(root, "dist/plugin-sdk"), { recursive: true });
+      writeFileSync(
+        path.join(root, `dist/plugin-sdk/${subpath}.js`),
+        "export const harnessOnly = true;\n",
+      );
+    }
+    // Resolve the private manifest with Node, without the test runner's source SDK aliases.
+    writeFileSync(
+      path.join(root, "load-private.mjs"),
+      `import assert from "node:assert/strict";
+for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
+  assert.equal((await import("openclaw/plugin-sdk/" + subpath)).harnessOnly, true);
+}
+`,
+    );
+    execFileSync(process.execPath, [path.join(root, "load-private.mjs")], { cwd: root });
     expect(readFileSync(candidateManifestPath, "utf8")).toBe(candidateBefore);
   });
 

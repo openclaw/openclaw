@@ -504,37 +504,88 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     },
   );
 
-  it("accepts the reviewed Codex process-inspection test helpers", async () => {
-    const packageName = "@openclaw/codex";
-    const spawnProbe = 'import { spawn } from "node:child_process";\n';
-    const artifact = writePluginArtifact({
-      extensionId: "codex",
-      packageName,
-      files: {
-        "src/app-server/sandbox-exec-server/sandbox-child.ts": `${spawnProbe}spawn(process.execPath, []);\n`,
-        "src/app-server/transport-process-snapshot.ts": `${spawnProbe}spawn(process.execPath, []);\n`,
-        "src/app-server/transport-stdio.ts": `${spawnProbe}spawn(process.execPath, []);\n`,
-        "src/app-server/transport-process-snapshot.test.ts":
-          spawnProbe + "spawn(process.execPath, []);\n".repeat(3),
-        "src/app-server/transport-procfs.test-support.ts":
-          spawnProbe + "spawn(process.execPath, []);\n".repeat(3),
-        "src/app-server/test-support/transport-process-blocked-command.test-support.mjs":
-          spawnProbe + "spawn(process.execPath, []);\n".repeat(2),
-        "src/app-server/test-support/transport-process-starvation.test-support.mjs": `${spawnProbe}spawn(process.execPath, []);\n`,
-      },
-    });
-
-    const scanned = await scanPublishablePluginPackages([artifact.artifact], "release/2026.9.4");
-    expect(scanned.scanErrors).toEqual([]);
-    expect(scanned.packageResults[0]?.unexpectedCriticalFindings).toEqual([]);
-    const report = buildPluginNpmSecurityScanReport({
-      candidateSha: CANDIDATE_SHA,
-      packageResults: scanned.packageResults,
-      targetContextRef: "release/2026.9.4",
-      toolingSha: TOOLING_SHA,
-    });
-    expect(report.errors.filter((error) => error.startsWith(`${packageName}:`))).toEqual([]);
-  });
+  it.each([
+    ["src/app-server/transport-process-snapshot.test.ts", 3, 1],
+    ["src/app-server/transport-procfs.test-support.ts", 3, 0],
+    ["src/app-server/test-support/transport-process-blocked-command.test-support.mjs", 2, 0],
+    ["src/app-server/test-support/transport-process-starvation.test-support.mjs", 1, 0],
+  ] as const)(
+    "keeps exact current process-fixture counts separate from shipped inventories: %s",
+    async (fixturePath, currentCount, frozenCount) => {
+      const packageName = "@openclaw/codex";
+      const fixtureKey = `${packageName}:dangerous-exec:${fixturePath}`;
+      const spawnImport = 'import { spawn } from "node:child_process";\n';
+      const spawnCall = "spawn(process.execPath, []);\n";
+      for (const count of new Set([
+        null,
+        0,
+        frozenCount,
+        currentCount - 1,
+        currentCount,
+        currentCount + 1,
+      ])) {
+        const artifacts = new Map<boolean, ReturnType<typeof writePluginArtifact>>();
+        for (const context of [
+          "",
+          "release/2026.9.1",
+          "release/2026.9.2",
+          "release/2026.9.3",
+          "release/2026.9.4",
+          "release/2026.9.5",
+        ]) {
+          const current = context === "" || context === "release/2026.9.5";
+          const expectedCount = current ? currentCount : frozenCount;
+          const requiresLegacyDoctor =
+            context === "release/2026.9.1" || context === "release/2026.9.2";
+          let artifact = artifacts.get(requiresLegacyDoctor);
+          if (!artifact) {
+            artifact = writePluginArtifact({
+              extensionId: "codex",
+              packageName,
+              files: {
+                "src/app-server/transport-stdio.ts": spawnImport + spawnCall,
+                "src/app-server/sandbox-exec-server/sandbox-child.ts": spawnImport + spawnCall,
+                "src/app-server/transport-process-snapshot.ts": spawnImport + spawnCall,
+                ...(requiresLegacyDoctor ? { "src/doctor.ts": spawnImport + spawnCall } : {}),
+                ...(count === null ? {} : { [fixturePath]: spawnImport + spawnCall.repeat(count) }),
+              },
+            });
+            artifacts.set(requiresLegacyDoctor, artifact);
+          }
+          const label = `${context || "current"}: ${count ?? "absent"}`;
+          const scanned = await scanPublishablePluginPackages([artifact.artifact], context);
+          expect(scanned.scanErrors, label).toEqual([]);
+          const result = scanned.packageResults[0]!;
+          expect(result.expectedReviewedCriticalFindings, label).toEqual(
+            count === null ? [] : Array.from({ length: expectedCount }, () => fixtureKey),
+          );
+          expect(result.unexpectedCriticalFindings, label).toHaveLength(
+            expectedCount === 0 ? (count ?? 0) : 0,
+          );
+          const report = buildPluginNpmSecurityScanReport({
+            candidateSha: CANDIDATE_SHA,
+            packageResults: scanned.packageResults,
+            targetContextRef: context,
+            toolingSha: TOOLING_SHA,
+          });
+          expect(
+            report.errors.filter((error) => error.startsWith(`${packageName}:`)),
+            label,
+          ).toEqual(
+            count === null || count === expectedCount
+              ? []
+              : [
+                  expect.stringContaining(
+                    expectedCount === 0
+                      ? "unexpected critical findings"
+                      : "reviewed critical inventory mismatch",
+                  ),
+                ],
+          );
+        }
+      }
+    },
+  );
 
   it.each([null, 0, 1, 2])(
     "reviews exactly one packed composition fixture for current and 9.5 only: %s",
