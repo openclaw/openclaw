@@ -58,57 +58,6 @@ enum GatewaySettingsStore {
     private static let gatewayCustomHeadersService = "ai.openclawfoundation.app.gateway.custom-headers"
     private static let talkProviderApiKeyAccountPrefix = "provider.apiKey." // pragma: allowlist secret
 
-    struct GatewayRegistryEntry: Codable, Equatable, Identifiable, Sendable {
-        enum Kind: String, Codable, Sendable {
-            case manual
-            case discovered
-        }
-
-        var stableID: String
-        var kind: Kind
-        var name: String
-        var host: String?
-        var port: Int?
-        var useTLS: Bool
-        var contextPath: String?
-        var lastConnectedAtMs: Int?
-
-        init(
-            stableID: String,
-            kind: Kind,
-            name: String,
-            host: String?,
-            port: Int?,
-            useTLS: Bool,
-            contextPath: String? = nil,
-            lastConnectedAtMs: Int?)
-        {
-            self.stableID = stableID
-            self.kind = kind
-            self.name = name
-            self.host = host
-            self.port = port
-            self.useTLS = useTLS
-            self.contextPath = contextPath
-            self.lastConnectedAtMs = lastConnectedAtMs
-        }
-
-        var id: GatewayStableIdentifier.Key {
-            GatewayStableIdentifier.Key(self.stableID)
-        }
-
-        static func == (lhs: Self, rhs: Self) -> Bool {
-            GatewayStableIdentifier.matches(lhs.stableID, rhs.stableID) &&
-                lhs.kind == rhs.kind &&
-                lhs.name == rhs.name &&
-                lhs.host == rhs.host &&
-                lhs.port == rhs.port &&
-                lhs.useTLS == rhs.useTLS &&
-                lhs.contextPath == rhs.contextPath &&
-                lhs.lastConnectedAtMs == rhs.lastConnectedAtMs
-        }
-    }
-
     struct GatewayCredentialMetadata: Codable, Equatable {
         let gatewayStableID: String
         let suppressStoredDeviceAuth: Bool
@@ -512,6 +461,9 @@ enum GatewaySettingsStore {
             GatewayStableIdentifier.matches($0.stableID, normalized.stableID)
         }) {
             var replacement = normalized
+            // Connection/Bonjour updates do not own ingress identity. Retain the
+            // last admitted origin until its owner retires or replaces the grant.
+            replacement.accessOrigin = replacement.accessOrigin ?? registry.entries[index].accessOrigin
             if replacement.lastConnectedAtMs == nil {
                 replacement.lastConnectedAtMs = registry.entries[index].lastConnectedAtMs
             }
@@ -527,6 +479,16 @@ enum GatewaySettingsStore {
                 registry.connectedStableIDs.append(normalized.stableID)
             }
         }
+        return self.saveGatewayRegistry(registry)
+    }
+
+    @discardableResult
+    static func saveGatewayAccessOrigin(stableID: String, origin: CloudflareAccessOrigin?) -> Bool {
+        var registry = self.loadGatewayRegistry()
+        guard let index = registry.entries.firstIndex(where: {
+            GatewayStableIdentifier.matches($0.stableID, stableID)
+        }) else { return false }
+        registry.entries[index].accessOrigin = origin
         return self.saveGatewayRegistry(registry)
     }
 
@@ -663,6 +625,7 @@ enum GatewaySettingsStore {
                 port: port,
                 useTLS: entry.useTLS,
                 contextPath: contextPath,
+                accessOrigin: entry.accessOrigin,
                 lastConnectedAtMs: entry.lastConnectedAtMs)
         }
         return GatewayRegistryEntry(
@@ -672,6 +635,7 @@ enum GatewaySettingsStore {
             host: nil,
             port: nil,
             useTLS: entry.useTLS,
+            accessOrigin: entry.accessOrigin,
             lastConnectedAtMs: entry.lastConnectedAtMs)
     }
 
@@ -1034,6 +998,61 @@ enum GatewaySettingsStore {
 }
 
 extension GatewaySettingsStore {
+    struct GatewayRegistryEntry: Codable, Equatable, Identifiable, Sendable {
+        enum Kind: String, Codable, Sendable {
+            case manual
+            case discovered
+        }
+
+        var stableID: String
+        var kind: Kind
+        var name: String
+        var host: String?
+        var port: Int?
+        var useTLS: Bool
+        var contextPath: String?
+        var accessOrigin: CloudflareAccessOrigin?
+        var lastConnectedAtMs: Int?
+
+        init(
+            stableID: String,
+            kind: Kind,
+            name: String,
+            host: String?,
+            port: Int?,
+            useTLS: Bool,
+            contextPath: String? = nil,
+            accessOrigin: CloudflareAccessOrigin? = nil,
+            lastConnectedAtMs: Int?)
+        {
+            self.stableID = stableID
+            self.kind = kind
+            self.name = name
+            self.host = host
+            self.port = port
+            self.useTLS = useTLS
+            self.contextPath = contextPath
+            self.accessOrigin = accessOrigin
+            self.lastConnectedAtMs = lastConnectedAtMs
+        }
+
+        var id: GatewayStableIdentifier.Key {
+            GatewayStableIdentifier.Key(self.stableID)
+        }
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            GatewayStableIdentifier.matches(lhs.stableID, rhs.stableID) &&
+                lhs.kind == rhs.kind &&
+                lhs.name == rhs.name &&
+                lhs.host == rhs.host &&
+                lhs.port == rhs.port &&
+                lhs.useTLS == rhs.useTLS &&
+                lhs.contextPath == rhs.contextPath &&
+                lhs.accessOrigin == rhs.accessOrigin &&
+                lhs.lastConnectedAtMs == rhs.lastConnectedAtMs
+        }
+    }
+
     @discardableResult
     static func completeGatewayCredentialHandoff(
         instanceId: String,

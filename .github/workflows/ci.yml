@@ -5163,6 +5163,7 @@ jobs:
             -only-testing:OpenClawLogicTests/CloudflareAccessClientTests
             -only-testing:OpenClawLogicTests/CloudflareAccessTransferTests
             -only-testing:OpenClawLogicTests/CloudflareAccessSessionStoreTests
+            -only-testing:OpenClawTests/GatewayIngressControllerTests
           )
           if [[ "$IOS_TEST_PHASE" == "tests" ]]; then
             test_args+=(

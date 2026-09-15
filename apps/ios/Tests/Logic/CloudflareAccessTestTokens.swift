@@ -1,6 +1,9 @@
 import Foundation
 import Security
 import Testing
+#if OPENCLAW_APP_TESTS
+@testable import OpenClaw
+#endif
 
 /// Runtime signing exercises the platform verifier without storing a private signing key in fixtures.
 struct CloudflareAccessTestTokens {

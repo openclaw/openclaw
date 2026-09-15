@@ -344,7 +344,14 @@ public actor GatewayChannelActor {
 
         // External authorization can suspend. A canceled route must never create a socket
         // with a grant returned after its disconnect or replacement.
-        let request = try await self.makeUpgradeRequest()
+        let request: URLRequest
+        do {
+            request = try await self.makeUpgradeRequest()
+        } catch let error as GatewayExternalAuthorizationError {
+            // No physical socket exists yet; pause the watchdog at this admission boundary.
+            self.reconnectPausedForAuthFailure = true
+            throw error
+        }
         try Task.checkCancellation()
         guard self.shouldReconnect else { throw CancellationError() }
         if let disconnectError { throw disconnectError }
@@ -1308,6 +1315,7 @@ extension GatewayChannelActor {
     }
 
     private func shouldPauseReconnectAfterAuthFailure(_ error: Error) -> Bool {
+        if error is GatewayExternalAuthorizationError { return true }
         guard let authError = error as? GatewayConnectAuthError else {
             return false
         }
@@ -1570,6 +1578,7 @@ extension GatewayChannelActor {
     private func wrap(_ error: Error, context: String) -> Error {
         if error is CancellationError ||
             error is GatewayConnectAuthError ||
+            error is GatewayExternalAuthorizationError ||
             error is GatewayResponseError ||
             error is GatewayDecodingError ||
             error is GatewayTLSValidationError
