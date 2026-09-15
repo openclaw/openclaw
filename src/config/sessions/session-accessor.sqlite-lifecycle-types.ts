@@ -14,6 +14,8 @@ import type {
   SessionEntryLifecycleRemoval,
 } from "./session-accessor.sqlite-contract.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
+import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 // Shared plan shapes only. Runtime ownership stays in maintenance and lifecycle-state.
@@ -25,12 +27,32 @@ export type ReclamationDatabaseOptions = OpenClawAgentDatabaseOptions & {
 
 export type ReclamationDeleteParams = Omit<DeleteSessionEntryLifecycleParams, "commitGuard">;
 
+export type SessionEntryMaintenanceInput = {
+  activeSessionKey?: string;
+  activeSessionKeys?: readonly string[];
+  archiveDirectory: string;
+  forceMaintenance?: boolean;
+  maintenance: ResolvedSessionMaintenanceConfig;
+  preservation: SessionMaintenancePreservationSnapshot | null;
+  storePath: string;
+};
+
 type SessionReclamationPlanBase = {
   databaseOptions: ReclamationDatabaseOptions;
   materializedPlans: MaterializedSessionStateDeletePlan[];
 };
 
 export type SqliteSessionReclamationPlan =
+  | (SessionReclamationPlanBase & { kind: "maintenance-statistics" })
+  | (SessionReclamationPlanBase & {
+      kind: "maintenance-plan";
+      input: SessionEntryMaintenanceInput;
+    })
+  | (SessionReclamationPlanBase & {
+      agentId: string;
+      entries: SessionEntryRemovalPlan[];
+      kind: "maintenance-finalize";
+    })
   | (SessionReclamationPlanBase & {
       deleteParams: ReclamationDeleteParams;
       kind: "entry";
@@ -56,6 +78,17 @@ export type SqliteSessionReclamationPlan =
     });
 
 export type SqliteSessionReclamationResult =
+  | { kind: "maintenance-statistics"; value: true }
+  | { kind: "maintenance-preservation-required" }
+  | { kind: "maintenance-plan"; value: SessionEntryMaintenancePlan }
+  | {
+      kind: "maintenance-finalize";
+      value: {
+        archivedTranscripts: SessionLifecycleArchivedTranscript[];
+        changedEntries: SessionEntryRemovalPlan[];
+        committedEntries: SessionEntryRemovalPlan[];
+      };
+    }
   | { kind: "entry"; value: DeleteSessionEntryLifecycleResult }
   | {
       kind: "lifecycle-artifacts";

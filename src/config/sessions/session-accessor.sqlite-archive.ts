@@ -7,7 +7,6 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { runScopedSqliteArchiveOperation } from "./session-accessor.sqlite-archive-session.js";
 import type {
   MaterializedSessionStateDeletePlan,
@@ -18,10 +17,7 @@ import type {
   TranscriptArchiveWorkerResult,
 } from "./session-accessor.sqlite-archive-types.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
-import {
-  readSessionStateDeleteSnapshot,
-  sqliteSessionStateDeleteSnapshotsEqual,
-} from "./session-accessor.sqlite-delete-snapshot.js";
+import { sqliteSessionStateDeleteSnapshotsEqual } from "./session-accessor.sqlite-delete-snapshot.js";
 import {
   runSqliteMutationWorkerRequest,
   type SqliteMutationWorkerValidationOwner,
@@ -47,8 +43,8 @@ export function createSqliteTranscriptArchiveWorker(workerData: object): Worker 
   });
 }
 
-type TranscriptArchiveWorkerOperation<Result> =
-  | { expectedMessageType: "done" | "published"; workerData: object }
+type TranscriptArchiveWorkerOperation<Result> = { assertCurrent?: () => void } & (
+  | { expectedMessageType: "done" | "published" | "sized"; workerData: object }
   | {
       expectedMessageType: "reclaimed";
       workerData: SessionColdWorkerData;
@@ -56,7 +52,8 @@ type TranscriptArchiveWorkerOperation<Result> =
       onCommitRequest: () => void;
       withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
       validationOwner?: SqliteMutationWorkerValidationOwner;
-    };
+    }
+);
 
 function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
   params: TranscriptArchiveWorkerOperation<Result>,
@@ -161,9 +158,10 @@ export function runExclusiveSqliteTranscriptArchiveWorker<T>(run: () => Promise<
 export function runSqliteTranscriptArchiveWorkerOperation<Result>(
   params: TranscriptArchiveWorkerOperation<Result>,
 ): Promise<Result[]> {
-  return runExclusiveSqliteTranscriptArchiveWorker(() =>
-    spawnSqliteTranscriptArchiveWorkerOperation<Result>(params),
-  );
+  return runExclusiveSqliteTranscriptArchiveWorker(() => {
+    params.assertCurrent?.();
+    return spawnSqliteTranscriptArchiveWorkerOperation<Result>(params);
+  });
 }
 
 function runSqliteTranscriptArchiveWorker(
@@ -210,23 +208,6 @@ export function runSqliteTranscriptArchivePublishWorker(
   });
 }
 
-function validateEmptyTranscriptArchivePlan(plan: TranscriptArchiveWorkerPlan): void {
-  const opened = withOpenClawAgentDatabaseReadOnly(
-    (database) => readSessionStateDeleteSnapshot(database.db, plan.sessionId),
-    { agentId: plan.agentId, path: plan.databasePath },
-  );
-  if (!opened.found) {
-    throw new Error(
-      `Cannot archive SQLite transcript ${plan.sessionId}: ${opened.reason.replaceAll("-", " ")}`,
-    );
-  }
-  if (!sqliteSessionStateDeleteSnapshotsEqual(opened.value, plan.snapshot)) {
-    throw new Error(
-      `SQLite session state changed before archive materialization for ${plan.sessionId}`,
-    );
-  }
-}
-
 // Reads and encodes one consistent generation outside SQLite write transactions
 // and off the gateway event loop. The lifecycle Worker queue and per-call
 // dedupe prevent concurrent whole-buffer spikes within this path.
@@ -234,21 +215,9 @@ export async function materializeSessionStateDeletePlans(
   plans: readonly SessionStateDeletePlan[],
 ): Promise<MaterializedSessionStateDeletePlan[]> {
   const deduped = dedupeSqliteSessionStateDeletePlans(plans);
-  const workerResults: TranscriptArchiveWorkerResult[] = [];
-  const workerPlans: TranscriptArchiveWorkerPlan[] = [];
-  for (const archivePlan of deduped.filter((plan) => plan.archiveTranscript)) {
-    if (archivePlan.snapshot.lastSeq === null) {
-      // Empty transcripts still need a fresh snapshot fence, but have no bytes
-      // to encode off-thread and should not pay Worker startup latency.
-      validateEmptyTranscriptArchivePlan(archivePlan);
-      workerResults.push({ archive: null, sessionId: archivePlan.sessionId });
-      continue;
-    }
-    workerPlans.push(archivePlan);
-  }
-  if (workerPlans.length > 0) {
-    workerResults.push(...(await runSqliteTranscriptArchiveWorker(workerPlans)));
-  }
+  const workerPlans = deduped.filter((plan) => plan.archiveTranscript);
+  const workerResults =
+    workerPlans.length > 0 ? await runSqliteTranscriptArchiveWorker(workerPlans) : [];
   const resultBySessionId = new Map(workerResults.map((result) => [result.sessionId, result]));
 
   return deduped.map((plan) => {

@@ -299,6 +299,24 @@ no-op commits do not reopen a disposed handle. Native deletion and archive
 preparation still run outside the writer; the subsequent commit rechecks its
 native owner's authority after any awaited admission.
 
+Automatic entry maintenance captures its policy at writer admission, then plans
+on the existing reclamation worker. Only a pass with retention candidates requests
+protected session identities, after rolling back candidate discovery and before
+a fresh planning transaction. The parent captures those identities under the
+writer. Protection includes runtime providers, active work, and active lifecycle
+mutations; the parent rechecks these owners and the write generation before planning commits.
+Changed inputs roll back that planning pass before a fresh pass begins. Bounded
+finalization preserves changed entries and publishes removals only for committed
+entries. Transcript sizing and empty-transcript validation run on archive workers;
+planner statistics retain the existing deletion threshold and bounded analysis.
+After worker analysis commits, an existing parent connection reloads its planner
+statistics locally without rescanning tables; this remains necessary until its
+query owners move to workers.
+Compound projection and replacement transactions keep their synchronous kernels.
+Candidate-only preservation providers, incognito databases, prepared native
+deletion hooks, commit-authorization joins, archive publication bookkeeping, and
+repository/worktree cleanup retain their existing parent-side owners.
+
 Session reclamation keeps its deletion transaction on a worker connection.
 The worker opens its database under the session writer, then releases that writer
 while any required first full integrity and foreign-key checks run on the same

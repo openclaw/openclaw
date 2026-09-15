@@ -75,3 +75,9 @@ export type SqliteArchiveSessionResponse = {
   | { type: "done"; results: TranscriptArchiveWorkerResult[] }
   | { type: "published"; results: TranscriptArchivePublishResult[] }
 );
+export type SessionTranscriptMaintenanceSizingInput = {
+  agentId: string;
+  path: string;
+  env: NodeJS.ProcessEnv;
+  sessionIds: readonly string[];
+};

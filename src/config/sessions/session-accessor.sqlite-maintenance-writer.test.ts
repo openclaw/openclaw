@@ -23,7 +23,12 @@ import {
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
-import { applySessionEntryMaintenance } from "./session-accessor.sqlite-maintenance.js";
+import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
+import {
+  applySessionEntryMaintenance,
+  refreshSqliteSessionPlannerStatisticsBestEffort,
+} from "./session-accessor.sqlite-maintenance.js";
+import * as reclamationCommit from "./session-accessor.sqlite-reclamation-commit.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
@@ -480,4 +485,73 @@ it("does not refresh planner statistics after one routine session deletion", asy
       .get("idx_agent_session_nodes_updated_at"),
   ).toEqual({ stat: expect.stringMatching(/^66\b/u) });
   expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
+});
+
+it("rolls back planner statistics when maintenance ownership is revoked before commit", async () => {
+  const { database } = createPlannerStore(66);
+  const scope = { agentId: "main", path: database.path };
+  runOpenClawAgentWriteTransaction((current) => {
+    for (let index = 1; index < 66; index += 1) {
+      deleteSessionEntryRows(current, `agent:main:planner-${index}`, { deleteOwnedWindows: true });
+    }
+  }, scope);
+  expect(database.db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()).toEqual({
+    count: 1,
+  });
+  const readStatistics = () =>
+    database.db
+      .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
+      .get("idx_agent_session_nodes_updated_at");
+  let current = true;
+  let reachedCommit = false;
+  const authorize = reclamationCommit.withSqliteReclamationAuthorization;
+  const authorization = vi
+    .spyOn(reclamationCommit, "withSqliteReclamationAuthorization")
+    .mockImplementation((buffer, owner, assertCurrent, run) =>
+      authorize(buffer, owner, assertCurrent, (commit) =>
+        run(() => {
+          reachedCommit = true;
+          current = false;
+          return commit();
+        }),
+      ),
+    );
+
+  await refreshSqliteSessionPlannerStatisticsBestEffort(scope, 65, { isCurrent: () => current });
+  expect(reachedCommit).toBe(true);
+  expect(readStatistics()).toEqual({ stat: expect.stringMatching(/^66\b/u) });
+  authorization.mockRestore();
+  current = true;
+  await refreshSqliteSessionPlannerStatisticsBestEffort(scope, 65, { isCurrent: () => current });
+  expect(readStatistics()).toEqual({ stat: expect.stringMatching(/^1\b/u) });
+  expect(database.db.prepare("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 37 });
+});
+
+it("refreshes the retained parent query planner after worker analysis", async () => {
+  const { database } = createPlannerStore(1);
+  database.db.exec(`
+    CREATE TABLE maintenance_planner_probe (a INTEGER, b INTEGER, payload TEXT);
+    CREATE INDEX maintenance_probe_a ON maintenance_planner_probe(a);
+    CREATE INDEX maintenance_probe_b ON maintenance_planner_probe(b);
+    WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000)
+    INSERT INTO maintenance_planner_probe
+      SELECT CASE WHEN i<=9900 THEN 1 ELSE i-9899 END,
+        CASE WHEN i<=9900 THEN i+1 ELSE 1 END, 'synthetic' FROM n;
+    PRAGMA analysis_limit=0;
+    ANALYZE main;
+  `);
+  const plan = () =>
+    database.db
+      .prepare("EXPLAIN QUERY PLAN SELECT payload FROM maintenance_planner_probe WHERE a=1 AND b=1")
+      .all()
+      .map((row) => row.detail);
+  expect(plan()).toEqual([expect.stringContaining("maintenance_probe_b")]);
+  database.db.exec("DELETE FROM maintenance_planner_probe WHERE a=1");
+
+  await refreshSqliteSessionPlannerStatisticsBestEffort(
+    { agentId: "main", path: database.path },
+    9900,
+  );
+
+  expect(plan()).toEqual([expect.stringContaining("maintenance_probe_a")]);
 });
