@@ -1,9 +1,73 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+
+async function createUnreadAcknowledgementHarness(markedUnreadAt?: number) {
+  const key = "agent:main:current";
+  const sessionId = "unread-session";
+  const firstResponse = createDeferred<unknown>();
+  const laterResponse = createDeferred<unknown>();
+  let row = {
+    key,
+    sessionId,
+    kind: "direct" as const,
+    updatedAt: 20,
+    unread: true,
+    markedUnreadAt,
+    visibility: "shared" as const,
+    sharingRole: "viewer" as const,
+  };
+  let requestCount = 0;
+  const patchRequest = vi.fn(() => {
+    requestCount += 1;
+    return requestCount === 1 ? firstResponse.promise : laterResponse.promise;
+  });
+  const client = createTestGatewayClient((method) => {
+    if (method === "sessions.patch") {
+      return patchRequest();
+    }
+    if (method === "sessions.list") {
+      return sessionsResult([row], row.updatedAt);
+    }
+    if (method === "sessions.subscribe") {
+      return { subscribed: true };
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  const { pane, sessions } = createTestChatPane({ client });
+  const patch = vi.spyOn(sessions, "patch");
+  await sessions.refresh({ force: true });
+  const unsubscribe = sessions.subscribe(pane.applySessionsState.bind(pane));
+  return {
+    key,
+    sessionId,
+    firstResponse,
+    pane,
+    sessions,
+    patch,
+    patchRequest,
+    publishActivity(updatedAt: number) {
+      row = { ...row, updatedAt, unread: true };
+      sessions.reconcileChanged({ ...row, reason: "send" });
+    },
+    async close() {
+      unsubscribe();
+      sessions.dispose();
+      // A regression may dispatch during settlement; keep later requests bounded until disposal.
+      firstResponse.resolve(null);
+      laterResponse.resolve(null);
+      await Promise.allSettled(
+        patch.mock.results.flatMap((result) => (result.type === "return" ? [result.value] : [])),
+      );
+    },
+  };
+}
 
 describe("chat pane read markers", () => {
   it("marks an unread failure read even when its regular unread flag is false", () => {
@@ -160,6 +224,76 @@ describe("chat pane read markers", () => {
     pane.markSessionRead(row);
 
     expect(patch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { name: "activity unread", markedUnreadAt: undefined },
+    { name: "manual unread", markedUnreadAt: 100 },
+  ])("does not retry $name from its own rejected acknowledgement", async ({ markedUnreadAt }) => {
+    const harness = await createUnreadAcknowledgementHarness(markedUnreadAt);
+    const { key, firstResponse, pane, sessions, patch, patchRequest } = harness;
+    try {
+      pane.applySessionsState(sessions.state);
+      expect(patchRequest).toHaveBeenCalledTimes(1);
+      expect(patch).toHaveBeenCalledWith(
+        key,
+        { unread: false },
+        { agentId: "main", expectedMarkedUnreadAt: markedUnreadAt ?? null },
+      );
+
+      firstResponse.reject(
+        new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "session is shared for this connection",
+          details: {
+            code: "SESSION_PARTICIPATION_REQUIRED",
+            sessionKey: key,
+            visibility: "shared",
+          },
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(sessions.state.error).toContain("session is shared for this connection");
+      });
+
+      expect(patchRequest).toHaveBeenCalledTimes(1);
+      expect(sessions.state.result?.sessions[0]?.unread).toBe(true);
+
+      harness.publishActivity(21);
+      expect(patchRequest).toHaveBeenCalledTimes(2);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it("settles a successful acknowledgement without consuming newer unread activity", async () => {
+    const harness = await createUnreadAcknowledgementHarness();
+    const { key, sessionId, firstResponse, pane, sessions, patch, patchRequest } = harness;
+    try {
+      pane.applySessionsState(sessions.state);
+      expect(patchRequest).toHaveBeenCalledTimes(1);
+      const firstPatch = patch.mock.results[0];
+      if (firstPatch?.type !== "return") {
+        throw new Error("Expected the automatic acknowledgement promise");
+      }
+
+      harness.publishActivity(40);
+      expect(patchRequest).toHaveBeenCalledTimes(1);
+      firstResponse.resolve({
+        ok: true,
+        key,
+        path: "",
+        entry: { sessionId, updatedAt: 30, lastReadAt: 30, lastActivityAt: 20 },
+      });
+      await expect(firstPatch.value).resolves.toMatchObject({ ok: true });
+
+      expect(patchRequest).toHaveBeenCalledTimes(1);
+      expect(sessions.state.result?.sessions[0]).toMatchObject({ updatedAt: 40, unread: true });
+      harness.publishActivity(41);
+      expect(patchRequest).toHaveBeenCalledTimes(2);
+    } finally {
+      await harness.close();
+    }
   });
 
   it("does not clear unread from a hidden retained pane", () => {

@@ -1,62 +1,57 @@
 /**
- * Acknowledges unread state at most once per unread episode: the pending flag
- * clears when the server-confirmed read (unread=false) is observed, so fresh
- * activity while the session stays open re-acknowledges without patch loops.
+ * Owns each automatic acknowledgement through request settlement. Published
+ * optimistic reads and rollbacks must not start another request while it is pending.
  */
 export class SessionUnreadPatchGuard {
   private activeSessionKey = "";
   private activationObserved = false;
   private activationMarkedUnreadAt: number | undefined;
-  private requested = false;
+  private pendingPatch: object | null = null;
 
   beginActivation(activeSessionKey: string) {
     this.activeSessionKey = activeSessionKey.trim();
     this.activationObserved = false;
     this.activationMarkedUnreadAt = undefined;
-    this.requested = false;
+    this.pendingPatch = null;
   }
 
-  shouldPatch(
+  beginPatch(
     activeSessionKey: string,
     unread: boolean | undefined,
     markedUnreadAt?: number | null,
-  ): boolean {
+  ): (() => void) | null {
     const key = activeSessionKey.trim();
     const marker = markedUnreadAt ?? undefined;
     if (key !== this.activeSessionKey) {
       this.beginActivation(key);
     }
-    if (!key) {
-      return false;
+    if (!key || this.pendingPatch) {
+      return null;
     }
     if (!this.activationObserved) {
       this.activationObserved = true;
       this.activationMarkedUnreadAt = marker;
     }
     if (unread === false) {
-      // An optimistic read keeps the observed marker until the Gateway confirms it.
-      // Clearing the latch here would let rollback synchronously dispatch a duplicate.
       if (marker !== undefined) {
-        return false;
+        return null;
       }
       this.activationMarkedUnreadAt = undefined;
-      this.requested = false;
-      return false;
+      return null;
     }
     if (marker !== undefined && marker !== this.activationMarkedUnreadAt) {
-      return false;
+      return null;
     }
-    if (unread !== true || this.requested) {
-      return false;
+    if (unread !== true) {
+      return null;
     }
-    this.requested = true;
-    return true;
-  }
-
-  /** A failed read patch must unlatch the episode so later snapshots retry. */
-  patchFailed(activeSessionKey: string) {
-    if (activeSessionKey.trim() === this.activeSessionKey) {
-      this.requested = false;
-    }
+    const claim = {};
+    this.pendingPatch = claim;
+    return () => {
+      // A late completion from an earlier activation cannot release its successor.
+      if (this.pendingPatch === claim) {
+        this.pendingPatch = null;
+      }
+    };
   }
 }

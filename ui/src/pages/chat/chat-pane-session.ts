@@ -280,7 +280,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     const agentStatusActive = Boolean(row.agentStatus && row.agentStatus.expiresAt > Date.now());
     const unread = row.unread === true || unreadFailure || agentStatusActive;
     if (!unread) {
-      this.unreadPatchGuard.shouldPatch(state.sessionKey, false, row.markedUnreadAt);
+      this.unreadPatchGuard.beginPatch(state.sessionKey, false, row.markedUnreadAt);
       return;
     }
     const agentId = parseAgentSessionKey(row.key)?.agentId ?? resolveChatAgentId(state);
@@ -297,32 +297,21 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         listLoading: state.sessionsLoading,
         sessionKey: `${resolveChatAgentId(state) ?? ""}\0${state.sessionKey}`,
         session: row,
-      }) ||
-      !this.unreadPatchGuard.shouldPatch(state.sessionKey, true, row.markedUnreadAt)
+      })
     ) {
       return;
     }
-    const guardKey = state.sessionKey;
+    const settle = this.unreadPatchGuard.beginPatch(state.sessionKey, true, row.markedUnreadAt);
+    if (!settle) {
+      return;
+    }
     void this.context.sessions
       .patch(
         row.key,
         { unread: false },
         { agentId, expectedMarkedUnreadAt: row.markedUnreadAt ?? null },
       )
-      .then(
-        (result) => {
-          // A null result means no request was sent (connection scope lost);
-          // unlatch like a failure or the badge stays lit until navigation.
-          if (result === null) {
-            this.unreadPatchGuard.patchFailed(guardKey);
-          }
-        },
-        () => {
-          // Unlatch so later unread snapshots retry; the session capability
-          // publishes the actionable error for the owning page.
-          this.unreadPatchGuard.patchFailed(guardKey);
-        },
-      );
+      .then(settle, settle);
   }
 
   protected async restoreArchivedSession(sessionKey: string, expectedSessionId: string) {
