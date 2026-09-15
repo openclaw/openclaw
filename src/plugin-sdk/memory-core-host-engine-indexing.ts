@@ -6,6 +6,13 @@ export {
 } from "../../packages/memory-host-sdk/src/host/markdown-chunks.js";
 export { hashText } from "../../packages/memory-host-sdk/src/host/hash.js";
 export { enforceEmbeddingMaxInputTokens } from "../../packages/memory-host-sdk/src/host/embedding-chunk-limits.js";
+// memory-core reaches shared host primitives through the plugin SDK boundary.
+// Re-export Markdown Core's owner instead of maintaining a second frontmatter grammar.
+export {
+  extractFrontmatterBlock,
+  type ExtractedFrontmatterBlock,
+  type FrontmatterLineRange,
+} from "../../packages/markdown-core/src/frontmatter-extract.js";
 export {
   extractCuratedEntryRecallMetadata,
   stripMemoryAnnotationCarriers,

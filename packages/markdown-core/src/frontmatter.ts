@@ -1,5 +1,16 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isAlias, isMap, isNode, isScalar, parseDocument } from "yaml";
+import {
+  extractFrontmatterBlock,
+  hasFrontmatterOpeningDelimiter,
+  normalizeFrontmatterContent,
+} from "./frontmatter-extract.js";
+
+export {
+  extractFrontmatterBlock,
+  type ExtractedFrontmatterBlock,
+  type FrontmatterLineRange,
+} from "./frontmatter-extract.js";
 
 type ParsedFrontmatter = Record<string, string>;
 
@@ -214,50 +225,10 @@ function parseYamlFrontmatter(block: string): ParsedFrontmatterBlockResult {
   return parsed;
 }
 
-export type ExtractedFrontmatterBlock = {
-  block: string;
-  body: string;
-};
-
-function normalizeFrontmatterContent(content: string): string {
-  return content
-    .replace(/^\uFEFF/, "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n");
-}
-
-const FRONTMATTER_CLOSING_DELIMITER = /(?:^|\n)---[^\S\n]*(?:\n|(?![\s\S]))/;
-const FRONTMATTER_OPENING_DELIMITER = /^---[^\S\n]*\n/;
-
-function extractFrontmatterBlockFromNormalized(
-  normalized: string,
-): ExtractedFrontmatterBlock | undefined {
-  const opening = FRONTMATTER_OPENING_DELIMITER.exec(normalized);
-  if (!opening) {
-    return undefined;
-  }
-  const blockStart = opening[0].length;
-  const tail = normalized.slice(blockStart);
-  const closing = FRONTMATTER_CLOSING_DELIMITER.exec(tail);
-  if (!closing) {
-    return undefined;
-  }
-  return {
-    block: tail.slice(0, closing.index),
-    body: tail.slice(closing.index + closing[0].length),
-  };
-}
-
-/** Splits a complete leading YAML frontmatter block from its Markdown body. */
-export function extractFrontmatterBlock(content: string): ExtractedFrontmatterBlock | undefined {
-  const normalized = normalizeFrontmatterContent(content);
-  return extractFrontmatterBlockFromNormalized(normalized);
-}
-
 /** Removes a leading YAML frontmatter block and returns the remaining Markdown body. */
 export function stripFrontmatterBlock(content: string): string {
   const normalized = normalizeFrontmatterContent(content);
-  return (extractFrontmatterBlockFromNormalized(normalized)?.body ?? normalized).trim();
+  return (extractFrontmatterBlock(normalized)?.body ?? normalized).trim();
 }
 
 /** Parses leading YAML frontmatter into string values used by skill and metadata loaders. */
@@ -268,11 +239,11 @@ export function parseFrontmatterBlock(content: string): ParsedFrontmatter {
 /** Parses frontmatter once while retaining recoverable YAML parser issues for owning loaders. */
 export function parseFrontmatterBlockResult(content: string): ParsedFrontmatterBlockResult {
   const normalized = normalizeFrontmatterContent(content);
-  const block = extractFrontmatterBlockFromNormalized(normalized)?.block;
+  const block = extractFrontmatterBlock(normalized)?.block;
   if (block !== undefined) {
     return block ? parseYamlFrontmatter(block) : { frontmatter: {}, issues: [] };
   }
-  return FRONTMATTER_OPENING_DELIMITER.test(normalized)
+  return hasFrontmatterOpeningDelimiter(normalized)
     ? {
         frontmatter: {},
         issues: [

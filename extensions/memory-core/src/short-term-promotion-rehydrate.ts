@@ -1,8 +1,13 @@
 import fs from "node:fs/promises";
+import { extractFrontmatterBlock } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveShortTermSourcePathCandidates } from "./short-term-promotion-record.js";
 import type { PromotionCandidate } from "./short-term-promotion-types.js";
-import { normalizeSnippet, SHORT_TERM_BASENAME_RE } from "./short-term-promotion-utils.js";
+import {
+  isShortTermSessionCorpusPath,
+  normalizeSnippet,
+  SHORT_TERM_BASENAME_RE,
+} from "./short-term-promotion-utils.js";
 
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
@@ -327,6 +332,12 @@ export async function rehydratePromotionCandidate(
     // because file edits shifted lines between ranking and apply), refuse the
     // candidate so dream artifacts cannot be promoted into MEMORY.md.
     if (lineRangeOverlapsDreamingFence(lines, relocated.startLine, relocated.endLine)) {
+      continue;
+    }
+    const frontmatter = isShortTermSessionCorpusPath(candidate.path)
+      ? undefined
+      : extractFrontmatterBlock(rawSource);
+    if (frontmatter && relocated.startLine <= frontmatter.lineRange.endLine) {
       continue;
     }
     return {

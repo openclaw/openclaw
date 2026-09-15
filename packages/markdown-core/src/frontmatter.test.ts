@@ -3,10 +3,28 @@ import { expectDefined } from "@openclaw/normalization-core";
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import {
+  extractFrontmatterBlock,
   parseFrontmatterBlock,
   parseFrontmatterBlockResult,
   stripFrontmatterBlock,
 } from "./frontmatter.js";
+
+describe("extractFrontmatterBlock", () => {
+  it("normalizes the body and reports the original frontmatter line range", () => {
+    const input = "\uFEFF---\r\ntitle: Daily Note\r\nstatus: active\r\n---\r\n# Note\r\nBody";
+
+    expect(extractFrontmatterBlock(input)).toEqual({
+      block: "title: Daily Note\nstatus: active",
+      body: "# Note\nBody",
+      lineRange: { startLine: 1, endLine: 4 },
+    });
+  });
+
+  it("leaves ordinary Markdown and unterminated frontmatter unextracted", () => {
+    expect(extractFrontmatterBlock("# Note\nstatus: active")).toBeUndefined();
+    expect(extractFrontmatterBlock("---\nstatus: active\n# Note")).toBeUndefined();
+  });
+});
 
 describe("parseFrontmatterBlock", () => {
   it("parses YAML block scalars", () => {

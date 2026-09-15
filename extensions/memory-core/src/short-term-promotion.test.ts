@@ -1715,6 +1715,64 @@ describe("short-term promotion", () => {
     expect(memoryText).not.toMatch(/openclaw:dreaming/i);
   });
 
+  it("does not promote YAML frontmatter from a daily memory note", async (workspaceDir) => {
+    await writeDailyMemoryNote(workspaceDir, "2026-09-05", [
+      "---",
+      'title: "Daily Notes — 2026-09-05"',
+      "date: 2026-09-05",
+      "type: daily",
+      "tags: [memory, daily]",
+      "status: active",
+      "---",
+      "# 2026-09-05",
+      "Durable body content.",
+    ]);
+    const candidate = promotionCandidateFixture({
+      key: "memory:claim:a62dac41d3c8",
+      path: "memory/2026-09-05.md",
+      startLine: 6,
+      endLine: 6,
+      source: "memory",
+      snippet: "status: active",
+    });
+
+    const applied = await applyAllCandidates(workspaceDir, [candidate]);
+
+    expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates).toContainEqual(
+      expect.objectContaining({
+        candidate: expect.objectContaining({ key: candidate.key }),
+        category: "source rehydration",
+      }),
+    );
+    const memoryText = await fs
+      .readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")
+      .catch(() => "");
+    expect(memoryText).not.toContain("status: active");
+    expect(memoryText).not.toContain("Promoted From Short-Term Memory");
+  });
+
+  it("does not treat session-corpus YAML-looking text as note frontmatter", async (workspaceDir) => {
+    const relativePath = "memory/.dreams/session-corpus/2026-09-05.txt";
+    const corpusPath = path.join(workspaceDir, relativePath);
+    await fs.mkdir(path.dirname(corpusPath), { recursive: true });
+    await fs.writeFile(corpusPath, "---\nstatus: active\n---\n", "utf-8");
+    const candidate = promotionCandidateFixture({
+      key: "memory:corpus-yaml-looking-text",
+      path: relativePath,
+      startLine: 2,
+      endLine: 2,
+      source: "memory",
+      snippet: "status: active",
+    });
+
+    const applied = await applyAllCandidates(workspaceDir, [candidate]);
+
+    expect(applied.applied).toBe(1);
+    const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+    expect(memoryText).toContain("status: active");
+  });
+
   it("refuses to promote rehydrated candidates that land inside a managed dreaming fence", async (workspaceDir) => {
     const dailyPath = await writeDailyMemoryNote(workspaceDir, "2026-04-18", [
       "# 2026-04-18",
