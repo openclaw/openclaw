@@ -8,6 +8,7 @@ import {
   normalizeVerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
@@ -56,6 +57,11 @@ import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
 import { acquireWorktreeRunLease, resolveWorktreeIdForPath } from "../worktrees/run-lease.js";
 import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
+import { normalizeAgentCommandDefaultModelRef } from "./model-ref.js";
+import {
+  resolveConfiguredModelAuthProfileId,
+  resolveStandaloneModelIsDefault,
+} from "./model-selection-gate.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { resolveSession } from "./session.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -128,7 +134,7 @@ export async function prepareAgentCommandExecution(
     );
   }
 
-  const cfg = await resolveAgentRuntimeConfig(runtime, {
+  const { cfg, prepareSecretsSnapshot } = await resolveAgentRuntimeConfig(runtime, {
     runtimeTargetsChannelSecrets: opts.deliver === true,
     runtimeChannelSecretScope:
       opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
@@ -468,6 +474,55 @@ export async function prepareAgentCommandExecution(
       acpResolution,
       runLease,
     };
+    // Standalone agent commands defer secrets activation until the session is
+    // resolved so the authoritative session auth-profile pin can keep an
+    // order-excluded SecretRef profile materialized. Gateway-active paths have
+    // no finalizer (snapshot activation is Gateway-owned), so skip them here.
+    let secretsSnapshotActivated = false;
+    if (prepareSecretsSnapshot) {
+      const pinSource = resolveCollapsedSessionAuthPinSource(sessionEntryRaw);
+      const pinnedProfileId =
+        pinSource !== "auto" ? sessionEntryRaw?.authProfileOverride?.trim() : undefined;
+      // A configured default-model auth-profile binding is a third config-bound
+      // exemption in addition to `models.providers.<id>.apiKey` and the session
+      // pin, but only when the run actually resolves to that default model
+      // (mirroring execution's authority gate). Leaning on explicit+stored
+      // overrides here avoids re-introducing #145740's "unrelated profile
+      // becomes a startup requirement" regression on override paths.
+      const defaultRef = normalizeAgentCommandDefaultModelRef(
+        cfg,
+        configuredModel.provider,
+        configuredModel.model,
+        modelManifestContext,
+      );
+      const isDefaultModel = resolveStandaloneModelIsDefault({
+        cfg,
+        agentId: sessionAgentId,
+        opts,
+        sessionEntry: sessionEntryRaw,
+        sessionStore,
+        sessionKey,
+        defaultProvider: defaultRef.provider,
+        defaultModel: defaultRef.model,
+        allowPluginNormalization: pluginsEnabled,
+        modelManifestContext,
+      });
+      const configuredAuthProfileId = isDefaultModel
+        ? resolveConfiguredModelAuthProfileId(cfg, sessionAgentId)
+        : undefined;
+      await prepareSecretsSnapshot({
+        pinnedProfileId,
+        ...(configuredAuthProfileId
+          ? { configBoundProfileIds: new Set([configuredAuthProfileId]) }
+          : {}),
+      });
+      secretsSnapshotActivated = true;
+    }
+    // Guard against a silent regression where the standalone path returns a
+    // prepared command without ever activating its secrets snapshot.
+    if (prepareSecretsSnapshot !== undefined && !secretsSnapshotActivated) {
+      throw new Error("standalone secrets snapshot was not activated before command return");
+    }
     return prepared;
   } catch (error) {
     await runLease?.release();

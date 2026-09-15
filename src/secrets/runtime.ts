@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
+  getScopedAuthProfileEnv,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles.js";
@@ -183,6 +184,10 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
   /** Isolate known non-Gateway owners and retain unchanged last-known-good values when possible. */
   allowUnavailableSecretOwners?: boolean;
+  /** Session auth-profile pin; a pinned profile is never excluded by explicit auth.order. */
+  pinnedProfileId?: string;
+  /** Extra config-bound auth profiles that stay materialized despite explicit auth.order. */
+  configBoundProfileIds?: ReadonlySet<string>;
   /** Ref keys whose owners must become cold rather than retain last-known-good values. */
   forceColdRefKeys?: ReadonlySet<string>;
   /** Test override for discovered loadable plugins and their origins. */
@@ -270,6 +275,11 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const context = createResolverContext({
     sourceConfig,
     env: runtimeEnv,
+    allowOwnerIsolation: params.allowUnavailableSecretOwners,
+    pinnedProfileId: params.pinnedProfileId,
+    ...(params.configBoundProfileIds
+      ? { configBoundProfileIds: params.configBoundProfileIds }
+      : {}),
     ...(manifestRegistry ? { manifestRegistry } : {}),
   });
 
@@ -310,6 +320,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
           options: {
             config: sourceConfig,
             env: context.env,
+            storeOwnerEnv: getScopedAuthProfileEnv(),
             cache: context.cache,
             manifestRegistry: context.manifestRegistry,
           },

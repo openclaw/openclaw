@@ -16,6 +16,27 @@ import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js"
 import { listAgentEntries } from "./agent-scope.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
+/** Result of resolving agent runtime config for standalone agent commands. */
+export type AgentRuntimeConfigResolution = {
+  /** Resolved runtime/source config with command SecretRefs inlined. */
+  cfg: OpenClawConfig;
+  /**
+   * Standalone-only finalizer that materializes auth-profile secrets into the
+   * active secrets runtime snapshot. Accepts the authoritative session auth
+   * profile pin so a pinned, order-excluded SecretRef profile stays materialized.
+   *
+   * Present only when there is no Gateway-owned snapshot (standalone local agent
+   * commands). Gateway-active paths own snapshot activation via their own
+   * startup/reload lifecycle, so this is undefined there. The caller MUST await
+   * this finalizer (when defined) before the prepared agent command executes;
+   * otherwise secrets are never activated.
+   */
+  prepareSecretsSnapshot?: (params: {
+    pinnedProfileId?: string;
+    configBoundProfileIds?: ReadonlySet<string>;
+  }) => Promise<void>;
+};
+
 /** Loads runtime/source config and resolves command SecretRefs when the agent path needs them. */
 export async function resolveAgentRuntimeConfig(
   runtime: RuntimeEnv,
@@ -23,7 +44,7 @@ export async function resolveAgentRuntimeConfig(
     runtimeTargetsChannelSecrets?: boolean;
     runtimeChannelSecretScope?: { channel: string; accountId?: string };
   },
-): Promise<OpenClawConfig> {
+): Promise<AgentRuntimeConfigResolution> {
   const loadedRaw = getRuntimeConfig();
   const includeChannelTargets = params?.runtimeTargetsChannelSecrets === true;
   const channelSecretScope = params?.runtimeChannelSecretScope;
@@ -82,14 +103,25 @@ export async function resolveAgentRuntimeConfig(
     // Gateway activation already published loadedRaw with this source config. Republishing the
     // same object here would advance its lifecycle revision and evict revision-keyed hot caches.
     setRuntimeConfigSnapshot(cfg, sourceConfig);
-  } else if (!activeSecretsConfig) {
-    // Standalone local agent commands have no Gateway-owned snapshot. Materialize
-    // auth-profile refs too; resolving only config refs leaves selected credentials unusable.
-    const secretsRuntime = await measureAgentStartup(
-      "secrets-runtime-import",
-      () => import("../secrets/runtime.js"),
-      { config: cfg },
-    );
+    return { cfg };
+  }
+  if (activeSecretsConfig) {
+    return { cfg };
+  }
+  // Standalone local agent commands have no Gateway-owned snapshot. Materialize
+  // auth-profile refs too; resolving only config refs leaves selected credentials
+  // unusable. Preparation/activation is deferred so the caller can first resolve
+  // the session and supply its authoritative auth-profile pin.
+  const secretsRuntimePromise = measureAgentStartup(
+    "secrets-runtime-import",
+    () => import("../secrets/runtime.js"),
+    { config: cfg },
+  );
+  const prepareSecretsSnapshot = async (params?: {
+    pinnedProfileId?: string;
+    configBoundProfileIds?: ReadonlySet<string>;
+  }): Promise<void> => {
+    const secretsRuntime = await secretsRuntimePromise;
     const snapshot = await measureAgentStartup(
       "secrets-snapshot",
       () =>
@@ -98,12 +130,16 @@ export async function resolveAgentRuntimeConfig(
           assignmentConfig: cfg,
           includeConfigRefs: false,
           ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+          ...(params?.pinnedProfileId ? { pinnedProfileId: params.pinnedProfileId } : {}),
+          ...(params?.configBoundProfileIds
+            ? { configBoundProfileIds: params.configBoundProfileIds }
+            : {}),
         }),
       { config: cfg },
     );
     secretsRuntime.activateSecretsRuntimeSnapshot(snapshot);
-  }
-  return cfg;
+  };
+  return { cfg, prepareSecretsSnapshot };
 }
 
 function hasNestedSecretRef(value: unknown): boolean {

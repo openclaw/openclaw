@@ -422,6 +422,41 @@ export function resolveAuthProfileOrder(params: ResolveAuthProfileOrderParams): 
   return resolveAuthProfileOrderWithMetadata(params).profileIds;
 }
 
+/**
+ * Resolves the auth profiles whose credentials secret preparation must
+ * materialize for a provider. This is the selection owner shared with runtime
+ * auth: it applies stored/config order (including explicit empty-order
+ * exclusion and stored-order recovery when every stored id is missing),
+ * eligibility, and the authoritative session pin. Callers that also recognize
+ * config-bound apiKey references union those bound profile ids separately so a
+ * bearer credential referenced by a provider entry stays materialized even when
+ * excluded by order.
+ */
+export function resolveAuthProfileDeploymentCandidates(params: {
+  cfg?: OpenClawConfig;
+  store: AuthProfileStore;
+  provider: string;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
+  pinnedProfileId?: string;
+}): { profileIds: Set<string>; hasExplicitOrder: boolean } {
+  // Matches the selection owner's runtime inputs (see prepare-agent-runtime-auth):
+  // read-only readiness keeps not-yet-materialized refs ordered so they remain
+  // candidates for materialization, and pending OAuth refresh stays eligible.
+  const order = resolveAuthProfileOrderWithMetadata({
+    cfg: params.cfg,
+    authAliasLookupParams: params.authAliasLookupParams,
+    store: params.store,
+    provider: params.provider,
+    readinessMode: "read-only",
+    includePendingOAuthRefresh: true,
+  });
+  const pinned = prependAuthProfilePin(
+    { profileIds: order.profileIds, hasExplicitOrder: order.hasExplicitOrder },
+    params.pinnedProfileId,
+  );
+  return { profileIds: new Set(pinned.profileIds), hasExplicitOrder: pinned.hasExplicitOrder };
+}
+
 function orderProfilesByMode(
   order: string[],
   store: AuthProfileStore,
