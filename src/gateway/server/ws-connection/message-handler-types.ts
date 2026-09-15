@@ -115,7 +115,10 @@ export type GatewayConnectPhaseContext = {
   ) => void;
   sendFrame: (obj: unknown) => Promise<void>;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
-  runDetachedConnectWork: (run: () => Promise<void>, onError: (error: unknown) => void) => void;
+  runDetachedConnectWork: (
+    run: (signal: AbortSignal) => Promise<void>,
+    onError: (error: unknown) => void,
+  ) => void;
   pendingNodePairingCleanup: {
     value?: import("../../../infra/device-pairing-node.js").NodePairingCleanupClaim;
   };
