@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -8,12 +9,15 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
+  assignSessionOwner,
   listSessionChildEntriesReadOnly,
+  listSessionEntriesReadOnly,
   loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryReadOnly,
   recordSessionParticipant,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
+import { captureSessionEntryCacheRead } from "./session-accessor.sqlite-entry-cache.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 
 const autoTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -24,6 +28,321 @@ afterEach(() => {
 });
 
 describe("exact SQLite session batches", () => {
+  it("reuses complete list metadata without rereading saved prompts or sharing mutable entries", () => {
+    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-cached-") };
+    const scope = { agentId: "main", env };
+    const keys = Array.from({ length: 4 }, (_, index) => `agent:main:cached-${index}`);
+    const savedPrompt = {
+      skillsSnapshot: { prompt: "synthetic skill text ".repeat(1024), skills: [] },
+      systemPromptReport: {
+        source: "run" as const,
+        generatedAt: 1,
+        systemPrompt: { chars: 20_480, projectContextChars: 0, nonProjectContextChars: 20_480 },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 20_480, entries: [] },
+        tools: { listChars: 0, schemaChars: 0, entries: [] },
+      },
+    };
+    for (const [index, sessionKey] of keys.entries()) {
+      replaceSessionEntrySync(
+        { ...scope, sessionKey },
+        {
+          sessionId: `cached-${index}`,
+          updatedAt: index + 1,
+          ...savedPrompt,
+        },
+      );
+      recordSessionParticipant(
+        { ...scope, sessionKey },
+        { identity: { type: "profile", id: `person-${index}` }, promptedAt: index + 1 },
+      );
+    }
+    expect(listSessionEntriesReadOnly({ ...scope, projection: "list" })).toHaveLength(4);
+    const database = openOpenClawAgentDatabase(scope);
+    const queries = trackSqliteStatementExecutions(
+      database.db,
+      ["payload", "identity", "participants"],
+      (sql) => {
+        if (/from\s+"session_nodes"/i.test(sql)) {
+          return /entry_json/i.test(sql) ? "payload" : "identity";
+        }
+        return /from\s+"session_participants"/i.test(sql) ? "participants" : null;
+      },
+    );
+    const read = () =>
+      loadExactSessionEntryCandidatesReadOnlyBatch([
+        { ...scope, projection: "list", sessionKeys: [keys[2]!, keys[0]!, keys[2]!] },
+        { ...scope, projection: "list", sessionKeys: [keys[1]!] },
+      ]);
+    try {
+      const first = read();
+      expect(first[0]).toMatchObject({
+        ok: true,
+        value: [
+          { sessionKey: keys[2], entry: { sessionId: "cached-2" } },
+          { sessionKey: keys[0], entry: { sessionId: "cached-0" } },
+          { sessionKey: keys[2], entry: { sessionId: "cached-2" } },
+        ],
+      });
+      expect(queries.counts.payload).toBe(0);
+      expect(queries.counts.participants).toBe(0);
+      expect(queries.rowCounts.identity).toBe(3);
+      const selected = first[0];
+      if (!selected?.ok) {
+        throw new Error("Expected cached exact entries");
+      }
+      expect(selected.value[0]!.entry.skillsSnapshot).toBeUndefined();
+      expect(selected.value[0]!.entry.systemPromptReport).toBeUndefined();
+      selected.value[0]!.entry.participants![0]!.identity = { type: "profile", id: "changed" };
+      const next = read()[0];
+      if (!next?.ok) {
+        throw new Error("Expected fresh exact entries");
+      }
+      expect(next.value[0]).toMatchObject({
+        entry: { participants: [{ identity: { type: "profile", id: "person-2" } }] },
+      });
+      expect(listSessionEntriesReadOnly({ ...scope, projection: "list" })[2]).toMatchObject({
+        entry: { participants: [{ identity: { type: "profile", id: "person-2" } }] },
+      });
+      assignSessionOwner(
+        { ...scope, sessionKey: keys[2]! },
+        { owner: { type: "agent", id: "research" }, assignedBy: { type: "system", id: "fixture" } },
+      );
+      recordSessionParticipant(
+        { ...scope, sessionKey: keys[2]! },
+        { identity: { type: "agent", id: "peer" } },
+      );
+      expect(read()[0]).toMatchObject({
+        ok: true,
+        value: expect.arrayContaining([
+          {
+            sessionKey: keys[2],
+            entry: expect.objectContaining({
+              owner: expect.objectContaining({ actor: { type: "agent", id: "research" } }),
+              participants: expect.arrayContaining([{ identity: { type: "agent", id: "peer" } }]),
+            }),
+          },
+        ]),
+      });
+    } finally {
+      queries.restore();
+    }
+    for (const projection of ["full", undefined] as const) {
+      expect(
+        loadExactSessionEntryCandidatesReadOnlyBatch([
+          { ...scope, projection, sessionKeys: [keys[2]!] },
+        ]),
+      ).toMatchObject([{ ok: true, value: [{ entry: savedPrompt }] }]);
+    }
+  });
+
+  it.each(["same connection", "external connection"] as const)(
+    "observes raw node and participant changes from %s after warming list metadata",
+    (writer) => {
+      const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-invalidate-") };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
+      replaceSessionEntrySync(scope, { sessionId: "target", updatedAt: 1, label: "before" });
+      recordSessionParticipant(scope, { identity: { type: "profile", id: "before" } });
+      listSessionEntriesReadOnly({ ...scope, projection: "list" });
+      const database = openOpenClawAgentDatabase(scope);
+      const connection =
+        writer === "same connection" ? database.db : new DatabaseSync(database.path);
+      const read = () =>
+        loadExactSessionEntryCandidatesReadOnlyBatch([
+          { ...scope, projection: "list", sessionKeys: [scope.sessionKey] },
+        ]);
+      try {
+        connection
+          .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+          .run(
+            JSON.stringify({ sessionId: "target", updatedAt: 1, label: "after" }),
+            scope.sessionKey,
+          );
+        expect(read()).toMatchObject([{ ok: true, value: [{ entry: { label: "after" } }] }]);
+        listSessionEntriesReadOnly({ ...scope, projection: "list" });
+        connection
+          .prepare("UPDATE session_participants SET actor_id = ? WHERE session_key = ?")
+          .run("after", scope.sessionKey);
+        expect(read()).toMatchObject([
+          {
+            ok: true,
+            value: [{ entry: { participants: [{ identity: { type: "profile", id: "after" } }] } }],
+          },
+        ]);
+      } finally {
+        if (connection !== database.db) {
+          connection.close();
+        }
+      }
+    },
+  );
+
+  it("rejects a cache snapshot if an external commit occurs while selected entries are copied", () => {
+    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-copy-race-") };
+    const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
+    replaceSessionEntrySync(scope, { sessionId: "target", updatedAt: 1, label: "before" });
+    listSessionEntriesReadOnly({ ...scope, projection: "list" });
+    const database = openOpenClawAgentDatabase(scope);
+    const external = new DatabaseSync(database.path);
+    const originalClone = structuredClone;
+    const clone = vi.spyOn(globalThis, "structuredClone").mockImplementationOnce((value) => {
+      external
+        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+        .run(
+          JSON.stringify({ sessionId: "target", updatedAt: 1, label: "after" }),
+          scope.sessionKey,
+        );
+      return originalClone(value);
+    });
+    try {
+      expect(
+        loadExactSessionEntryCandidatesReadOnlyBatch([
+          { ...scope, projection: "list", sessionKeys: [scope.sessionKey] },
+        ]),
+      ).toMatchObject([{ ok: true, value: [{ entry: { label: "after" } }] }]);
+    } finally {
+      clone.mockRestore();
+      external.close();
+    }
+  });
+
+  it.each(["current_session_id", "updated_at", "malformed", "delivery"] as const)(
+    "keeps per-key %s errors after an intervening list reload",
+    (corruption) => {
+      const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-identity-") };
+      const scope = { agentId: "main", env, projection: "list" as const };
+      const healthy = "agent:main:healthy";
+      const broken = "agent:main:matrix:group:!room:example.org";
+      for (const sessionKey of [healthy, broken]) {
+        replaceSessionEntrySync({ ...scope, sessionKey }, { sessionId: sessionKey, updatedAt: 1 });
+      }
+      listSessionEntriesReadOnly(scope);
+      const database = openOpenClawAgentDatabase(scope);
+      if (corruption === "current_session_id" || corruption === "updated_at") {
+        database.db
+          .prepare(`UPDATE session_nodes SET ${corruption} = ? WHERE session_key = ?`)
+          .run(corruption === "current_session_id" ? "mismatched" : 2, broken);
+      } else {
+        const json =
+          corruption === "malformed"
+            ? "{"
+            : JSON.stringify({
+                sessionId: broken,
+                updatedAt: 1,
+                delivery: {
+                  kind: "external",
+                  route: {
+                    channel: "matrix",
+                    accountId: "work",
+                    target: { to: "!Room:example.org" },
+                  },
+                  context: { channel: "matrix", accountId: "work", to: "!Room:example.org" },
+                  origin: { provider: "matrix", to: "!Room:example.org", accountId: "work" },
+                },
+              });
+        database.db
+          .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+          .run(json, broken);
+      }
+      if (corruption === "delivery") {
+        expect(() => listSessionEntriesReadOnly(scope)).toThrow(/non-canonical persisted row/);
+      } else {
+        listSessionEntriesReadOnly(scope);
+      }
+      let originalError: unknown;
+      try {
+        loadExactSessionEntryReadOnly({ ...scope, sessionKey: broken });
+      } catch (error) {
+        originalError = error;
+      }
+      expect(originalError).toMatchObject({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" });
+      expect(
+        loadExactSessionEntryCandidatesReadOnlyBatch(
+          [[healthy], [broken]].map((sessionKeys) => ({
+            agentId: scope.agentId,
+            env,
+            projection: scope.projection,
+            sessionKeys,
+          })),
+        ),
+      ).toMatchObject([
+        { ok: true, value: [{ sessionKey: healthy }] },
+        { ok: false, error: originalError },
+      ]);
+      expect(
+        loadExactSessionEntryCandidatesReadOnlyBatch(
+          [[healthy], [broken], ["agent:main:missing"], [healthy, broken]].map((sessionKeys) => ({
+            agentId: scope.agentId,
+            env,
+            projection: scope.projection,
+            sessionKeys,
+          })),
+        ),
+      ).toMatchObject([
+        { ok: true, value: [{ sessionKey: healthy }] },
+        { ok: false, error: originalError },
+        { ok: true, value: [] },
+        { ok: false, error: originalError },
+      ]);
+    },
+  );
+
+  it.each(["missing", "partial"] as const)(
+    "keeps a %s cache from hydrating unrelated rows",
+    (kind) => {
+      const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-partial-") };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
+      replaceSessionEntrySync(scope, { sessionId: "target", updatedAt: 1 });
+      replaceSessionEntrySync(
+        { ...scope, sessionKey: "agent:main:unrelated" },
+        { sessionId: "unrelated", updatedAt: 1, label: "unrelated payload ".repeat(1024) },
+      );
+      loadExactSessionEntryReadOnly({ ...scope, projection: "list" });
+      const database = openOpenClawAgentDatabase(scope);
+      const held =
+        kind === "partial" ? captureSessionEntryCacheRead(database, scope.sessionKey) : undefined;
+      const queries = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
+        /from\s+"session_nodes"/i.test(sql) ? "entries" : null,
+      );
+      try {
+        expect(
+          loadExactSessionEntryCandidatesReadOnlyBatch([
+            { ...scope, projection: "list", sessionKeys: [scope.sessionKey] },
+          ]),
+        ).toMatchObject([{ ok: true, value: [{ entry: { sessionId: "target" } }] }]);
+        expect(queries.rowCounts.entries).toBe(1);
+        expect(queries.textBytes.entries).toBeLessThan(1024);
+        if (held) {
+          expect(held.isCurrent()).toBe(true);
+        }
+      } finally {
+        queries.restore();
+        held?.release();
+      }
+    },
+  );
+
+  it("reads committed entries through the companion while the cached writer has a transaction", () => {
+    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-committed-") };
+    const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
+    replaceSessionEntrySync(scope, { sessionId: "target", updatedAt: 1, label: "committed" });
+    listSessionEntriesReadOnly({ ...scope, projection: "list" });
+    const read = () =>
+      loadExactSessionEntryCandidatesReadOnlyBatch([
+        { ...scope, projection: "list", sessionKeys: [scope.sessionKey] },
+      ]);
+    runOpenClawAgentWriteTransaction((database) => {
+      database.db
+        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+        .run(
+          JSON.stringify({ sessionId: "target", updatedAt: 1, label: "next" }),
+          scope.sessionKey,
+        );
+      expect(read()).toMatchObject([{ ok: true, value: [{ entry: { label: "committed" } }] }]);
+    }, scope);
+    expect(read()).toMatchObject([{ ok: true, value: [{ entry: { label: "next" } }] }]);
+  });
+
   it.each(["full", "list"] as const)(
     "batches fresh entry and participant reads while preserving %s results",
     (projection) => {
@@ -122,7 +441,12 @@ describe("exact SQLite session batches", () => {
         { ...scope, sessionKey: storedKey },
         { identity: { type: "profile", id: "person" }, promptedAt: 1 },
       );
-      const keys = ["agent:main:replacement-\ud800", "agent:main:replacement-\udc00", storedKey];
+      const keys = [
+        "agent:main:replacement-\ud800",
+        "agent:main:replacement-\udc00",
+        storedKey,
+        "agent:main:replacement-\ud800",
+      ];
       const expectedEntry = {
         sessionId: "replacement",
         participantCount: 1,
@@ -131,12 +455,22 @@ describe("exact SQLite session batches", () => {
       expect(
         loadExactSessionEntryReadOnly({ ...scope, sessionKey: keys[0]!, projection }),
       ).toMatchObject({ entry: expectedEntry });
-      expect(
-        loadExactSessionEntryCandidatesReadOnlyBatch([
-          { agentId: scope.agentId, env, projection, sessionKeys: keys },
-        ]),
-      ).toMatchObject([
+      listSessionEntriesReadOnly({ ...scope, projection: "list" });
+      const result = loadExactSessionEntryCandidatesReadOnlyBatch([
+        { agentId: scope.agentId, env, projection, sessionKeys: keys },
+      ]);
+      expect(result).toMatchObject([
         { ok: true, value: keys.map((sessionKey) => ({ sessionKey, entry: expectedEntry })) },
+      ]);
+      const selected = result[0];
+      if (!selected?.ok) {
+        throw new Error("Expected native-equivalent keys to resolve");
+      }
+      selected.value[0]!.entry.participants![0]!.identity = { type: "profile", id: "mutated" };
+      expect(selected.value[1]!.entry.participants).toEqual(expectedEntry.participants);
+      expect(selected.value[2]!.entry.participants).toEqual(expectedEntry.participants);
+      expect(selected.value[3]!.entry.participants).toEqual([
+        { identity: { type: "profile", id: "mutated" } },
       ]);
     },
   );
