@@ -42,7 +42,7 @@ import {
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
 import { hasExactOwnKeys, workerProtocolObject } from "./protocol-record.js";
-import { isWorkerToolName, type WorkerToolName } from "./tool-authority.js";
+import { isWorkerToolName, type WorkerToolAuthority } from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import {
   parseWorkerConnectionEndpoint,
@@ -91,15 +91,65 @@ const AbsoluteHostPath = z
 const WorkspacePath = AbsoluteHostPath.refine(
   (value) => value.trim() === value && value.length <= 4_096 && !value.includes("\0"),
 );
-const ToolAuthoritySchema = workerProtocolObject({
-  allowedToolNames: z
-    .custom<WorkerToolName[]>(
-      (value) =>
-        Array.isArray(value) &&
-        value.every(isWorkerToolName) &&
-        new Set(value).size === value.length,
-    )
-    .transform((names) => [...names]),
+function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
+  if (
+    !isRecord(value) ||
+    !hasExactOwnKeys(value, ["allowedToolNames"], ["exec"]) ||
+    !Array.isArray(value.allowedToolNames) ||
+    !value.allowedToolNames.every(isWorkerToolName) ||
+    new Set(value.allowedToolNames).size !== value.allowedToolNames.length
+  ) {
+    return undefined;
+  }
+  const allowedToolNames = [...value.allowedToolNames];
+  const exec = value.exec;
+  if (exec === undefined) {
+    return { allowedToolNames };
+  }
+  if (!isRecord(exec)) {
+    return undefined;
+  }
+  const { host, security, ask, node, nodeCwd, safeBins } = exec;
+  if (
+    !hasExactOwnKeys(
+      exec,
+      ["host", "security", "ask"],
+      host === "node" ? ["node", "nodeCwd", "safeBins"] : ["safeBins"],
+    ) ||
+    (Object.hasOwn(exec, "safeBins") && (!Array.isArray(safeBins) || safeBins.length !== 0)) ||
+    (host !== "sandbox" && host !== "gateway" && host !== "node") ||
+    (security !== "deny" && security !== "allowlist" && security !== "full") ||
+    (ask !== "off" && ask !== "on-miss" && ask !== "always") ||
+    (node !== undefined &&
+      (host !== "node" || typeof node !== "string" || node.length === 0 || node.trim() !== node)) ||
+    (Object.hasOwn(exec, "nodeCwd") &&
+      (typeof nodeCwd !== "string" || nodeCwd.length === 0 || nodeCwd.trim() !== nodeCwd))
+  ) {
+    return undefined;
+  }
+  const execAuthority: NonNullable<WorkerToolAuthority["exec"]> =
+    host === "node"
+      ? {
+          host,
+          security,
+          ask,
+          ...(typeof node === "string" ? { node } : {}),
+          ...(typeof nodeCwd === "string" ? { nodeCwd } : {}),
+        }
+      : { host, security, ask };
+  return {
+    allowedToolNames,
+    exec: { ...execAuthority, ...(safeBins !== undefined ? { safeBins: [] } : {}) },
+  };
+}
+
+const ToolAuthoritySchema = z.unknown().transform((value, ctx) => {
+  const authority = parseToolAuthority(value);
+  if (!authority) {
+    ctx.addIssue({ code: "custom", message: "invalid worker tool authority" });
+    return z.NEVER;
+  }
+  return authority;
 });
 const BrowserLaunchSchema = workerProtocolObject({
   cdpUrl: z.string().refine((value) => {

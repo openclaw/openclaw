@@ -577,6 +577,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     reasoningLevel: params.reasoningLevel,
     toolResultFormat: resolvedToolResultFormat,
     toolProgressDetail: params.toolProgressDetail,
+    execSession: params.execSession,
     execOverrides: params.execOverrides,
     bashElevated: params.bashElevated,
     timeoutMs: params.timeoutMs,
