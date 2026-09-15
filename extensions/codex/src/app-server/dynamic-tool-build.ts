@@ -253,6 +253,7 @@ export async function buildDynamicTools(
     nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
     nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
   });
+  const questionPromptMessageChannel = resolveCodexMessageToolProvider(params);
   const webFetchHostnameAllowlistRef: { value?: string[] } = {};
   const toolConstructionPlan = resolveCodexNodePlacementToolConstructionPlan(
     input.sandbox,
@@ -282,7 +283,9 @@ export async function buildDynamicTools(
       ? {
           questionPrompt: {
             send: params.onToolResult,
-            ...(params.messageChannel ? { messageChannel: params.messageChannel } : {}),
+            ...(questionPromptMessageChannel
+              ? { messageChannel: questionPromptMessageChannel }
+              : {}),
           },
         }
       : {}),
