@@ -1,10 +1,16 @@
 import type { ProgressCard, ProgressCardStep } from "../../packages/gateway-protocol/src/index.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import {
   readSessionProgressCard,
   writeSessionProgressCard,
 } from "../session-cards/progress-card-store.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import {
+  resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
+  withOpenClawAgentDatabaseAsync,
+} from "../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { resolveGatewaySessionDatabase } from "./board-store.js";
 
 export type ProgressCardStore = {
@@ -33,13 +39,42 @@ export const progressCardStore: ProgressCardStore = {
   },
   async put(sessionKey, input, agentId) {
     const resolved = resolveGatewaySessionDatabase(sessionKey, agentId);
-    const result = runOpenClawAgentWriteTransaction(
-      (transactionDatabase) => {
-        input.assertCurrent?.();
-        return writeSessionProgressCard(transactionDatabase.db, resolved.sessionKey, input);
-      },
-      resolved,
-      { operationLabel: "progress-card.put" },
+    const env = { ...process.env };
+    env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+    const databaseOptions = {
+      ...resolved,
+      env,
+      path: resolveOpenClawAgentSqlitePath({ ...resolved, env }),
+    };
+    const assertCurrent = () => {
+      input.assertCurrent?.();
+      const current = resolveGatewaySessionDatabase(sessionKey, agentId);
+      if (
+        current.agentId !== resolved.agentId ||
+        current.path !== resolved.path ||
+        current.sessionKey !== resolved.sessionKey
+      ) {
+        throw new Error("progress-card session changed; retry");
+      }
+    };
+    assertCurrent();
+    const result = await runOpenClawAgentWriteAdmission(
+      databaseOptions,
+      () =>
+        withOpenClawAgentDatabaseAsync(
+          databaseOptions,
+          () =>
+            runOpenClawAgentWriteTransaction(
+              (database) => {
+                assertCurrent();
+                return writeSessionProgressCard(database.db, resolved.sessionKey, input);
+              },
+              databaseOptions,
+              { operationLabel: "progress-card.put" },
+            ),
+          assertCurrent,
+        ),
+      true,
     );
     return "card" in result ? result : { card: null };
   },

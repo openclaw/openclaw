@@ -71,7 +71,8 @@ export function createProgressCardHandlers(
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
       }
     },
-    "progressCard.put": async ({ params, respond, context, sessionMutationAuthorization }) => {
+    "progressCard.put": async (invocation) => {
+      const { params, respond, context, sessionMutationAuthorization } = invocation;
       if (!assertValidParams(params, validateProgressCardPutParams, "progressCard.put", respond)) {
         return;
       }
@@ -101,19 +102,22 @@ export function createProgressCardHandlers(
         return;
       }
       sessionMutationAuthorization?.assertCurrent();
+      const assertCurrent = () => {
+        invocation.signal?.throwIfAborted();
+        invocation.sessionMutationCommitGuard?.();
+        sessionMutationAuthorization?.assertCurrent();
+      };
       try {
         const result = await store.put(
           session.sessionKey,
           {
             ...input,
             expectedRevision: params.expectedRevision,
-            ...(sessionMutationAuthorization
-              ? { assertCurrent: sessionMutationAuthorization.assertCurrent }
-              : {}),
+            assertCurrent,
           },
           session.agentId,
         );
-        sessionMutationAuthorization?.assertCurrent();
+        assertCurrent();
         if (params.expectedRevision === undefined || result.card === null) {
           context.broadcast(
             "progressCard.changed",
