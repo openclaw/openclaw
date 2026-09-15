@@ -17,6 +17,12 @@ import {
 
 type SessionProgressCardPlacement = "board" | "composer";
 
+// Run ownership affects displayed status, never the disclosure choice or lifetime.
+type ComposerProgressCardContext = ComposerProgressDisclosureContext & {
+  activeRunId?: string | null;
+  snapshotRunId?: string | null;
+};
+
 const REFRESH_STATUS_LABEL_KEYS: Record<SessionProgressCardRefreshState, Parameters<typeof t>[0]> =
   {
     pending: "sessionProgressCard.refresh.pending",
@@ -341,17 +347,26 @@ export function renderSessionProgressCard(
   card: ProgressCard | null | undefined,
   placement: SessionProgressCardPlacement,
   onDismiss?: (card: ProgressCard) => void,
-  sessionStatus?: SessionRunStatus,
+  snapshotStatus?: SessionRunStatus,
   startedAt?: number,
   endedAt?: number,
   hasActiveRun = true,
   collapseComposerByDefault = false,
-  composerDisclosureContext?: ComposerProgressDisclosureContext,
+  composerDisclosureContext?: ComposerProgressCardContext,
   refreshAction?: SessionProgressCardRefreshAction,
 ) {
   if (!card) {
     return nothing;
   }
+  // A live owner for this exact run outranks a lagging terminal session row.
+  // Session-wide activity alone (including another run) cannot erase its outcome.
+  const sessionStatus =
+    placement === "composer" &&
+    hasActiveRun &&
+    composerDisclosureContext?.activeRunId &&
+    composerDisclosureContext.activeRunId === composerDisclosureContext.snapshotRunId
+      ? "running"
+      : snapshotStatus;
   const counts = progressCounts(card);
   const countLabel = counts
     ? t("sessionProgressCard.countLabel", {

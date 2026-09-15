@@ -672,6 +672,11 @@ img.chat-avatar {
   color: var(--warn);
 }
 
+.chat-bubble--run-error {
+  align-self: stretch;
+  width: 100%;
+}
+
 .chat-bubble--workspace-conflict {
   width: 100%;
   border-color: color-mix(in srgb, var(--warn) 34%, var(--border));
