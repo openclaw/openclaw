@@ -152,7 +152,6 @@ vi.mock("../channel-capabilities.js", () => {
 });
 
 vi.mock("./channel-doctor.js", () => ({
-  collectChannelDoctorEmptyAllowlistExtraWarnings: vi.fn(() => []),
   collectChannelDoctorPreviewWarnings: vi.fn(
     async ({ cfg }: { cfg: { channels?: Record<string, unknown> } }) => {
       const telegram = cfg.channels?.telegram as { allowFrom?: unknown } | undefined;
@@ -512,6 +511,12 @@ describe("doctor preview warnings", () => {
   });
 
   it("collects provider and shared preview warnings", async () => {
+    const channelDoctor = await import("./channel-doctor.js");
+    const extraWarningsForAccount = vi.fn(({ prefix }: { prefix: string }) => [`extra:${prefix}`]);
+    vi.mocked(channelDoctor.createChannelDoctorEmptyAllowlistPolicyHooks).mockReturnValueOnce({
+      extraWarningsForAccount,
+      shouldSkipDefaultEmptyGroupAllowlistWarning: () => false,
+    });
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {
         channels: {
@@ -535,6 +540,12 @@ describe("doctor preview warnings", () => {
     expect(
       warnings.some((warning) => warning.includes('channels.signal.allowFrom: set to ["*"]')),
     ).toBe(true);
+    expect(warnings.join("\n")).toContain("extra:channels.telegram");
+    expect(warnings.join("\n")).toContain("extra:channels.signal");
+    expect(extraWarningsForAccount).toHaveBeenCalledTimes(2);
+    for (const [context] of extraWarningsForAccount.mock.calls) {
+      expect(context).not.toHaveProperty("cfg");
+    }
   });
 
   it("resolves configured channel SecretRefs before collecting channel preview warnings", async () => {

@@ -411,18 +411,6 @@ export async function collectChannelDoctorRepairMutations(params: {
   return mutations;
 }
 
-/** Collect plugin-provided empty allowlist warning lines for one channel/account context. */
-export function collectChannelDoctorEmptyAllowlistExtraWarnings(
-  params: ChannelDoctorEmptyAllowlistLookupParams,
-): string[] {
-  return collectEmptyAllowlistExtraWarningsForEntries(
-    listChannelDoctorEntries([params.channelName], {
-      cfg: params.cfg ?? {},
-    }),
-    params,
-  );
-}
-
 /** Return true when a channel doctor owns empty group-allowlist warning behavior. */
 export function shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning(
   params: ChannelDoctorEmptyAllowlistLookupParams,

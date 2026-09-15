@@ -1134,7 +1134,6 @@ vi.mock("./doctor/shared/channel-doctor.js", async () => {
 
   return {
     collectChannelDoctorCompatibilityMutations: vi.fn(collectCompatibilityMutations),
-    collectChannelDoctorEmptyAllowlistExtraWarnings: vi.fn(collectTelegramFirstTimeExtraWarnings),
     collectChannelDoctorMutableAllowlistWarnings: vi.fn(
       ({ cfg }: { cfg: { channels?: Record<string, unknown> } }) => {
         const zalouser = readNullableRecord(cfg.channels?.zalouser);

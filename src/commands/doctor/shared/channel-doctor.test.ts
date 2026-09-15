@@ -1,9 +1,10 @@
 // Channel doctor tests cover shared channel health checks and repair hints.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExtensionChannelConfig } from "../../../config/types.channels.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../../config/types.secrets.js";
 import {
   collectChannelDoctorCompatibilityMutations,
-  collectChannelDoctorEmptyAllowlistExtraWarnings,
   collectChannelDoctorMutableAllowlistWarnings,
   collectChannelDoctorPreviewWarnings,
   collectChannelDoctorStaleConfigMutations,
@@ -379,9 +380,9 @@ describe("channel doctor compatibility mutations", () => {
       channels: {
         matrix: {
           groupPolicy: "allowlist",
-        },
+        } satisfies ExtensionChannelConfig,
       },
-    };
+    } satisfies OpenClawConfig;
     mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
       plugins: [
         {
@@ -391,10 +392,10 @@ describe("channel doctor compatibility mutations", () => {
       ],
     });
 
-    const result = collectChannelDoctorEmptyAllowlistExtraWarnings({
+    const hooks = createChannelDoctorEmptyAllowlistPolicyHooks({ cfg });
+    const result = hooks.extraWarningsForAccount({
       account: {},
       channelName: "matrix",
-      cfg: cfg as never,
       prefix: "channels.matrix",
     });
 
