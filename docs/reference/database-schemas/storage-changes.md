@@ -122,9 +122,22 @@ the SDK's synchronous metadata getters; its credential and discovery callbacks
 await fresh storage reads. An earlier read cannot replace metadata acknowledged
 by a later write. If a write reports an error after a possible commit, the
 provider requires an acknowledged read before serving metadata again. Status
-and inventory reads do not create state. Lease validation and mutations retain
-their native owners and captured store context until their complete lifecycle
-moves off the application thread.
+and inventory reads do not create state.
+
+MCP flow leases acquire, verify, renew, and release through the shared-state actor.
+The parent schedules renewal, so these leases depend on its event loop and the
+actor's queue. Explicit worker heartbeat mode retains independent renewal for
+callers that need it. Cleanup stops and joins timer-issued work before final
+verification and release. Committed expiry observations remain available even
+when delivery of an actor reply is delayed; they never authorize a mutation.
+The original caller context and maintenance lifetime remain attached through
+callback settlement and cleanup. SDK writes and pending-state operations run
+as complete transactions in the shared-state actor, with live per-store lease
+admission and durable ownership checks before each mutation. Requester-prefix
+cleanup retains its existing context-owned orphan cleanup contract. Token expiry
+is captured when the SDK supplies tokens, before queued worker work; issuer
+binding uses the transaction's current discovery state. Doctor's legacy import
+and other native lease callers retain their existing maintenance owners.
 Requester MCP setup reads its sorted authorization set in one current read-worker
 operation. The worker decodes selected rows in caller order and returns only
 status facts; each message still observes current storage before runtime reuse.

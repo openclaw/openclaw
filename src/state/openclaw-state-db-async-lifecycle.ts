@@ -34,6 +34,7 @@ type MaintenanceResource = {
   phase:
     | "agent-resources"
     | "agent-handles"
+    | "shared-leases"
     | "shared-resources"
     | "shared-references"
     | "shared-handles";
@@ -201,6 +202,7 @@ export function createOpenClawDatabaseMaintenanceScope(
             for (const phase of [
               "agent-resources",
               "agent-handles",
+              "shared-leases",
               "shared-resources",
               "shared-references",
               "shared-handles",

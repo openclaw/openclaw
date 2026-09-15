@@ -52,18 +52,17 @@ function writeAdmissionLocation(database: DatabaseSync): string | null {
   if (cached !== undefined) {
     return cached;
   }
-  const location = database.location();
   // A native handle's filename is stable; normalize namespace aliases once, without filesystem IO.
-  const normalized =
-    location !== null && process.platform === "win32"
-      ? normalizeWindowsPathPreservingCase(location)
-      : location;
-  const canonical =
-    process.platform === "win32" && normalized !== null && !path.win32.isAbsolute(normalized)
-      ? location
-      : normalized;
+  const location = database.location();
+  const canonical = location === null ? null : normalizeWriteAdmissionLocation(location);
   writeAdmissionLocations.set(database, canonical);
   return canonical;
+}
+
+function normalizeWriteAdmissionLocation(location: string): string {
+  const normalized =
+    process.platform === "win32" ? normalizeWindowsPathPreservingCase(location) : location;
+  return process.platform === "win32" && !path.win32.isAbsolute(normalized) ? location : normalized;
 }
 
 /** Keep worker-owned lock holders serviceable across connections and module graphs. */
@@ -76,17 +75,36 @@ export async function withSqliteWriteAdmissionService<T>(
   if (location === null) {
     throw new Error("SQLite write admission service requires a file-backed database");
   }
-  const services = writeAdmissionServices.get(location) ?? new Set<() => void>();
-  services.add(service);
-  writeAdmissionServices.set(location, services);
+  const release = retainSqliteWriteAdmissionService([location], service);
   try {
     return await operation();
   } finally {
-    services.delete(service);
-    if (services.size === 0) {
-      writeAdmissionServices.delete(location);
-    }
+    release();
   }
+}
+
+/** Locations come from the retained native owner; registration grants no write authority. */
+export function retainSqliteWriteAdmissionService(
+  nativeLocations: readonly string[],
+  service: () => void,
+): () => void {
+  const locations = new Set(nativeLocations.map(normalizeWriteAdmissionLocation));
+  const registrations = [...locations].map((location) => {
+    const services = writeAdmissionServices.get(location) ?? new Set<() => void>();
+    // Separate reservations remain valid when the same owner retains two operations.
+    const retained = () => service();
+    services.add(retained);
+    writeAdmissionServices.set(location, services);
+    return { location, services, retained };
+  });
+  return () => {
+    for (const { location, services, retained } of registrations) {
+      services.delete(retained);
+      if (services.size === 0 && writeAdmissionServices.get(location) === services) {
+        writeAdmissionServices.delete(location);
+      }
+    }
+  };
 }
 
 type SqliteBeginAdmissionDiagnostics = {

@@ -6,8 +6,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
-import { createMcpOAuthClientProvider } from "../agents/mcp-oauth-provider.js";
 import { clearMcpOAuthCredentials, resolveMcpOAuthAccessToken } from "../agents/mcp-oauth.js";
+import { withMcpOAuthProviderForTest } from "../agents/mcp-oauth.test-support.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -309,11 +309,15 @@ describe("legacy MCP OAuth Doctor migration", () => {
         scope: "docs.read",
       }),
     ).rejects.toThrow("Run openclaw mcp login Remote Docs.");
-    const provider = await createMcpOAuthClientProvider({
-      identity,
-      allowAuthorizationRedirect: true,
-    });
-    await provider.saveCodeVerifier("new-login-verifier");
+    await withMcpOAuthProviderForTest(
+      {
+        identity,
+        allowAuthorizationRedirect: true,
+      },
+      async (provider) => {
+        await provider.saveCodeVerifier("new-login-verifier");
+      },
+    );
     const sourcePath = await writeLegacy({
       stateDir,
       fileName: `${storeKey}.json`,

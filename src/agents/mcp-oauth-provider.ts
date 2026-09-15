@@ -1,23 +1,21 @@
 /** MCP SDK OAuth provider backed by canonical OpenClaw state. */
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateAsyncLeaseContext } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
-import { readMcpOAuthStore, updateMcpOAuthStore, type McpOAuthStore } from "./mcp-oauth-store.js";
+import { createMcpOAuthProviderState } from "./mcp-oauth-provider-state.js";
+import { readMcpOAuthStore, mutateMcpOAuthStore, type McpOAuthStore } from "./mcp-oauth-store.js";
+import { MCP_OAUTH_DEFAULT_REDIRECT_URL } from "./mcp-oauth-store.mutations.js";
 
 export type McpOAuthConfig = {
   scope?: unknown;
   redirectUrl?: unknown;
   clientMetadataUrl?: unknown;
 };
-
-const LEGACY_DEFAULT_REDIRECT_URL = "http://127.0.0.1:8989/oauth/callback";
 
 function resolveTokenExpiresAt(tokens: OAuthTokens): number | undefined {
   const expiresIn = tokens.expires_in;
@@ -30,7 +28,7 @@ function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = 
   return (
     normalizeOptionalString(config.redirectUrl) ??
     normalizeOptionalString(store.redirectUrl) ??
-    LEGACY_DEFAULT_REDIRECT_URL
+    MCP_OAUTH_DEFAULT_REDIRECT_URL
   );
 }
 
@@ -51,12 +49,6 @@ function buildOAuthClientMetadata(
   };
 }
 
-export function bindMcpOAuthLeaseAssertion(
-  lease: OpenClawStateLeaseContext | undefined,
-): ((database: DatabaseSync) => void) | undefined {
-  return lease ? (database) => lease.assertOwnedInTransaction(database) : undefined;
-}
-
 /** Bind OAuth network work to the lease that fences its persisted side effects. */
 export function withMcpOAuthLeaseSignal(
   fetchFn: FetchLike | undefined,
@@ -70,57 +62,27 @@ export function withMcpOAuthLeaseSignal(
   };
 }
 
-function beginMcpOAuthAuthorization(store: McpOAuthStore): McpOAuthStore {
-  const next = { ...store };
-  if (next.credentialState === "uninitialized") {
-    delete next.credentialState;
-  }
-  return next;
-}
-
 /** Creates the MCP SDK OAuth provider backed by canonical shared SQLite state. */
 export async function createMcpOAuthClientProvider(params: {
   identity: McpOAuthIdentity;
   config?: McpOAuthConfig;
   allowAuthorizationRedirect?: boolean;
   suppressStoredTokens?: boolean;
-  lease?: OpenClawStateLeaseContext;
-  storeContext?: OpenClawStateWorkerContext;
+  lease: OpenClawStateAsyncLeaseContext;
+  storeContext: OpenClawStateWorkerContext;
 }): Promise<OAuthClientProvider> {
   const config = params.config ?? {};
   const storeKey = params.identity.storeKey;
-  const storeContext = params.storeContext ?? captureOpenClawStateWorkerContext();
-  let prepared: { redirectUrl?: string } | { error: unknown } = {};
-  let preparation = 0;
-  const readStore = async () => {
-    const currentPreparation = ++preparation;
-    const store = await readMcpOAuthStore(storeKey, storeContext);
-    params.lease?.assertOwned();
-    if (currentPreparation === preparation) {
-      prepared = { redirectUrl: store.redirectUrl };
-    }
-    return store;
-  };
-  await readStore();
-  const assertOwnedInTransaction = bindMcpOAuthLeaseAssertion(params.lease);
-  const updateStore = (update: (store: McpOAuthStore) => McpOAuthStore) => {
-    preparation++;
-    try {
-      const store = updateMcpOAuthStore(storeKey, update, assertOwnedInTransaction, storeContext);
-      prepared = { redirectUrl: store.redirectUrl };
+  const storeContext = params.storeContext;
+  const { readStore, updateStore, preparedStore } = createMcpOAuthProviderState({
+    read: async () => {
+      const store = await readMcpOAuthStore(storeKey, storeContext);
+      await params.lease.assertOwned();
       return store;
-    } catch (error) {
-      // Coordinator cleanup can fail after commit; only an acknowledged read can repair these facts.
-      prepared = { error };
-      throw error;
-    }
-  };
-  const preparedStore = () => {
-    if ("error" in prepared) {
-      throw prepared.error;
-    }
-    return prepared;
-  };
+    },
+    mutate: (mutation) => mutateMcpOAuthStore(storeKey, mutation, params.lease, storeContext),
+  });
+  await readStore();
   const assertAuthorizationRedirectAllowed = () => {
     if (params.allowAuthorizationRedirect !== true) {
       throw new Error(
@@ -144,8 +106,8 @@ export async function createMcpOAuthClientProvider(params: {
     async clientInformation() {
       return (await readStore()).clientInformation;
     },
-    saveClientInformation(clientInformation) {
-      updateStore((store) => ({ ...beginMcpOAuthAuthorization(store), clientInformation }));
+    async saveClientInformation(clientInformation) {
+      await updateStore({ kind: "clientInformation", clientInformation });
     },
     async tokens() {
       if (params.suppressStoredTokens) {
@@ -161,37 +123,21 @@ export async function createMcpOAuthClientProvider(params: {
         ? store.tokens
         : undefined;
     },
-    saveTokens(tokens) {
-      updateStore((store) => {
-        const next: McpOAuthStore = { ...store, tokens };
-        delete next.credentialState;
-        delete next.pendingAuthorizationChallenge;
-        const issuedBy = store.discoveryState?.authorizationServerUrl;
-        if (issuedBy === undefined) {
-          delete next.tokensAuthorizationServerUrl;
-        } else {
-          next.tokensAuthorizationServerUrl = issuedBy;
-        }
-        const tokenExpiresAt = resolveTokenExpiresAt(tokens);
-        if (tokenExpiresAt === undefined) {
-          delete next.tokenExpiresAt;
-        } else {
-          next.tokenExpiresAt = tokenExpiresAt;
-        }
-        return next;
-      });
+    async saveTokens(tokens) {
+      const tokenExpiresAt = resolveTokenExpiresAt(tokens);
+      await updateStore({ kind: "tokens", tokens, tokenExpiresAt });
     },
     async redirectToAuthorization(authorizationUrl) {
       assertAuthorizationRedirectAllowed();
-      updateStore((store) => ({
-        ...beginMcpOAuthAuthorization(store),
-        lastAuthorizationUrl: authorizationUrl.toString(),
-        redirectUrl: resolveOAuthRedirectUrl(config, store),
-      }));
+      await updateStore({
+        kind: "authorizationRedirect",
+        authorizationUrl: authorizationUrl.toString(),
+        redirectUrl: normalizeOptionalString(config.redirectUrl),
+      });
     },
-    saveCodeVerifier(codeVerifier) {
+    async saveCodeVerifier(codeVerifier) {
       assertAuthorizationRedirectAllowed();
-      updateStore((store) => ({ ...beginMcpOAuthAuthorization(store), codeVerifier }));
+      await updateStore({ kind: "codeVerifier", codeVerifier });
     },
     async codeVerifier() {
       const codeVerifier = (await readStore()).codeVerifier;
@@ -200,29 +146,15 @@ export async function createMcpOAuthClientProvider(params: {
       }
       return codeVerifier;
     },
-    invalidateCredentials(scope) {
-      updateStore((store) => {
-        const next: McpOAuthStore = { ...store };
-        if (scope === "all" || scope === "client") {
-          delete next.clientInformation;
-        }
-        if ((scope === "all" || scope === "tokens") && params.suppressStoredTokens !== true) {
-          delete next.tokens;
-          delete next.tokenExpiresAt;
-          delete next.tokensAuthorizationServerUrl;
-          next.credentialState = "cleared";
-        }
-        if (scope === "all" || scope === "verifier") {
-          delete next.codeVerifier;
-        }
-        if (scope === "all" || scope === "discovery") {
-          delete next.discoveryState;
-        }
-        return next;
+    async invalidateCredentials(scope) {
+      await updateStore({
+        kind: "invalidate",
+        scope,
+        suppressStoredTokens: params.suppressStoredTokens === true,
       });
     },
-    saveDiscoveryState(discoveryState) {
-      updateStore((store) => ({ ...beginMcpOAuthAuthorization(store), discoveryState }));
+    async saveDiscoveryState(discoveryState) {
+      await updateStore({ kind: "discoveryState", discoveryState });
     },
     async discoveryState() {
       return (await readStore()).discoveryState;
