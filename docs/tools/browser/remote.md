@@ -13,7 +13,7 @@ read_when:
   Targetless actions can launch it (for example, `open`, `navigate`, or `openclaw browser start`). Actions that name a
   tab by `targetId`, tab id, or label never start a stopped browser, because a new browser cannot
   contain that tab; start the browser or open a new tab, then select a current target.
-- **Remote control (node host):** run a node host on the machine that has the browser; the Gateway proxies browser actions to it.
+- **Remote control (node host):** run a node host on the machine that has the browser; the Gateway proxies browser actions to it. Set the node host up first — see [Nodes](/nodes).
 - **Remote CDP:** set `browser.profiles.<name>.cdpUrl` (or `browser.cdpUrl`) to
   attach to a remote Chromium-based browser. In this case, OpenClaw will not launch a local browser.
 - For externally managed CDP services on loopback (for example Browserless in
