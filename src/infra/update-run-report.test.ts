@@ -433,4 +433,55 @@ describe("update run report", () => {
     expect(legacy.markdown).toContain("Failed: build");
     expect(legacy.markdown).not.toContain("private legacy");
   });
+
+  it("uses the failed finalize step instead of unknown reason when reason is missing", () => {
+    const report = renderUpdateRunReport(
+      run({
+        status: "failed",
+        reason: null,
+        steps: [
+          { step: "requested", status: "failed", startedAtMs: 1, endedAtMs: 2 },
+          { step: "finalize:doctor", status: "failed", startedAtMs: 1, endedAtMs: 2 },
+        ],
+      }),
+    );
+    expect(report.headline).toContain("finalize:doctor");
+    expect(report.headline).not.toContain("unknown reason");
+  });
+
+  it.each([
+    {
+      reason: " saved-doctor-error ",
+      failedSteps: ["finalize:doctor"],
+      expected: "saved-doctor-error",
+    },
+    { reason: null, failedSteps: [], expected: "unknown reason" },
+    { reason: null, failedSteps: ["requested"], expected: "unknown reason" },
+  ])("preserves the update status headline for $expected", ({ reason, failedSteps, expected }) => {
+    const report = renderUpdateRunReport(
+      run({
+        status: "failed",
+        reason,
+        steps: [
+          { step: "staging", status: "completed" },
+          ...failedSteps.map((step) => ({ step, status: "failed" as const })),
+        ],
+      }),
+    );
+    expect(report.headline).toBe(`⚠️ OpenClaw update failed: ${expected}.`);
+  });
+
+  it.each(["skipped", "rolled-back"] as const)(
+    "keeps a missing reason unchanged for a %s update with a failed child",
+    (status) => {
+      const record = run({ status, reason: null });
+      const before = renderUpdateRunReport(record).headline;
+      const report = renderUpdateRunReport({
+        ...record,
+        steps: [{ step: "finalize:doctor", status: "failed" }],
+      });
+      expect(report.headline).toBe(before);
+      expect(report.headline).toContain("unknown reason");
+    },
+  );
 });
