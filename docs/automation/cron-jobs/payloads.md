@@ -115,6 +115,11 @@ Delivered text is derived from process output: non-empty stdout wins; if stdout 
 
 Script payloads run headlessly in the same code-mode executor as trigger scripts, without starting a conversational agent turn. They are available by default; setting `cron.triggers.enabled: false` disables creation and execution of script payloads together with condition-trigger scripts and stream schedules. Script jobs support only `main` and `isolated` session targets.
 
+This headless runtime does not attach configured MCP servers. Its owning
+agent's tool policy can include core tools such as `exec`, but configured
+`mcp__<server>__<tool>` tools are not available to the script. Use an
+agent-turn payload when the job needs to query an MCP server.
+
 ```bash
 openclaw automations create "0 * * * *" \
   --name "Hourly queue check" \
