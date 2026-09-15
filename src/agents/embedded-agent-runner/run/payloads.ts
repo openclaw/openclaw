@@ -199,8 +199,16 @@ export function buildEmbeddedRunPayloads(params: {
     .map((text) => sanitizeAssistantVisibleStreamText(text))
     .filter((text) => text.trim().length > 0);
   const currentAssistant = params.currentAssistant ?? undefined;
+  // `lastAssistant` is the session snapshot's newest assistant, which after a
+  // turn that produced no assistant message of its own is the previous final
+  // reply. An internal heartbeat turn must never adopt it: the previous reply
+  // would be re-committed to history and re-delivered as this turn's answer,
+  // so NO_REPLY has to stay a true no-op (#143787).
   const assistantForPayload =
-    currentAssistant ?? (nonEmptyAssistantTexts.length === 1 ? undefined : params.lastAssistant);
+    currentAssistant ??
+    (params.isHeartbeatTrigger === true || nonEmptyAssistantTexts.length === 1
+      ? undefined
+      : params.lastAssistant);
   // Pre-upgrade recovered messages have no stored facts, and recovery intentionally does not
   // reparse text; one in-flight reply can lose delivery or speech intent across this boundary.
   const storedDelivery = assistantForPayload?.openclawDelivery;
