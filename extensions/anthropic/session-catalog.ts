@@ -7,7 +7,11 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { adoptedSourceKey, CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
+import {
+  adoptedSourceKey,
+  CLAUDE_LOCAL_SESSION_HOST_ID,
+  isClaudeAdoptedSessionKey,
+} from "./session-catalog-adoption.js";
 import { continueClaudeSession } from "./session-catalog-continue.js";
 import { isExactClaudeSessionCursor } from "./session-catalog-cursor.js";
 import { listClaudeSessions } from "./session-catalog-discovery.js";
@@ -114,6 +118,14 @@ function toGenericClaudeHost(
       const nodeCli =
         host.kind === "node" && host.canContinueClaude === true && session.source === "claude-cli";
       const existingSessionKey = adopted.get(adoptedSourceKey(host.hostId, session.threadId));
+      // Only sessions minted by the adoption flow may carry a sessionKey here:
+      // the UI treats that field as "this transcript row owns the regular
+      // sidebar entry" and hides the row from its category/pinned zones. A
+      // plain channel session that merely ran the CLI keeps its own sidebar
+      // row; its binding still feeds continue affinity in session-catalog-continue.
+      const projectedSessionKey = isClaudeAdoptedSessionKey(existingSessionKey)
+        ? existingSessionKey
+        : undefined;
       // Already-adopted rows stay continuable even if node policy later denies
       // the run command: continue only returns the existing session key, and
       // the turn itself still fails closed at invoke time.
@@ -134,7 +146,7 @@ function toGenericClaudeHost(
         ...(session.customGroup ? { customGroup: session.customGroup } : {}),
         ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
         archived: session.archived,
-        ...(continuable && existingSessionKey ? { sessionKey: existingSessionKey } : {}),
+        ...(continuable && projectedSessionKey ? { sessionKey: projectedSessionKey } : {}),
         canContinue: continuable,
         canArchive: false,
         canOpenTerminal: terminal.canOpenTerminal,

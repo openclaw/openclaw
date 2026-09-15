@@ -11,7 +11,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { SessionCatalogProvider as RegisteredSessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { adoptedSourceKey } from "./session-catalog-adoption.js";
+import { adoptedSessionKey, adoptedSourceKey } from "./session-catalog-adoption.js";
 import { listClaudeSessions } from "./session-catalog-discovery.js";
 import {
   createClaudeSessionNodeInvokePolicies,
@@ -1009,13 +1009,8 @@ describe("Claude session catalog", () => {
 
   it.each([
     {
-      label: "CLI binding",
-      entry: (sessionId: string) => ({
-        cliSessionBindings: { "claude-cli": { sessionId } },
-      }),
-    },
-    {
       label: "catalog marker when the CLI binding is empty",
+      sessionKey: (sessionId: string) => adoptedSessionKey("gateway:local", sessionId),
       entry: (sessionId: string) => ({
         cliSessionBindings: { "claude-cli": { sessionId: "" } },
         pluginOwnerId: "anthropic",
@@ -1023,35 +1018,119 @@ describe("Claude session catalog", () => {
         pluginExtensions: { anthropic: { sessionCatalog: { sourceThreadId: sessionId } } },
       }),
     },
-  ])("links a catalog row to an existing OpenClaw session via $label", async ({ entry }) => {
+    {
+      // Real adoption hands the minted key to session creation, which persists
+      // it agent-scoped (agent:<agentId>:<minted>); bound-session enumeration
+      // returns that canonical shape, so it must stay recognized here.
+      label: "canonical persisted key after session creation agent-scopes it",
+      sessionKey: (sessionId: string) =>
+        `agent:main:${adoptedSessionKey("gateway:local", sessionId)}`,
+      entry: (sessionId: string) => ({
+        cliSessionBindings: { "claude-cli": { sessionId } },
+        pluginOwnerId: "anthropic",
+        modelSelectionLocked: true,
+        pluginExtensions: { anthropic: { sessionCatalog: { sourceThreadId: sessionId } } },
+      }),
+    },
+  ])(
+    "links a catalog row to an existing OpenClaw session via $label",
+    async ({ entry, sessionKey }) => {
+      const home = await createHome();
+      process.env.HOME = home;
+      const sessionId = "claude-bound-session";
+      await writeProject({
+        home,
+        entries: [
+          {
+            sessionId,
+            fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+            summary: "Bound session",
+            projectPath: "/work/source",
+          },
+        ],
+        transcripts: { [sessionId]: [message(sessionId, "user", "source prompt", 1)] },
+      });
+      const provider = captureCatalogProvider({
+        config: { current: () => ({}) },
+        agent: {
+          session: {
+            listSessionEntries: () => [
+              { sessionKey: sessionKey(sessionId), entry: entry(sessionId) },
+            ],
+          },
+        },
+      } as unknown as PluginRuntime);
+
+      const hosts = await provider?.list({});
+      expect(hosts?.[0]?.sessions[0]?.sessionKey).toBe(sessionKey(sessionId));
+    },
+  );
+
+  it("keeps a categorized channel session out of the catalog's owned rows when it only ran the CLI", async () => {
     const home = await createHome();
     process.env.HOME = home;
-    const sessionId = "claude-bound-session";
+    const sessionId = "whatsapp-cli-run";
     await writeProject({
       home,
       entries: [
         {
           sessionId,
           fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
-          summary: "Bound session",
+          summary: "WhatsApp group run",
           projectPath: "/work/source",
         },
       ],
       transcripts: { [sessionId]: [message(sessionId, "user", "source prompt", 1)] },
     });
+    const whatsappKey = "agent:main:whatsapp:12025550123-987654321@g.us";
     const provider = captureCatalogProvider({
       config: { current: () => ({}) },
       agent: {
         session: {
           listSessionEntries: () => [
-            { sessionKey: "agent:main:claude-bound", entry: entry(sessionId) },
+            {
+              sessionKey: whatsappKey,
+              entry: {
+                chatType: "group",
+                category: "WhatsApp Gruppen",
+                cliSessionBindings: { "claude-cli": { sessionId } },
+              },
+            },
           ],
         },
       },
     } as unknown as PluginRuntime);
 
+    // The row stays continuable (continue affinity still resolves the binding
+    // to the WhatsApp session), but the row must not claim the session: the UI
+    // treats a projected sessionKey as "this catalog row owns the sidebar
+    // entry" and would pull a categorized session out of its custom group.
     const hosts = await provider?.list({});
-    expect(hosts?.[0]?.sessions[0]?.sessionKey).toBe("agent:main:claude-bound");
+    expect(hosts?.[0]?.sessions[0]?.sessionKey).toBeUndefined();
+    expect(hosts?.[0]?.sessions[0]?.canContinue).toBe(true);
+    expect(
+      listBoundClaudeSessions({
+        id: "anthropic",
+        config: {},
+        runtime: {
+          config: { current: () => ({}) },
+          agent: {
+            session: {
+              listSessionEntries: () => [
+                {
+                  sessionKey: whatsappKey,
+                  entry: {
+                    chatType: "group",
+                    category: "WhatsApp Gruppen",
+                    cliSessionBindings: { "claude-cli": { sessionId } },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawPluginApi),
+    ).toEqual(new Map([[adoptedSourceKey("gateway:local", sessionId), whatsappKey]]));
   });
 
   it("continues a local Desktop-app row and lists it as continuable", async () => {
