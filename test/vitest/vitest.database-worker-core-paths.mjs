@@ -21,6 +21,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/security/audit-rosterless.test.ts",
   "src/claws/lifecycle-state.test.ts",
   "src/claws/update-plan.test.ts",
+  "src/claws/update-plan.adopted-agent.test.ts",
   "src/claws/packages.test.ts",
   "src/commands/doctor/auth-alias-migration.test.ts",
   "src/commands/doctor/auth-alias-import-recovery.test.ts",

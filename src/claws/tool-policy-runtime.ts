@@ -5,6 +5,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { canonicalizeClawAgent } from "./agent-adoption-apply.js";
 import { digestClawAgentConfig } from "./agent-config-digest.js";
 import {
   initializeCachedClawInstallSchemaVersions,
@@ -12,7 +13,10 @@ import {
   readCachedClawInstallSchemaVersions,
   registerClawInstallSchemaVersionSnapshotListener,
 } from "./provenance-runtime-read.js";
-import { CLAW_INSTALL_RECORD_SCHEMA_VERSION } from "./provenance-schema-version.js";
+import {
+  CLAW_ADOPTED_INSTALL_RECORD_SCHEMA_VERSION,
+  CLAW_INSTALL_RECORD_SCHEMA_VERSION,
+} from "./provenance-schema-version.js";
 
 const frozenToolAllowPolicies = new WeakSet<object>();
 type PreparedClawToolPolicy =
@@ -70,10 +74,10 @@ function applyPreparedClawToolPolicyConsent(): void {
       });
       continue;
     }
-    if (
-      schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION &&
-      schemaVersionRead.agentConfigDigest !== candidate.agentConfigDigest
-    ) {
+    const currentSchema =
+      schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION ||
+      schemaVersionRead.schemaVersion === CLAW_ADOPTED_INSTALL_RECORD_SCHEMA_VERSION;
+    if (currentSchema && schemaVersionRead.agentConfigDigest !== candidate.agentConfigDigest) {
       preparedClawToolPolicies.set(candidate.tools, {
         kind: "state-error",
         error: new Error("Claw agent configuration does not match its consent provenance."),
@@ -81,10 +85,7 @@ function applyPreparedClawToolPolicyConsent(): void {
       continue;
     }
     preparedClawToolPolicies.set(candidate.tools, {
-      kind:
-        schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION
-          ? "current"
-          : "legacy",
+      kind: currentSchema ? "current" : "legacy",
     });
   }
 }
@@ -92,9 +93,20 @@ function applyPreparedClawToolPolicyConsent(): void {
 function collectClawToolPolicyCandidates(config: OpenClawConfig): ClawToolPolicyCandidate[] {
   return listAgentEntries(config).flatMap((agent) => {
     const tools = agent.tools;
-    return tools && (tools.profile || tools.allow?.length)
-      ? [{ agentId: agent.id, agentConfigDigest: digestClawAgentConfig(agent), tools }]
-      : [];
+    if (!tools || !(tools.profile || tools.allow?.length)) {
+      return [];
+    }
+    // Adoption persists the install record under the canonical id and digests the canonical
+    // entry (canonicalizeClawAgent); a raw mixed-case roster key would miss that row and the
+    // agent would silently lose drift rejection and frozen-allowlist enforcement.
+    const canonicalAgent = canonicalizeClawAgent(agent);
+    return [
+      {
+        agentId: canonicalAgent.id,
+        agentConfigDigest: digestClawAgentConfig(canonicalAgent),
+        tools,
+      },
+    ];
   });
 }
 

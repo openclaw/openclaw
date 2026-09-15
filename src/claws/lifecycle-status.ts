@@ -1,5 +1,4 @@
 import { stableStringify } from "@openclaw/normalization-core";
-import { listAgentEntries } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
@@ -10,6 +9,7 @@ import {
   PLUGIN_ARTIFACT_ADAPTER_IDENTITY,
 } from "../plugins/install-artifact-inspection.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { resolveCanonicalClawAgent } from "./agent-adoption-apply.js";
 import { readClawCronRefs, type PersistedClawCronRef } from "./cron.js";
 import { digestClawAgentConfig } from "./lifecycle-config-removal.js";
 import {
@@ -38,6 +38,7 @@ import {
   type PersistedClawPackageRef,
 } from "./provenance.js";
 import { CLAW_OUTPUT_STABILITY, type ClawPackagePreflight } from "./types.js";
+import { readClawWorkspaceAdoption, type ClawWorkspaceAdoption } from "./workspace-origin.js";
 import { readAllClawWorkspaceFiles, readClawWorkspaceFiles } from "./workspace.js";
 
 const CLAW_STATUS_SCHEMA_VERSION = "openclaw.clawStatus.v1" as const;
@@ -131,6 +132,8 @@ async function inspectClawPackageCompatibility(params: {
 
 export type ClawStatusRecord = {
   install: PersistedClawInstall;
+  agentOrigin: PersistedClawInstall["agentOrigin"];
+  workspaceOrigin: ClawWorkspaceAdoption;
   orphaned?: boolean;
   agentState: "present" | "modified" | "missing";
   bootstrapState: ClawBootstrapStatus["state"];
@@ -238,15 +241,18 @@ export async function readClawStatus(
   const records: ClawStatusRecord[] = [];
   const packagePreflight = options.packagePreflight;
   for (const install of installs) {
-    const agent = listAgentEntries(config).find((candidate) => candidate.id === install.agentId);
+    const agent = resolveCanonicalClawAgent(config, install.agentId);
     const packageRefs = allPackageRefs.filter(
       (packageRef) => packageRef.agentId === install.agentId,
     );
     const workspaceFiles = installAgentIds.has(install.agentId)
       ? readClawWorkspaceFiles(install.agentId, options)
       : allWorkspaceFiles.filter((file) => file.agentId === install.agentId);
+    const workspaceOrigin: ClawWorkspaceAdoption = installAgentIds.has(install.agentId)
+      ? readClawWorkspaceAdoption(install.agentId, install.workspace, options)
+      : { adopted: false };
     const bootstrap = installAgentIds.has(install.agentId)
-      ? await inspectClawBootstrap(install, options)
+      ? await inspectClawBootstrap(install, workspaceOrigin, options)
       : {
           state: "unknown" as const,
           workspace: install.workspace,
@@ -254,6 +260,8 @@ export async function readClawStatus(
         };
     records.push({
       install,
+      agentOrigin: install.agentOrigin,
+      workspaceOrigin,
       ...(installAgentIds.has(install.agentId) ? {} : { orphaned: true }),
       agentState: !agent
         ? "missing"

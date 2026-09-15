@@ -752,4 +752,36 @@ describe("Claw exec approvals removal", () => {
 
     expect(readAgentDeletionJournal("worker") === undefined).toBe(!seedJournal);
   });
+
+  it("rejects apply when a hook mapping starts referencing the agent after planning", async () => {
+    const addPlan = await buildApprovalFixture();
+    await withTempHomeConfig({}, async ({ home }) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", join(home, ".openclaw"));
+      let config: OpenClawConfig = {};
+      await applyClawAddPlan(addPlan, {
+        consentPlanIntegrity: addPlan.planIntegrity,
+        commitConfig: async (transform) => {
+          config = transform(config);
+        },
+      });
+      await writeOpenClawConfig(home, config);
+      const plan = await buildClawRemovePlan("worker");
+      // The removal surface digest covers hook references too, so a mapping added after planning
+      // must be caught here, before applyClawRemovePlan writes any config.
+      await writeOpenClawConfig(home, {
+        ...config,
+        hooks: { mappings: [{ id: "h", agentId: "worker", action: "agent" }] },
+      });
+
+      await expect(
+        applyClawRemovePlan(plan, {
+          monitorGateway: quiescentClawMonitorGateway,
+          consentPlanIntegrity: plan.planIntegrity,
+        }),
+      ).resolves.toMatchObject({
+        status: "partial",
+        error: { code: "agent_modified" },
+      });
+    });
+  });
 });

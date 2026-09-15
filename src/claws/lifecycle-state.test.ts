@@ -326,18 +326,41 @@ describe("Claw status and remove", () => {
     } as OpenClawConfig;
 
     const plan = await buildClawRemovePlan("worker", { env: current.env, config });
+    await state.writeConfig(config);
 
     expect(plan.actions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: "agent", target: 'agents.entries["worker"]' }),
-        expect.objectContaining({ kind: "configBinding", target: "bindings[agentId=worker]" }),
-        expect.objectContaining({ kind: "agentAllow", target: "tools.agentToAgent.allow[worker]" }),
+        expect.objectContaining({
+          kind: "configBinding",
+          action: "remove",
+          blocked: false,
+          target: "bindings[agentId=worker]",
+        }),
+        expect.objectContaining({
+          kind: "agentAllow",
+          action: "remove",
+          blocked: false,
+          target: "tools.agentToAgent.allow[worker]",
+        }),
         expect.objectContaining({ kind: "workspace", action: "trash" }),
         expect.objectContaining({ kind: "agentState", action: "trash" }),
         expect.objectContaining({ kind: "sessionIndex", action: "delete" }),
         expect.objectContaining({ kind: "sessionTranscripts", action: "trash" }),
       ]),
     );
+
+    // Sibling guard: a Claw-created agent's bindings/allow entries are Claw-owned, so removal
+    // still prunes and completes even though adopted removal now blocks on the same reference kinds.
+    const result = await applyClawRemovePlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env: current.env,
+      config,
+      monitorGateway: quiescentClawMonitorGateway,
+    });
+    expect(result.status).toBe("complete");
+    expect(current.getConfig().bindings).toBeUndefined();
+    expect(current.getConfig().tools?.agentToAgent?.allow).toBeUndefined();
   });
 
   it("refuses changed bindings and retains the cleanup fence", async () => {
