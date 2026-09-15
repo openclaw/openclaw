@@ -115,6 +115,15 @@ const PLUGIN_SDK_SUBPATH_SEEDS = [
       "`openclaw/plugin-sdk/channel-outbound` and `openclaw/plugin-sdk/channel-inbound`; retain until supported external plugin migration is verified",
   },
   {
+    code: "plugin-sdk-channel-runtime-subpath",
+    subpath: "channel-runtime",
+    status: "removal-pending",
+    owner: "channel",
+    removeAfter: "2026-10-01",
+    replacement:
+      "`openclaw/plugin-sdk/channel-outbound`; retain until supported external plugin migration is verified",
+  },
+  {
     code: "plugin-sdk-group-access-subpath",
     subpath: "group-access",
     status: "removed",

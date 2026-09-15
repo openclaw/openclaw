@@ -93,6 +93,7 @@ describe("plugin compatibility registry", () => {
       "plugin-sdk-infra-runtime-subpath",
       "plugin-sdk-channel-lifecycle-subpath",
       "plugin-sdk-channel-message-subpath",
+      "plugin-sdk-channel-runtime-subpath",
     ] as const satisfies readonly PluginCompatCode[]) {
       const record = records.get(code);
       expect(record).toMatchObject({

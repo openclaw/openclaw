@@ -204,7 +204,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: typed feature contracts, backend registration, and native Control UI hosting.
       // +1: public provider-owned asynchronous embedding batch contract.
       // +1: runtime-neutral WebSocket client/server adapter for bundled and external plugins.
-      154,
+      // +1: deprecated channel-runtime compatibility alias for published channel plugins.
+      155,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -375,7 +376,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved shared widget CDN policy for core and channel presenters.
       // +13: runtime-neutral WebSocket client/server, stream, data, and option contracts.
       // +2: approved process-diagnostics predicate and lightweight subsystem logger.
-      4481,
+      // +6: channel-runtime compatibility alias re-exports (typing, reply prefix, status sink, lifecycle).
+      4487,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -514,7 +516,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared per-connection webhook request ordering for channel listeners.
       // +4: runtime-neutral WebSocket client/server and stream constructors.
       // +2: approved process-diagnostics predicate and lightweight subsystem logger.
-      2645,
+      // +6: channel-runtime compatibility alias re-exported helper functions.
+      2651,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
