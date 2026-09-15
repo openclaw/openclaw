@@ -32,6 +32,11 @@ function readTimeoutDiagnostic(result: unknown): ToolErrorSummary["terminalDiagn
   };
 }
 
+function isSteeringSkippedToolResult(result: unknown): boolean {
+  const details = readToolResultDetails(result);
+  return details?.status === "skipped" && details?.deniedReason === "steering";
+}
+
 /** Build one attempt-scoped facts-in/state-out terminal observer for every harness. */
 export function createToolTerminalObserver(
   runId: string,
@@ -62,7 +67,11 @@ export function createToolTerminalObserver(
         buildToolMutationState(observation.toolName, executedArguments));
     const replaySafe = observation.replaySafe ?? mutation.replaySafe;
     let lastToolError: ToolErrorSummary | undefined;
-    if (observation.outcome === "failure") {
+    if (isSteeringSkippedToolResult(observation.result)) {
+      // Steering skips preserve the transcript and queued message without
+      // turning an intentional omission into a user-facing tool failure.
+      lastToolError = errors.read().lastToolError;
+    } else if (observation.outcome === "failure") {
       const mutatingAction = executionStarted && mutation.mutatingAction;
       const terminalDiagnostic =
         observation.failure?.terminalDiagnostic ??
