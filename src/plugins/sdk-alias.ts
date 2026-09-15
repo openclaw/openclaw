@@ -1,4 +1,5 @@
 // Resolves plugin SDK aliases for public package imports.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1218,11 +1219,17 @@ function hasJitiNormalizedAliasMarker(aliasMap: Record<string, string>) {
   return Boolean((aliasMap as Record<symbol, unknown>)[JITI_NORMALIZED_ALIAS_SYMBOL]);
 }
 
+function stableHashKey(value: string): string {
+  return createHash("sha256").update(value).digest("base64url");
+}
+
 function createJitiAliasContentCacheKey(aliasMap: Record<string, string>) {
-  return Object.entries(aliasMap)
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}\0${value}`)
-    .join("\0");
+  return stableHashKey(
+    Object.entries(aliasMap)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => `${key}\0${value}`)
+      .join("\0"),
+  );
 }
 
 function isConcreteJitiAliasTarget(target: string | undefined): boolean {
