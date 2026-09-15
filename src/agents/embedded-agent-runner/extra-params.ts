@@ -370,8 +370,9 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
   }
-  if (typeof extraParams.topP === "number") {
-    streamParams.topP = extraParams.topP;
+  const topP = resolveAliasedParamValueFromKeys([extraParams], ["topP", "top_p"]);
+  if (typeof topP === "number") {
+    streamParams.topP = topP;
   }
   const maxTokens = resolveMaxTokensParam(extraParams);
   if (maxTokens !== undefined) {
