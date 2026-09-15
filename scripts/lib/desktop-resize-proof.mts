@@ -100,6 +100,73 @@ function desktopSocketCloses(value: unknown) {
   });
 }
 
+const nodeStreamCloseTriggers = [
+  "owner-abort",
+  "target-close",
+  "target-error",
+  "websocket-close",
+  "websocket-error",
+  "send-error",
+  "invalid-frame",
+  "splice-unavailable",
+  "startup-error",
+] as const;
+
+function desktopNodeStreamCloses(value: unknown) {
+  if (value === null) {
+    return null;
+  }
+  if (!Array.isArray(value) || value.length > 8) {
+    throw new Error("Invalid desktop node stream diagnostics");
+  }
+  return value.map((event) => {
+    const trigger = nodeStreamCloseTriggers.find(
+      (candidate) => isRecord(event) && candidate === event.trigger,
+    );
+    if (!isRecord(event) || !trigger) {
+      throw new Error("Invalid desktop node stream diagnostic");
+    }
+    return { trigger, closeCode: reportInteger(event.closeCode, 65_535) };
+  });
+}
+
+/** Read only the fixture-owned log before node cleanup removes it. */
+export async function readDesktopProofNodeStreamCloses(file: string) {
+  try {
+    const stat = await lstat(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) {
+      return null;
+    }
+    const events: unknown[] = [];
+    for (const line of (await readFile(file, "utf8")).split("\n")) {
+      if (!line.trim()) {
+        continue;
+      }
+      let record: unknown;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        // An in-progress final log write is not a completed lifecycle record.
+        continue;
+      }
+      if (
+        !isRecord(record) ||
+        record["0"] !== '{"subsystem":"node-host/stream"}' ||
+        record["2"] !== "node stream closed" ||
+        !isRecord(record["1"]) ||
+        record["1"].streamKind !== "desktop"
+      ) {
+        continue;
+      }
+      events.push(record["1"]);
+    }
+    return desktopNodeStreamCloses(events.slice(-8));
+  } catch {
+    // Diagnostic collection must not replace the framebuffer assertion failure.
+    return null;
+  }
+}
+
 function desktopViewerResizeFailure(value: unknown) {
   if (!isRecord(value) || typeof value.pageClosed !== "boolean") {
     throw new Error("Invalid desktop viewer diagnostic");
@@ -128,6 +195,9 @@ function desktopViewerResizeFailure(value: unknown) {
     socketCount: value.socketCount === null ? null : reportInteger(value.socketCount, 10_000),
     latestReadyState,
     socketCloses: desktopSocketCloses(value.socketCloses),
+    ...(value.nodeStreamCloses !== undefined
+      ? { nodeStreamCloses: desktopNodeStreamCloses(value.nodeStreamCloses) }
+      : {}),
   };
 }
 

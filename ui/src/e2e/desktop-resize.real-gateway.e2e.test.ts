@@ -11,6 +11,7 @@ import type {
   desktopProofTestReport,
   readDesktopProofPhase,
 } from "../../../scripts/lib/desktop-resize-proof.mts";
+import { readDesktopProofNodeStreamCloses } from "../../../scripts/lib/desktop-resize-proof.mts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { startSkillLibraryNodeProcess } from "../../../test/e2e/qa-lab/runtime/skill-library-node-process.ts";
 import { SkillLibraryWireClient } from "../../../test/e2e/qa-lab/runtime/skill-library-wire-fixture.ts";
@@ -639,9 +640,13 @@ suite.define(() => {
               socketCount: null,
               latestReadyState: null,
               socketCloses: null,
+              nodeStreamCloses: null,
             };
             // Retain known facts even if the one read-only browser snapshot cannot settle.
             context.task.meta.desktopViewerResizeFailure = diagnostic;
+            if (node) {
+              diagnostic.nodeStreamCloses = await readDesktopProofNodeStreamCloses(node.logFile);
+            }
             let snapshotTimer: ReturnType<typeof setTimeout> | undefined;
             try {
               const snapshot = await Promise.race([

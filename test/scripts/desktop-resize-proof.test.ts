@@ -12,6 +12,7 @@ import {
   exportDesktopResizeProof,
   inspectDesktopSshdRuntimeDirectory,
   readDesktopProofPhase,
+  readDesktopProofNodeStreamCloses,
   readDesktopProofTestReport,
   sanitizeDesktopResizeProof,
   withDesktopProofCleanup,
@@ -63,6 +64,7 @@ const viewerFailure = {
   socketCount: 2,
   latestReadyState: 1,
   socketCloses: [{ socketIndex: 0, code: 4000, wasClean: true, category: "takeover" }],
+  nodeStreamCloses: [{ trigger: "target-close", closeCode: 1005 }],
 };
 const proof = (carrier: "node" | "ssh" = "node") => ({
   carrier,
@@ -88,6 +90,63 @@ const proof = (carrier: "node" | "ssh" = "node") => ({
 });
 
 describe("desktop proof identity and public evidence", () => {
+  it("retains node close categories from the existing JSON file logger", async () => {
+    const file = path.join(dirs.make("desktop-node-log-"), "node.log");
+    execFileSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "--eval",
+        `
+          import { flushLogger, setLoggerOverride } from "./src/logging/logger.ts";
+          import { createSubsystemLogger } from "./src/logging/subsystem.ts";
+          setLoggerOverride({ file: process.argv[1], level: "info", consoleLevel: "silent" });
+          const log = createSubsystemLogger("node-host/stream");
+          log.info("node stream closed", {
+            streamKind: "portal", trigger: "target-close", closeCode: 1000,
+          });
+          for (let index = 0; index < 10; index++) {
+            log.info("node stream closed", {
+              streamKind: "desktop", trigger: "target-close", closeCode: 1000 + index,
+              privateDetail: "private-node-data",
+            });
+          }
+          await flushLogger();
+        `,
+        file,
+      ],
+      {
+        cwd: path.resolve(import.meta.dirname, "../.."),
+        env: { ...process.env, OPENCLAW_TEST_FILE_LOG: "1" },
+        timeout: 15_000,
+        stdio: "pipe",
+      },
+    );
+    const closes = await readDesktopProofNodeStreamCloses(file);
+    expect(closes).toEqual(
+      Array.from({ length: 8 }, (_, index) => ({
+        trigger: "target-close",
+        closeCode: 1002 + index,
+      })),
+    );
+    expect(JSON.stringify(closes)).not.toMatch(/private|portal|streamKind/u);
+  });
+
+  it("leaves unavailable node diagnostics empty without replacing the test failure", async () => {
+    const root = dirs.make("desktop-node-log-bounds-");
+    const file = path.join(root, "node.log");
+    expect(await readDesktopProofNodeStreamCloses(file)).toBeNull();
+    await writeFile(file, Buffer.alloc(1024 * 1024 + 1));
+    expect(await readDesktopProofNodeStreamCloses(file)).toBeNull();
+    await writeFile(file, '{"partial":');
+    expect(await readDesktopProofNodeStreamCloses(file)).toEqual([]);
+    const link = path.join(root, "linked.log");
+    await symlink(file, link);
+    expect(await readDesktopProofNodeStreamCloses(link)).toBeNull();
+  });
+
   it("keeps the UI phase contract narrower than arbitrary reporter strings", () => {
     type Phase = Exclude<
       ReturnType<typeof desktopProofTestReport>["files"][number]["assertions"][number]["phase"],
@@ -299,6 +358,10 @@ describe("desktop proof identity and public evidence", () => {
                 reason: "control-taken:private-operator",
                 url: "https://example.invalid/private-token",
               })) ?? null,
+            nodeStreamCloses: diagnostics.nodeStreamCloses.map((event) => ({
+              ...event,
+              privateDetail: "private-node-data",
+            })),
             html: "private-dom",
             socketUrl: "https://example.invalid/private-token",
             error: "private-error",
@@ -320,6 +383,10 @@ describe("desktop proof identity and public evidence", () => {
     { latestReadyState: 4 },
     { socketCloses: undefined },
     { socketCloses: "private-token" },
+    { nodeStreamCloses: "private-token" },
+    { nodeStreamCloses: [{ trigger: "private-token", closeCode: 1000 }] },
+    { nodeStreamCloses: [{ trigger: "target-close", closeCode: 65_536 }] },
+    { nodeStreamCloses: Array.from({ length: 9 }, () => viewerFailure.nodeStreamCloses[0]) },
     { socketCloses: Array.from({ length: 9 }, () => viewerFailure.socketCloses[0]) },
     ...[
       { socketIndex: -1 },

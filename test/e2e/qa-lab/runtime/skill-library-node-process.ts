@@ -42,6 +42,7 @@ export async function startSkillLibraryNodeProcess(
     },
   });
   const abort = new AbortController();
+  const logFile = path.join(node.stateDir, "node.log");
   let failure: Error | undefined;
   let logs = "";
   let completion: Promise<void> | undefined;
@@ -58,7 +59,10 @@ export async function startSkillLibraryNodeProcess(
     // Worker state uses os.tmpdir(); own that root so location assertions cannot accept host-global state.
     const workerTmpDir = path.join(node.stateDir, "tmp");
     await fs.mkdir(workerTmpDir, { recursive: true, mode: 0o700 });
-    await node.state.writeConfig({ nodeHost: { workerRuns: { enabled: true } } });
+    await node.state.writeConfig({
+      nodeHost: { workerRuns: { enabled: true } },
+      logging: { file: logFile },
+    });
     const entrypoint = await node.entrypoint();
     completion = runManagedCommand({
       bin: process.execPath,
@@ -140,7 +144,7 @@ export async function startSkillLibraryNodeProcess(
         ? listed
         : undefined;
     });
-    return { nodeId: admission.nodeId, stateDir: node.stateDir, stop };
+    return { nodeId: admission.nodeId, stateDir: node.stateDir, logFile, stop };
   } catch (error) {
     try {
       await stop();
