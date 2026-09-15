@@ -118,6 +118,7 @@ function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
 }): {
   accountId?: string;
   provider: WebLoginProvider;
+  gateway: WebLoginGateway;
   run: NonNullable<WebLoginGateway[TMethod]>;
 } | null {
   const accountId = resolveAccountId(params.rawParams);
@@ -137,7 +138,12 @@ function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
     respondProviderUnsupported(params.respond, provider.id);
     return null;
   }
-  return { accountId, provider, run: run.bind(gateway) as NonNullable<WebLoginGateway[TMethod]> };
+  return {
+    accountId,
+    provider,
+    gateway,
+    run: run.bind(gateway) as NonNullable<WebLoginGateway[TMethod]>,
+  };
 }
 
 /** Checks whether the matching channel/account should be restored after login start. */
@@ -176,23 +182,34 @@ export const webHandlers: GatewayRequestHandlers = {
       if (!request) {
         return;
       }
-      const { accountId, provider, run } = request;
+      const { accountId, provider, gateway, run } = request;
+      const loginParams = {
+        force: Boolean(params.force),
+        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
+        verbose: Boolean(params.verbose),
+        accountId,
+      };
+      const existingResult = await gateway.loginWithQrStartExisting?.(loginParams);
+      if (existingResult) {
+        respond(true, existingResult, undefined);
+        return;
+      }
+      const preflightResult = await gateway.loginWithQrStartPreflight?.(loginParams);
+      if (preflightResult) {
+        respond(true, preflightResult, undefined);
+        return;
+      }
       const wasRunning = wasChannelRunning({
         context,
         channelId: provider.id,
         accountId,
       });
-      const forceLogin = Boolean(params.force);
+      const forceLogin = loginParams.force;
       const stoppedBeforeLogin = forceLogin || !wasRunning;
       if (stoppedBeforeLogin) {
         await context.stopChannel(provider.id, accountId);
       }
-      const result = await run({
-        force: forceLogin,
-        timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
-        verbose: Boolean(params.verbose),
-        accountId,
-      });
+      const result = await run(loginParams);
       const stoppedAfterQrTakeover = !stoppedBeforeLogin && Boolean(result.qrDataUrl);
       if (stoppedAfterQrTakeover) {
         await context.stopChannel(provider.id, accountId);
