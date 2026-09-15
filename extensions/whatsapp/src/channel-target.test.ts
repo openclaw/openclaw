@@ -4,10 +4,17 @@ import { whatsappPlugin } from "./channel.js";
 describe("whatsapp explicit target parsing", () => {
   it.each(["277038292303944:4@lid", "789@hosted.lid", "1555000:2@hosted"])(
     "preserves formed direct %s JIDs for downstream delivery",
-    (raw) => {
-      expect(whatsappPlugin.messaging?.parseExplicitTarget?.({ raw })).toEqual({
+    async (raw) => {
+      await expect(
+        whatsappPlugin.messaging?.targetResolver?.resolveTarget?.({
+          cfg: {},
+          input: raw,
+          normalized: raw,
+        }),
+      ).resolves.toEqual({
         to: raw,
-        chatType: "direct",
+        kind: "user",
+        source: "normalized",
       });
     },
   );

@@ -30,8 +30,6 @@ import { loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { resolveWhatsAppGroupSessionKey } from "./group-session-key.js";
 import {
-  isWhatsAppGroupJid,
-  isWhatsAppNewsletterJid,
   looksLikeWhatsAppTargetId,
   normalizeWhatsAppAllowFromEntry,
   normalizeWhatsAppAllowFromEntries,
@@ -187,6 +185,22 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           looksLikeId: (raw) =>
             looksLikeWhatsAppTargetId(raw) || resolveWhatsAppTargetInfo(raw) !== null,
           hint: "<E.164|group JID|newsletter JID>",
+          resolveTarget: async ({ input }) => {
+            const target = resolveWhatsAppTargetInfo(input);
+            if (!target) {
+              return null;
+            }
+            return {
+              to: target.to,
+              kind:
+                target.chatType === "direct"
+                  ? ("user" as const)
+                  : target.chatType === "group"
+                    ? ("group" as const)
+                    : ("channel" as const),
+              source: "normalized" as const,
+            };
+          },
         },
       },
       message: whatsappMessageAdapter,

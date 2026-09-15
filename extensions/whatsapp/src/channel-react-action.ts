@@ -6,11 +6,11 @@ import {
   type OutboundMediaAccess,
 } from "openclaw/plugin-sdk/media-runtime";
 import {
-  isWhatsAppGroupJid,
   resolveAuthorizedWhatsAppOutboundTarget,
   resolveWhatsAppAccount,
   resolveWhatsAppMediaMaxBytes,
   resolveReactionMessageId,
+  resolveWhatsAppTargetFacts,
   handleWhatsAppAction,
   readStringOrNumberParam,
   readStringParam,
@@ -19,6 +19,14 @@ import {
 } from "./channel-react-action.runtime.js";
 
 const WHATSAPP_CHANNEL = "whatsapp" as const;
+
+function resolveActionTargetFacts(raw: string | null | undefined) {
+  if (!raw?.trim()) {
+    return null;
+  }
+  const resolution = resolveWhatsAppTargetFacts({ target: raw });
+  return resolution.ok ? resolution.facts : null;
+}
 
 type WhatsAppMessageActionParams = {
   action: string;
@@ -67,7 +75,7 @@ function readWhatsAppActionChatJid(params: WhatsAppMessageActionParams): string 
   ) {
     return undefined;
   }
-  return normalizeWhatsAppTarget(params.toolContext.currentChannelId) ?? undefined;
+  return resolveActionTargetFacts(params.toolContext.currentChannelId)?.normalizedTarget;
 }
 
 async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParams) {
@@ -157,9 +165,10 @@ export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionP
     throw new Error(`Action ${params.action} is not supported for provider ${WHATSAPP_CHANNEL}.`);
   }
   const isWhatsAppSource = params.toolContext?.currentChannelProvider === WHATSAPP_CHANNEL;
-  const explicitTarget = readWhatsAppActionChatJid(params);
-  const normalizedTarget = explicitTarget ? normalizeWhatsAppTarget(explicitTarget) : null;
-  const normalizedCurrent =
+  const explicitTarget =
+    readStringParam(params.params, "chatJid") ?? readStringParam(params.params, "to");
+  const explicitTargetFacts = resolveActionTargetFacts(explicitTarget);
+  const currentTargetFacts =
     isWhatsAppSource && params.toolContext?.currentChannelId
       ? resolveActionTargetFacts(params.toolContext.currentChannelId)
       : null;

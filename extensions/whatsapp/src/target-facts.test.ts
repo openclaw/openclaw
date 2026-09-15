@@ -1,17 +1,10 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it } from "vitest";
 import { resolveWhatsAppTargetFacts } from "./target-facts.js";
 
-async function withTempDir<T>(run: (dir: string) => T | Promise<T>): Promise<Awaited<T>> {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-target-facts-"));
-  try {
-    return await run(dir);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function factsFor(target: string, allowFrom?: Array<string | number>) {
   const resolution = resolveWhatsAppTargetFacts({ target, allowFrom });
@@ -87,7 +80,16 @@ describe("resolveWhatsAppTargetFacts", () => {
     const blocked = factsFor("whatsapp:277038292303944:4@lid", ["789@hosted.lid"]).authorization;
     expect(blocked.allowed).toBe(false);
     expect(blocked.allowed ? "" : blocked.error.message).toBe(
-      'Target "+277038292303944" is not listed in the configured WhatsApp allowFrom policy.',
+      'Target "277038292303944@lid" is not listed in the configured WhatsApp allowFrom policy.',
+    );
+  });
+
+  it("does not authorize an opaque LID through a phone-number allowFrom entry", () => {
+    const blocked = factsFor("15551230000:4@lid", ["+15551230000"]).authorization;
+
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.allowed ? "" : blocked.error.message).toBe(
+      'Target "15551230000@lid" is not listed in the configured WhatsApp allowFrom policy.',
     );
   });
 
@@ -98,23 +100,22 @@ describe("resolveWhatsAppTargetFacts", () => {
     );
   });
 
-  it("uses LID forward mappings when auth context is available", async () => {
-    await withTempDir((authDir) => {
-      fs.writeFileSync(path.join(authDir, "lid-mapping-15555550000.json"), JSON.stringify(987654));
-      const resolution = resolveWhatsAppTargetFacts({
-        target: "+15555550000",
-        lidOptions: { authDir },
-      });
-      expect(resolution).toMatchObject({
-        ok: true,
-        facts: { wireDelivery: { jid: "987654@lid", shouldSendComposingPresence: true } },
-      });
+  it("uses LID forward mappings when auth context is available", () => {
+    const authDir = tempDirs.make("openclaw-wa-target-facts-");
+    fs.writeFileSync(path.join(authDir, "lid-mapping-15555550000.json"), JSON.stringify(987654));
+    const resolution = resolveWhatsAppTargetFacts({
+      target: "+15555550000",
+      lidOptions: { authDir },
+    });
+    expect(resolution).toMatchObject({
+      ok: true,
+      facts: { wireDelivery: { jid: "987654@lid", shouldSendComposingPresence: true } },
     });
   });
 
   it.each([
-    ["device LID", "277038292303944:4@lid", "+277038292303944"],
-    ["hosted LID", "789@hosted.lid", "+789"],
+    ["device LID", "277038292303944:4@lid", "277038292303944@lid"],
+    ["hosted LID", "789@hosted.lid", "789@hosted.lid"],
     ["hosted PN", "1555000:2@hosted", "+1555000"],
   ] as const)("accepts formed direct %s JIDs", (_name, target, normalizedTarget) => {
     expect(factsFor(`whatsapp:${target}`, [normalizedTarget])).toMatchObject({

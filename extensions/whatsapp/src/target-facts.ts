@@ -10,7 +10,7 @@ import { toWhatsappJid, toWhatsappJidWithLid, type JidToE164Options } from "./ta
 const TARGET_FORMAT_HINT = "<E.164|group JID|newsletter JID>";
 const DIRECT_WIRE_JID_RE = /^(\d+)(?::\d+)?@(s\.whatsapp\.net|hosted|lid|hosted\.lid)$/i;
 
-export type WhatsAppTargetChatType = "direct" | "group" | "channel";
+type WhatsAppTargetChatType = "direct" | "group" | "channel";
 
 export type WhatsAppTargetFacts = {
   normalizedTarget: string;
@@ -92,8 +92,12 @@ function stripWhatsAppTargetPrefix(value: string): string {
 function normalizeDirectWireJidTarget(rawTarget: string): string | null {
   const match = stripWhatsAppTargetPrefix(rawTarget).match(DIRECT_WIRE_JID_RE);
   const localPart = match?.[1];
-  if (!localPart) {
+  const server = match?.[2]?.toLowerCase();
+  if (!localPart || !server) {
     return null;
+  }
+  if (server === "lid" || server === "hosted.lid") {
+    return `${localPart}@${server}`;
   }
   const normalized = normalizeE164(localPart);
   return normalized.length > 1 ? normalized : null;
@@ -103,14 +107,15 @@ function normalizeTargetForFacts(rawTarget: string): {
   normalizedTarget: string;
   preserveJidAsAuthorizedTarget: boolean;
 } | null {
+  const directWireJidTarget = normalizeDirectWireJidTarget(rawTarget);
+  if (directWireJidTarget) {
+    return { normalizedTarget: directWireJidTarget, preserveJidAsAuthorizedTarget: true };
+  }
   const normalizedTarget = normalizeWhatsAppTarget(rawTarget);
   if (normalizedTarget) {
     return { normalizedTarget, preserveJidAsAuthorizedTarget: false };
   }
-  const directWireJidTarget = normalizeDirectWireJidTarget(rawTarget);
-  return directWireJidTarget
-    ? { normalizedTarget: directWireJidTarget, preserveJidAsAuthorizedTarget: true }
-    : null;
+  return null;
 }
 
 function wireJidFor(params: {
