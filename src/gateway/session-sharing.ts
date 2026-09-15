@@ -138,6 +138,22 @@ export function resolveSessionMutationAuthorization(params: {
   // config change cannot split target discovery from authorization.
   let cachedCfg: OpenClawConfig | undefined;
   const getCfg = (): OpenClawConfig => (cachedCfg ??= params.context.getRuntimeConfig());
+  const authorizeMutationTarget = (
+    target: SessionSharingTarget | null,
+    sessionKey: string,
+    cfg: OpenClawConfig,
+  ): ErrorShape | null =>
+    (target && authorizesAgentRun
+      ? authorizeSessionAgentRun({ cfg, client: params.client, target })
+      : null) ??
+    authorizeIncognitoSessionTarget({ client: params.client, sessionKey, target }) ??
+    (target &&
+    !(
+      VISIBILITY_AUTHORIZED_METHODS.has(params.method) &&
+      (operatorSessionCap(params.client, cfg) ?? "write") === "write"
+    )
+      ? authorizeSessionSharingTarget({ cfg, client: params.client, target })
+      : null);
   // Each cache pair defines one synchronous freshness epoch: initial authorization shares one,
   // while commit-time guards start fresh after handler work.
   const createLookupCaches = (): {
@@ -265,26 +281,7 @@ export function resolveSessionMutationAuthorization(params: {
       return { error: resolved.error };
     }
     const target = resolved.target;
-    const error =
-      (target && authorizesAgentRun
-        ? authorizeSessionAgentRun({
-            cfg: getCfg(),
-            client: params.client,
-            target,
-          })
-        : null) ??
-      authorizeIncognitoSessionTarget({
-        client: params.client,
-        sessionKey: targetRef.sessionKey,
-        target,
-      }) ??
-      (target &&
-      !(
-        VISIBILITY_AUTHORIZED_METHODS.has(params.method) &&
-        (operatorSessionCap(params.client, getCfg()) ?? "write") === "write"
-      )
-        ? authorizeSessionSharingTarget({ cfg: getCfg(), client: params.client, target })
-        : null);
+    const error = authorizeMutationTarget(target, targetRef.sessionKey, getCfg());
     if (error) {
       return { error };
     }
@@ -401,24 +398,7 @@ export function resolveSessionMutationAuthorization(params: {
         if (!current) {
           return;
         }
-        const error =
-          (authorizesAgentRun
-            ? authorizeSessionAgentRun({
-                cfg: currentCfg,
-                client: params.client,
-                target: current,
-              })
-            : null) ??
-          authorizeIncognitoSessionTarget({
-            client: params.client,
-            sessionKey: targetRef.sessionKey,
-            target: current,
-          }) ??
-          authorizeSessionSharingTarget({
-            cfg: currentCfg,
-            client: params.client,
-            target: current,
-          });
+        const error = authorizeMutationTarget(current, targetRef.sessionKey, currentCfg);
         if (error) {
           throw new SessionMutationAuthorizationChangedError(error);
         }

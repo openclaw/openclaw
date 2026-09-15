@@ -25,10 +25,16 @@ import {
   loadExactSessionEntryReadOnly,
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { withOpenClawAgentDatabaseAsync } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { listProfiles } from "../../state/user-profiles.js";
 import {
   loadPublicSessionShareTokenCodec,
@@ -373,6 +379,102 @@ function createSessionMembersListHandler(
   };
 }
 
+function createSessionMemberMutationHandler(
+  method: "session.members.add" | "session.members.remove",
+): GatewayRequestHandlers[string] {
+  const adding = method === "session.members.add";
+  const validate = adding ? validateSessionMemberAddParams : validateSessionMemberRemoveParams;
+  return async ({ params, respond, client, context, signal, sessionMutationAuthorization }) => {
+    if (!assertValidParams(params, validate, method, respond)) {
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const managed = requireManageableTarget({
+      cfg,
+      client,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      respond,
+    });
+    if (!managed) {
+      return;
+    }
+    const actor = actorIdentity(client);
+    if (
+      adding &&
+      !knownSessionIdentities({ cfg, actor }).some((identity) => identity.id === params.identityId)
+    ) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown identity"));
+      return;
+    }
+    const target = { ...managed.target, entry: { ...managed.target.entry } };
+    const scope = {
+      agentId: target.agentId,
+      sessionKey: target.storeKey,
+      storePath: target.storePath,
+      env: { ...process.env },
+    };
+    const databaseOptions = toDatabaseOptions(resolveSqliteScope(scope));
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      sessionMutationAuthorization?.assertCurrent();
+      requireCurrentManagedTarget({
+        cfg: context.getRuntimeConfig(),
+        client,
+        authorized: target,
+      });
+    };
+    await runExclusiveSharingMutation(target, () =>
+      runOpenClawAgentWriteAdmission(
+        databaseOptions,
+        () =>
+          withOpenClawAgentDatabaseAsync(
+            databaseOptions,
+            (database) => {
+              const currentScope = { ...scope, storePath: database.path };
+              const now = Date.now();
+              const changed = adding
+                ? addSessionMember(currentScope, {
+                    identityId: params.identityId,
+                    addedBy: sharingActorStorageRef(actor),
+                    addedAt: now,
+                    expectedSessionId: target.entry.sessionId,
+                  }).inserted
+                : removeSessionMember(
+                    currentScope,
+                    params.identityId,
+                    undefined,
+                    target.entry.sessionId,
+                  );
+              if (!changed) {
+                return;
+              }
+              publishSharingChange({
+                context,
+                agentId: target.agentId,
+                actor,
+                event: {
+                  action: adding ? "member-added" : "member-removed",
+                  sessionKey: target.canonicalKey,
+                  agentId: target.agentId,
+                  identityId: params.identityId,
+                  ts: now,
+                },
+              });
+            },
+            assertCurrent,
+          ),
+        true,
+      ),
+    );
+    respond(
+      true,
+      { ok: true, sessionKey: target.canonicalKey, identityId: params.identityId },
+      undefined,
+    );
+  };
+}
+
 export const sessionSharingHandlers: GatewayRequestHandlers = {
   "session.publicShare.set": async ({ params, respond, client, context }) => {
     if (
@@ -589,126 +691,6 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
   "session.members.list": createSessionMembersListHandler("session.members.list"),
   "session.members.listEvidence": createSessionMembersListHandler("session.members.listEvidence"),
 
-  "session.members.add": async ({ params, respond, client, context }) => {
-    if (
-      !assertValidParams(params, validateSessionMemberAddParams, "session.members.add", respond)
-    ) {
-      return;
-    }
-    const cfg = context.getRuntimeConfig();
-    const managed = requireManageableTarget({
-      cfg,
-      client,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      respond,
-    });
-    if (!managed) {
-      return;
-    }
-    const actor = actorIdentity(client);
-    const known = knownSessionIdentities({
-      cfg,
-      actor,
-    });
-    if (!known.some((identity) => identity.id === params.identityId)) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown identity"));
-      return;
-    }
-    await runExclusiveSharingMutation(managed.target, async () => {
-      const current = requireCurrentManagedTarget({ cfg, client, authorized: managed.target });
-      const scope = {
-        agentId: current.agentId,
-        sessionKey: current.storeKey,
-        storePath: current.storePath,
-      };
-      const now = Date.now();
-      const added = addSessionMember(scope, {
-        identityId: params.identityId,
-        addedBy: sharingActorStorageRef(actor),
-        addedAt: now,
-        expectedSessionId: current.entry.sessionId,
-      });
-      if (!added.inserted) {
-        return;
-      }
-      publishSharingChange({
-        context,
-        agentId: current.agentId,
-        actor,
-        event: {
-          action: "member-added",
-          sessionKey: current.canonicalKey,
-          agentId: current.agentId,
-          identityId: params.identityId,
-          ts: now,
-        },
-      });
-    });
-    respond(
-      true,
-      { ok: true, sessionKey: managed.target.canonicalKey, identityId: params.identityId },
-      undefined,
-    );
-  },
-
-  "session.members.remove": async ({ params, respond, client, context }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateSessionMemberRemoveParams,
-        "session.members.remove",
-        respond,
-      )
-    ) {
-      return;
-    }
-    const cfg = context.getRuntimeConfig();
-    const managed = requireManageableTarget({
-      cfg,
-      client,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      respond,
-    });
-    if (!managed) {
-      return;
-    }
-    await runExclusiveSharingMutation(managed.target, async () => {
-      const current = requireCurrentManagedTarget({ cfg, client, authorized: managed.target });
-      const scope = {
-        agentId: current.agentId,
-        sessionKey: current.storeKey,
-        storePath: current.storePath,
-      };
-      const removed = removeSessionMember(
-        scope,
-        params.identityId,
-        undefined,
-        current.entry.sessionId,
-      );
-      if (!removed) {
-        return;
-      }
-      const now = Date.now();
-      const actor = actorIdentity(client);
-      publishSharingChange({
-        context,
-        agentId: current.agentId,
-        actor,
-        event: {
-          action: "member-removed",
-          sessionKey: current.canonicalKey,
-          agentId: current.agentId,
-          identityId: params.identityId,
-          ts: now,
-        },
-      });
-    });
-    respond(
-      true,
-      { ok: true, sessionKey: managed.target.canonicalKey, identityId: params.identityId },
-      undefined,
-    );
-  },
+  "session.members.add": createSessionMemberMutationHandler("session.members.add"),
+  "session.members.remove": createSessionMemberMutationHandler("session.members.remove"),
 };

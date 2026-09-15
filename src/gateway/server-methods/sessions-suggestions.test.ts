@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
@@ -12,8 +13,13 @@ import {
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
 } from "../../config/sessions/session-suggestion-store.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { resolveSessionSharingTarget } from "../session-sharing.js";
+import {
+  resolveSessionSharingTarget,
+  SessionMutationAuthorizationChangedError,
+} from "../session-sharing.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
 import {
   call,
@@ -24,12 +30,161 @@ import {
   sessionKey,
   upsertDefaultSuggestionSession,
 } from "./sessions-suggestions.test-support.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 const mocks = getSessionSuggestionTestMocks();
 registerSessionSuggestionTestLifecycle(mocks);
 
 describe("session suggestion handlers", () => {
+  it("releases a claimed suggestion when authority is revoked before chat dispatch", async () => {
+    const { sessionSuggestionHandlers } = await import("./sessions-suggestions.js");
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await upsertDefaultSuggestionSession();
+      const scope = { agentId: "main", sessionKey, env: state.env };
+      addSessionSuggestion(scope, {
+        id: "revoke-before-send",
+        authorId: "owner",
+        text: "synthetic suggestion",
+      });
+      const database = openOpenClawAgentDatabase(scope);
+      let revoked = false;
+      database.db.function("revoke_after_suggestion_claim", () => {
+        queueMicrotask(() => {
+          revoked = true;
+        });
+        return 0;
+      });
+      database.db
+        .exec(`CREATE TRIGGER revoke_suggestion_claim AFTER UPDATE OF dispatch_token ON session_suggestions
+        WHEN OLD.dispatch_token IS NULL AND NEW.dispatch_token IS NOT NULL
+        BEGIN SELECT revoke_after_suggestion_claim(); END`);
+      const assertCurrent = () => {
+        if (revoked) {
+          throw new SessionMutationAuthorizationChangedError(
+            errorShape(ErrorCodes.FORBIDDEN, "caller authority revoked"),
+          );
+        }
+      };
+      const params = { sessionKey, id: "revoke-before-send", resolution: "send" };
+      const respond = vi.fn<RespondFn>();
+      await sessionSuggestionHandlers["session.suggestions.resolve"]!({
+        req: {
+          type: "req",
+          id: "revoked-suggestion",
+          method: "session.suggestions.resolve",
+          params,
+        },
+        params,
+        client: client("owner", "Owner"),
+        context: context(),
+        respond,
+        isWebchatConnect: () => false,
+        sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
+      });
+      expect(revoked).toBe(true);
+      expect(mocks.handleChatSend).not.toHaveBeenCalled();
+      expect(respond.mock.calls[0]).toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
+      expect(
+        database.db
+          .prepare("SELECT state, dispatch_token FROM session_suggestions WHERE id = ?")
+          .get(params.id),
+      ).toEqual({ state: "pending", dispatch_token: null });
+    });
+  });
+
+  it("settles an accepted dispatch after caller revocation while its write waits", async () => {
+    const { sessionSuggestionHandlers } = await import("./sessions-suggestions.js");
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await upsertDefaultSuggestionSession();
+      const scope = { agentId: "main", sessionKey, env: state.env };
+      addSessionSuggestion(scope, {
+        id: "settle-accepted-send",
+        authorId: "owner",
+        text: "synthetic suggestion",
+      });
+      const database = openOpenClawAgentDatabase(scope);
+      const entered = createDeferred();
+      const accepted = createDeferred();
+      const release = createDeferred();
+      let reservation: Promise<void> | undefined;
+      let revoked = false;
+      let hostCurrent = true;
+      let admittedCheck: (() => void) | undefined;
+      const assertAdmittedCurrent = () => {
+        if (!hostCurrent) {
+          throw new Error("host closed");
+        }
+      };
+      const assertCurrent = () => {
+        assertAdmittedCurrent();
+        if (revoked) {
+          throw new SessionMutationAuthorizationChangedError(
+            errorShape(ErrorCodes.FORBIDDEN, "caller authority revoked"),
+          );
+        }
+      };
+      mocks.handleChatSend.mockImplementation(
+        async ({
+          respond,
+          sessionMutationAuthorization,
+        }: Pick<GatewayRequestHandlerOptions, "respond" | "sessionMutationAuthorization">) => {
+          sessionMutationAuthorization?.assertCurrent();
+          admittedCheck = sessionMutationAuthorization?.assertAdmittedInputCurrent;
+          reservation = runOpenClawAgentWorkerWrite({ ...scope, path: database.path }, async () => {
+            entered.resolve();
+            await release.promise;
+          });
+          await entered.promise;
+          respond(true, { runId: "accepted-suggestion", status: "started" });
+          accepted.resolve();
+        },
+      );
+      const params = { sessionKey, id: "settle-accepted-send", resolution: "send" };
+      const respond = vi.fn<RespondFn>();
+      const pending = Promise.resolve(
+        sessionSuggestionHandlers["session.suggestions.resolve"]!({
+          req: {
+            type: "req",
+            id: "accepted-suggestion",
+            method: "session.suggestions.resolve",
+            params,
+          },
+          params,
+          client: client("owner", "Owner"),
+          context: context(),
+          respond,
+          isWebchatConnect: () => false,
+          sessionMutationAuthorization: {
+            assertCurrent,
+            assertTargetCurrent: assertCurrent,
+            assertAdmittedInputCurrent: assertAdmittedCurrent,
+          },
+        }),
+      );
+      try {
+        await Promise.race([accepted.promise, pending]);
+        revoked = true;
+        expect(admittedCheck).toBeTypeOf("function");
+        expect(() => admittedCheck!()).not.toThrow();
+        release.resolve();
+        await pending;
+        await reservation;
+        expect(mocks.handleChatSend).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        expect(
+          database.db
+            .prepare("SELECT state, dispatch_token FROM session_suggestions WHERE id = ?")
+            .get(params.id),
+        ).toEqual({ state: "accepted", dispatch_token: null });
+        hostCurrent = false;
+        expect(() => admittedCheck!()).toThrow("host closed");
+      } finally {
+        release.resolve();
+        await Promise.allSettled([pending, reservation]);
+      }
+    });
+  });
+
   it("admits bare fixed-store keys only through their persisted owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = state.path("shared-sessions.sqlite");

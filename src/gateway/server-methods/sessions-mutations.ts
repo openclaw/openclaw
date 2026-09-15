@@ -12,8 +12,14 @@ import {
   validateSessionsResetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { assignSessionOwner } from "../../config/sessions/session-accessor.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
+import { withOpenClawAgentDatabaseAsync } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import {
   projectAssignableSessionOwner,
@@ -165,7 +171,14 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       diagnostics?.finish();
     }
   },
-  "sessions.assignOwner": async ({ params, respond, context, client }) => {
+  "sessions.assignOwner": async ({
+    params,
+    respond,
+    context,
+    client,
+    signal,
+    sessionMutationAuthorization,
+  }) => {
     if (
       !assertValidParams(params, validateSessionsAssignOwnerParams, "sessions.assignOwner", respond)
     ) {
@@ -210,10 +223,12 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `unknown session: ${key}`));
       return;
     }
-    const authorizeView = (candidate: NonNullable<typeof target>) =>
+    const authorizeView = (candidate: NonNullable<typeof target>, currentCfg = cfg) =>
       authorizeIncognitoSessionTarget({ client, sessionKey: key, target: candidate }) ??
-      (createSessionListEntryFilter({ client, cfg })?.(candidate.storeKey, candidate.entry) ===
-      false
+      (createSessionListEntryFilter({ client, cfg: currentCfg })?.(
+        candidate.storeKey,
+        candidate.entry,
+      ) === false
         ? errorShape(ErrorCodes.FORBIDDEN, "session is not visible to this connection")
         : null);
     const visibilityError = authorizeView(target);
@@ -232,38 +247,63 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       return;
     }
     const owner = { type: projectedOwner.type, id: projectedOwner.id };
-    const assignment = assignSessionOwner(
-      {
+    const scope = {
+      agentId: target.agentId,
+      sessionKey: target.storeKey,
+      storePath: target.storePath,
+      env: { ...process.env },
+    };
+    const expectedSessionId = target.entry.sessionId;
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      sessionMutationAuthorization?.assertCurrent();
+      const currentCfg = context.getRuntimeConfig();
+      ownerIdentityById.clear();
+      const currentOwner = projectAssignableSessionOwner(
+        params.owner,
+        ownerIdentityById,
+        currentCfg,
+      );
+      const current = resolveSessionSharingTarget({
+        cfg: currentCfg,
+        sessionKey: target.canonicalKey,
         agentId: target.agentId,
-        sessionKey: target.storeKey,
-        storePath: target.storePath,
-      },
-      {
-        owner,
-        assignedBy,
-        assertCurrent: () => {
-          const current = resolveSessionSharingTarget({
-            cfg: context.getRuntimeConfig(),
-            sessionKey: target.canonicalKey,
-            agentId: target.agentId,
-          });
-          const currentError = current ? authorizeView(current) : null;
-          if (
-            !current ||
-            current.entry.sessionId !== target.entry.sessionId ||
-            current.storeKey !== target.storeKey ||
-            currentError
-          ) {
-            throw new SessionMutationAuthorizationChangedError(
-              currentError ??
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  "session changed before sessions.assignOwner; retry the request",
-                ),
-            );
-          }
-        },
-      },
+      });
+      const currentError = current ? authorizeView(current, currentCfg) : null;
+      if (
+        !current ||
+        current.agentId !== target.agentId ||
+        current.canonicalKey !== target.canonicalKey ||
+        current.entry.sessionId !== expectedSessionId ||
+        current.storeKey !== target.storeKey ||
+        current.storePath !== target.storePath ||
+        currentOwner?.id !== owner.id ||
+        currentOwner.type !== owner.type ||
+        currentError
+      ) {
+        throw new SessionMutationAuthorizationChangedError(
+          currentError ??
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "session changed before sessions.assignOwner; retry the request",
+            ),
+        );
+      }
+    };
+    const databaseOptions = toDatabaseOptions(resolveSqliteScope(scope));
+    const assignment = await runOpenClawAgentWriteAdmission(
+      databaseOptions,
+      () =>
+        withOpenClawAgentDatabaseAsync(
+          databaseOptions,
+          (database) =>
+            assignSessionOwner(
+              { ...scope, storePath: database.path },
+              { owner, assignedBy, assertCurrent },
+            ),
+          assertCurrent,
+        ),
+      true,
     );
     const projectedActor = assignment
       ? projectAssignableSessionOwner(assignment.actor, ownerIdentityById, cfg)
