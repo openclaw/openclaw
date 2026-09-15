@@ -14,24 +14,11 @@ import type {
   ClickClackEvent,
   ClickClackMessage,
   ClickClackMessageProvenance,
+  ClickClackUpload,
   ClickClackUser,
   ClickClackWorkspace,
 } from "./types.js";
 import { WebSocket } from "./ws-runtime.js";
-
-type ClickClackUpload = {
-  id: string;
-  workspace_id: string;
-  owner_id: string;
-  nonce?: string;
-  filename: string;
-  content_type: string;
-  byte_size: number;
-  width: number;
-  height: number;
-  duration_ms: number;
-  created_at: string;
-};
 
 /**
  * Serializes optional provenance into the wire fields. Unknown JSON fields
@@ -72,6 +59,7 @@ const CLICKCLACK_INBOUND_JSON_LIMIT_BYTES = 16 * 1024 * 1024;
 // never upgrades, pinning the monitor reconnect loop.
 const CLICKCLACK_WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 30_000;
 const CLICKCLACK_EPHEMERAL_REQUEST_TIMEOUT_MS = 15_000;
+const CLICKCLACK_UPLOAD_RESPONSE_TIMEOUT_MS = 30_000;
 const CLICKCLACK_MESSAGE_PAGE_LIMIT = 200;
 const CLICKCLACK_DISCUSSION_ROOT_PAGE_LIMIT = 8;
 const CLICKCLACK_DISCUSSION_THREAD_REQUEST_LIMIT = 24;
@@ -192,6 +180,51 @@ export function createClickClackClient(options: ClientOptions) {
       if (timeout) {
         clearTimeout(timeout);
       }
+    }
+  }
+
+  async function consumeUpload<T>(params: {
+    uploadId: string;
+    consume: (response: Response) => Promise<T>;
+    signal?: AbortSignal;
+  }): Promise<T> {
+    const requestHeaders = new Headers(headers);
+    requestHeaders.set("Accept", "*/*");
+    if (correlationId) {
+      requestHeaders.set(CLICKCLACK_CORRELATION_ID_HEADER, correlationId);
+    }
+    const controller = new AbortController();
+    const abort = () => controller.abort(params.signal?.reason);
+    if (params.signal?.aborted) {
+      abort();
+    } else {
+      params.signal?.addEventListener("abort", abort, { once: true });
+    }
+    const timeout = setTimeout(() => controller.abort(), CLICKCLACK_UPLOAD_RESPONSE_TIMEOUT_MS);
+    let response: Response | undefined;
+    try {
+      response = await fetcher(`${baseUrl}/api/uploads/${encodeURIComponent(params.uploadId)}`, {
+        headers: requestHeaders,
+        redirect: "error",
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (!response.ok) {
+        const detail = await readResponseTextLimited(
+          response,
+          CLICKCLACK_ERROR_BODY_LIMIT_BYTES,
+        ).catch(() => response?.statusText || "upload request failed");
+        throw new ClickClackHttpError(
+          response.status,
+          redactToolPayloadText(detail),
+          new Headers(response.headers),
+        );
+      }
+      return await params.consume(response);
+    } finally {
+      clearTimeout(timeout);
+      params.signal?.removeEventListener("abort", abort);
+      await response?.body?.cancel().catch(() => undefined);
     }
   }
 
@@ -383,26 +416,24 @@ export function createClickClackClient(options: ClientOptions) {
       await request<{ root: ClickClackMessage; replies: ClickClackMessage[] }>(
         `/api/messages/${encodeURIComponent(messageId)}/thread`,
       ),
-    message: async (
-      messageId: string,
-    ): Promise<ClickClackMessage & { attachments?: Array<{ id: string }> }> => {
-      const data = await request<{
-        message: ClickClackMessage & { attachments?: Array<{ id: string }> };
-      }>(`/api/messages/${encodeURIComponent(messageId)}`);
+    message: async (messageId: string): Promise<ClickClackMessage> => {
+      const data = await request<{ message: ClickClackMessage }>(
+        `/api/messages/${encodeURIComponent(messageId)}`,
+      );
       return data.message;
     },
     findMessageByNonce: async (params: {
       workspaceId: string;
       nonce: string;
-    }): Promise<(ClickClackMessage & { attachments?: Array<{ id: string }> }) | undefined> => {
+    }): Promise<ClickClackMessage | undefined> => {
       const query = new URLSearchParams({
         workspace_id: params.workspaceId,
         nonce: params.nonce,
       });
       try {
-        const data = await request<{
-          message: ClickClackMessage & { attachments?: Array<{ id: string }> };
-        }>(`/api/messages/by-nonce?${query.toString()}`);
+        const data = await request<{ message: ClickClackMessage }>(
+          `/api/messages/by-nonce?${query.toString()}`,
+        );
         return data.message;
       } catch (error) {
         if (error instanceof ClickClackHttpError && error.status === 404) {
@@ -518,6 +549,7 @@ export function createClickClackClient(options: ClientOptions) {
         body: JSON.stringify({ upload_id: uploadId }),
       });
     },
+    consumeUpload,
     /**
      * POSTs a durable agent activity row (agent_commentary / agent_tool)
      * through the normal message create path. Requires a bot token carrying

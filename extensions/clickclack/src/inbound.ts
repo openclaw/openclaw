@@ -1,7 +1,10 @@
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import {
   buildChannelInboundEventContext,
   createChannelInboundEnvelopeBuilder,
+  formatInboundMediaUnavailableText,
   recordChannelBotPairLoopAndCheckSuppression,
+  toInboundMediaFactsWithMetadata,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelMessageReplyPipeline,
@@ -12,9 +15,10 @@ import {
  * routes resulting outbound text back to ClickClack.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { MediaFetchError, saveResponseMedia } from "openclaw/plugin-sdk/media-runtime";
 import { resolveClickClackInboundAccess, type ClickClackInboundAccess } from "./access.js";
 import { createClickClackActivityPublisher, type ClickClackActivityPublisher } from "./activity.js";
-import { createClickClackClient } from "./http-client.js";
+import { ClickClackHttpError, createClickClackClient } from "./http-client.js";
 import { sendClickClackText } from "./outbound.js";
 import {
   createClickClackAgentProgressPublisher,
@@ -30,6 +34,105 @@ import type {
 
 const CHANNEL_ID = "clickclack" as const;
 const CLICKCLACK_MESSAGE_ID_PATTERN = /^msg_[0-9a-hjkmnp-tv-z]{26}$/u;
+const CLICKCLACK_MAX_MEDIA_BYTES = 64 * 1024 * 1024;
+const CLICKCLACK_MAX_INBOUND_ATTACHMENTS = 8;
+const CLICKCLACK_MEDIA_READ_IDLE_TIMEOUT_MS = 15_000;
+
+async function materializeInboundMedia(params: {
+  account: ResolvedClickClackAccount;
+  config: CoreConfig;
+  message: ClickClackMessage;
+  correlationId?: string;
+  abortSignal?: AbortSignal;
+}) {
+  const attachments = params.message.attachments ?? [];
+  if (attachments.length === 0) {
+    return { body: params.message.body, media: [] };
+  }
+  const maxBytes = Math.min(
+    resolveChannelMediaMaxBytes({
+      cfg: params.config,
+      accountId: params.account.accountId,
+      resolveChannelLimitMb: () => params.account.config.mediaMaxMb,
+    }) ?? CLICKCLACK_MAX_MEDIA_BYTES,
+    CLICKCLACK_MAX_MEDIA_BYTES,
+  );
+  const client = createClickClackClient({
+    baseUrl: params.account.apiEndpoint,
+    token: params.account.token,
+    correlationId: params.correlationId,
+  });
+  const mediaInputs = [];
+  const notices: string[] = [];
+  for (const attachment of attachments.slice(0, CLICKCLACK_MAX_INBOUND_ATTACHMENTS)) {
+    if (params.abortSignal?.aborted) {
+      throw params.abortSignal.reason ?? new Error("ClickClack attachment staging aborted");
+    }
+    if (attachment.byte_size > maxBytes) {
+      notices.push(
+        `[ClickClack attachment unavailable: ${attachment.filename} exceeds the configured media limit]`,
+      );
+      continue;
+    }
+    try {
+      const saved = await client.consumeUpload({
+        uploadId: attachment.id,
+        signal: params.abortSignal,
+        consume: (response) =>
+          saveResponseMedia(response, {
+            sourceUrl: `${params.account.apiEndpoint}/api/uploads/${encodeURIComponent(attachment.id)}`,
+            filePathHint: attachment.filename,
+            fallbackContentType: attachment.content_type,
+            originalFilename: attachment.filename,
+            maxBytes,
+            readIdleTimeoutMs: CLICKCLACK_MEDIA_READ_IDLE_TIMEOUT_MS,
+          }),
+      });
+      mediaInputs.push({
+        path: saved.path,
+        url: saved.path,
+        contentType: saved.contentType ?? attachment.content_type,
+        fileName: attachment.filename,
+        width: attachment.width,
+        height: attachment.height,
+        durationMs: attachment.duration_ms,
+      });
+    } catch (error) {
+      const permanentHttpFailure =
+        error instanceof ClickClackHttpError &&
+        error.status >= 400 &&
+        error.status < 500 &&
+        error.status !== 408 &&
+        error.status !== 425 &&
+        error.status !== 429;
+      if (
+        !(error instanceof MediaFetchError && error.code === "max_bytes") &&
+        !permanentHttpFailure
+      ) {
+        throw error;
+      }
+      notices.push(
+        permanentHttpFailure
+          ? `[ClickClack attachment unavailable: ${attachment.filename} could not be retrieved]`
+          : `[ClickClack attachment unavailable: ${attachment.filename} exceeds the configured media limit]`,
+      );
+      continue;
+    }
+  }
+  if (attachments.length > CLICKCLACK_MAX_INBOUND_ATTACHMENTS) {
+    notices.push(
+      `[ClickClack: ${attachments.length - CLICKCLACK_MAX_INBOUND_ATTACHMENTS} additional attachments were not processed]`,
+    );
+  }
+  let body = params.message.body;
+  for (const notice of notices) {
+    body = formatInboundMediaUnavailableText({ body, notice });
+  }
+  return {
+    body,
+    media: await toInboundMediaFactsWithMetadata(mediaInputs, { messageId: params.message.id }),
+  };
+}
 
 function hasClickClackReplyMedia(payload: {
   mediaUrl?: string;
@@ -113,6 +216,7 @@ export async function handleClickClackInbound(params: {
   message: ClickClackMessage;
   access?: ClickClackInboundAccess;
   correlationId?: string;
+  abortSignal?: AbortSignal;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getClickClackRuntime();
@@ -132,6 +236,9 @@ export async function handleClickClackInbound(params: {
     return;
   }
   const { discussionRoute, isDirect, route, target } = access.preparedRoute;
+  if (params.abortSignal?.aborted) {
+    return;
+  }
   const progress = params.account.nativeProgress
     ? createClickClackAgentProgressPublisher({
         client: createClickClackClient({
@@ -170,6 +277,9 @@ export async function handleClickClackInbound(params: {
         return;
       }
     }
+    if (params.abortSignal?.aborted) {
+      return;
+    }
     progress?.start();
     try {
       await dispatchModelReply({
@@ -183,6 +293,16 @@ export async function handleClickClackInbound(params: {
     } finally {
       await progress?.finalize();
     }
+    return;
+  }
+  const inbound = await materializeInboundMedia({
+    account: params.account,
+    config: params.config,
+    message,
+    correlationId: params.correlationId,
+    abortSignal: params.abortSignal,
+  });
+  if (params.abortSignal?.aborted) {
     return;
   }
   // Durable activity rows (streamed commentary + tool progress) are a
@@ -221,7 +341,7 @@ export async function handleClickClackInbound(params: {
     channel: "ClickClack",
     from: senderName,
     timestamp: new Date(message.created_at),
-    body: message.body,
+    body: inbound.body,
   });
   const ctxPayload = (params.buildContext ?? buildChannelInboundEventContext)({
     channelIngress: access.channelIngress,
@@ -252,7 +372,13 @@ export async function handleClickClackInbound(params: {
       messageThreadId: message.parent_message_id ? message.thread_root_id : undefined,
       threadParentId: message.parent_message_id ? message.thread_root_id : undefined,
     },
-    message: { body, bodyForAgent: message.body, rawBody: message.body, commandBody: message.body },
+    media: inbound.media,
+    message: {
+      body,
+      bodyForAgent: inbound.body,
+      rawBody: inbound.body,
+      commandBody: inbound.body,
+    },
     access: {
       commands: { authorized: access.commandAuthorized },
       mentions: access.mentionFacts,
@@ -291,6 +417,9 @@ export async function handleClickClackInbound(params: {
         }
       : {}),
   };
+  if (params.abortSignal?.aborted) {
+    return;
+  }
   progress?.start();
   const dispatch = () =>
     runtime.channel.inbound.dispatch({
