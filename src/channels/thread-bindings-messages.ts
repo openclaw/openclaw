@@ -2,6 +2,7 @@
  * Channel-neutral thread-binding message builders shared by plugins, ACP, and subagent flows.
  * Keep text system-prefixed and compact because callers post it directly into user-visible threads.
  */
+import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prefixSystemMessage } from "../infra/system-message.js";
@@ -10,14 +11,7 @@ const DEFAULT_THREAD_BINDING_FAREWELL_TEXT =
   "This conversation is no longer bound to that session.";
 
 function normalizeThreadBindingDurationMs(raw: unknown): number {
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return 0;
-  }
-  const durationMs = Math.floor(raw);
-  if (durationMs < 0) {
-    return 0;
-  }
-  return durationMs;
+  return Math.floor(asNonNegativeFiniteNumber(raw) ?? 0);
 }
 
 /** Formats thread-binding timeout durations for compact user-facing messages. */
