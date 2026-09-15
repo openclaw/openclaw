@@ -1168,9 +1168,40 @@ function convertMessages(
         // Skip the messages we've already processed
         i = j - 1;
 
+        // GPT-5.6 Sol accepts user images but rejects images nested in tool results.
+        // Keep each image beside its originating result without rewriting history.
+        const userContent: ContentBlock[] = model.id.includes("openai.gpt-5.6-sol")
+          ? toolResults.flatMap((block): ContentBlock[] => {
+              const images: ContentBlock[] = [];
+              const content = (block.toolResult.content ?? []).filter((part) => {
+                if (part.image) {
+                  images.push({ image: part.image });
+                  return false;
+                }
+                return true;
+              });
+              if (images.length === 0) {
+                return [block];
+              }
+              return [
+                {
+                  toolResult: {
+                    ...block.toolResult,
+                    content: [
+                      ...content,
+                      {
+                        text: "Images returned by this tool are attached immediately after this result.",
+                      },
+                    ],
+                  },
+                },
+                ...images,
+              ];
+            })
+          : toolResults;
         result.push({
           role: ConversationRole.USER,
-          content: toolResults,
+          content: userContent,
         });
         break;
       }
