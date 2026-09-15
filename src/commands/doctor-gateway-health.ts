@@ -62,9 +62,17 @@ function isGatewayCallTimeout(message: string): boolean {
   return /^gateway timeout after \d+ms(?:\n|$)/.test(message);
 }
 
-function resolveGatewayDiagnosticsTimeoutMs(timeoutMs: number, statusElapsedMs: number): number {
-  // Follow-up RPCs need room for the observed round-trip as well as channel work.
-  return Math.min(30_000, Math.max(timeoutMs, Math.ceil(statusElapsedMs * 3)));
+function resolveGatewayDiagnosticsTimeouts(timeoutMs: number, statusElapsedMs: number) {
+  // Preserve five seconds of channel work, plus the measured round-trip and result-delivery margin.
+  const transportMs = Math.ceil(statusElapsedMs) + 1_000;
+  const diagnosticsTimeoutMs = Math.min(
+    30_000,
+    Math.max(timeoutMs, 5_000 + transportMs, Math.ceil(statusElapsedMs * 3)),
+  );
+  return {
+    diagnosticsTimeoutMs,
+    channelProbeTimeoutMs: Math.max(1, diagnosticsTimeoutMs - transportMs),
+  };
 }
 
 function isGatewayHealthAuthUnavailableError(error: unknown): boolean {
@@ -161,7 +169,10 @@ export async function checkGatewayHealth(params: {
       },
     });
     const statusElapsedMs = performance.now() - statusStartedAt;
-    const diagnosticsTimeoutMs = resolveGatewayDiagnosticsTimeoutMs(timeoutMs, statusElapsedMs);
+    const { diagnosticsTimeoutMs, channelProbeTimeoutMs } = resolveGatewayDiagnosticsTimeouts(
+      timeoutMs,
+      statusElapsedMs,
+    );
     const slowDiagnosticNote = (diagnostic: string) =>
       `Gateway answered status in ${formatDurationSeconds(statusElapsedMs)}; ${diagnostic} diagnostics did not finish within ${formatDurationSeconds(diagnosticsTimeoutMs)}. The host may be slow; this does not mark the Gateway unhealthy.`;
     healthOk = true;
@@ -199,7 +210,7 @@ export async function checkGatewayHealth(params: {
     const [channelsResult, exporterResult] = await Promise.allSettled([
       callGateway({
         method: "channels.status",
-        params: { probe: true, timeoutMs: diagnosticsTimeoutMs },
+        params: { probe: true, timeoutMs: channelProbeTimeoutMs },
         timeoutMs: diagnosticsTimeoutMs,
         config: params.cfg,
       }),

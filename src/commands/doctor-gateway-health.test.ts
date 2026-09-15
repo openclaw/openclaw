@@ -124,9 +124,14 @@ describe("checkGatewayHealth", () => {
     callGateway.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({});
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await expect(
-      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({ authenticated: true, healthOk: true, status: { ok: true } });
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
+    try {
+      await expect(
+        checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+      ).resolves.toEqual({ authenticated: true, healthOk: true, status: { ok: true } });
+    } finally {
+      now.mockRestore();
+    }
 
     expect(callGateway).toHaveBeenNthCalledWith(
       1,
@@ -139,14 +144,14 @@ describe("checkGatewayHealth", () => {
     );
     expect(callGateway).toHaveBeenNthCalledWith(2, {
       method: "channels.status",
-      params: { probe: true, timeoutMs: 3000 },
-      timeoutMs: 3000,
+      params: { probe: true, timeoutMs: 5000 },
+      timeoutMs: 6000,
       config: cfg,
     });
     expect(callGateway).toHaveBeenNthCalledWith(3, {
       method: "diagnostics.stability",
       params: { type: "telemetry.exporter", limit: 1000 },
-      timeoutMs: 3000,
+      timeoutMs: 6000,
       config: cfg,
     });
     expect(runtime.error).not.toHaveBeenCalled();
@@ -378,9 +383,22 @@ describe("checkGatewayHealth", () => {
     }
 
     it.each([
-      { timeoutMs: 10_000, statusMs: 7_000, diagnosticsMs: 12_000, budgetMs: 21_000 },
-      { timeoutMs: 3_000, statusMs: 2_000, diagnosticsMs: 5_000, budgetMs: 6_000 },
-      { timeoutMs: 20_000, statusMs: 12_000, diagnosticsMs: 12_000, budgetMs: 30_000 },
+      {
+        timeoutMs: 10_000,
+        statusMs: 7_000,
+        diagnosticsMs: 12_000,
+        budgetMs: 21_000,
+        probeMs: 13_000,
+      },
+      { timeoutMs: 3_000, statusMs: 100, diagnosticsMs: 4_000, budgetMs: 6_100, probeMs: 5_000 },
+      { timeoutMs: 3_000, statusMs: 2_000, diagnosticsMs: 5_000, budgetMs: 8_000, probeMs: 5_000 },
+      {
+        timeoutMs: 20_000,
+        statusMs: 12_000,
+        diagnosticsMs: 12_000,
+        budgetMs: 30_000,
+        probeMs: 17_000,
+      },
     ])("allows slow diagnostics after a $statusMs ms status response", async (timing) => {
       const started = mockResponseTiming(timing.statusMs, timing.diagnosticsMs);
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -396,7 +414,7 @@ describe("checkGatewayHealth", () => {
       expect(callGateway).toHaveBeenCalledWith(
         expect.objectContaining({
           method: "channels.status",
-          params: { probe: true, timeoutMs: timing.budgetMs },
+          params: { probe: true, timeoutMs: timing.probeMs },
           timeoutMs: timing.budgetMs,
         }),
       );
