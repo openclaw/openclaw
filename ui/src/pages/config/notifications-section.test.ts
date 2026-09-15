@@ -160,12 +160,17 @@ describe("Web Push preference saves", () => {
   });
 });
 
+type UserPreferencesListener = NonNullable<
+  Parameters<typeof renderNotificationsSection>[0]["onWebPushSetUserPreferences"]
+>;
 type DevicePreferencesListener = NonNullable<
   Parameters<typeof renderNotificationsSection>[0]["onWebPushSetDevicePreferences"]
 >;
 
 describe("Web Push preference controls", () => {
-  function renderPreferences(options: { onDevice?: DevicePreferencesListener } = {}) {
+  function renderPreferences(
+    options: { onUser?: UserPreferencesListener; onDevice?: DevicePreferencesListener } = {},
+  ) {
     const container = document.createElement("div");
     const user = {
       ...userPreferences,
@@ -175,6 +180,7 @@ describe("Web Push preference controls", () => {
     render(
       renderNotificationsSection({
         connected: true,
+        onWebPushSetUserPreferences: options.onUser,
         onWebPushSetDevicePreferences: options.onDevice,
         webPush: {
           supported: true,
@@ -207,9 +213,37 @@ describe("Web Push preference controls", () => {
         return !control.classList.contains(expectedClass) || !control.getAttribute("aria-label");
       })
       .map((control) => control.outerHTML.slice(0, 60));
-    expect(container.querySelectorAll("select")).toHaveLength(10);
+    expect(container.querySelectorAll("select")).toHaveLength(11);
     expect(container.querySelectorAll('input[type="time"]')).toHaveLength(2);
     expect(unstyled).toEqual([]);
+  });
+
+  it("groups the quiet-hours controls below descriptive text and saves IANA timezone choices", () => {
+    const onUser = vi.fn<UserPreferencesListener>();
+    const container = renderPreferences({ onUser });
+    const quietHours = expectDefined(
+      container.querySelector<HTMLElement>(".quiet-hours-window"),
+      "quiet-hours controls",
+    );
+
+    expect(quietHours.textContent).toContain("Quiet hours window");
+    expect(quietHours.textContent).toContain("Time zone");
+    expect(quietHours.previousElementSibling?.classList).toContain("settings-row--toggle");
+
+    const timeZone = expectDefined(
+      quietHours.querySelector<HTMLSelectElement>('select[aria-label="Time zone"]'),
+      "quiet-hours timezone select",
+    );
+    expect(timeZone.querySelector('option[value="Pacific/Tahiti"]')?.textContent).toContain(
+      "Tahiti Time",
+    );
+
+    timeZone.value = "Pacific/Tahiti";
+    timeZone.dispatchEvent(new Event("change"));
+    expect(onUser).toHaveBeenLastCalledWith({
+      ...userPreferences,
+      quietHours: { ...userPreferences.quietHours, enabled: true, timeZone: "Pacific/Tahiti" },
+    });
   });
 
   it("patches device preferences from the toggle row and select row", () => {
