@@ -4,6 +4,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionEntry } from "../config/sessions.js";
+import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
@@ -22,13 +23,16 @@ import {
 } from "./model-auth.js";
 
 // Builds concise auth labels for UI/status surfaces without exposing credential
-// values. Resolution follows profile override, provider profiles, env, CLI, then
+// values. Resolution follows user pins, ordered provider profiles, env, CLI, then
 // custom provider config.
 /** Resolve the display label that describes how a provider is authenticated. */
 export function resolveModelAuthLabel(params: {
   provider?: string;
   cfg?: OpenClawConfig;
-  sessionEntry?: Partial<Pick<SessionEntry, "authProfileOverride">>;
+  sessionEntry?: Pick<
+    SessionEntry,
+    "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
+  >;
   agentDir?: string;
   workspaceDir?: string;
   codexCliCredentialsHome?: string;
@@ -66,7 +70,10 @@ export function resolveModelAuthLabel(params: {
       }),
     ),
   );
-  const candidates = [profileOverride, ...order].filter(Boolean) as string[];
+  const candidates =
+    profileOverride && resolveCollapsedSessionAuthPinSource(params.sessionEntry) === "user"
+      ? [profileOverride, ...order]
+      : order;
 
   for (const profileId of candidates) {
     const profile = store.profiles[profileId];

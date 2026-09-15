@@ -1,5 +1,6 @@
 // Verifies safe, user-facing auth labels without exposing credential values.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
 import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
@@ -130,6 +131,90 @@ describe("resolveModelAuthLabel", () => {
     });
 
     expect(label).toBe("oauth (anthropic:oauth)");
+  });
+
+  it.each([
+    {
+      name: "ignores an automatic profile excluded from the auth order",
+      provenance: { authProfileOverrideSource: "auto" },
+      order: ["openai:chat"],
+      expected: "oauth (openai:chat)",
+    },
+    {
+      name: "ignores a legacy automatic profile excluded from the auth order",
+      provenance: { authProfileOverrideCompactionCount: 0 },
+      order: ["openai:chat"],
+      expected: "oauth (openai:chat)",
+    },
+    {
+      name: "keeps an explicit user pin outside the auth order",
+      provenance: { authProfileOverrideSource: "user" },
+      order: ["openai:chat"],
+      expected: "api-key (openai:audio)",
+    },
+    {
+      name: "keeps a person-linked pin outside the auth order",
+      provenance: { authProfileOverrideSource: "user-link" },
+      order: ["openai:chat"],
+      expected: "api-key (openai:audio)",
+    },
+    {
+      name: "preserves legacy user pins without source or compaction metadata",
+      provenance: {},
+      order: ["openai:chat"],
+      expected: "api-key (openai:audio)",
+    },
+    {
+      name: "does not revive an automatic profile when the auth order is empty",
+      provenance: { authProfileOverrideSource: "auto" },
+      order: [],
+      expected: "unknown",
+    },
+    {
+      name: "keeps the explicit user exception when the auth order is empty",
+      provenance: { authProfileOverrideSource: "user" },
+      order: [],
+      expected: "api-key (openai:audio)",
+    },
+    {
+      name: "keeps an automatic API-key preference included in the resolved order",
+      provenance: { authProfileOverrideSource: "auto" },
+      order: ["openai:audio", "openai:chat"],
+      expected: "api-key (openai:audio)",
+    },
+  ] as const)("$name", ({ provenance, order, expected }) => {
+    const store = createAuthProfileStoreFixture({
+      "openai:audio": createApiKeyCredential("openai", "synthetic-audio-key"),
+      "openai:chat": {
+        type: "oauth",
+        provider: "openai",
+        access: "synthetic-access",
+        refresh: "synthetic-refresh",
+        expires: Date.now() + 60_000,
+      },
+    });
+    mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue(store);
+    mocks.resolveAuthProfileOrder.mockReturnValue([...order]);
+    mocks.resolveAuthProfileDisplayLabel.mockImplementation(
+      ({ profileId }: { profileId: string }) => profileId,
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "status-auth-selection",
+      updatedAt: 1,
+      authProfileOverride: "openai:audio",
+      ...provenance,
+    };
+    const previousEntry = { ...sessionEntry };
+
+    expect(
+      resolveModelAuthLabel({
+        provider: "openai",
+        cfg: { auth: { order: { openai: [...order] } } },
+        sessionEntry,
+        includeExternalProfiles: false,
+      }),
+    ).toBe(expected);
+    expect(sessionEntry).toEqual(previousEntry);
   });
 
   it("uses accepted provider ids before falling back to provider env auth", () => {

@@ -71,6 +71,7 @@ type ModelsCommandSessionEntry = Partial<
     SessionEntry,
     | "authProfileOverride"
     | "authProfileOverrideSource"
+    | "authProfileOverrideCompactionCount"
     | "modelProvider"
     | "providerOverride"
     | "model"

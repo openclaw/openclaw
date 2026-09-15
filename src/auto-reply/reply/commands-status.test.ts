@@ -1054,6 +1054,48 @@ describe("buildStatusReply subagent summary", () => {
     ).toBe(false);
   });
 
+  it("does not display an automatic audio profile excluded from the agent auth order", async () => {
+    await withTempHome(async (dir) => {
+      const agentDir = path.join(dir, ".openclaw", "agents", "main", "agent");
+      fs.mkdirSync(agentDir, { recursive: true });
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openai:status": {
+              type: "oauth",
+              provider: "openai",
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60 * 60_000,
+            },
+            "openai:audio": { type: "api_key", provider: "openai", key: "audio-test-key" },
+          },
+          order: { openai: ["openai:status"] },
+        },
+        agentDir,
+        { filterExternalAuthProfiles: false, syncExternalCli: false },
+      );
+      const text = await buildStatusText({
+        cfg: baseCfg,
+        sessionEntry: {
+          sessionId: "status-stale-audio",
+          updatedAt: 0,
+          authProfileOverride: "openai:audio",
+          authProfileOverrideSource: "auto",
+          authProfileOverrideCompactionCount: 0,
+        },
+        ...createStatusSessionParams(),
+        provider: "openai",
+        model: "gpt-5.4",
+        contextTokens: 32_000,
+        ...createStatusDisplayParams(),
+      });
+      expect(normalizeTestText(text)).toContain("oauth (openai:status)");
+      expect(text).not.toContain("openai:audio");
+    });
+  });
+
   it("uses Codex OAuth auth labels for openai models running on the Codex harness", async () => {
     registerStatusCodexHarness();
 

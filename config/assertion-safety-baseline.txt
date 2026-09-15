@@ -1813,7 +1813,6 @@ src/agents/mcp-ui-resource.ts	4
 src/agents/media-generation-task-status-shared.ts	1
 src/agents/memory-write-provenance.ts	1
 src/agents/minimax-vlm.ts	1
-src/agents/model-auth-label.ts	1
 src/agents/model-auth-model.ts	2
 src/agents/model-fallback-attempt.ts	1
 src/agents/model-fallback-runner.ts	2
