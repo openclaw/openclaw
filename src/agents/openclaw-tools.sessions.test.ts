@@ -5,6 +5,7 @@ import path from "node:path";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   configureExecutionDecisionWorkSink,
@@ -2269,8 +2270,16 @@ describe("sessions tools", () => {
       guardSessionManager(sessionManager);
       const { session } = await createTestSession({ sessionManager });
       let finishInitialResponse: (() => void) | undefined;
+      let closing = false;
+      const initialResponseStarted = createDeferred();
+      const queued = createDeferred();
+      const unsubscribe = session.subscribe((event) => {
+        if (event.type === "queue_update") {
+          queued.resolve();
+        }
+      });
       streamMocks.streamSimple.mockImplementation((model: Model) => {
-        if (finishInitialResponse) {
+        if (finishInitialResponse || closing) {
           return createAssistantResultStream(
             createAssistant(model, [{ type: "text", text: "received" }]),
           );
@@ -2284,75 +2293,90 @@ describe("sessions tools", () => {
           });
           stream.end();
         };
+        initialResponseStarted.resolve();
         return stream;
       });
       const prompt = session.prompt("wait for another session");
-      await vi.waitFor(() => expect(streamMocks.streamSimple).toHaveBeenCalledOnce());
-      const queueMessage = vi.fn((text: string, options?: EmbeddedAgentQueueMessageOptions) =>
-        steerActiveSessionWithOptionalDeliveryWait(session, text, options, runScopedCallerKey),
-      );
-      setActiveEmbeddedRun(
-        "caller-active-session",
-        {
-          queueMessage,
-          isStreaming: () => true,
-          isCompacting: () => false,
-          supportsTranscriptCommitWait,
-          sourceReplyDeliveryMode: mode === "steer" ? "automatic" : "message_tool_only",
-          abort: () => {},
-        },
-        runScopedCallerKey,
-      );
-      callGatewayMock.mockImplementation(async (opts: unknown) => {
-        const request = opts as { method?: string };
-        calls.push(request);
-        if (request.method === "agent") {
-          throw new Error("fallback agent should not start");
-        }
-        return {};
-      });
+      const pending: Promise<unknown>[] = [prompt];
+      try {
+        // Dispatch can await transport initialization; synchronize on provider entry.
+        await Promise.race([initialResponseStarted.promise, prompt]);
+        expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+        const queueMessage = vi.fn((text: string, options?: EmbeddedAgentQueueMessageOptions) =>
+          steerActiveSessionWithOptionalDeliveryWait(session, text, options, runScopedCallerKey),
+        );
+        setActiveEmbeddedRun(
+          "caller-active-session",
+          {
+            queueMessage,
+            isStreaming: () => true,
+            isCompacting: () => false,
+            supportsTranscriptCommitWait,
+            sourceReplyDeliveryMode: mode === "steer" ? "automatic" : "message_tool_only",
+            abort: () => {},
+          },
+          runScopedCallerKey,
+        );
+        callGatewayMock.mockImplementation(async (opts: unknown) => {
+          const request = opts as { method?: string };
+          calls.push(request);
+          if (request.method === "agent") {
+            throw new Error("fallback agent should not start");
+          }
+          return {};
+        });
 
-      const tool = getSessionTool("sessions_send", {
-        agentSessionKey: requesterKey,
-        agentChannel: "telegram",
-        config: { ...TEST_CONFIG, session: { ...TEST_CONFIG.session, store: scope.storePath } },
-      });
+        const tool = getSessionTool("sessions_send", {
+          agentSessionKey: requesterKey,
+          agentChannel: "telegram",
+          config: { ...TEST_CONFIG, session: { ...TEST_CONFIG.session, store: scope.storePath } },
+        });
 
-      const send = tool.execute("call-run-scoped-caller", {
-        mode,
-        sessionKey: runScopedCallerKey,
-        message: "[TASK-COMPLETE] re-portal occupancy ready",
-        timeoutSeconds: 0,
-      });
-      await vi.waitFor(() => expect(session.pendingMessageCount).toBe(1));
-      finishInitialResponse?.();
-      const [result] = await Promise.all([send, prompt]);
+        const send = tool.execute("call-run-scoped-caller", {
+          mode,
+          sessionKey: runScopedCallerKey,
+          message: "[TASK-COMPLETE] re-portal occupancy ready",
+          timeoutSeconds: 0,
+        });
+        pending.push(send);
+        await Promise.race([queued.promise, send, prompt]);
+        expect(session.pendingMessageCount).toBe(1);
+        finishInitialResponse?.();
+        const [result] = await Promise.all([send, prompt]);
 
-      const details = sessionsSendDetails(result.details);
-      expect(details.status).toBe("accepted");
-      expect(details.sessionKey).toBe(runScopedCallerKey);
-      expect(details.targetDisposition).toBe("steered");
-      expect(details.delivery?.status).toBe("skipped");
-      expect(details.delivery?.mode).toBe("announce");
-      expect(queueMessage).toHaveBeenCalledOnce();
-      expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(
-        supportsTranscriptCommitWait ? true : undefined,
-      );
-      expect(SessionManager.open(scope, dir).getEntries()).toContainEqual(
-        expect.objectContaining({
-          type: "message",
-          message: expect.objectContaining({
-            role: "user",
-            provenance: {
-              kind: "inter_session",
-              sourceSessionKey: requesterKey,
-              sourceChannel: "telegram",
-              sourceTool: "sessions_send",
-            },
+        const details = sessionsSendDetails(result.details);
+        expect(details.status).toBe("accepted");
+        expect(details.sessionKey).toBe(runScopedCallerKey);
+        expect(details.targetDisposition).toBe("steered");
+        expect(details.delivery?.status).toBe("skipped");
+        expect(details.delivery?.mode).toBe("announce");
+        expect(queueMessage).toHaveBeenCalledOnce();
+        expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(
+          supportsTranscriptCommitWait ? true : undefined,
+        );
+        expect(SessionManager.open(scope, dir).getEntries()).toContainEqual(
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              role: "user",
+              provenance: {
+                kind: "inter_session",
+                sourceSessionKey: requesterKey,
+                sourceChannel: "telegram",
+                sourceTool: "sessions_send",
+              },
+            }),
           }),
-        }),
-      );
-      expect(calls.some((call) => call.method === "agent")).toBe(false);
+        );
+        expect(calls.some((call) => call.method === "agent")).toBe(false);
+      } finally {
+        // Release even a late provider callback, then join work before fixture teardown.
+        closing = true;
+        unsubscribe();
+        finishInitialResponse?.();
+        await session.abort();
+        await Promise.allSettled(pending);
+      }
     },
   );
 

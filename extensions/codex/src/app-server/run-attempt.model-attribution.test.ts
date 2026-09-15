@@ -176,9 +176,6 @@ describe("registered Codex harness model attribution", () => {
           case "thread/unsubscribe":
             result = { status: "unsubscribed" };
             break;
-          case "thread/backgroundTerminals/list":
-            result = { data: [], nextCursor: null };
-            break;
         }
         send({ id: message.id, result });
       },

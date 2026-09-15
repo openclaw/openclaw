@@ -5,6 +5,7 @@ import {
   iterateSqliteQuerySync,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { assertSqliteJsonlReadBudget } from "../../infra/sqlite-jsonl-budget.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
@@ -122,6 +123,7 @@ export function readTranscriptExportSnapshotReadOnlySync(scope: SessionTranscrip
           return {
             events: loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
               beforeEventSeq: fence?.beforeRawSeq,
+              maxEventBytes: scope.maxEventBytes,
             }),
             stats: readTranscriptStatsFromDatabase(database, resolved.sessionId),
             sessionKey,
@@ -149,6 +151,7 @@ export function loadTranscriptReadSnapshotSync(scope: SessionTranscriptReadScope
       return {
         events: loadTranscriptEventsFromDatabase(database, resolved.sessionId, {
           beforeEventSeq: fence?.beforeRawSeq,
+          maxEventBytes: scope.maxEventBytes,
         }),
         version: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
       };
@@ -306,11 +309,28 @@ export function readTranscriptEventAtSeqSync(
 export function loadTranscriptEventsFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
-  options: { beforeEventSeq?: number; projection?: "reset-boundary" } = {},
+  options: {
+    beforeEventSeq?: number;
+    projection?: "reset-boundary";
+    maxEventBytes?: number;
+  } = {},
 ): TranscriptEvent[] {
   return readHotSessionTranscriptSnapshot(database, sessionId, "events", () => {
-    const { beforeEventSeq } = options;
+    const { beforeEventSeq, maxEventBytes } = options;
     const db = getSessionKysely(database.db);
+    if (maxEventBytes !== undefined && Number.isFinite(maxEventBytes) && maxEventBytes >= 0) {
+      assertSqliteJsonlReadBudget(
+        database.db,
+        db
+          .selectFrom("transcript_events")
+          .select("event_json")
+          .where("session_id", "=", sessionId)
+          .$if(beforeEventSeq !== undefined, (query) => query.where("seq", "<", beforeEventSeq!))
+          .as("events"),
+        Math.floor(maxEventBytes),
+        "Trajectory transcript store",
+      );
+    }
     const rows = iterateSqliteQuerySync(
       database.db,
       db
