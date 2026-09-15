@@ -2173,6 +2173,57 @@ struct GatewayNodeSessionTests {
         await gateway.disconnect()
     }
 
+    enum ConnectEntryPoint: CaseIterable, Sendable {
+        case connect, request, send
+    }
+
+    private enum UpgradeAuthorizationFailure: LocalizedError, Equatable, Sendable {
+        case rejected(profile: String, revision: Int)
+
+        var errorDescription: String? {
+            switch self {
+            case let .rejected(profile, revision):
+                "Authorization rejected for \(profile) at revision \(revision)"
+            }
+        }
+
+        var recoverySuggestion: String? {
+            "Authorize the selected profile again."
+        }
+    }
+
+    @Test(arguments: ConnectEntryPoint.allCases)
+    func `connect entry points preserve upgrade provider errors`(entryPoint: ConnectEntryPoint) async throws {
+        let session = FakeGatewayWebSocketSession()
+        let expected = UpgradeAuthorizationFailure.rejected(profile: "test-profile", revision: 7)
+        let channel = try GatewayChannelActor(
+            url: testURL("wss://gateway.example.invalid"), token: nil,
+            session: WebSocketSessionBox(session: session), connectOptions: nodeConnectOptions(),
+            extraHeadersProvider: { throw expected })
+        var caught: (any Error)?
+        do {
+            switch entryPoint {
+            case .connect:
+                try await channel.connect()
+            case .request:
+                _ = try await channel.request(method: "health", params: nil)
+            case .send:
+                try await channel.send(method: "health", params: nil)
+            }
+        } catch {
+            caught = error
+        }
+        #expect(session.snapshotMakeCount() == 0)
+        #expect(await channel.currentConnectionGeneration() == nil)
+        await channel.shutdown()
+
+        let error = try #require(caught)
+        #expect(error as? UpgradeAuthorizationFailure == expected)
+        #expect(error.localizedDescription == expected.localizedDescription)
+        let localizedError = try #require(error as? any LocalizedError)
+        #expect(localizedError.recoverySuggestion == expected.recoverySuggestion)
+    }
+
     #if DEBUG
     @Test
     func `disconnect fences a suspended upgrade authorization before creating a socket`() async throws {
