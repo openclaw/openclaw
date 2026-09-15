@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
@@ -23,7 +24,15 @@ type ErrorValue =
   | { undefined: true };
 
 type ErrorIdentity =
-  | { type: "error" | "aggregate" | "ownership" | "newer-schema" | "coordinator" }
+  | {
+      type:
+        | "error"
+        | "aggregate"
+        | "ownership"
+        | "newer-schema"
+        | "coordinator"
+        | "mcp-oauth-corruption";
+    }
   | { type: "coordinator-contention"; family: CoordinatorFamily }
   | { type: "ownership-metadata"; databasePath: string }
   | { type: "external-ownership"; databasePath: string; managerId: string }
@@ -50,6 +59,9 @@ export type OpenClawStateWorkerErrorPayload = {
 type ErrorGraphOptions = { includeOrdinary?: boolean };
 
 function identifyError(error: Error): ErrorIdentity {
+  if (error instanceof McpOAuthStoreCorruptionError) {
+    return { type: "mcp-oauth-corruption" };
+  }
   if (error instanceof StateDatabaseCoordinatorContentionError) {
     return { type: "coordinator-contention", family: error.family };
   }
@@ -171,6 +183,7 @@ function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined
     case "aggregate":
     case "ownership":
     case "newer-schema":
+    case "mcp-oauth-corruption":
     case "coordinator":
       return { type: node.type };
     case "coordinator-contention":
@@ -297,6 +310,8 @@ function createError(node: ErrorNode): Error {
       return new OpenClawStateExternalOwnershipError(node.databasePath, node.managerId);
     case "newer-schema":
       return new SqliteSchemaVersionError(node.message);
+    case "mcp-oauth-corruption":
+      return new McpOAuthStoreCorruptionError("", "");
     case "maintenance":
       return new StartupMaintenanceRequiredError(node.kind, node.message);
     case "state-migration":

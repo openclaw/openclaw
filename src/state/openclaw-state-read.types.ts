@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { McpOAuthReadOnlyOperations } from "../agents/mcp-oauth-store.kernel.js";
 import type { FleetCellRecord } from "../fleet/registry.types.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -18,7 +19,13 @@ export type OpenClawStateReadAuthority = {
 
 export type OpenClawStateReadCommand =
   | { type: "fleet.list" }
-  | { type: "fleet.get"; tenantId: string };
+  | { type: "fleet.get"; tenantId: string }
+  | {
+      [Kind in keyof McpOAuthReadOnlyOperations]: {
+        type: Kind;
+        input: McpOAuthReadOnlyOperations[Kind]["input"];
+      };
+    }[keyof McpOAuthReadOnlyOperations];
 export type OpenClawStateReadRequest = {
   context: SqliteWorkerStateContext;
   databasePath: string;
@@ -30,6 +37,14 @@ export type OpenClawStateReadReply =
   | { ok: true; type: "admit" }
   | { ok: true; type: "fleet.list"; sourceAdmitted: true; cells: FleetCellRecord[] }
   | { ok: true; type: "fleet.get"; sourceAdmitted: true; cell: FleetCellRecord | undefined }
+  | {
+      [Kind in keyof McpOAuthReadOnlyOperations]: {
+        ok: true;
+        type: Kind;
+        sourceAdmitted: true;
+        value: McpOAuthReadOnlyOperations[Kind]["output"];
+      };
+    }[keyof McpOAuthReadOnlyOperations]
   | {
       ok: false;
       sourceAdmitted?: true;
@@ -53,4 +68,10 @@ export type RetainedReadScope = {
 export type OpenClawStateReadOnlyDatabase = {
   db: DatabaseSync;
   path: string;
+};
+
+export type OpenClawStateReadCaller = {
+  context: OpenClawStateWorkerContext;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
 };

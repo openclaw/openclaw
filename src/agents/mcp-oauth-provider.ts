@@ -6,6 +6,8 @@ import type { OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { readMcpOAuthStore, updateMcpOAuthStore, type McpOAuthStore } from "./mcp-oauth-store.js";
 
@@ -77,18 +79,48 @@ function beginMcpOAuthAuthorization(store: McpOAuthStore): McpOAuthStore {
 }
 
 /** Creates the MCP SDK OAuth provider backed by canonical shared SQLite state. */
-export function createMcpOAuthClientProvider(params: {
+export async function createMcpOAuthClientProvider(params: {
   identity: McpOAuthIdentity;
   config?: McpOAuthConfig;
   allowAuthorizationRedirect?: boolean;
   suppressStoredTokens?: boolean;
   lease?: OpenClawStateLeaseContext;
-}): OAuthClientProvider {
+  storeContext?: OpenClawStateWorkerContext;
+}): Promise<OAuthClientProvider> {
   const config = params.config ?? {};
   const storeKey = params.identity.storeKey;
+  const storeContext = params.storeContext ?? captureOpenClawStateWorkerContext();
+  let prepared: { redirectUrl?: string } | { error: unknown } = {};
+  let preparation = 0;
+  const readStore = async () => {
+    const currentPreparation = ++preparation;
+    const store = await readMcpOAuthStore(storeKey, storeContext);
+    params.lease?.assertOwned();
+    if (currentPreparation === preparation) {
+      prepared = { redirectUrl: store.redirectUrl };
+    }
+    return store;
+  };
+  await readStore();
   const assertOwnedInTransaction = bindMcpOAuthLeaseAssertion(params.lease);
-  const updateStore = (update: (store: McpOAuthStore) => McpOAuthStore) =>
-    updateMcpOAuthStore(storeKey, update, assertOwnedInTransaction);
+  const updateStore = (update: (store: McpOAuthStore) => McpOAuthStore) => {
+    preparation++;
+    try {
+      const store = updateMcpOAuthStore(storeKey, update, assertOwnedInTransaction, storeContext);
+      prepared = { redirectUrl: store.redirectUrl };
+      return store;
+    } catch (error) {
+      // Coordinator cleanup can fail after commit; only an acknowledged read can repair these facts.
+      prepared = { error };
+      throw error;
+    }
+  };
+  const preparedStore = () => {
+    if ("error" in prepared) {
+      throw prepared.error;
+    }
+    return prepared;
+  };
   const assertAuthorizationRedirectAllowed = () => {
     if (params.allowAuthorizationRedirect !== true) {
       throw new Error(
@@ -98,28 +130,28 @@ export function createMcpOAuthClientProvider(params: {
   };
   return {
     get redirectUrl() {
-      return resolveOAuthRedirectUrl(config, readMcpOAuthStore(storeKey));
+      return resolveOAuthRedirectUrl(config, preparedStore());
     },
     clientMetadataUrl: normalizeOptionalString(config.clientMetadataUrl),
     get clientMetadata() {
-      return buildOAuthClientMetadata(config, readMcpOAuthStore(storeKey));
+      return buildOAuthClientMetadata(config, preparedStore());
     },
     state() {
       assertAuthorizationRedirectAllowed();
       // State validates one browser round trip. It is not reusable persisted state.
       return randomUUID();
     },
-    clientInformation() {
-      return readMcpOAuthStore(storeKey).clientInformation;
+    async clientInformation() {
+      return (await readStore()).clientInformation;
     },
     saveClientInformation(clientInformation) {
       updateStore((store) => ({ ...beginMcpOAuthAuthorization(store), clientInformation }));
     },
-    tokens() {
+    async tokens() {
       if (params.suppressStoredTokens) {
         return undefined;
       }
-      const store = readMcpOAuthStore(storeKey);
+      const store = await readStore();
       const discoveredAuthorizationServerUrl = store.discoveryState?.authorizationServerUrl;
       if (!store.tokens?.refresh_token || discoveredAuthorizationServerUrl === undefined) {
         return store.tokens;
@@ -161,8 +193,8 @@ export function createMcpOAuthClientProvider(params: {
       assertAuthorizationRedirectAllowed();
       updateStore((store) => ({ ...beginMcpOAuthAuthorization(store), codeVerifier }));
     },
-    codeVerifier() {
-      const codeVerifier = readMcpOAuthStore(storeKey).codeVerifier;
+    async codeVerifier() {
+      const codeVerifier = (await readStore()).codeVerifier;
       if (!codeVerifier) {
         throw new Error("Missing MCP OAuth code verifier. Run the login flow again.");
       }
@@ -192,8 +224,8 @@ export function createMcpOAuthClientProvider(params: {
     saveDiscoveryState(discoveryState) {
       updateStore((store) => ({ ...beginMcpOAuthAuthorization(store), discoveryState }));
     },
-    discoveryState() {
-      return readMcpOAuthStore(storeKey).discoveryState;
+    async discoveryState() {
+      return (await readStore()).discoveryState;
     },
   };
 }

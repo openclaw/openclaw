@@ -1,4 +1,5 @@
 import { availableParallelism } from "node:os";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export const DEFAULT_WORKER_PENDING_TASKS = 128;
@@ -81,4 +82,68 @@ export function getWorkerComputeCapacity() {
       requestCheckpoints,
     };
   });
+}
+
+export type WorkerComputeAdmission = { ready: Promise<void>; release(): void };
+
+/** Retain shared capacity across preparation and cleanup owned outside a task pool. */
+export function reserveWorkerComputeCapacity(
+  signal: AbortSignal,
+  inputBytes: number,
+): WorkerComputeAdmission | undefined {
+  signal.throwIfAborted();
+  const capacity = getWorkerComputeCapacity();
+  if (!capacity.admit(inputBytes)) {
+    return undefined;
+  }
+  const ready = createDeferredCore();
+  let permit: WorkerComputePermit | undefined;
+  let waiting = false;
+  let released = false;
+  const removeWaiting = () => {
+    if (waiting) {
+      waiting = false;
+      capacity.remove(resume);
+    }
+  };
+  const abort = () => {
+    removeWaiting();
+    ready.reject(signal.reason);
+  };
+  const release = () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    removeWaiting();
+    signal.removeEventListener("abort", abort);
+    if (permit) {
+      capacity.release(permit);
+    }
+    capacity.finish(inputBytes);
+    ready.reject(signal.reason ?? new Error("Worker compute admission released"));
+  };
+  const resume = () => {
+    waiting = false;
+    if (released || signal.aborted) {
+      ready.reject(signal.reason);
+      return;
+    }
+    try {
+      permit = capacity.acquire(resume, () => false);
+      waiting = !permit;
+      if (permit) {
+        ready.resolve();
+      } else if (signal.aborted) {
+        abort();
+      }
+    } catch (error) {
+      capacity.remove(resume);
+      ready.reject(error);
+      release();
+    }
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  resume();
+  return { ready: ready.promise, release };
 }

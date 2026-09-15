@@ -15,6 +15,11 @@ import {
   hasStateDatabaseSourceExclusion,
   prepareStateDatabaseCanonicalMutation,
 } from "../infra/state-database-coordinator.js";
+import {
+  reserveWorkerComputeCapacity,
+  type WorkerComputeAdmission,
+} from "../infra/worker-task-capacity.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { observeOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
@@ -36,6 +41,7 @@ import { createRetainedReadScope, runRetainedReadScope } from "./openclaw-state-
 import { createOpenClawStateReadTransport } from "./openclaw-state-read-worker.js";
 import type {
   OpenClawStateReadAuthority,
+  OpenClawStateReadCaller,
   OpenClawStateReadCommand,
   OpenClawStateReadReply,
   OpenClawStateReadOnlyDatabase,
@@ -428,6 +434,7 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
 export function executeExistingOpenClawStateRead(
   options: OpenClawStateDatabaseOptions,
   command: OpenClawStateReadCommand,
+  caller?: OpenClawStateReadCaller,
 ): Promise<OpenClawStateReadReply | undefined> {
   const pathname = resolveReadOnlyPath(options);
   const current = stateSnapshotReads.getStore();
@@ -438,10 +445,21 @@ export function executeExistingOpenClawStateRead(
       (scope) => scope.active && scope.path === pathname,
     ),
   ];
-  const context = captureOpenClawStateWorkerContext({
-    path: pathname,
-    env: snapshot?.env ?? options.env,
-  });
+  const context =
+    caller?.context ??
+    captureOpenClawStateWorkerContext({
+      path: pathname,
+      env: snapshot?.env ?? options.env,
+    });
+  const signal = caller?.signal;
+  const assertCallerCurrent = caller?.assertCurrent;
+  if (context.admission.databasePath !== pathname) {
+    throw new Error("Shared-state read context does not match its selected source");
+  }
+  signal?.throwIfAborted();
+  context.maintenanceScope?.assertAdmission();
+  context.admission.assertCurrent();
+  assertCallerCurrent?.();
   const mutation = prepareStateDatabaseCanonicalMutation(pathname);
   const excluded = hasStateDatabaseSourceExclusion(pathname);
   const preserveArtifacts = requiresArtifactPreservingSnapshot(pathname);
@@ -453,6 +471,8 @@ export function executeExistingOpenClawStateRead(
   const run = async (): Promise<OpenClawStateReadReply | undefined> => {
     const controller = new AbortController();
     const producerSettled = createDeferredCore();
+    let compute: WorkerComputeAdmission | undefined;
+    const abortCaller = () => controller.abort(signal?.reason);
     const transport = createOpenClawStateReadTransport(command, (error) => controller.abort(error));
     let cleanupPending: Promise<void> | undefined;
     let transportStopped = false;
@@ -469,6 +489,7 @@ export function executeExistingOpenClawStateRead(
         controller.signal.throwIfAborted();
         context.maintenanceScope?.assertAdmission();
         context.admission.assertCurrent();
+        assertCallerCurrent?.();
         mutation?.();
         if (excluded && !hasStateDatabaseSourceExclusion(pathname)) {
           throw new Error("Shared-state source read scope is closed");
@@ -521,6 +542,8 @@ export function executeExistingOpenClawStateRead(
           errors.push(error);
         }
         throwSqliteLifecycleErrors(errors, "Shared-state read source release failed");
+        compute?.release();
+        signal?.removeEventListener("abort", abortCaller);
         cleaned = true;
         unregister();
         for (const scope of scopes) {
@@ -551,6 +574,10 @@ export function executeExistingOpenClawStateRead(
     for (const scope of scopes) {
       scope.resources.add(resource);
     }
+    signal?.addEventListener("abort", abortCaller, { once: true });
+    if (signal?.aborted) {
+      abortCaller();
+    }
     const read = async () => {
       authority.assertCurrent();
       if (!snapshot) {
@@ -562,6 +589,15 @@ export function executeExistingOpenClawStateRead(
       if (excluded || mutation) {
         sourcePin = acquireStateDatabaseHandleLease({ databasePath: pathname });
       }
+      compute = reserveWorkerComputeCapacity(
+        controller.signal,
+        Buffer.byteLength(JSON.stringify(command), "utf8"),
+      );
+      if (!compute) {
+        throw new WorkerTaskError("worker task capacity reached", "overloaded");
+      }
+      await compute.ready;
+      authority.assertCurrent();
       let location = snapshot?.location ?? pathname;
       if (borrowed) {
         prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(

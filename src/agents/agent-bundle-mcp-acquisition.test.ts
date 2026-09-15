@@ -12,10 +12,15 @@ import {
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { createMcpProbeFixture, probeMcpServer } from "./agent-bundle-mcp-probe.test-support.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
+import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 
-const readAuthorization = vi.hoisted(() => vi.fn(async () => ({ state: "unauthenticated" })));
+const readAuthorization = vi.hoisted(() =>
+  vi.fn(async (identities: readonly McpOAuthIdentity[]) =>
+    identities.map(() => ({ state: "unauthenticated" })),
+  ),
+);
 vi.mock("./mcp-oauth.js", () => ({
-  readMcpOAuthCredentialsStatus: readAuthorization,
+  readMcpOAuthCredentialsStatuses: readAuthorization,
   startMcpOAuthAuthorization: async () => ({ status: "authorized" }),
 }));
 
@@ -33,7 +38,11 @@ afterEach(async () => {
   await disposeAllSessionMcpRuntimes();
   Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
   cleanupTempDirs(tempDirs);
-  readAuthorization.mockReset().mockResolvedValue({ state: "unauthenticated" });
+  readAuthorization
+    .mockReset()
+    .mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
+      identities.map(() => ({ state: "unauthenticated" })),
+    );
 });
 
 it.each(["exported acquisition", "harness materialization"])(
@@ -56,10 +65,10 @@ it.each(["exported acquisition", "harness materialization"])(
     const started = createDeferred();
     const released = createDeferred();
     releases.push(() => released.resolve());
-    readAuthorization.mockImplementationOnce(async () => {
+    readAuthorization.mockImplementationOnce(async (identities) => {
       started.resolve();
       await released.promise;
-      return { state: "unauthenticated" };
+      return identities.map(() => ({ state: "unauthenticated" }));
     });
     const pending =
       surface === "exported acquisition"

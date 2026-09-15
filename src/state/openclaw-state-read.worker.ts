@@ -1,5 +1,12 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  countMcpOAuthPrincipalsInDatabase,
+  listMcpOAuthStoreKeysInDatabase,
+  readMcpOAuthPendingInDatabase,
+  readMcpOAuthStoreIfPresentInDatabase,
+  readMcpOAuthStatusesInDatabase,
+} from "../agents/mcp-oauth-store.kernel.js";
 import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/registry.kernel.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { serveWorkerTasks } from "../infra/worker-task-pool.js";
@@ -29,15 +36,27 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
     typeof coordinatorRuntime.keepAlive === "boolean" &&
     (input.command.type === "admit" ||
       input.command.type === "fleet.list" ||
-      (input.command.type === "fleet.get" && typeof input.command.tenantId === "string"))
+      (input.command.type === "fleet.get" && typeof input.command.tenantId === "string") ||
+      (input.command.type === "mcpOAuth.statuses" &&
+        Array.isArray(input.command.input) &&
+        input.command.input.every((key) => typeof key === "string")) ||
+      ((input.command.type === "mcpOAuth.readOnly" ||
+        input.command.type === "mcpOAuth.keys" ||
+        input.command.type === "mcpOAuth.pending" ||
+        input.command.type === "mcpOAuth.countPrincipals") &&
+        typeof input.command.input === "string"))
   );
+}
+
+function unexpectedReadCommand(_command: never): never {
+  throw new Error("Unexpected shared-state read command");
 }
 
 serveWorkerTasks((input): OpenClawStateReadReply => {
   let sourceAdmitted: true | undefined;
   try {
     if (!isReadRequest(input)) {
-      throw new Error("Fleet registry reader requires a captured state location and read command");
+      throw new Error("Shared-state reader requires a captured state location and read command");
     }
     return withStateDatabaseCoordinatorRuntimeDirectory(input.context.coordinatorRuntime, () => {
       if (input.checkFreshAdmission) {
@@ -53,14 +72,58 @@ serveWorkerTasks((input): OpenClawStateReadReply => {
       return withOpenClawStateReadOnlyLocation(
         ({ db }) => {
           sourceAdmitted = true;
-          return command.type === "fleet.list"
-            ? { ok: true, type: "fleet.list", sourceAdmitted, cells: listFleetCellsInDatabase(db) }
-            : {
+          switch (command.type) {
+            case "fleet.list":
+              return {
                 ok: true,
-                type: "fleet.get",
+                type: command.type,
+                sourceAdmitted,
+                cells: listFleetCellsInDatabase(db),
+              };
+            case "fleet.get":
+              return {
+                ok: true,
+                type: command.type,
                 sourceAdmitted,
                 cell: getFleetCellInDatabase(db, command.tenantId),
               };
+            case "mcpOAuth.statuses":
+              return {
+                ok: true,
+                type: command.type,
+                sourceAdmitted,
+                value: readMcpOAuthStatusesInDatabase(db, command.input),
+              };
+            case "mcpOAuth.readOnly":
+              return {
+                ok: true,
+                type: command.type,
+                sourceAdmitted,
+                value: readMcpOAuthStoreIfPresentInDatabase(db, command.input),
+              };
+            case "mcpOAuth.keys":
+              return {
+                ok: true,
+                type: command.type,
+                sourceAdmitted,
+                value: listMcpOAuthStoreKeysInDatabase(db, command.input),
+              };
+            case "mcpOAuth.pending":
+              return {
+                ok: true,
+                type: command.type,
+                sourceAdmitted,
+                value: readMcpOAuthPendingInDatabase(db, command.input),
+              };
+            case "mcpOAuth.countPrincipals":
+              return {
+                ok: true,
+                type: command.type,
+                sourceAdmitted,
+                value: countMcpOAuthPrincipalsInDatabase(db, command.input),
+              };
+          }
+          return unexpectedReadCommand(command);
         },
         input.databasePath,
         input.location,

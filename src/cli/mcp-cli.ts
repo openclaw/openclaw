@@ -439,10 +439,10 @@ async function probeMcpServerIssues(params: {
   }
 }
 
-function countConnectedMcpPrincipals(
+async function countConnectedMcpPrincipals(
   name: string,
   server: Record<string, unknown>,
-): number | undefined {
+): Promise<number | undefined> {
   const resolved = resolveMcpTransportConfig(name, server);
   if (
     server.auth !== "oauth" ||
@@ -486,7 +486,7 @@ async function buildMcpStatusEntries(
         const identity = operatorMcpOAuthIdentity(name, resolved.url);
         // Documented `mcp status --json` contract: the six legacy authStatus
         // booleans stay for existing scripts; `state` is the additive shape.
-        const store = readMcpOAuthStoreReadOnly(identity.storeKey);
+        const store = await readMcpOAuthStoreReadOnly(identity.storeKey);
         entry.authStatus = {
           hasTokens: Boolean(store.tokens),
           requiresAuthorization:
@@ -495,10 +495,10 @@ async function buildMcpStatusEntries(
           hasCodeVerifier: Boolean(store.codeVerifier),
           hasDiscoveryState: Boolean(store.discoveryState),
           hasLastAuthorizationUrl: Boolean(store.lastAuthorizationUrl),
-          ...(await readMcpOAuthCredentialsStatus(identity)),
+          ...(await readMcpOAuthCredentialsStatus(identity, store)),
         };
       } else {
-        entry.connectedPrincipals = countConnectedMcpPrincipals(name, server);
+        entry.connectedPrincipals = await countConnectedMcpPrincipals(name, server);
       }
       return entry;
     }),
@@ -723,7 +723,7 @@ export function registerMcpCli(program: Command) {
       }
       defaultRuntime.log(`OpenClaw-managed MCP servers (${loaded.path}):`);
       for (const [name, server] of entries) {
-        const connectedPrincipals = countConnectedMcpPrincipals(name, server);
+        const connectedPrincipals = await countConnectedMcpPrincipals(name, server);
         const connected =
           connectedPrincipals === undefined
             ? ""

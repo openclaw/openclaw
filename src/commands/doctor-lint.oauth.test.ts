@@ -7,8 +7,11 @@ import { createMcpOAuthClientProvider } from "../agents/mcp-oauth-provider.js";
 import { readMcpOAuthStoreReadOnly } from "../agents/mcp-oauth-store.js";
 import { createCoreHealthChecks } from "../flows/doctor-core-checks.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectDoctorFindings, runDoctorLintCli } from "./doctor-lint.js";
@@ -125,7 +128,8 @@ describe("Doctor OAuth snapshot isolation", () => {
     clearHealthChecksForTest();
     mocks.fetch.mockReset();
   });
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     vi.restoreAllMocks();
   });
@@ -152,7 +156,7 @@ describe("Doctor OAuth snapshot isolation", () => {
         await state.writeConfig(cfg);
         const network = rotatingOAuthServer(rejected);
         mocks.fetch.mockImplementation(network.fetch);
-        const provider = createMcpOAuthClientProvider({ identity: IDENTITY });
+        const provider = await createMcpOAuthClientProvider({ identity: IDENTITY });
         await provider.saveClientInformation?.({ client_id: "fixture-client" });
         await provider.saveDiscoveryState?.({ authorizationServerUrl: ISSUER });
         await provider.saveTokens({
@@ -162,7 +166,7 @@ describe("Doctor OAuth snapshot isolation", () => {
           expires_in: rejected ? 3600 : -1,
         });
         const databasePath = resolveOpenClawStateSqlitePath(process.env);
-        closeOpenClawStateDatabaseByPath(databasePath);
+        await closeOpenClawStateDatabaseByPathAsync(databasePath);
         const before = snapshotDoctorLintSqliteFamily(databasePath);
         const runtime = createTestRuntime();
         const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -199,7 +203,7 @@ describe("Doctor OAuth snapshot isolation", () => {
           expect(liveRuntime.tools.some((tool) => tool.name.endsWith("__status"))).toBe(true);
           expect(network.refreshes).toBe(1);
           expect(network.replayDetected).toBe(false);
-          expect(readMcpOAuthStoreReadOnly(IDENTITY.storeKey).tokens?.refresh_token).toBe(
+          expect((await readMcpOAuthStoreReadOnly(IDENTITY.storeKey)).tokens?.refresh_token).toBe(
             "fixture-refresh-1",
           );
         } finally {

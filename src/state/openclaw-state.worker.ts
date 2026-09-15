@@ -1,3 +1,4 @@
+import { readMcpOAuthStoreInDatabase } from "../agents/mcp-oauth-store.kernel.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
 import {
   patchConfigHealthEntryInDatabase,
@@ -143,6 +144,9 @@ function createSharedStateWorkerBackend(
     execute(command) {
       if (closed) {
         throw new Error("Shared-state worker is closed");
+      }
+      if (command.type === "mcpOAuth.read") {
+        return readMcpOAuthStoreInDatabase(open().db, command.input);
       }
       if (command.type === "tasks.statusSummary") {
         const read = () =>

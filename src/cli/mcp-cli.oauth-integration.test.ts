@@ -17,7 +17,10 @@ import { readMcpOAuthCredentialsStatus } from "../agents/mcp-oauth.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import { defaultRuntime } from "../runtime.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { registerMcpCli } from "./mcp-cli.js";
 
@@ -208,9 +211,10 @@ async function startOAuthFixture() {
   };
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+  vi.restoreAllMocks();
 });
 
 describe("mcp login OAuth integration", () => {
@@ -316,7 +320,7 @@ describe("mcp login OAuth integration", () => {
       await expect(readMcpOAuthCredentialsStatus(operator)).resolves.toEqual({
         state: "authorized",
       });
-      expect(readMcpOAuthPendingAuthorization("requester-state")).toBeUndefined();
+      expect(await readMcpOAuthPendingAuthorization("requester-state")).toBeUndefined();
     });
   });
 

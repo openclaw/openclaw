@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { decodeSqliteWorkerReplyError } from "../infra/sqlite-worker-broker-reply.js";
@@ -35,6 +36,22 @@ function roundTrip(error: Error): Error {
 }
 
 describe("shared-state worker error transport", () => {
+  it("preserves MCP OAuth corruption details and parsing cause", () => {
+    const cause = new SyntaxError("Synthetic malformed JSON");
+    const error = new McpOAuthStoreCorruptionError(
+      "synthetic-store",
+      "store_json is not valid JSON",
+      {
+        cause,
+      },
+    );
+    const decoded = roundTrip(error);
+    expect(decoded).toBeInstanceOf(McpOAuthStoreCorruptionError);
+    expect(decoded).toMatchObject({ name: error.name, message: error.message });
+    expect(decoded.cause).toBeInstanceOf(Error);
+    expect(decoded.cause).toMatchObject({ name: "SyntaxError", message: cause.message });
+  });
+
   it("uses the validated wire root when retaining an unopened error graph", () => {
     const retained = new Error("remote aggregate");
     retainOpenClawStateWorkerErrorPayload(retained, {
