@@ -47,7 +47,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       !isPathInside(privateRoot, path.resolve(file)) ||
       !isPathInside(privateRoot, resolvePathViaExistingAncestorSync(file))
     ) {
-      throw new Error(`Plugin dependency escapes the update rehearsal: ${file}`);
+      throw new Error(`Plugin dependency is outside the temporary update copy: ${file}`);
     }
   };
   const isPrivateLookup = (specifier: string) => {
@@ -76,7 +76,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
   const candidateRoot =
     params.candidateRoot ?? resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   if (!candidateRoot) {
-    throw new Error("Cannot locate the candidate host for plugin dependency preparation");
+    throw new Error("Cannot locate the staged OpenClaw installation for plugin setup");
   }
   const discovery = discoverConfiguredPluginLoadPaths({
     loadPaths: [...sources],
@@ -136,7 +136,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     const entryFile = resolveUpdateCandidatePluginSourcePath(privateRoot, copiedEntry);
     if (!rootDir || !entryFile || !isPathInside(rootDir, entryFile)) {
       warnings.push(
-        `Update rehearsal could not recover the original plugin path for ${entry.entryFile}.`,
+        `Update checks could not recover the original plugin path for ${entry.entryFile}.`,
       );
       continue;
     }
@@ -153,7 +153,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       throw error;
     });
     if (!canonicalSource) {
-      warnings.push(`Update rehearsal plugin source is no longer available: ${entryFile}.`);
+      warnings.push(`Plugin source for update checks is no longer available: ${entryFile}.`);
       continue;
     }
     let available: ReturnType<typeof inspectPluginSourceDependencies>;
@@ -162,7 +162,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
     } catch {
       // Source edits cannot invalidate an already runnable copy. Without a
       // supplied missing edge, candidate execution still owns optional imports.
-      warnings.push(`Update rehearsal could not inspect the original plugin source: ${entryFile}.`);
+      warnings.push(`Update checks could not inspect the original plugin source: ${entryFile}.`);
       continue;
     }
     if (
@@ -202,7 +202,7 @@ export async function completeUpdateCandidatePluginRehearsal(params: {
       params.env.OPENCLAW_UPDATE_IN_PROGRESS !== "1" ||
       resolveUpdateRehearsalRoot(params.env) !== rehearsalRoot
     ) {
-      throw new Error("Update rehearsal authority changed during plugin dependency preparation");
+      throw new Error("Update authority changed during plugin dependency preparation");
     }
     graph.assertSourceCurrent();
     for (const [source, copied] of comparedFiles) {

@@ -107,7 +107,7 @@ process.send({ type: "ready", candidateRehearsal: true });
       });
       expect(result).toMatchObject({
         status: "unavailable",
-        reason: expect.stringContaining("cannot repair isolated rehearsal state"),
+        reason: expect.stringContaining("cannot safely repair the temporary update copy"),
       });
       expect(validate).not.toHaveBeenCalled();
     });

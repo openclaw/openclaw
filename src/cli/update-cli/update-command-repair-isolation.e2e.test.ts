@@ -281,7 +281,7 @@ describe("staged CLI repair isolation", () => {
                 expect.arrayContaining([
                   expect.objectContaining({
                     step: "repairing",
-                    detail: expect.stringContaining("candidate rehearsal"),
+                    detail: expect.stringContaining("update checks"),
                   }),
                 ]),
               );

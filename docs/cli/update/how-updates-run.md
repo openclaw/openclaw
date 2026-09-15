@@ -1,5 +1,5 @@
 ---
-summary: "How `openclaw update` switches channels, validates a candidate, hands off the restart, and updates a Git checkout"
+summary: "How `openclaw update` switches channels, checks the new version, hands off the restart, and updates a Git checkout"
 read_when:
   - You want to know what an update does before you run one
   - You are debugging a restart handoff or a control-plane update response
@@ -7,7 +7,7 @@ read_when:
 title: "How an update runs"
 ---
 
-Channel switching, candidate validation, the restart handoff, and the Git checkout flow. Part of the [`openclaw update`](/cli/update) reference.
+Channel switching, update validation, the restart handoff, and the Git checkout flow. Part of the [`openclaw update`](/cli/update) reference.
 
 ## What it does
 
@@ -35,11 +35,11 @@ Changed plugins restart a running managed Gateway unless `--no-restart` is set; 
 
 Explicit package artifacts, such as tarball paths and URLs, compare known build
 IDs before a same-version no-op. Matching known identity remains nonmutating;
-different or missing identity continues through normal candidate validation and
+different or missing identity continues through normal update validation and
 installation because a matching version alone does not establish artifact
 equality. Registry requests retain their version-based same-version no-op.
 Installation-method switches and fresh-profile initialization still retain and
-validate the candidate even when its build identity matches.
+validate the new version even when its build identity matches.
 
 Updates continue with recorded warnings when disposable validation-copy cleanup,
 retired derived-cache cleanup, or Git upstream tracking setup fails. Resolve the
@@ -68,21 +68,21 @@ An interrupted update is not a successful update or a verified rollback.
 Unresolved effects remain visible in the update report. Unsupported pending
 checkpoint records block further mutable update work and remain unchanged.
 
-For targets that support candidate validation, the old Gateway keeps serving through `staging` and
-`validating`. The updater uses the candidate entrypoint for Doctor lint
+For versions that support checks before installation, the old Gateway keeps serving through `staging` and
+`validating`. The updater uses the new version to run health checks
 (`doctor --lint --json --severity-min error`), config validation, and read-only
-plugin resolution and compatibility planning. It also rehearses migrations and
-boots a canary with copied configuration and verified SQLite snapshots in an
+plugin resolution and compatibility planning. It also tests migrations and
+boots a test Gateway with copied configuration and verified SQLite snapshots in an
 isolated temporary state directory. The copied database registry points to the
 copied agent databases. Installed plugin payloads and their dependencies are also
-copied; the rehearsal install records point to those copies, and their OpenClaw
-host links target the staged candidate. Literal imports, `require()` calls, and
+copied; the copied install records point to those copies, and their OpenClaw
+host links target the staged installation. Literal imports, `require()` calls, and
 literal dynamic imports to shared source modules include those modules and their
 package metadata in the private copy. Unrelated repository files remain outside
 the snapshot.
 
 When a published updater omitted shared modules from an external plugin copy,
-candidate Doctor can complete the private copy before loading plugin repair
+the new version’s Doctor can complete the private copy before loading plugin repair
 hooks. Recovery requires the original path retained by that updater and matching
 source/manifest bytes; it never replaces existing private files or changes the
 serving plugin. Complete snapshots do not require the original source to remain
@@ -97,20 +97,20 @@ cron, automatic updates, background task maintenance, and other side services ar
 suppressed in this canary. Copied task records remain available for startup
 validation without recovery or pruning.
 
-Candidate build and rehearsal processes resolve source-linked plugin SDKs from
-the candidate root, even when the serving source launcher passed its own checkout
-root. This keeps candidate assets and validation independent of the old checkout.
+Update build and validation processes resolve source-linked plugin SDKs from
+the staged installation root, even when the serving source launcher passed its own checkout
+root. This keeps staged assets and validation independent of the old checkout.
 
-Warning-severity Doctor findings do not block candidate or post-plugin readiness.
+Doctor warnings do not block update checks or readiness after plugin updates.
 The updater retains them in the run report shown by `openclaw update status`,
 including when an intentional open channel policy requires no configuration change.
 Error findings and failed check execution still refuse the update.
 
-The candidate answers the updater's native service capability probe before
+The new version answers the updater's native service capability probe before
 loading configuration or initializing debug capture. Probing capability does not
 open or migrate shared state, so the old Gateway can keep serving while its
-database schema is older than the candidate's. The installed updater runs first;
-this repair takes effect when the candidate it probes contains the fix.
+database schema is older than the new version's. The installed updater runs first;
+this repair takes effect when the version it probes contains the fix.
 
 The invoking updater supplies the capability probe's per-step time budget. The
 probe does not impose a separate startup deadline.
@@ -124,13 +124,13 @@ runtime validation budget. By default, that budget scales with measured database
 and plugin bytes, allowing each validation process to inspect the private state.
 An explicit per-step timeout replaces that derived runtime allowance.
 Automatic and chat updates leave that runtime allowance derived from state.
-Their request and recovery watchdogs do not become candidate validation deadlines.
+Their request and recovery watchdogs do not become update validation deadlines.
 Startup and readiness responses share that validation deadline, including reading
 the response body.
 
 Before copying, the updater measures the shared and agent SQLite database
 families and the installed plugin payloads and dependency trees that the
-rehearsal needs. Admission includes space for temporary copies and the candidate
+update checks need. Admission includes space for temporary copies and the new version’s
 Doctor backup. Active plugin payloads remain in the snapshot so configuration
 and startup validation can load them; unreferenced plugin generations are not
 copied.
@@ -157,7 +157,7 @@ If even the initial SQLite inspection copy cannot fit, the refusal reports that
 required lower bound and marks plugin size as not yet inspected.
 
 Snapshot placement belongs to the updater already running. The published
-2026.9.3 and 2026.9.4 updaters prepare their snapshot before candidate code runs,
+2026.9.3 and 2026.9.4 updaters prepare their snapshot before the new version’s code runs,
 so updating to this fix cannot change that first hop. If their system temporary
 filesystem is too small, select another filesystem with sufficient space:
 
@@ -181,13 +181,13 @@ slow hardware, or the explicit per-step timeout. A transient readiness miss does
 not discard the previous generation's rollback eligibility. Native service and
 Gateway boot identities must still match through the final observation.
 
-The canary binds a free loopback port and must report `/startupz` as `started`,
+The test Gateway binds a free loopback port and must report `/startupz` as `started`,
 then `/readyz` as ready within the runtime validation allowance. Plugin-resolution
-errors attributed to a named plugin are recorded without rejecting the candidate.
+errors attributed to a named plugin are recorded without rejecting the update.
 An invalid plugin inventory, an unattributed registry error, or failure to meet
 the required core startup or readiness checks still fails validation. Failure
-records the phase, elapsed time, and bounded diagnostics; the canary process group
-and temporary state are cleaned up. This proves candidate core startup on copied
+records the phase, elapsed time, and bounded diagnostics; the test Gateway process group
+and temporary state are cleaned up. This proves the new version’s core startup on copied
 state; live channel and provider behavior are checked after activation.
 Targets that predate migration continuation record runtime validation as
 unavailable and use the current updater's existing finalization path. A present
@@ -196,19 +196,19 @@ The database-schema preflight still refuses incompatible downgrades. These older
 targets do not support automatic schema-neutral rollback; see
 [Downgrade finalization](/install/updating#roll-back-a-package-install).
 
-Blocking candidate validation failures enter a bounded `repairing` phase using
+Blocking update validation failures enter a bounded `repairing` phase using
 configured inference. These include failed required Doctor checks, invalid config
 or state, invalid or unattributed plugin-registry results, and failed core startup
 or readiness checks. The updater reruns the failed check after each attempt and
 activates only after it passes. Failed or unavailable repair discards the
-candidate and leaves the serving Gateway untouched.
-Successful repair of a private rehearsal does not mean the update was applied:
-the updater validates a fresh candidate again before activation. If that check
+staged update and leaves the serving Gateway untouched.
+Successful repair of a private copy does not mean the update was applied:
+the updater validates a fresh copy of the update again before activation. If that check
 fails, the report retains the failed update and the command exits nonzero even
 when the previous Gateway remains healthy. Successful updates with warnings
 exit zero.
-Pre-activation repair uses disposable rehearsal state and configuration, then
-independently validates surviving candidate changes before activation, and
+Pre-activation repair uses disposable copied state and configuration, then
+independently validates surviving update changes before activation, and
 `repair-requires-config-change` reports changed top-level keys that require
 operator-run `openclaw doctor --fix` or `openclaw triage`. Post-activation
 finalization may use live repair when compatibility-checked package rollback is
@@ -226,12 +226,12 @@ expected version and Git build identity, checks channel readiness, and requires
 HTTP 200 from `/readyz`. Plugin activation or load failures remain named warnings
 when these core checks pass; they do not turn a successful core update into an error.
 
-Managed updates from 2026.9.3 can finish migration through the candidate runtime
-while the original updater retains installation ownership. The candidate checks
+Managed updates from 2026.9.3 can finish migration through the new runtime
+while the original updater retains installation ownership. The new runtime checks
 the captured update identity against its live parent before finalizing either a
 Git or npm installation. This continuation does not change the recovery limits below.
 
-A candidate can be running while verification fails. Recovery guidance uses the
+The new version can be running while verification fails. Recovery guidance uses the
 latest observed service state and names the running version when known; an
 earlier activation stop does not mean the service remains stopped.
 
@@ -276,14 +276,14 @@ that backup and repair the installation before restarting, including for older
 targets without migration continuation. Automatic rollback requires that retained package, its pre-update verification, unchanged
 config content since the activation Doctor pass, and unchanged pre-existing shared and affected per-agent
 SQLite `user_version` values. A database first created during activation or
-verification is schema-neutral only at the candidate's supported version for its
-database kind; a missing pre-existing database or a new database at a foreign
+verification is schema-neutral only at the schema version supported by the new installation
+for that database kind; a missing pre-existing database or a new database at a foreign
 version blocks rollback. Newly created databases must also be readable by the
 previous package; unknown or incompatible support refuses rollback with
 `rollback-state-unverified`. The updater restores the previous generation and verifies
 it running before finishing `rolled-back`, preserving the failing check as its
 reason. See [Automatic rollback](/install/updating#automatic-schema-neutral-rollback)
-for the restoration and package-manager guards. The candidate’s own Doctor
+for the restoration and package-manager guards. The new version’s own Doctor
 migrations in the main config file do not block rollback, including on a fresh
 install’s first update. Separate `$include` files must retain their pre-activation
 configuration content. Doctor must have consumed the captured pre-update config,
@@ -293,16 +293,16 @@ When needed, rollback replaces the main config with the exact bytes captured bef
 Doctor and owner-only permissions (`0600`), including the previous writer stamp.
 Operator edits made after activation block
 restoration, including edits before Doctor reads the config or after its last write; the next action names the changed config file. A failure alone does not
-authorize restarting the candidate.
+authorize restarting the new version.
 
 If the config file changed after the activation Doctor pass or the databases are
 not schema-neutral, automatic rollback is refused with
 `state-migrated-no-rollback`. The updater enters `repairing` on the installed
-candidate, also used if rollback itself fails. If the previous package was
+version, also used if rollback itself fails. If the previous package was
 already restored, repair targets that version. Between repair attempts, the
 updater starts or restarts a stopped or unhealthy service once and reruns the
 post-restart verification checks. Successful verification finishes the run as
-`succeeded` for the candidate, or `rolled-back` for the restored release with a
+`succeeded` for the new version, or `rolled-back` for the restored release with a
 nonzero command exit. Failed repair preserves the original failure and attempt summaries.
 Use the recorded diagnostics and [Triage](/cli/triage) for remaining failures,
 preserving migrated state. These temporary validation
@@ -323,7 +323,7 @@ before stopping the Gateway. It prints the helper log path and follow-up command
 for update status and Gateway health, then exits; this acknowledges the handoff,
 not a completed update. The helper launches staging and validation outside the
 Gateway process tree while the old Gateway keeps serving, including during
-bounded candidate repair. It parks the Gateway
+bounded update repair. It parks the Gateway
 only when the orchestrator reaches `activating`, then completes the existing
 commit-or-cancel handoff. Keep stdout connected to the agent: stopping the service
 can terminate the surrounding exec shell (SIGTERM or exit 143), including commands
@@ -337,7 +337,7 @@ original installation identity for recovery; a child running from a different
 installation is still rejected.
 
 Updates from stable 2026.9.2 and 2026.9.3 retain support for their service handoff
-records, which predate the recorded Linux service-manager UID. The candidate
+records, which predate the recorded Linux service-manager UID. The new version
 still revalidates service ownership, profile, unit, and protected launcher data.
 When the handoff records a manager UID, a different UID blocks service mutation.
 
@@ -350,7 +350,7 @@ Control-plane `update.run` package-manager updates and supervised git-checkout u
 the same managed-service handoff instead of replacing the package tree or
 rebuilding `dist/` inside the live Gateway process: the Gateway starts a
 detached helper, which runs `openclaw update --yes --json` from outside the
-Gateway process tree. The Gateway exits only after candidate validation succeeds
+Gateway process tree. The Gateway exits only after update validation succeeds
 and activation begins. If the handoff is unavailable,
 `update.run` returns a structured response with the safe shell command to run
 manually.
@@ -362,9 +362,11 @@ polling cadence. Explicit foreground updates, bare foreground updates with
 stored `update.channel: "extended-stable"`, on-demand status, and their managed
 Gateway handoff remain supported.
 
-#### Candidate validation and service definitions
+<a id="candidate-validation-and-service-definitions" />
 
-With a local managed service and restart enabled, candidate validation precedes
+#### Update validation and service definitions
+
+With a local managed service and restart enabled, update validation precedes
 the stop as described above. The updater reports `Gateway: restarted and verified.`
 only after the restarted service passes verification. Plugin-owned readiness
 checks run against an isolated state snapshot and do not run interactive setup,
@@ -480,7 +482,7 @@ the sentinel.
 - `stable`: select the latest non-beta tag.
 - `beta`: prefer the latest `-beta` tag, falling back to the latest stable tag
   when beta is missing or older.
-- `dev`: fetch `main` and rebase the candidate.
+- `dev`: fetch `main` and rebase the staged checkout.
 - `extended-stable`: unsupported for Git checkouts; no checkout mutation
   occurs.
 
@@ -493,23 +495,23 @@ the sentinel.
   <Step title="Resolve the target">
     Selects the channel's tag or branch and fetches upstream as needed. If the resolved target SHA equals `HEAD`, finishes `skipped` with reason `already-current` before staging or stopping the service.
   </Step>
-  <Step title="Build a candidate">
-    Stable, beta, and dev updates install dependencies and build in a temporary worktree while the old Gateway serves. Dev rebases the candidate first so local commits are preserved and the build validates the exact source that will be activated. On POSIX, staging uses a private directory in the checkout's existing ignored `.artifacts` area. By default, the full workspace stays on the checkout filesystem, not a potentially small system temporary filesystem. An existing `.artifacts` redirect is honored as an operator storage choice, just like the build cache. Existing checkout, parent, and artifact directory permissions are not changed. Windows keeps its short system-drive staging path. Only dev updates walk back through earlier commits; stable and beta updates validate their selected target.
+  <Step id="build-a-candidate" title="Build the update">
+    Stable, beta, and dev updates install dependencies and build in a temporary worktree while the old Gateway serves. Dev rebases the staged checkout first so local commits are preserved and the build validates the exact source that will be activated. On POSIX, staging uses a private directory in the checkout's existing ignored `.artifacts` area. By default, the full workspace stays on the checkout filesystem, not a potentially small system temporary filesystem. An existing `.artifacts` redirect is honored as an operator storage choice, just like the build cache. Existing checkout, parent, and artifact directory permissions are not changed. Windows keeps its short system-drive staging path. Only dev updates walk back through earlier commits; stable and beta updates validate their selected target.
 
     The updater prepares the built runtime (`dist`, `dist-runtime`, and dependencies, including nested workspace outputs) on the destination filesystem and removes the temporary Git worktree registration before changing the live checkout. Cleanup failures remain visible in the update result. If an interruption leaves staging behind, artifact-area staging does not dirty the checkout or block the next update's clean check.
 
-    Dev can walk back up to 10 commits to find the newest buildable candidate. Confirmed ENOSPC storage failures stop immediately with `preflight-insufficient-space`; free space on the preflight staging and package-manager store filesystems before retrying. Shared package-manager stores are not deleted. Update builds skip TypeScript declaration generation by default. Set `OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0` to explicitly request declarations. Set `OPENCLAW_UPDATE_PREFLIGHT_LINT=1` to also run source lint during this preflight; lint runs in constrained serial mode because user update hosts are often smaller than CI runners.
+    Dev can walk back up to 10 commits to find the newest buildable version. Confirmed ENOSPC storage failures stop immediately with `preflight-insufficient-space`; free space on the preflight staging and package-manager store filesystems before retrying. Shared package-manager stores are not deleted. Update builds skip TypeScript declaration generation by default. Set `OPENCLAW_RUN_NODE_SKIP_DTS_BUILD=0` to explicitly request declarations. Set `OPENCLAW_UPDATE_PREFLIGHT_LINT=1` to also run source lint during this preflight; lint runs in constrained serial mode because user update hosts are often smaller than CI runners.
 
     The updater already running owns staging. Artifact-area staging first shipped in 2026.8.1; updating to a commit that contains it cannot change an older published updater's first hop, which still stages under the system temporary directory.
 
     Uses the repo package manager. For pnpm checkouts, the updater bootstraps `pnpm` on demand (via `corepack` first, then a temporary npm installation of the target checkout’s exact pnpm version) instead of running `npm run build` inside a pnpm workspace. If pnpm bootstrap still fails, the updater stops early with a package-manager-specific error instead of trying `npm run build` in the checkout.
 
   </Step>
-  <Step title="Validate the candidate">
-    Runs candidate Doctor lint, config and plugin planning, and the isolated migration rehearsal and canary described above. Validation failure leaves the old Gateway serving.
+  <Step id="validate-the-candidate" title="Check the update">
+    Runs Doctor health checks, config and plugin planning, and the isolated migration and test Gateway checks described above. Validation failure leaves the old Gateway serving.
   </Step>
   <Step title="Activate and verify">
-    Stops the managed service, checks out the exact candidate SHA, publishes the prepared runtime, and runs required Doctor migrations. Core dependencies and the checkout build were prepared before downtime; plugin convergence follows while the service remains stopped.
+    Stops the managed service, checks out the exact staged commit SHA, publishes the prepared runtime, and runs required Doctor migrations. Core dependencies and the checkout build were prepared before downtime; plugin convergence follows while the service remains stopped.
 
     If restoring the previous Git runtime fails, the Gateway stays stopped and the failed rollback step records the filesystem error. Pending originals remain in sibling `<runtime>.openclaw-update-<id>.tmp/previous` directories. Preserve those backups and repair the installation before restarting; cleanup does not delete an unrestored original.
 
@@ -517,7 +519,7 @@ the sentinel.
   <Step title="Sync plugins">
     Against the installed target, syncs plugins to the active channel before restarting the managed service. Dev uses bundled plugins; stable and beta use npm or ClawHub while preserving recorded source choices. A changed plugin snapshot runs fresh Doctor migrations; unchanged plugins do not run another full Doctor pass. The updater then revalidates the service owner, starts the Gateway, and verifies the final snapshot.
 
-    Source targets that support runtime completion also check their generated plugin runtime overlay and SDK aliases before loading plugin configuration. This completes artifacts omitted by an older updater on the first update to such a target; `update repair` performs the same check before Doctor. Exact artifacts remain untouched, including while a Gateway is running. Replacing missing or stale artifacts requires proof that the affected runtime is offline. A Gateway serving a physically separate runtime does not block completion. If service ownership or offline status cannot be verified, completion fails with recovery guidance instead of reporting a successful update. Older targets retain their existing generation behavior. Clean-source and candidate-build validation still apply.
+    Source targets that support runtime completion also check their generated plugin runtime overlay and SDK aliases before loading plugin configuration. This completes artifacts omitted by an older updater on the first update to such a target; `update repair` performs the same check before Doctor. Exact artifacts remain untouched, including while a Gateway is running. Replacing missing or stale artifacts requires proof that the affected runtime is offline. A Gateway serving a physically separate runtime does not block completion. If service ownership or offline status cannot be verified, completion fails with recovery guidance instead of reporting a successful update. Older targets retain their existing generation behavior. Clean-source and staged-build validation still apply.
 
   </Step>
 </Steps>
@@ -582,7 +584,7 @@ named notice and continues the core update. The plugin can remain unavailable
 until a compatible version can be installed. Configuration, ownership, schema,
 and core readiness checks still have to pass.
 
-Older updaters may still refuse with `plugin-target-unavailable` before candidate
+Older updaters may still refuse with `plugin-target-unavailable` before the new version’s
 code runs. Use your installation's [manual update method](/install/updating/update-methods),
 then run `openclaw update repair` from the updated installation.
 
@@ -634,11 +636,11 @@ current plugin operation takes precedence.
 For package-manager installs, `openclaw update` resolves the target package
 version before invoking the package manager. npm global installs use a staged
 install: OpenClaw installs the new package into a temporary npm prefix,
-lets the candidate package validate the host Node version during `preinstall`,
+lets the staged package validate the host Node version during `preinstall`,
 and verifies the packaged `dist` inventory there. A packed completion guard
 stays outside that inventory until `preinstall` succeeds, so package managers
 that skip lifecycle scripts also stop before activation. On npm 12 and newer,
-the updater approves only the candidate OpenClaw lifecycle; transitive
+the updater approves only the staged OpenClaw package’s lifecycle; transitive
 dependency scripts remain blocked. OpenClaw then swaps the clean package tree
 into the real global prefix. If verification fails, post-update doctor, plugin
 sync, and restart work do not run from the suspect tree.
@@ -669,7 +671,7 @@ supported through the owning manager.
 
 Package updates preserve local `dist` edits in a recovery bundle before replacing
 the old package. Capture happens after service drain and the old-tree move, so
-edits made while the candidate installs are included. The report names the bundle
+edits made while the new version installs are included. The report names the bundle
 under the selected state directory's `update-recovery/` directory. Keep it until
 you have checked the updated installation; removal is manual.
 
@@ -685,7 +687,7 @@ executable status. Replay requires the new package's corresponding baseline and
 actual bytes to match; upstream changes, unsafe paths, and hardlinked targets
 prevent replay. A conflict leaves the whole override set in the recovery bundle.
 Unreferenced content-hashed additions also require manual recovery. Replay runs
-against the private candidate before it replaces the live package. Publication
+against the private staged package before it replaces the live package. Publication
 and restoration refuse to overwrite a destination created concurrently. Replay
 does not establish that local code remains compatible with the new release.
 

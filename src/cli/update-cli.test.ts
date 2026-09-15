@@ -2165,7 +2165,7 @@ describe("update-cli", () => {
         },
         steps: [
           {
-            name: "candidate gateway canary",
+            name: "Checking Gateway startup",
             command: "openclaw gateway",
             cwd: "/candidate",
             durationMs: 1,
@@ -4053,7 +4053,7 @@ describe("update-cli", () => {
           status: "ok",
           steps: [
             {
-              name: "candidate migration continuation",
+              name: "Checking update recovery",
               command: "--check",
               cwd: options.root,
               durationMs: 0,
@@ -9245,7 +9245,7 @@ describe("update-cli", () => {
             : {}),
           steps: [
             {
-              name: "candidate gateway canary",
+              name: "Checking Gateway startup",
               command: "openclaw gateway",
               cwd: root,
               durationMs: 1,
@@ -9358,7 +9358,7 @@ describe("update-cli", () => {
       }
       if (legacyConfigChange) {
         const warning =
-          "Candidate Doctor changed keys meta, plugins, wizard; promotion receipts unavailable for this candidate version.";
+          "Doctor changed config keys meta, plugins, wizard during update checks. Check those settings after the update; this version cannot verify that they were applied.";
         expect(record?.steps).toContainEqual(
           expect.objectContaining({
             step: expect.stringMatching(/^warning:/),
@@ -9426,7 +9426,7 @@ describe("update-cli", () => {
         status: "ok",
         steps: [
           {
-            name: "candidate gateway canary",
+            name: "Checking Gateway startup",
             command: "openclaw gateway",
             cwd: options.root,
             durationMs: 1,
@@ -9457,7 +9457,7 @@ describe("update-cli", () => {
         },
         steps: [
           {
-            name: "candidate gateway canary",
+            name: "Checking Gateway startup",
             command: "openclaw gateway",
             cwd: root,
             durationMs: 1,

@@ -145,7 +145,7 @@ describe("update candidate canary", () => {
       expect(result).toMatchObject({ status: "error", phase: "snapshot" });
       const failed = result.steps.at(-1);
       expect(failed).toMatchObject({
-        name: "candidate snapshot",
+        name: "Preparing update checks",
         exitCode: 1,
         snapshotCapacity: {
           reason: "snapshot-capacity-insufficient",
@@ -268,7 +268,7 @@ describe("update candidate canary", () => {
       expect(result, result.logTail.join("\n")).toMatchObject({ status: "ok", phase: "readiness" });
       expect(result.durationMs).toBeGreaterThanOrEqual(300_001);
       expect(result.steps).toContainEqual(
-        expect.objectContaining({ name: "candidate gateway canary", exitCode: 0 }),
+        expect.objectContaining({ name: "Checking Gateway startup", exitCode: 0 }),
       );
       expect(result.logTail.join("\n")).toContain("readyz: ready");
       await expect(fs.access(childEnv.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({
@@ -312,7 +312,7 @@ describe("update candidate canary", () => {
           expect(result.logTail.join("\n")).toContain("deadline exceeded");
         } else {
           expect(result.steps).toContainEqual(
-            expect.objectContaining({ name: "candidate migration rehearsal", exitCode: 0 }),
+            expect.objectContaining({ name: "Checking data migrations", exitCode: 0 }),
           );
           expect(result.logTail.join("\n")).toContain("readyz: ready");
         }
@@ -411,7 +411,7 @@ describe("update candidate canary", () => {
       stubHealthyGateway();
       const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
       expect(result.status).toBe(expectedStatus);
-      const step = result.steps.find((entry) => entry.name === "candidate migration rehearsal");
+      const step = result.steps.find((entry) => entry.name === "Checking data migrations");
       expect(step?.exitCode).toBe(exitCode);
       if (receipt.status === "advisory") {
         expect(step?.advisory).toEqual({
@@ -456,7 +456,7 @@ describe("update candidate canary", () => {
     if (proceeds) {
       expect(result.steps).toContainEqual(
         expect.objectContaining({
-          name: "candidate plugin resolution",
+          name: "Checking plugins",
           exitCode: 0,
           stdoutTail: 'Plugin "fixture" could not be loaded during the update preview.',
         }),
@@ -489,11 +489,11 @@ describe("update candidate canary", () => {
       });
       expect(result.status).toBe("ok");
       expect(result.steps).toContainEqual(
-        expect.objectContaining({ name: "candidate gateway canary", exitCode: 0 }),
+        expect.objectContaining({ name: "Checking Gateway startup", exitCode: 0 }),
       );
       expect(result.steps).toContainEqual(
         expect.objectContaining({
-          name: "candidate rehearsal cleanup",
+          name: "Removing temporary update files",
           advisory: expect.objectContaining({
             message: expect.stringContaining("synthetic cleanup permission denied"),
           }),
@@ -537,10 +537,9 @@ describe("update candidate canary", () => {
     expect(result).not.toHaveProperty("checkpointContinuation");
     expect(result.steps).toEqual([
       expect.objectContaining({
-        name: "candidate migration continuation",
+        name: "Checking update recovery",
         exitCode: null,
-        stdoutTail:
-          "candidate predates the migration-continuation contract; finalization runs in the current binary",
+        stdoutTail: "This version uses the current updater to finish installation",
       }),
     ]);
     expect(onStep).toHaveBeenCalledWith(result.steps[0]);
@@ -605,13 +604,13 @@ describe("update candidate canary", () => {
     });
     expect(result).not.toHaveProperty("checkpointContinuation");
     expect(result.steps.map((step) => step.name)).toEqual([
-      "candidate snapshot",
-      "candidate migration rehearsal",
-      "candidate doctor lint",
-      "candidate config validation",
-      "candidate plugin resolution",
-      "candidate migration continuation",
-      "candidate gateway canary",
+      "Preparing update checks",
+      "Checking data migrations",
+      "Checking update health",
+      "Checking configuration",
+      "Checking plugins",
+      "Checking update recovery",
+      "Checking Gateway startup",
     ]);
     expect(completed.map((step) => step.name)).toEqual(result.steps.map((step) => step.name));
     expect(completed.map((step) => step.argv.slice(1, 3))).toEqual([
@@ -934,7 +933,7 @@ describe("update candidate canary", () => {
     const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
     expect(result).toMatchObject({ status: "error", phase: "runtime" });
     expect(result.steps.at(-1)).toMatchObject({
-      name: "candidate migration continuation",
+      name: "Checking update recovery",
       exitCode: 1,
     });
     expect(mocks.spawn.mock.calls.some(([, args]) => args.includes("--update-canary"))).toBe(false);

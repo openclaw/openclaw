@@ -62,7 +62,7 @@ export async function runUpdateCommandRepair(params: {
   let completedTurns = 0;
   let activeTurn = 0;
   let lastValidation: UpdateRepairValidation | undefined;
-  const targetClass = params.phase === "validating" ? "candidate rehearsal" : "live";
+  const targetClass = params.phase === "validating" ? "update checks" : "installed version";
   if (runId) {
     recordUpdateRunPhase(
       runId,

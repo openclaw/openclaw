@@ -74,7 +74,7 @@ export async function withUpdateCommandRecoveryUnwind(
     return;
   }
   if (recoveryState.ledgerHandoffOwned && !recoveryState.ledgerHandoffCompleted) {
-    let cause = failure?.error ?? new Error("Candidate finalization has no confirmed outcome.");
+    let cause = failure?.error ?? new Error("Update finalization has no confirmed outcome.");
     try {
       // Settle the existing guarded suspension without enabling a runtime whose
       // handoff did not finish. The native owner retains its own identity checks.

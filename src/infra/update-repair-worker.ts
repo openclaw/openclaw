@@ -23,7 +23,7 @@ export async function runUpdateRepairWorker(
   let finalValidation: UpdateRepairValidation = {
     ok: false,
     score: 0,
-    summary: "Candidate repair worker did not validate the installation.",
+    summary: "Update repair did not verify the installation.",
   };
   const clean = (value: unknown) =>
     redactSupportString(
@@ -38,7 +38,7 @@ export async function runUpdateRepairWorker(
   if (params.isCurrent && !params.runId) {
     return stopped(
       "unavailable",
-      "Candidate repair requires the admitting update run identity to preserve its execution guard.",
+      "Update repair requires the original update run to continue safely.",
     );
   }
   const parsedBudget = updateRepairBudgetSchema.safeParse(params.budget ?? {});
@@ -127,11 +127,11 @@ export async function runUpdateRepairWorker(
   };
   const send = (message: UpdateRepairParentMessage) => {
     if (!child.connected) {
-      stop(new Error("Candidate repair worker closed its control channel."));
+      stop(new Error("Update repair lost its connection to the repair process."));
       return;
     }
     if (Buffer.byteLength(JSON.stringify(message)) > UPDATE_REPAIR_IPC_MAX_BYTES) {
-      stop(new Error("Candidate repair message exceeded its bounded diagnostic budget."));
+      stop(new Error("Update repair message exceeded the size limit."));
       return;
     }
     child.send(message, (error) => {
@@ -157,18 +157,18 @@ export async function runUpdateRepairWorker(
     try {
       assertCurrent();
       if (Buffer.byteLength(JSON.stringify(raw)) > UPDATE_REPAIR_IPC_MAX_BYTES) {
-        throw new Error("Candidate repair response exceeded its bounded diagnostic budget.");
+        throw new Error("Update repair response exceeded the size limit.");
       }
       const message = updateRepairWorkerMessageSchema.parse(raw);
       if (message.type === "ready") {
         if (started) {
-          throw new Error("Candidate repair worker repeated startup.");
+          throw new Error("Update repair process reported startup more than once.");
         }
         // Released workers only repair live state and discard rehearsal selectors.
         // Never let one reopen a migrated copy under the previous runtime.
         if (params.context.phase === "validating" && !message.candidateRehearsal) {
           throw new Error(
-            "This candidate cannot repair isolated rehearsal state. Run openclaw triage to inspect the validation failure.",
+            "This version cannot safely repair the temporary update copy. Run openclaw triage to inspect the failed update checks.",
           );
         }
         started = true;
@@ -185,7 +185,7 @@ export async function runUpdateRepairWorker(
         send(start);
       } else if (message.type === "validate") {
         if (!started || pending || message.id !== ++requestId || requestId > budget.maxTurns + 1) {
-          throw new Error("Candidate repair validation request is outside its active turn.");
+          throw new Error("Update repair requested a check outside its active turn.");
         }
         const validationController = new AbortController();
         const validationSignal = AbortSignal.any([signal, validationController.signal]);
@@ -208,18 +208,18 @@ export async function runUpdateRepairWorker(
         pending = { id: message.id, controller: validationController, promise };
       } else if (message.type === "cancel-validation") {
         if (pending?.id === message.id) {
-          pending.controller.abort(new Error("Candidate repair validation was cancelled."));
+          pending.controller.abort(new Error("Update repair checks were canceled."));
         }
       } else if (message.type === "event") {
         if (
           (message.event.type === "turn-started" || message.event.type === "turn-finished") &&
           message.event.turn > budget.maxTurns
         ) {
-          throw new Error("Candidate repair exceeded its turn budget.");
+          throw new Error("Update repair exceeded its allowed number of attempts.");
         }
         if (message.event.type === "turn-finished") {
           if (attempts.length >= budget.maxTurns || message.event.turn !== attempts.length + 1) {
-            throw new Error("Candidate repair repeated a completed turn.");
+            throw new Error("Update repair repeated a completed attempt.");
           }
           const { type: _type, ...attempt } = message.event;
           attempts.push(attempt);
@@ -227,7 +227,7 @@ export async function runUpdateRepairWorker(
         params.onEvent?.(message.event);
       } else {
         if (message.result.attempts.length > budget.maxTurns) {
-          throw new Error("Candidate repair exceeded its turn budget.");
+          throw new Error("Update repair exceeded its allowed number of attempts.");
         }
         result = message.result;
       }
@@ -237,7 +237,7 @@ export async function runUpdateRepairWorker(
   });
   child.once("disconnect", () => {
     if (!result) {
-      stop(new Error("Candidate repair worker closed its control channel."));
+      stop(new Error("Update repair lost its connection to the repair process."));
     }
   });
   const closed = new Promise<number | null>((resolve) => {
@@ -254,7 +254,7 @@ export async function runUpdateRepairWorker(
   });
   try {
     const code = await closed;
-    pending?.controller.abort(new Error("Candidate repair worker exited."));
+    pending?.controller.abort(new Error("Update repair process exited."));
     await pending?.promise;
     await termination.settle();
     assertCurrent();
@@ -263,7 +263,7 @@ export async function runUpdateRepairWorker(
       : stopped(
           "unavailable",
           failure ??
-            "Candidate repair worker exited without a result. Inspect the candidate installation with triage.",
+            "Update repair process exited without a result. Run openclaw triage to inspect the installation.",
         );
   } catch (error) {
     return stopped("aborted", clean(error));

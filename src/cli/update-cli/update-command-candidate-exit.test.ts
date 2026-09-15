@@ -105,7 +105,7 @@ it("keeps successful candidate repair separate from a failed update and its proc
     phase: "snapshot" as const,
     steps: [
       {
-        name: "candidate snapshot",
+        name: "Preparing update checks",
         command: "candidate validation",
         cwd: candidateRoot,
         durationMs: 1,

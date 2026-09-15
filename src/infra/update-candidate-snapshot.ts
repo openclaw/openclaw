@@ -166,7 +166,7 @@ export async function assessInitialUpdateSnapshotCapacity(
     };
   } catch {
     warnings.push(
-      "Initial snapshot capacity could not be measured; continuing to the candidate snapshot check.",
+      "Initial snapshot capacity could not be measured; continuing to the update snapshot check.",
     );
     return {
       ...step,

@@ -32,7 +32,7 @@ export async function waitForUpdateCandidateReadiness(
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
     if (params.hasExited()) {
-      throw new Error(params.getExitReason() ?? "Candidate gateway exited before readiness");
+      throw new Error(params.getExitReason() ?? "The updated Gateway exited before it was ready");
     }
   };
   try {
@@ -47,7 +47,7 @@ export async function waitForUpdateCandidateReadiness(
           assertRunning();
           if (Date.now() >= params.workDeadline) {
             if (!failure) {
-              throw new Error("Candidate validation deadline exceeded");
+              throw new Error("Update validation deadline exceeded");
             }
             params.capture(failure.message);
             return failure;

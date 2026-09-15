@@ -35,14 +35,14 @@ export function createUpdateDoctorConfigWarningStep(
     ...new Set(changes.flatMap((change) => (change.kind === "key" ? [change.key] : []))),
   ].toSorted();
   return {
-    name: "candidate Doctor config",
+    name: "Doctor config changes",
     command: "report Doctor config changes",
     cwd: root,
     durationMs: 0,
     exitCode: 0,
     advisory: {
       kind: "recoverable-maintenance" as const,
-      message: `Candidate Doctor changed keys ${keys.join(", ") || "none recorded"}; promotion receipts unavailable for this candidate version.`,
+      message: `Doctor changed config keys ${keys.join(", ") || "none recorded"} during update checks. Check those settings after the update; this version cannot verify that they were applied.`,
     },
   };
 }

@@ -13,7 +13,7 @@ export function expectCanaryReadinessWarning(
   status: number,
 ) {
   expect(step).toMatchObject({
-    name: "candidate gateway canary",
+    name: "Checking Gateway startup",
     advisory: {
       kind: "candidate-runtime-unavailable",
       message: expect.stringContaining(`failed: HTTP ${status}`),
@@ -140,9 +140,7 @@ export function registerCanaryReadinessBudgetTests(root: () => string) {
     const params = { root: root(), stateDir: root(), config: {}, env: {}, timeoutMs: 250 };
     const unavailable = await validateUpdateCandidateCanary(params);
     expect(unavailable.status).toBe("ok");
-    expect(unavailable.logTail.join("\n")).toContain(
-      "Candidate stopped by the validation deadline",
-    );
+    expect(unavailable.logTail.join("\n")).toContain("Update checks reached their time limit");
     expect(unavailable.steps.at(-1)?.advisory?.message).toContain("ECONNREFUSED");
     expect(unavailable.steps.at(-1)?.failureFacts).toEqual([
       {

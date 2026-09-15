@@ -72,9 +72,7 @@ export function createChildOwner(params: {
   let failure: Error | undefined;
   const assertIdle = () => {
     if (delegating) {
-      throw new UpdateCommandRecoveryPendingError(
-        "Parent executor is suspended for its candidate.",
-      );
+      throw new UpdateCommandRecoveryPendingError("The update process is still running.");
     }
   };
   return {
@@ -116,7 +114,7 @@ export function createChildOwner(params: {
           !store.current(candidateParent) ||
           resolveUpdateInstallRoot(root) !== candidateParent.key
         ) {
-          throw new UpdateCommandRecoveryPendingError("Candidate installation ownership changed.");
+          throw new UpdateCommandRecoveryPendingError("Update installation ownership changed.");
         }
       };
       const running = async () => {
@@ -127,7 +125,7 @@ export function createChildOwner(params: {
             const acquired = store.acquire(candidateRoot, randomUUID(), { kind: "update" });
             if (acquired.kind !== "acquired") {
               throw new UpdateCommandRecoveryPendingError(
-                "Another update executor owns the candidate installation.",
+                "Another update executor owns the update installation.",
               );
             }
             candidateParent = acquired.lease;
@@ -147,7 +145,7 @@ export function createChildOwner(params: {
             );
             if (acquired.kind !== "acquired") {
               throw new UpdateCommandRecoveryPendingError(
-                "Candidate lifetime could not be acquired.",
+                "Could not reserve the installation for this update.",
               );
             }
             children.push(acquired.lease);
@@ -166,14 +164,12 @@ export function createChildOwner(params: {
           const result = await operation(grant, (pid, argv) => {
             assertOwners();
             if (bound || pid === process.pid) {
-              throw new UpdateCommandRecoveryPendingError(
-                "Candidate process can be bound only once.",
-              );
+              throw new UpdateCommandRecoveryPendingError("Update process can be bound only once.");
             }
             for (let index = 0; index < children.length; index++) {
               const assigned = store.bind(children[index]!, pid, undefined, argv);
               if (!assigned) {
-                throw new UpdateCommandRecoveryPendingError("Candidate process binding failed.");
+                throw new UpdateCommandRecoveryPendingError("Update process binding failed.");
               }
               children[index] = assigned;
             }
@@ -181,7 +177,7 @@ export function createChildOwner(params: {
           });
           if (!bound) {
             throw new UpdateCommandRecoveryPendingError(
-              "Candidate continuation did not bind a process.",
+              "The update worker did not confirm startup.",
             );
           }
           assertOwners();
@@ -193,20 +189,20 @@ export function createChildOwner(params: {
           // Release the active generation before the original lineage, as in
           // the shipped finalizer. A failed release never reactivates the parent.
           if (children.length > 1 && !store.release(children[1]!)) {
-            throw new UpdateCommandRecoveryPendingError("Candidate executor has not settled.");
+            throw new UpdateCommandRecoveryPendingError("The update process has not finished.");
           }
           if (acquiredParent && !store.release(candidateParent)) {
-            throw new UpdateCommandRecoveryPendingError("Candidate installation release failed.");
+            throw new UpdateCommandRecoveryPendingError("Update installation release failed.");
           }
           if (children.length > 0 && !store.release(children[0]!)) {
-            throw new UpdateCommandRecoveryPendingError("Candidate executor has not settled.");
+            throw new UpdateCommandRecoveryPendingError("The update process has not finished.");
           }
           delegating = false;
         } catch (cause) {
           if ("error" in outcome) {
             throw new AggregateError(
               [outcome.error, cause],
-              "Candidate and its executor cleanup failed",
+              "Update and its executor cleanup failed",
               { cause },
             );
           }
@@ -221,7 +217,7 @@ export function createChildOwner(params: {
       pending = work;
       void work
         .catch((cause: unknown) => {
-          failure = cause instanceof Error ? cause : new Error("Candidate failed", { cause });
+          failure = cause instanceof Error ? cause : new Error("Update failed", { cause });
         })
         .finally(() => {
           if (pending === work) {

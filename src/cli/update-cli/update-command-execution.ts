@@ -383,7 +383,7 @@ export async function executeMutableUpdate(
         if (!executor) {
           throw new UpdatePreMutationError(
             "target-native-unsupported",
-            "Native candidate admission requires its original update executor.",
+            "Starting the update requires its original update process.",
           );
         }
         const supported = await isUpdatedInstallGatewayExecutorSupported({
@@ -429,7 +429,7 @@ export async function executeMutableUpdate(
         candidateSchemaVersions = validation.candidateSchemaVersions;
         doctorConfigWrites = validation.doctorConfigWrites === true;
         observedGatewayStartupMs = validation.steps.find(
-          (step) => step.name === "candidate gateway canary" && step.exitCode === 0,
+          (step) => step.name === "Checking Gateway startup" && step.exitCode === 0,
         )?.durationMs;
       }
       return validation;
@@ -461,7 +461,7 @@ export async function executeMutableUpdate(
             score: repairValidation.steps.filter((step) => step.exitCode === 0).length,
             summary:
               repairValidation.status === "ok"
-                ? "Candidate validation passed."
+                ? "Update checks passed."
                 : repairValidation.logTail.join("\n"),
           };
         },
@@ -494,7 +494,7 @@ export async function executeMutableUpdate(
     ) {
       throw new UpdatePreMutationError(
         "invalid-config",
-        "Config changed during candidate validation; rerun the update before activating.",
+        "Config changed during update checks; rerun the update before activating.",
       );
     }
     const config = snapshot.config;
@@ -653,7 +653,7 @@ export async function executeMutableUpdate(
           if (failed) {
             throw new UpdatePreMutationError(
               failed.name,
-              failed.stderrTail ?? "Candidate validation failed.",
+              failed.stderrTail ?? "Update checks failed.",
               { failureFacts: failed.failureFacts },
             );
           }

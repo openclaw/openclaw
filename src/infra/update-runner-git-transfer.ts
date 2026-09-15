@@ -70,12 +70,12 @@ export async function prepareGitCandidateTransfer(params: {
       : undefined;
   };
   const upstreamSha = upstreamRef
-    ? await runGit("git pin candidate upstream", ["rev-parse", upstreamRef])
+    ? await runGit("git pin update upstream", ["rev-parse", upstreamRef])
     : undefined;
   if (upstreamRef && !upstreamSha) {
     return undefined;
   }
-  const objects = await runGit("git candidate history", [
+  const objects = await runGit("git update history", [
     "rev-list",
     "--objects",
     "--no-object-names",
@@ -85,7 +85,7 @@ export async function prepareGitCandidateTransfer(params: {
   ]);
   // An older/divergent target may reuse blobs omitted from the installed partial
   // clone. Include its entire tree separately, even when no new commits exist.
-  const tree = await runGit("git candidate tree", [
+  const tree = await runGit("git update tree", [
     "rev-list",
     "--objects",
     "--no-object-names",
@@ -169,7 +169,7 @@ export async function prepareGitCandidateTransfer(params: {
   // base can trigger a lazy network fetch when the installed Git imports it.
   // A configured packSizeLimit also needs clearing to guarantee a single pack.
   const hash = await runGit(
-    "git pack candidate",
+    "git pack update",
     ["-c", "pack.packSizeLimit=0", "pack-objects", "--max-pack-size=0", prefix],
     input,
   );
@@ -187,9 +187,9 @@ export async function prepareGitCandidateTransfer(params: {
   } catch (error) {
     return recordStagingFailure(
       step,
-      "git candidate pack read",
-      `read candidate pack ${packPath}`,
-      `Cannot stage candidate Git pack: ${String(error)}`,
+      "git update pack read",
+      `read update pack ${packPath}`,
+      `Cannot stage the Git update pack: ${String(error)}`,
       Date.now() - readStarted,
     );
   }
@@ -232,7 +232,7 @@ export async function prepareGitCandidateTransfer(params: {
           { cwd: target.cwd, timeoutMs: target.timeoutMs },
         );
         if (location.code !== 0) {
-          throw new Error("Cannot locate the retained candidate pack");
+          throw new Error("Cannot locate the retained Git update pack");
         }
         const keepPath = location.stdout.trim();
         const message = await fs.readFile(keepPath, "utf8").catch((error: unknown) => {
@@ -248,15 +248,15 @@ export async function prepareGitCandidateTransfer(params: {
         }
       } catch (error) {
         const warning: UpdateStepResult = {
-          name: "git candidate pack cleanup",
-          command: "release retained candidate pack",
+          name: "git update pack cleanup",
+          command: "release retained Git update pack",
           cwd: target.cwd,
           durationMs: 0,
           exitCode: 1,
           stderrTail: String(error),
           advisory: {
             kind: "recoverable-maintenance",
-            message: `Candidate pack remains retained: ${String(error)}`,
+            message: `Git update pack could not be removed: ${String(error)}`,
           },
         };
         target.results?.push(warning);

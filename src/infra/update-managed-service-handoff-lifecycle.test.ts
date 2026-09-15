@@ -511,7 +511,7 @@ describe("managed service update handoff", () => {
         );
         expect(
           run?.steps.find((step) => step.step === "repairing" && step.status === "failed")?.detail,
-        ).toContain(phase === "validating" ? "candidate rehearsal" : "live");
+        ).toContain(phase === "validating" ? "update checks" : "installed version");
         expect(run?.repair[0]?.reason).toBe("requester-revoked");
       } else {
         expect(run?.repair[0]).toMatchObject({ status: "succeeded" });

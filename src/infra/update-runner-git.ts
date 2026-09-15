@@ -416,7 +416,7 @@ export async function updateGitCheckout(params: {
           beforeSha,
           installedRoot: gitRoot,
           upstreamRef,
-          step: inspectionStep("git pack candidate", [], inspectionRoot),
+          step: inspectionStep("git pack update", [], inspectionRoot),
         });
         if (!transfer) {
           return { status: "error" as const, reason: "fetch-failed" };
@@ -469,14 +469,14 @@ export async function updateGitCheckout(params: {
             timeoutMs,
           });
           if (candidate.code !== 0 || !candidate.stdout.trim()) {
-            throw new Error("Cannot inspect the validated Git candidate");
+            throw new Error("Cannot inspect the validated Git update");
           }
           await inspectTarget(candidate.stdout.trim(), root);
           if (opts.publishGitCheckout) {
             // A new checkout must settle its destination before runtime relocation
             // records absolute paths. Candidate build/validation has already finished.
             if ((await importCandidate(candidate.stdout.trim())).status !== "ok") {
-              throw new Error("Cannot import the admitted Git candidate");
+              throw new Error("Cannot import the admitted Git update");
             }
             gitRoot = await opts.publishGitCheckout();
             publishedCandidate = true;
@@ -714,7 +714,7 @@ export async function updateGitCheckout(params: {
       error instanceof UpdateRequesterRevokedError ? error.code : "unexpected-error",
     );
   } finally {
-    await candidateTransfer?.cleanup(step("git candidate pack cleanup", [], gitRoot));
+    await candidateTransfer?.cleanup(step("git update pack cleanup", [], gitRoot));
     await runtimePromotion?.cleanup();
   }
 }

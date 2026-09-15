@@ -393,7 +393,7 @@ describe("fresh candidate repair process", () => {
       });
       expect(result).toMatchObject({
         status: "unavailable",
-        reason: expect.stringContaining("cannot repair isolated rehearsal state"),
+        reason: expect.stringContaining("cannot safely repair the temporary update copy"),
       });
       await expect(
         fs.stat(path.join(state.workspaceDir, "unexpected-start")),
