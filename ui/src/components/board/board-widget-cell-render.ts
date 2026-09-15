@@ -66,15 +66,18 @@ export function renderBoardWidgetMenu(options: {
       )}
       ${
         widget.contentKind === "html"
-          ? html`<wa-dropdown-item
-              class="board-widget__preset"
-              type="checkbox"
-              value="height:auto"
-              ?checked=${widget.heightMode !== "fixed"}
-              ?disabled=${disabled}
-            >
-              ${t("board.widget.autoHeight")}
-            </wa-dropdown-item>`
+          ? html`<wa-dropdown-item value="size:full-auto" ?disabled=${disabled}>
+                ${t("board.widget.fullWidthAutoHeight")}
+              </wa-dropdown-item>
+              <wa-dropdown-item
+                class="board-widget__preset"
+                type="checkbox"
+                value="height:auto"
+                ?checked=${widget.heightMode !== "fixed"}
+                ?disabled=${disabled}
+              >
+                ${t("board.widget.autoHeight")}
+              </wa-dropdown-item>`
           : nothing
       }
       <div class="board-widget__menu-separator" role="separator"></div>

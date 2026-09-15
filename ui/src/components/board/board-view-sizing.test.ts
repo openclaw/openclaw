@@ -4,10 +4,11 @@ import {
   effectiveBoardWidgetRows,
   exactBoardWidgetHeightPx,
 } from "../../lib/board/grid.ts";
+import type { BoardOp } from "../../lib/board/types.ts";
 // Side-effect import: test-support only type-imports the component, so the
 // custom element must be registered here for mount() to render anything.
 import "./board-view.ts";
-import { boardWidget, callbacks, mount, snapshot } from "./board-view.test-support.ts";
+import { boardWidget, callbacks, mount, settleCells, snapshot } from "./board-view.test-support.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -15,6 +16,55 @@ afterEach(() => {
 });
 
 describe("board widget sizing", () => {
+  it.each([
+    { sizeW: 3, heightMode: "fixed" as const },
+    { sizeW: 8, heightMode: "auto" as const },
+    { sizeW: 5, heightMode: "fixed" as const },
+    { sizeW: 12, heightMode: "fixed" as const },
+  ])(
+    "restores full width and auto height from $sizeW columns in $heightMode mode",
+    async (size) => {
+      const initial = snapshot({ widgets: [boardWidget({ ...size, sizeH: 6 })] });
+      const applyOps = vi.fn(async (ops: BoardOp[]) => {
+        const op = ops[0];
+        if (op?.kind !== "widget_resize") {
+          throw new Error("Expected a widget resize");
+        }
+        view.snapshot = snapshot({
+          revision: 2,
+          widgets: [boardWidget({ sizeW: op.sizeW, sizeH: op.sizeH, heightMode: op.heightMode })],
+        });
+      });
+      const view = await mount({ snapshot: initial, callbacks: callbacks({ applyOps }) });
+      const frame = view.querySelector("iframe");
+      const item = view.querySelector('wa-dropdown-item[value="size:full-auto"]');
+      expect(item?.textContent).toContain("Full width + auto height");
+      view
+        .querySelector(".board-widget__menu")
+        ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
+      await vi.waitFor(() =>
+        expect(applyOps).toHaveBeenCalledExactlyOnceWith([
+          { kind: "widget_resize", name: "alpha", sizeW: 12, sizeH: 6, heightMode: "auto" },
+        ]),
+      );
+      await settleCells(view);
+      expect(view.querySelector(".board-widget")?.getAttribute("style")).toContain("span 12");
+      expect(
+        view.querySelector('wa-dropdown-item[value="height:auto"]')?.hasAttribute("checked"),
+      ).toBe(true);
+      expect(view.querySelector("iframe")).toBe(frame);
+    },
+  );
+
+  it("does not offer a writable full-width action to read-only users", async () => {
+    const applyOps = vi.fn(async () => undefined);
+    const view = await mount({ canMutate: false, callbacks: callbacks({ applyOps }) });
+    const item = view.querySelector('wa-dropdown-item[value="size:full-auto"]');
+    expect(item).toBeNull();
+    expect(view.querySelector(".board-widget__menu")).toBeNull();
+    expect(applyOps).not.toHaveBeenCalled();
+  });
+
   it("snaps reported HTML heights to rows with card inset and fixed-mode fallbacks", () => {
     const card = boardWidget({ sizeH: 6 });
     expect(effectiveBoardWidgetRows(card, 98)).toBe(2);
