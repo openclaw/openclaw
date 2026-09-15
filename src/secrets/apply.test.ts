@@ -8,7 +8,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { registerResolvedAgentDir } from "../agents/agent-dir-registry.js";
 import { createAuthProfileStoreFixture } from "../agents/auth-profiles/credential-fixtures.test-support.js";
 import { getRuntimeAuthProfileStoreCredentialMutationToken } from "../agents/auth-profiles/mutation-lineage.js";
-import { noteCommittedSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import {
+  noteCommittedSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
+} from "../agents/auth-profiles/path-resolve.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -42,6 +45,7 @@ import {
   TALK_TEST_PROVIDER_ID,
 } from "../test-utils/talk-test-provider.js";
 import type { SecretsApplyPlan } from "./plan.js";
+import { SECRETS_PLAN_PROTOCOL_VERSION, SECRETS_PLAN_SHARED_PROTOCOL_VERSION } from "./plan.js";
 
 const { clearSecretsRuntimeSnapshotMock, prepareSecretsRuntimeSnapshotMock } = vi.hoisted(() => ({
   clearSecretsRuntimeSnapshotMock: vi.fn(),
@@ -194,7 +198,10 @@ function createPlan(params: {
 }): SecretsApplyPlan {
   return {
     version: 1,
-    protocolVersion: 1,
+    // Mirrors the generator: a shared-store target travels under the shared revision.
+    protocolVersion: params.targets.some((target) => target.authProfileStore === "shared")
+      ? SECRETS_PLAN_SHARED_PROTOCOL_VERSION
+      : SECRETS_PLAN_PROTOCOL_VERSION,
     generatedAt: new Date().toISOString(),
     generatedBy: "manual",
     targets: params.targets,
@@ -688,6 +695,181 @@ describe("secrets apply", () => {
       source: "env",
       provider: "default",
       id: "OPENAI_API_KEY",
+    });
+  });
+
+  it("routes explicit shared auth-profile targets to the shared state database", async () => {
+    await writeJsonFile(fixture.authStorePath, { version: 1, profiles: {} });
+    const stateDatabase = openOpenClawStateDatabase({ env: fixture.env }).db;
+    stateDatabase
+      .prepare(
+        `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+         VALUES ('auth.sharedStore', ?, 1)`,
+      )
+      .run(JSON.stringify({ location: "state-db" }));
+    stateDatabase
+      .prepare(
+        "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, 1)",
+      )
+      .run(
+        "authProfiles.store",
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "«redacted:sk-…»", // pragma: allowlist secret
+            },
+          },
+        }),
+      );
+    noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, fixture.env);
+    const sharedDbPath = resolveSharedAuthStorePath(fixture.env);
+    const plan = createPlan({
+      targets: [
+        {
+          type: "auth-profiles.api_key.key",
+          path: "profiles.openai:default.key",
+          pathSegments: ["profiles", "openai:default", "key"],
+          agentId: "main",
+          authProfileStore: "shared",
+          authProfileProvider: "openai",
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+
+    const result = await runSecretsApply({ plan, env: fixture.env, write: true });
+
+    expect(result.changed).toBe(true);
+    expect(result.changedFiles).toContain(sharedDbPath);
+    expect(result.changedFiles).not.toContain(fixture.authStorePath);
+    expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual({
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      },
+    });
+    const agentStore = readPersistedAuthProfileStoreRaw(fixture.agentDir) as {
+      profiles: Record<string, unknown>;
+    };
+    expect(agentStore.profiles).toEqual({});
+  });
+
+  it("keeps explicit agent auth-profile targets in the scoped agent store", async () => {
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-ope...text", // pragma: allowlist secret
+        },
+      },
+    });
+    const plan = createPlan({
+      targets: [
+        {
+          type: "auth-profiles.api_key.key",
+          path: "profiles.openai:default.key",
+          pathSegments: ["profiles", "openai:default", "key"],
+          agentId: "main",
+          authProfileStore: "agent",
+          ref: OPENAI_API_KEY_ENV_REF,
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+
+    const result = await runSecretsApply({ plan, env: fixture.env, write: true });
+
+    expect(result.changed).toBe(true);
+    expect(result.changedFiles).toContain(fixture.authStorePath);
+    const nextAuthStore = (await readAuthStore(fixture)) as unknown as {
+      profiles: { "openai:default": { key?: string; keyRef?: unknown } };
+    };
+    expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
+    expect(nextAuthStore.profiles["openai:default"].keyRef).toEqual(OPENAI_API_KEY_ENV_REF);
+  });
+
+  it("cleans up persisted shared plaintext when the selected ref is unchanged", async () => {
+    await writeJsonFile(fixture.authStorePath, { version: 1, profiles: {} });
+    const stateDatabase = openOpenClawStateDatabase({ env: fixture.env }).db;
+    stateDatabase
+      .prepare(
+        `INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+         VALUES ('auth.sharedStore', ?, 1)`,
+      )
+      .run(JSON.stringify({ location: "state-db" }));
+    // The shared row carries plaintext AND the same reference the plan selects. The
+    // normalized loader drops the plaintext sibling, so apply must decide from the
+    // persisted row that cleanup is still pending instead of reporting no change.
+    stateDatabase
+      .prepare(
+        "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, 1)",
+      )
+      .run(
+        "authProfiles.store",
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-sha...text", // pragma: allowlist secret
+              keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            },
+          },
+        }),
+      );
+    noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, fixture.env);
+    const sharedDbPath = resolveSharedAuthStorePath(fixture.env);
+    const plan = createPlan({
+      targets: [
+        {
+          type: "auth-profiles.api_key.key",
+          path: "profiles.openai:default.key",
+          pathSegments: ["profiles", "openai:default", "key"],
+          agentId: "main",
+          authProfileStore: "shared",
+          authProfileProvider: "openai",
+          ref: OPENAI_API_KEY_ENV_REF,
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    });
+
+    const result = await runSecretsApply({ plan, env: fixture.env, write: true });
+
+    expect(result.changed).toBe(true);
+    expect(result.changedFiles).toContain(sharedDbPath);
+    expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual({
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      },
     });
   });
 
