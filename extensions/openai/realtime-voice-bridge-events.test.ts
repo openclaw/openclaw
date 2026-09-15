@@ -429,14 +429,34 @@ describe("OpenAI realtime voice bridge events", () => {
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       providerVad: true,
     },
+    {
+      name: "provider VAD with automatic responses disabled",
+      producedAudioMs: 3_700,
+      mediaElapsedMs: 3_760,
+      bytesPerMs: 48,
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      providerVad: true,
+      autoRespondToAudio: false,
+      interruptResponseOnInputAudio: true,
+    },
   ])(
     "truncates $name",
-    async ({ producedAudioMs, mediaElapsedMs, bytesPerMs, audioFormat, providerVad }) => {
+    async ({
+      producedAudioMs,
+      mediaElapsedMs,
+      bytesPerMs,
+      audioFormat,
+      providerVad,
+      autoRespondToAudio,
+      interruptResponseOnInputAudio,
+    }) => {
       const onAudio = vi.fn();
       const onClearAudio = vi.fn();
       const bridge = createNativeBridge({
         onAudio,
         onClearAudio,
+        autoRespondToAudio,
+        interruptResponseOnInputAudio,
         ...(audioFormat ? { audioFormat } : {}),
         ...(providerVad ? {} : { onMark: () => bridge.acknowledgeMark() }),
       });
