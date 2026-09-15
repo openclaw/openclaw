@@ -1031,30 +1031,17 @@ export async function runGatewayLoop(params: {
           server = null;
         }
         if (action === "restart") {
-          try {
-            await hostLifecycle?.retire();
-            if (shutdownFailure) {
-              await forceExitAfterStabilityBundle(
-                "gateway.restart_close_failed",
-                1,
-                shutdownFailure,
-              );
-            } else if (handoffClosed) {
-              await handleRestartAfterServerClose(
-                managedUpdateOwner,
-                managedUpdateCancellation === "restored-in-process",
-              );
-            }
-          } finally {
-            clearForceExitTimer();
-            forceActiveRestartExit = null;
+          await hostLifecycle?.retire();
+          if (shutdownFailure) {
+            await forceExitAfterStabilityBundle("gateway.restart_close_failed", 1, shutdownFailure);
+          } else if (handoffClosed) {
+            await handleRestartAfterServerClose(
+              managedUpdateOwner,
+              managedUpdateCancellation === "restored-in-process",
+            );
           }
         } else if (acceptedRequest.hostedStop) {
-          try {
-            await handleHostedStopAfterServerClose(acceptedRequest.hostedStop, shutdownFailure);
-          } finally {
-            clearForceExitTimer();
-          }
+          await handleHostedStopAfterServerClose(acceptedRequest.hostedStop, shutdownFailure);
         } else {
           await hostLifecycle?.retire();
           if (isRestart && shutdownFailure) {
@@ -1083,7 +1070,12 @@ export async function runGatewayLoop(params: {
             await releaseLockIfHeld();
             await exitProcessAfterLogFlush(shutdownFailure ? 1 : 0);
           }
-          clearForceExitTimer();
+        }
+        // Even process.exit() can throw from an exit listener. Keep both deadline
+        // owners armed until the complete handoff succeeds, not just server close.
+        clearForceExitTimer();
+        if (action === "restart") {
+          forceActiveRestartExit = null;
         }
       }
     })();
