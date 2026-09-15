@@ -2,6 +2,7 @@
  * Page inspection helpers for visible text, observed errors, network requests,
  * and console messages from Playwright page state.
  */
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS, DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type {
   BrowserConsoleMessage,
@@ -41,7 +42,11 @@ export async function getPageTextViaPlaywright(opts: {
     timeout: DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
     signal: opts.signal,
   });
-  return { text: text.slice(0, maxChars), truncated: text.length > maxChars };
+  // Match snapshot/responses: raw .slice can split a trailing surrogate pair.
+  return {
+    text: truncateUtf16Safe(text, maxChars),
+    truncated: text.length > maxChars,
+  };
 }
 
 /** Returns captured page errors, optionally clearing the per-page buffer. */

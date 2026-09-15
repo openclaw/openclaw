@@ -77,15 +77,30 @@ describe("getPageTextViaPlaywright", () => {
       const text = "x".repeat(DEFAULT_AI_SNAPSHOT_MAX_CHARS + 1);
       installTextPage({ body: [text] });
       const result = await getPageTextViaPlaywright({ cdpUrl: "http://127.0.0.1:18792", maxChars });
+      const limit = Math.min(maxChars ?? DEFAULT_AI_SNAPSHOT_MAX_CHARS, DEFAULT_AI_SNAPSHOT_MAX_CHARS);
       expect(result).toEqual({
-        text: text.slice(
-          0,
-          Math.min(maxChars ?? DEFAULT_AI_SNAPSHOT_MAX_CHARS, DEFAULT_AI_SNAPSHOT_MAX_CHARS),
-        ),
+        text: text.slice(0, limit),
         truncated: true,
       });
     },
   );
+
+  it("does not split a trailing surrogate pair when truncating page text", async () => {
+    // "😀" is one Unicode scalar / two UTF-16 code units. maxChars=5 would
+    // leave a lone high surrogate under raw .slice(0, 5).
+    const text = "abcd😀";
+    installTextPage({ body: [text] });
+    const result = await getPageTextViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      maxChars: 5,
+    });
+    expect(result.truncated).toBe(true);
+    expect(result.text).toBe("abcd");
+    expect(result.text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    console.log(
+      `[browser page-text utf16 proof] maxChars=5 input=${JSON.stringify(text)} output=${JSON.stringify(result.text)} truncated=${result.truncated}`,
+    );
+  });
 
   it("does not mark text that exactly fits the budget as truncated", async () => {
     installTextPage({ body: ["Exact"] });
