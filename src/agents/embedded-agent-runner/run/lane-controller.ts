@@ -394,9 +394,14 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       sessionLanePolicy.priority === "foreground"
         ? await beginForegroundSessionMaintenance(
             options.getParams().sessionKey ?? options.getParams().sessionId,
-          )
+            abortSignal,
+          ).catch((error: unknown) => {
+            throwIfAborted();
+            throw error;
+          })
         : undefined;
     try {
+      throwIfAborted();
       const sessionOpts: CommandQueueEnqueueOptions = {
         ...opts,
         abortSignal,
