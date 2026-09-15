@@ -1,5 +1,11 @@
 // Feishu plugin module implements monitor.card action.lifecycle support behavior.
-import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { registerPluginInteractiveHandler } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  createRuntimeEnv,
+  createMockPluginRegistry,
+  getActivePluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
@@ -9,6 +15,7 @@ import {
 } from "./lifecycle.test-support.js";
 import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
+import { createFeishuClient } from "./client.js";
 import {
   createFeishuLifecycleConfig,
   createFeishuLifecycleReplyDispatcher,
@@ -220,6 +227,84 @@ describe("Feishu card-action lifecycle", () => {
     expectFeishuReplyDispatcherSentFinalReplyOnce({ createFeishuReplyDispatcherMock });
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("delivers submitted fields and original context to a registered plugin without a model turn", async () => {
+    const previous = getActivePluginRegistry();
+    setActivePluginRegistry(createMockPluginRegistry([]));
+    const handler = vi.fn<(ctx: unknown) => void>();
+    const registration = registerPluginInteractiveHandler("test-form-plugin", {
+      channel: "feishu",
+      namespace: "test-form",
+      handler,
+    });
+    expect(registration.ok).toBe(true);
+    const chatGet = vi.fn(async () => ({ code: 0, data: { chat_mode: "p2p" } }));
+    vi.mocked(createFeishuClient, { partial: true, deep: true }).mockReturnValue({
+      im: { chat: { get: chatGet } },
+    });
+    try {
+      const onCardAction = await setupLifecycleMonitor();
+      const event = {
+        operator: { open_id: "ou_user1" },
+        token: "tok-plugin-form",
+        open_message_id: "card-action-c-temporary",
+        context: { open_chat_id: "oc_form", open_message_id: "om_original" },
+        action: {
+          tag: "button",
+          value: createFeishuCardInteractionEnvelope({
+            k: "button",
+            a: "test-form:save",
+            c: { u: "ou_user1", h: "oc_form" },
+          }),
+          form_value: { title: "  preserve whitespace  ", choices: ["one", "two"], checked: false },
+          input_value: "",
+          name: "save",
+          option: "one",
+          options: ["one", "two"],
+        },
+      };
+      await onCardAction(event);
+      await onCardAction(event);
+      expect(handler).toHaveBeenCalledExactlyOnceWith({
+        channel: "feishu",
+        accountId: "acct-card",
+        conversationId: "oc_form",
+        senderId: "ou_user1",
+        messageId: "om_original",
+        chatType: "p2p",
+        callback: {
+          data: "test-form:save",
+          namespace: "test-form",
+          payload: "save",
+          action: event.action,
+        },
+      });
+      expect(chatGet).toHaveBeenCalledTimes(1);
+      expect(dispatchReplyFromConfigMock).not.toHaveBeenCalled();
+      expect(lastRuntime.error).not.toHaveBeenCalled();
+    } finally {
+      setActivePluginRegistry(previous ?? createMockPluginRegistry([]));
+    }
+  });
+
+  it.each([
+    { form_value: [] },
+    { input_value: 42 },
+    { options: ["one", false] },
+    { form_value: { title: "界".repeat(22_000) } },
+  ])("rejects malformed or oversized submitted fields before dispatch", async (fields) => {
+    const onCardAction = await setupLifecycleMonitor();
+    const event = createCardActionEvent({
+      token: "tok-invalid-form",
+      action: "feishu.quick_actions.help",
+      command: "/help",
+    });
+    await onCardAction({ ...event, action: { ...event.action, ...fields } });
+    expect(dispatchReplyFromConfigMock).not.toHaveBeenCalled();
+    expect(lastRuntime.error).toHaveBeenCalledWith(
+      "feishu[acct-card]: ignoring malformed card action payload",
+    );
   });
 
   it("routes v2 callbacks that report open_chat_id instead of chat_id", async () => {

@@ -30,6 +30,11 @@ export type FeishuCardActionEvent = {
   action: {
     value: Record<string, unknown>;
     tag: string;
+    form_value?: Record<string, unknown>;
+    input_value?: string;
+    name?: string;
+    option?: string;
+    options?: string[];
   };
   open_message_id?: string;
   context: {
@@ -453,6 +458,20 @@ export async function handleFeishuCardAction(params: {
         });
         completeFeishuCardAction(event.token, account.accountId);
         return;
+      }
+
+      if (envelope.k === "button") {
+        const { dispatchFeishuPluginCardAction } = await import("./interactive-dispatch.js");
+        const result = await dispatchFeishuPluginCardAction({
+          event,
+          account,
+          data: envelope.a,
+          channelRuntime: params.channelRuntime,
+        });
+        if (result.matched) {
+          completeFeishuCardAction(event.token, account.accountId);
+          return;
+        }
       }
 
       await sendInvalidInteractionNotice({

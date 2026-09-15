@@ -258,6 +258,34 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
   if (!token || !openId || !tag || !isRecord(actionValue)) {
     return null;
   }
+  // Submitted fields are callback data, never command text. Reject malformed or
+  // oversized submissions together instead of silently dispatching partial input.
+  for (const key of ["input_value", "name", "option"] as const) {
+    if (action[key] !== undefined && typeof action[key] !== "string") {
+      return null;
+    }
+  }
+  if (action.form_value !== undefined && !isRecord(action.form_value)) {
+    return null;
+  }
+  const options = action.options;
+  if (
+    options !== undefined &&
+    (!Array.isArray(options) ||
+      !options.every((option): option is string => typeof option === "string"))
+  ) {
+    return null;
+  }
+  const submittedFields = {
+    ...(isRecord(action.form_value) ? { form_value: action.form_value } : {}),
+    ...(typeof action.input_value === "string" ? { input_value: action.input_value } : {}),
+    ...(typeof action.name === "string" ? { name: action.name } : {}),
+    ...(typeof action.option === "string" ? { option: action.option } : {}),
+    ...(options !== undefined ? { options } : {}),
+  };
+  if (Buffer.byteLength(JSON.stringify(submittedFields), "utf8") > 64 * 1024) {
+    return null;
+  }
   return {
     operator: {
       open_id: openId,
@@ -268,6 +296,7 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
     action: {
       value: actionValue,
       tag,
+      ...submittedFields,
     },
     ...(openMessageId ? { open_message_id: openMessageId } : {}),
     context: {
