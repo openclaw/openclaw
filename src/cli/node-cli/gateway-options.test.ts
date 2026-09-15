@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { NodeHostConfig } from "../../node-host/config.js";
 import { encodePairingSetupCode } from "../../pairing/setup-code.js";
 import { resolveNodeGatewayOptions, resolveNodePairGatewayOptions } from "./gateway-options.js";
 
@@ -69,6 +70,37 @@ describe("node gateway options", () => {
     ).toMatchObject({ tls: true, tlsFingerprint: TLS_FINGERPRINT });
     expect(() => resolveNodeGatewayOptions({ tlsFingerprint: "abc123" }, null)).toThrow(
       "Invalid TLS fingerprint",
+    );
+  });
+
+  it("rejects explicitly blank --context-path values instead of dropping the path", () => {
+    expect(() => resolveNodeGatewayOptions({ contextPath: "" }, null)).toThrow(
+      "--context-path must not be blank",
+    );
+    expect(() => resolveNodeGatewayOptions({ contextPath: "   " }, null)).toThrow(
+      "--context-path must not be blank",
+    );
+    expect(() => resolveNodeGatewayOptions({ contextPath: "\t" }, null)).toThrow(
+      "--context-path must not be blank",
+    );
+  });
+
+  it("falls back to a paired or configured context path only when --context-path is omitted", () => {
+    const config: NodeHostConfig = {
+      version: 1,
+      nodeId: "test-node",
+      gateway: { host: "gw.example", port: 18789, contextPath: "/openclaw-gw" },
+    };
+    const pair = resolveNodePairGatewayOptions(
+      encodePairingSetupCode({
+        url: "wss://pair.example:8443/pair-gw",
+        bootstrapToken: "bootstrap-123",
+      }),
+    );
+    expect(resolveNodeGatewayOptions({}, config).contextPath).toBe("/openclaw-gw");
+    expect(resolveNodeGatewayOptions({}, null, pair).contextPath).toBe("/pair-gw");
+    expect(resolveNodeGatewayOptions({ contextPath: "/custom" }, config).contextPath).toBe(
+      "/custom",
     );
   });
 });

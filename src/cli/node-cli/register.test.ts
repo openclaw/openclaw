@@ -190,6 +190,18 @@ describe("registerNodeCli", () => {
     );
   });
 
+  it("rejects an explicit blank node run context path instead of dropping it", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(["node", "run", "--context-path", ""], { from: "user" });
+
+    expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+    expect(daemonMocks.defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("--context-path must not be blank"),
+    );
+    expect(daemonMocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("hosts worker turns process-locally for an ephemeral node run", async () => {
     const program = createProgram();
 

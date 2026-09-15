@@ -91,6 +91,12 @@ export function resolveNodeGatewayOptions(
     typeof options.tls === "boolean"
       ? options.tls
       : Boolean(tlsFingerprint) || (endpointChanged ? undefined : baselineTls);
+  // An explicitly empty or whitespace-only --context-path is operator error, not
+  // "no context path": it would otherwise silently drop a paired/configured path
+  // and connect to the Gateway root. Omit the option to select the default.
+  if (options.contextPath !== undefined && !normalizeOptionalString(options.contextPath)) {
+    throw new Error("--context-path must not be blank");
+  }
   const contextPath =
     normalizeOptionalString(options.contextPath) ??
     (options.contextPath !== undefined || endpointChanged

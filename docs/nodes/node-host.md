@@ -76,6 +76,11 @@ them before using the link if that access is too broad. See
 
 `node run` also accepts `--pair`, `--context-path` (Gateway WS context path), `--tls`, `--tls-fingerprint <sha256>`, and `--node-id` (override the legacy client instance ID; this does not reset pairing). On macOS, pass `--share-installed-apps` to advertise `device.apps`; sharing is off by default. Use `--no-share-installed-apps` to disable a previously saved opt-in.
 
+An explicitly empty or whitespace-only `--context-path` value is rejected
+instead of silently dropping the path and connecting to the Gateway root. Omit
+the option to keep the default (root) or paired/configured context path; pass
+`--context-path /` to explicitly select the root path.
+
 ### Remote gateway via SSH tunnel (loopback bind)
 
 If the Gateway binds to loopback (`gateway.bind=loopback`, default in local mode), remote node hosts cannot connect directly. Create an SSH tunnel and point the node host at the local end of the tunnel.
