@@ -33,6 +33,7 @@ import { createProcessAdapterEvents } from "./process-events.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
 const FORCED_WINDOWS_CLOSE_SETTLE_MS = 250;
+const POST_EXIT_CLOSE_SETTLE_MS = 250;
 const WINDOWS_PACKAGE_MANAGER_SHIMS = ["npm", "pnpm", "yarn", "npx"] as const;
 
 function resolveChildInvocation(params: {
@@ -246,12 +247,42 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
       ),
     );
   }
+  // Output activity is tracked through the capture path only: pre-subscriber
+  // arrivals stay buffered in the paused stream until a subscriber attaches,
+  // so nothing is consumed or lost before capture begins (#147304).
+  const trackOutputActivity = () => {
+    lastOutputAtMs = Date.now();
+  };
   const onStdout: ChildAdapter["onStdout"] = (listener, onRaw) => {
-    outputUnsubscribers.push(onDecodedOutput(child.stdout, listener, onRaw));
+    outputUnsubscribers.push(
+      onDecodedOutput(
+        child.stdout,
+        (text) => {
+          trackOutputActivity();
+          listener(text);
+        },
+        (chunk) => {
+          trackOutputActivity();
+          onRaw?.(chunk);
+        },
+      ),
+    );
   };
 
   const onStderr: ChildAdapter["onStderr"] = (listener, onRaw) => {
-    outputUnsubscribers.push(onDecodedOutput(child.stderr, listener, onRaw));
+    outputUnsubscribers.push(
+      onDecodedOutput(
+        child.stderr,
+        (text) => {
+          trackOutputActivity();
+          listener(text);
+        },
+        (chunk) => {
+          trackOutputActivity();
+          onRaw?.(chunk);
+        },
+      ),
+    );
   };
 
   const completion = createDeferredCore<{ code: number | null; signal: NodeJS.Signals | null }>();
@@ -263,12 +294,18 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   let processClosed = false;
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
   let forcedWindowsCloseTimer: NodeJS.Timeout | null = null;
+  let postExitCloseSettlementTimer: NodeJS.Timeout | null = null;
   let hardKillRequested = false;
+  // Any requested termination (soft or hard) transfers cleanup ownership to
+  // the supervisor's escalation flow; the normal-exit idle cap must not
+  // settle cleanup out from under it (#147335 review).
+  let terminationRequested = false;
   let windowsTreeKillCompleted = false;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   let childCloseState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
   let stdoutDrained = child.stdout == null;
   let stderrDrained = child.stderr == null;
+  let lastOutputAtMs = Date.now();
   let workerIpcDisconnected = false;
   let openWorkerStdio = 0;
 
@@ -288,6 +325,14 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     forcedWindowsCloseTimer = null;
   };
 
+  const clearPostExitCloseSettlement = () => {
+    if (!postExitCloseSettlementTimer) {
+      return;
+    }
+    clearTimeout(postExitCloseSettlementTimer);
+    postExitCloseSettlementTimer = null;
+  };
+
   const settleWait = (value: { code: number | null; signal: NodeJS.Signals | null }) => {
     if (waitSettled) {
       return;
@@ -295,6 +340,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     waitSettled = true;
     clearForceKillWaitFallback();
     clearForcedWindowsCloseTimer();
+    clearPostExitCloseSettlement();
     completion.resolve(value);
   };
 
@@ -311,6 +357,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     waitSettled = true;
     clearForceKillWaitFallback();
     clearForcedWindowsCloseTimer();
+    clearPostExitCloseSettlement();
     completion.reject(error);
   };
 
@@ -354,6 +401,36 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
       settleWait(resolveObservedExitState(exitState));
     }, FORCED_WINDOWS_CLOSE_SETTLE_MS);
     forcedWindowsCloseTimer.unref?.();
+  };
+
+  const schedulePostExitCloseSettlement = () => {
+    if (
+      process.platform === "win32" ||
+      postExitCloseSettlementTimer ||
+      terminationRequested ||
+      childExitState == null ||
+      workerIpcDisconnected ||
+      (stdoutDrained && stderrDrained)
+    ) {
+      return;
+    }
+    const exitState = childExitState;
+    // A detached grandchild can inherit the child's stdio handles and hold
+    // them open long after the root command exits (e.g. `nohup sleep 600 |
+    // cat &`). The run's outcome is already determined by the root's exit;
+    // cap the drain window once output goes idle instead of waiting on a
+    // pipe we do not own. (#147304)
+    postExitCloseSettlementTimer = setTimeout(() => {
+      postExitCloseSettlementTimer = null;
+      if (Date.now() - lastOutputAtMs < POST_EXIT_CLOSE_SETTLE_MS) {
+        schedulePostExitCloseSettlement();
+        return;
+      }
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      settleObservedClose(resolveObservedExitState(exitState));
+    }, POST_EXIT_CLOSE_SETTLE_MS);
+    postExitCloseSettlementTimer.unref?.();
   };
 
   const isWindowsHardKillSettlementBlocked = () =>
@@ -419,6 +496,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     childExitState = { code, signal };
     events.emitExit(code, signal);
     scheduleForcedWindowsCloseSettlement();
+    schedulePostExitCloseSettlement();
     maybeSettleAfterExit();
   });
   child.once("close", (code, signal) => {
@@ -490,6 +568,10 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
       }
       return;
     }
+    // A termination request owns cleanup from here on: disarm the normal-exit
+    // idle cap so it cannot resolve cleanup while the supervisor escalates.
+    terminationRequested = true;
+    clearPostExitCloseSettlement();
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {
       hardKillRequested = true;
