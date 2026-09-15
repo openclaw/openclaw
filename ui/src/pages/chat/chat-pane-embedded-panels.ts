@@ -14,7 +14,10 @@ import type { ControlUiRegistration } from "../../plugins/control-ui-capability.
 import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
-import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
+import type {
+  ChatSessionCompanionThread,
+  ChatSessionCompanionTurn,
+} from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { openTaskDetailId } from "./components/chat-detail-slot.ts";
 import {
@@ -65,11 +68,10 @@ type SidebarPanelDefinitionParams = {
   companionPresented: boolean;
   companionFocusRequest: (() => boolean) | undefined;
   canFocusCompanion: () => boolean;
-  onCompanionSubmit: (question: string) => void;
+  onCompanionSubmit: (question: string | ChatSessionCompanionTurn) => void;
   onCompanionDraftChange: (draft: string) => void;
   onCompanionVisibilityChange: (visible: boolean) => void;
   connected: boolean;
-  pendingQuestion: string | null;
   onClearCompanion: () => void;
   onRefreshTasks: () => void;
   tasksLoading: boolean;
@@ -275,7 +277,7 @@ export function sidebarPanelDefinitions(
               class="rail-header__action chat-session-rail__clear"
               type="button"
               aria-label=${t("chat.rail.clear")}
-              ?disabled=${!params.connected || params.pendingQuestion !== null}
+              ?disabled=${!params.connected || params.companion.turns.some((turn) => turn.status === "pending")}
               @click=${params.onClearCompanion}
             >
               ${icons.trash}

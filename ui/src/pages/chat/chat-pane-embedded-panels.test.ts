@@ -991,6 +991,7 @@ describe("chat pane embedded panels", () => {
     const onRefreshTasks = vi.fn();
     const params = {} as NonNullable<Parameters<typeof sidebarPanelDefinitions>[0]>;
     params.connected = true;
+    params.companion = { turns: [], loading: false, draft: "" };
     params.onRefreshTasks = onRefreshTasks;
     params.tasksLoading = false;
     const tasks = sidebarPanelDefinitions(params).find((definition) => definition.slot === "tasks");
