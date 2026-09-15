@@ -696,11 +696,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       commandHighlighting: options?.exec?.commandHighlighting ?? execConfig.commandHighlighting,
       safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
       safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,
-      agentId,
+      agentId: executionAgentId,
       cleanupMs: options?.exec?.cleanupMs ?? execConfig.cleanupMs,
       processToolAvailabilityRef,
       scopeKey,
-      sessionKey: options?.sessionKey,
+      sessionKey: executionSessionKey,
       runId: options?.runId,
       operationalRunInstance: options?.operationalRunInstance,
       // Detached completions return to the live session, not the sandbox policy scope.

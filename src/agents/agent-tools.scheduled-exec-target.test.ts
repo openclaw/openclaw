@@ -170,4 +170,26 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
       undefined,
     );
   });
+
+  it("binds exec approval identity to the active run session", async () => {
+    const tools = createOpenClawCodingTools({
+      agentId: "main",
+      policyAgentId: "policy-owner",
+      sessionKey: "agent:main:telegram:default:direct:12345",
+      runSessionKey: "agent:main:main",
+    });
+    const execTool = tools.find((tool) => tool.name === "exec");
+    if (!execTool) {
+      throw new Error("expected an exec tool on the active run surface");
+    }
+    await execTool.execute("call-runtime-identity", { command: "echo hi" });
+
+    expect(shellSpies.defaults).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        notifySessionKey: "agent:main:main",
+      }),
+    );
+  });
 });

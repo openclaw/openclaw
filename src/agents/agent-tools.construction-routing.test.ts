@@ -201,7 +201,7 @@ describe("createOpenClawCodingTools exec notification routing", () => {
       expect(createLazyExecToolMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
           scopeKey: liveSessionKey,
-          sessionKey: policySessionKey ?? liveSessionKey,
+          sessionKey: liveSessionKey,
           notifySessionKey: liveSessionKey,
         }),
       );
