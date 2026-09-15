@@ -1,5 +1,5 @@
 --- telegram-direct-codex-message-tool.md	sha256=f3662b0b96815de1e27df17cace1a7196609f641e3ea4946fdf39dd89effd0d0
-+++ telegram-heartbeat-codex-tool.md	sha256=b252ebe3ea3bde51fe298f7046425a64c096d421f713ab2d59d572128c08c704
++++ telegram-heartbeat-codex-tool.md	sha256=9d6ecd1d6d620ad9806764c7f0b182f7aee431c6bfe1af6cfbb62eeb89ef9bf8
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Telegram Direct Codex Heartbeat Tool Turn
@@ -44,18 +44,18 @@
 @@ -269,2 +266,2 @@
 -    "chars": 26463,
 -    "roughTokens": 6616
-+    "chars": 26675,
-+    "roughTokens": 6669
++    "chars": 26886,
++    "roughTokens": 6722
 @@ -273,2 +270,2 @@
 -    "chars": 91356,
 -    "roughTokens": 22839
-+    "chars": 93061,
-+    "roughTokens": 23266
++    "chars": 93272,
++    "roughTokens": 23318
 @@ -277,2 +274,2 @@
 -    "chars": 793,
 -    "roughTokens": 199
-+    "chars": 1135,
-+    "roughTokens": 284
++    "chars": 1346,
++    "roughTokens": 337
 @@ -519,6 +515,0 @@
 -### User: OpenClaw Additional Context (openclaw_current_sender)
 -
@@ -68,7 +68,7 @@
 +{"chat_id":"user:1000001","message_id":"heartbeat-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
 @@ -567,1 +558,1 @@
 -Can you check whether the nightly build finished and tell me what happened?
-+Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.
++Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted. If the heartbeat_respond tool is not available in this run, reply NO_REPLY when nothing needs the user's attention; when the user should be interrupted, reply with only the alert text instead of a prose report.
 @@ -572,1 +563,1 @@
 -Full JSON: `codex-dynamic-tools.telegram-direct.json`
 +Full tool overrides: `codex-dynamic-tools.heartbeat-turn.json` (base: `codex-dynamic-tools.telegram-direct.json`)

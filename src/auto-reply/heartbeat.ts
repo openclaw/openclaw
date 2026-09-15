@@ -12,7 +12,14 @@ const HEARTBEAT_CONTEXT_PROMPT = `Follow the heartbeat monitor scratch context w
 export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply ${SILENT_REPLY_TOKEN}.`;
 export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
   "Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.";
-export const HEARTBEAT_RESPONSE_TOOL_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
+// The heartbeat_respond tool is direct-only, so backends that only receive
+// catalog tools (for example a claude-cli fallback after a Codex primary
+// fails) can never see it. Without a silent escape hatch those runs answer
+// in prose and the prose reaches the channel. Silence stays conditional on
+// nothing needing attention so fallback runs still deliver actionable alert
+// text, matching the documented response contract.
+const HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS = `If the heartbeat_respond tool is not available in this run, reply ${SILENT_REPLY_TOKEN} when nothing needs the user's attention; when the user should be interrupted, reply with only the alert text instead of a prose report.`;
+export const HEARTBEAT_RESPONSE_TOOL_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS} ${HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS}`;
 export const INTERNAL_WAKE_TRANSCRIPT_PROMPTS = {
   heartbeat: "[OpenClaw heartbeat poll]",
   exec: "[OpenClaw exec completion]",
@@ -100,9 +107,16 @@ export function resolveHeartbeatPromptForResponseTool(raw?: string): string {
   if (!prompt) {
     return HEARTBEAT_RESPONSE_TOOL_PROMPT;
   }
-  return prompt.includes(HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS)
-    ? prompt
-    : `${prompt}\n\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`;
+  let resolved = prompt;
+  for (const instructions of [
+    HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
+    HEARTBEAT_RESPONSE_TOOL_FALLBACK_INSTRUCTIONS,
+  ]) {
+    if (!resolved.includes(instructions)) {
+      resolved = `${resolved}\n\n${instructions}`;
+    }
+  }
+  return resolved;
 }
 
 type StripHeartbeatMode = "heartbeat" | "message";
