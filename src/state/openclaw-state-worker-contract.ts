@@ -15,7 +15,10 @@ import type { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
 import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
 import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-index-row.js";
 import type { TaskFlowView } from "../plugins/runtime/task-domain-types.js";
-import type { ProjectRegistryIdentity } from "../projects/project-registry.kernel.js";
+import type {
+  ProjectRegistryIdentity,
+  ProjectRegistryRecord,
+} from "../projects/project-registry.kernel.js";
 import type { ManagedTaskInFlowInput } from "../tasks/task-flow-managed-run-task.kernel.js";
 import type { RunTaskInFlowResult } from "../tasks/task-flow-managed-run-task.types.js";
 import type {
@@ -59,6 +62,7 @@ export type OpenClawStateWorkerOperations = PluginStateWorkerOperations &
   DeliveryQueueWorkerOperations & {
     "backup.recordOutcome": { input: PreparedBackupRunRecord; output: void };
     "projects.findRoot": { input: { repoRoot: string }; output: string | undefined };
+    "projects.list": { input: undefined; output: ProjectRegistryRecord[] };
     "projects.remove": {
       input: { project: ProjectRegistryIdentity; lease: OpenClawStateLeaseIdentity };
       output: boolean;

@@ -24,6 +24,7 @@ import { executePluginStateCommand } from "../plugin-state/plugin-state.worker.j
 import { readPluginMetadataStateRowSync } from "../plugins/installed-plugin-index-row.js";
 import {
   ensureProjectRegistrySchema,
+  listProjectRegistryInDatabase,
   removeProjectRegistryInDatabase,
   resolveRecordedProjectRootInDatabase,
 } from "../projects/project-registry.kernel.js";
@@ -352,6 +353,10 @@ function createSharedStateWorkerBackend(
       if (command.type === "projects.findRoot") {
         ensureProjectRegistrySchema(writeOptions);
         return resolveRecordedProjectRootInDatabase(database.db, command.input.repoRoot);
+      }
+      if (command.type === "projects.list") {
+        ensureProjectRegistrySchema(writeOptions);
+        return listProjectRegistryInDatabase(database.db);
       }
       if (command.type === "projects.remove") {
         return runOpenClawStateWriteTransaction(

@@ -3346,7 +3346,6 @@ src/process/supervisor/adapters/child.ts	2
 src/process/supervisor/adapters/pty.ts	1
 src/process/terminal-pty.ts	1
 src/process/windows-command.ts	1
-src/projects/project-registry.ts	1
 src/provider-runtime/operation-retry.ts	3
 src/proxy-capture/env.ts	1
 src/proxy-capture/runtime.ts	5

@@ -15,6 +15,11 @@ export type ProjectRegistryIdentity = {
   source: "workspace" | "registered" | "cloned";
 };
 
+export type ProjectRegistryRecord = ProjectRegistryIdentity & {
+  displayName: string;
+  agentId?: string;
+};
+
 type ProjectsDatabase = Pick<OpenClawStateKyselyDatabase, "projects">;
 type ProjectRow = Selectable<ProjectsDatabase["projects"]>;
 
@@ -22,6 +27,24 @@ export const ensureProjectRegistrySchema = createOpenClawStateSchemaEnsurer({
   table: "projects",
   operationLabel: "projects.registry.schema.ensure",
 });
+
+export function rowToProject(row: ProjectRow): ProjectRegistryRecord {
+  return {
+    id: row.id,
+    displayName: row.display_name,
+    repoRoot: row.repo_root,
+    ...(row.origin_url ? { originUrl: row.origin_url } : {}),
+    // SAFETY: The canonical projects.source CHECK permits these two stored values.
+    source: row.source as "registered" | "cloned",
+  };
+}
+
+export function listProjectRegistryInDatabase(database: DatabaseSync): ProjectRegistryRecord[] {
+  const db = getNodeSqliteKysely<ProjectsDatabase>(database);
+  return executeSqliteQuerySync(database, db.selectFrom("projects").selectAll()).rows.map(
+    rowToProject,
+  );
+}
 
 export function resolveRecordedProjectRootInDatabase(
   database: DatabaseSync,

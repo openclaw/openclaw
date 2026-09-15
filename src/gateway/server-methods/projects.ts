@@ -28,6 +28,7 @@ import {
 } from "../../projects/project-clone.js";
 import {
   listProjectRegistry,
+  listWorkspaceProjects,
   ProjectCheckoutError,
   registerProjectRegistry,
   removeProjectRegistry,
@@ -48,7 +49,7 @@ import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-type ProjectRegistryEntry = ReturnType<typeof listProjectRegistry>[number];
+type ProjectRegistryEntry = Awaited<ReturnType<typeof listProjectRegistry>>[number];
 type ProjectWorktreeService = Pick<
   ManagedWorktreeService,
   "listRegistryRecords" | "resolveRepositoryIdentity"
@@ -418,9 +419,8 @@ function findProjectCheckoutReference(
   repoRoot: string,
 ): string | undefined {
   const normalizedRoot = path.resolve(repoRoot);
-  const workspaceReference = listProjectRegistry(cfg).find(
-    (candidate) =>
-      candidate.source === "workspace" && path.resolve(candidate.repoRoot) === normalizedRoot,
+  const workspaceReference = listWorkspaceProjects(cfg).find(
+    (candidate) => path.resolve(candidate.repoRoot) === normalizedRoot,
   );
   const worktreeReference = listRegistryWorktrees(process.env).find(
     (worktree) => !worktree.removedAt && path.resolve(worktree.repoRoot) === normalizedRoot,
@@ -456,7 +456,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
       if (!assertValidParams(params, validateProjectsListParams, "projects.list", respond)) {
         return;
       }
-      const registryProjects = listProjectRegistry(context.getRuntimeConfig());
+      const registryProjects = await listProjectRegistry(context.getRuntimeConfig());
       const projects = registryProjects.map(sanitizeProjectRecord);
       const profileId = client?.authenticatedUserProfile?.profileId;
       const canonicalProfileId = profileId

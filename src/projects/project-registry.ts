@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Selectable } from "kysely";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { insideGitCheckout, runGit } from "../agents/worktrees/git.js";
@@ -25,16 +24,14 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import {
   ensureProjectRegistrySchema,
   readMatchingProjectRow,
+  rowToProject,
   type ProjectRegistryIdentity,
+  type ProjectRegistryRecord,
 } from "./project-registry.kernel.js";
 
-export type ProjectRegistryRecord = ProjectRegistryIdentity & {
-  displayName: string;
-  agentId?: string;
-};
+export type { ProjectRegistryRecord } from "./project-registry.kernel.js";
 
 type ProjectsDatabase = Pick<OpenClawStateKyselyDatabase, "projects">;
-type ProjectRow = Selectable<OpenClawStateKyselyDatabase["projects"]>;
 
 const PROJECT_ID_MAX_LENGTH = 64;
 const PROJECT_CHECKOUT_LEASE_MS = 30_000;
@@ -51,16 +48,6 @@ function openProjectsDatabase(options: OpenClawStateDatabaseOptions = {}) {
   ensureProjectRegistrySchema(options);
   const state = openOpenClawStateDatabase(options);
   return { sqlite: state.db, kysely: getNodeSqliteKysely<ProjectsDatabase>(state.db) };
-}
-
-function rowToProject(row: ProjectRow): ProjectRegistryRecord {
-  return {
-    id: row.id,
-    displayName: row.display_name,
-    repoRoot: row.repo_root,
-    ...(row.origin_url ? { originUrl: row.origin_url } : {}),
-    source: row.source as "registered" | "cloned",
-  };
 }
 
 function insertProjectRegistry(
@@ -253,17 +240,25 @@ export async function registerClonedProjectRegistry(
   return await registerResolvedProject({ ...input, source: "cloned" }, options);
 }
 
-export function listProjectRegistry(
+export function listWorkspaceProjects(cfg: OpenClawConfig): ProjectRegistryRecord[] {
+  return withAgentRosterFactsBatch(cfg, () =>
+    listAgentIds(cfg)
+      .map((agentId) => workspaceProject(cfg, agentId))
+      .toSorted(compareProjects),
+  );
+}
+
+export async function listProjectRegistry(
   cfg: OpenClawConfig,
-  options: OpenClawStateDatabaseOptions = {},
-): ProjectRegistryRecord[] {
-  const { sqlite, kysely } = openProjectsDatabase(options);
-  const stored = executeSqliteQuerySync(sqlite, kysely.selectFrom("projects").selectAll()).rows.map(
-    rowToProject,
-  );
-  const workspaces = withAgentRosterFactsBatch(cfg, () =>
-    listAgentIds(cfg).map((agentId) => workspaceProject(cfg, agentId)),
-  );
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+): Promise<ProjectRegistryRecord[]> {
+  const context = captureOpenClawStateWorkerContext(options);
+  const workspaces = listWorkspaceProjects(cfg);
+  const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
+  const stored = await executeOpenClawStateWorker(context, {
+    type: "projects.list",
+    input: undefined,
+  });
   return [...workspaces, ...stored].toSorted(compareProjects);
 }
 

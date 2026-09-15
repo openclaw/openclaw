@@ -11,7 +11,7 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: obs.note }));
 vi.mock("../commands/backup-health.js", () => ({ noteBackupDoctorHint: () => {} }));
 vi.mock("../state/config-machine-state-write.js", () => ({ writeConfigMachineState: () => {} }));
 vi.mock("../projects/project-registry.js", () => ({
-  listProjectRegistry: () => [
+  listProjectRegistry: async () => [
     {
       id: "synthetic-clone",
       displayName: "Synthetic clone",

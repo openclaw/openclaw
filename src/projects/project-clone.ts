@@ -25,12 +25,12 @@ import {
 const PROJECT_CLONE_LEASE_MS = 30_000;
 const PROJECT_CLONE_WAIT_MS = 30_000;
 
-function existingCanonicalProject(
+async function existingCanonicalProject(
   cfg: OpenClawConfig,
   canonicalUrl: string,
   options: OpenClawStateDatabaseOptions,
-): ProjectRegistryRecord | undefined {
-  return listProjectRegistry(cfg, options).find((project) => {
+): Promise<ProjectRegistryRecord | undefined> {
+  return (await listProjectRegistry(cfg, options)).find((project) => {
     const origin = project.originUrl ? parseProjectGitUrl(project.originUrl) : null;
     return origin?.url === canonicalUrl;
   });
@@ -69,7 +69,8 @@ export async function materializeProjectClone(
       // Keep clone as the outer lease and take one candidate checkout lease at a time. A row that
       // moves roots while we wait must be retried under its new root instead of returned stale.
       while (true) {
-        const candidate = existingCanonicalProject(input.cfg, parsed.url, options);
+        const candidate = await existingCanonicalProject(input.cfg, parsed.url, options);
+        lease.assertOwned();
         if (!candidate) {
           break;
         }
@@ -77,7 +78,9 @@ export async function materializeProjectClone(
           candidate.repoRoot,
           { ...options, signal: lease.signal },
           async (checkoutLease) => {
-            const current = existingCanonicalProject(input.cfg, parsed.url, options);
+            const current = await existingCanonicalProject(input.cfg, parsed.url, options);
+            lease.assertOwned();
+            checkoutLease.assertOwned();
             if (current?.repoRoot !== candidate.repoRoot) {
               return undefined;
             }

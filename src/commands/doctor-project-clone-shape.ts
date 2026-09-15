@@ -54,7 +54,7 @@ export async function collectProjectCloneShapeHealthFindings(
   const findings: HealthFinding[] = [];
   let projects;
   try {
-    projects = listProjectRegistry(cfg).filter((project) => project.source === "cloned");
+    projects = (await listProjectRegistry(cfg)).filter((project) => project.source === "cloned");
   } catch {
     return [
       {
