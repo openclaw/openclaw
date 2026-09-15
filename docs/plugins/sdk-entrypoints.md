@@ -82,3 +82,12 @@ The returned client exposes three methods:
 - `stop()` closes admission, retires pending requests, and awaits startup settlement and owned-process cleanup. It rejects through `errors.unavailable` with `proxy cleanup could not be confirmed` if cleanup is uncertain. It never stops a separately started service reached through the proxy's socket.
 
 Malformed frames, incompatible initialization, write failures, and unexpected process exit also retire the whole connection. The first fatal error is retained. Create a new client to reconnect. Timeout classification follows the SDK error code, so a timeout-coded server error also retires the connection.
+
+### Official Claude Agent SDK runtimes
+
+Official providers sharing Claude Agent SDK execution use the private packaged
+`claude-agent-sdk-runtime` facade. The Anthropic plugin remains the implementation
+owner; separately installed providers do not depend on its private workspace
+package. This facade is not a third-party SDK compatibility contract. Selected
+bearer credentials reach auxiliary and isolated executions through the same native
+process owner, preserving their restricted arguments and ephemeral sessions.

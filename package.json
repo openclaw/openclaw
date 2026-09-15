@@ -420,7 +420,8 @@
     "!dist/plugin-sdk/provider-auth-aliases.d.ts",
     "!dist/plugin-sdk/provider-model-metadata.d.ts",
     "!dist/plugin-sdk/memory-core-host-engine-knn.d.ts",
-    "!dist/plugin-sdk/memory-core-host-engine-indexing.d.ts"
+    "!dist/plugin-sdk/memory-core-host-engine-indexing.d.ts",
+    "!dist/plugin-sdk/claude-agent-sdk-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -852,6 +853,9 @@
     },
     "./plugin-sdk/cli-backend": {
       "default": "./dist/plugin-sdk/cli-backend.js"
+    },
+    "./plugin-sdk/claude-agent-sdk-runtime": {
+      "default": "./dist/plugin-sdk/claude-agent-sdk-runtime.js"
     },
     "./plugin-sdk/claude-model-runtime": {
       "default": "./dist/plugin-sdk/claude-model-runtime.js"

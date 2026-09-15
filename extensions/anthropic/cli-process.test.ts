@@ -5,10 +5,11 @@ import type {
   CliBackendExecuteContext,
   CliBackendLiveSessionHandle,
   CliBackendPreparedExecution,
+  CliBackendPrepareExecutionContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildAnthropicCliBackend } from "./cli-backend.js";
+import { buildAnthropicCliBackend, buildClaudeAgentSdkCliBackend } from "./cli-backend.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { executeClaudeCli } from "./cli.runtime.js";
 
@@ -120,6 +121,88 @@ function attachLiveSession(context: CliBackendExecuteContext) {
 }
 
 describe("Claude subprocess diagnostics through the direct CLI transport", () => {
+  it.each(["side-question", "isolated-completion"] as const)(
+    "delivers selected auth to a restricted %s child without ambient credentials",
+    async (mode) => {
+      const context = await contextForChild(`
+        const args = process.argv.slice(2);
+        const value = (name) => args[args.indexOf(name) + 1];
+        if (process.env.ANTHROPIC_AUTH_TOKEN !== "synthetic-auxiliary-key" ||
+            !args.includes("--no-session-persistence") ||
+            value("--tools") !== "" || value("--setting-sources") !== "" ||
+            value("--max-turns") !== "1") process.exit(2);
+        ${PROTOCOL_CHILD}
+      `);
+      context.args = [
+        ...context.args,
+        "--no-session-persistence",
+        "--tools",
+        "",
+        "--setting-sources",
+        "",
+        "--max-turns",
+        "1",
+      ];
+      const backend = buildClaudeAgentSdkCliBackend({
+        backendId: "synthetic-compatible-sdk",
+        modelProvider: "synthetic-compatible",
+        apiKeyAsAuthToken: true,
+      });
+      const preparation: CliBackendPrepareExecutionContext & {
+        authCredential: { type: "api_key"; key: string };
+        isolatedCompletionPrompt?: string;
+      } = {
+        provider: "synthetic-compatible",
+        modelId: "synthetic-model",
+        workspaceDir: context.cwd ?? "",
+        executionMode: "side-question",
+        authCredential: { type: "api_key", key: "synthetic-auxiliary-key" },
+        ...(mode === "isolated-completion" ? { isolatedCompletionPrompt: context.prompt } : {}),
+      };
+      const prepared = await backend.prepareExecution?.(preparation);
+      try {
+        expect(prepared?.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+        if (!prepared?.execute) {
+          throw new Error("Auxiliary execution bypasses the native credential owner");
+        }
+        const events = [];
+        for await (const event of prepared.execute(context)) {
+          events.push(event);
+        }
+        expect(events).toContainEqual(expect.objectContaining({ type: "result", result: "ok" }));
+        expect(context.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+      } finally {
+        await prepared?.cleanup?.();
+      }
+    },
+  );
+
+  it("marks bearer authentication as host-owned so native tools cannot inherit it", async () => {
+    const credential = "opaque-zai-auth-token-fixture";
+    const context = await contextForChild(`
+      if (process.env.ANTHROPIC_AUTH_TOKEN !== ${JSON.stringify("opaque-zai-auth-token-fixture")} ||
+          process.env.CLAUDE_CODE_HOST_AUTH_ENV_VAR !== "ANTHROPIC_AUTH_TOKEN" ||
+          process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST !== "1") {
+        process.exit(2);
+      }
+      ${PROTOCOL_CHILD}
+    `);
+    const buffers: Buffer[] = [];
+    const events = await collect(context, {
+      fd: 3,
+      envName: "ANTHROPIC_AUTH_TOKEN",
+      createData: () => {
+        const bytes = Buffer.from(credential);
+        buffers.push(bytes);
+        return bytes;
+      },
+    });
+    expect(events).toContainEqual(expect.objectContaining({ type: "result", result: "ok" }));
+    expect(context.env).not.toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+    expect(buffers).toHaveLength(1);
+    expect(buffers[0]?.every((byte) => byte === 0)).toBe(true);
+  });
+
   it("drains pipe-sized stderr and reports a bounded redacted fatal diagnostic", async () => {
     const secret = "sk-ant-api03-synthetic-diagnostic-credential-123456789";
     const context = await contextForChild(`
