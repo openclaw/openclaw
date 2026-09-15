@@ -1324,6 +1324,18 @@ export default class {
         fs.cpSync(path.join(initialDirectory, "dist"), path.join(fixture, "dist"), {
           recursive: true,
         });
+        // This checkout exercises source freshness, not the full runtime inventory.
+        // Keep real compiler phases while avoiding repeated unrelated application builds.
+        writeFixture(
+          fixture,
+          "scripts/lib/vitest-worker-build-entries.mts",
+          `export const vitestWorkerBuildEntries = {
+            "infra/sqlite-readonly-location.worker": "src/infra/sqlite-readonly-location.worker.ts",
+            "infra/sqlite-snapshot-source": "src/infra/sqlite-snapshot-source.ts",
+          };
+          export const legacyFinalizerBuildSources = ["src/infra/runtime-process-entrypoints.ts"];
+          `,
+        );
         const databasePath = path.join(fixture, "probe.sqlite");
         const database = new DatabaseSync(databasePath);
         database.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES ('native work');");
