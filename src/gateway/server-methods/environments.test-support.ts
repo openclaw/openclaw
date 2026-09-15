@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
+import type { PairedDevice, PairedDeviceNodeSurface } from "../../infra/device-pairing.types.js";
 import type {
   WorkerEnvironmentServiceContract,
   WorkerEnvironmentServiceRecord,
@@ -8,6 +9,25 @@ import type { WorkerEnvironmentRecord } from "../worker-environments/store.js";
 import { environmentsHandlers } from "./environments.js";
 
 export type TestWorkerRecord = WorkerEnvironmentRecord & WorkerEnvironmentServiceRecord;
+
+export function pairedNodeDevice(
+  deviceId: string,
+  nodeSurface: Partial<PairedDeviceNodeSurface> = {},
+  device: Omit<Partial<PairedDevice>, "deviceId" | "nodeSurface"> = {},
+): PairedDevice {
+  return {
+    deviceId,
+    publicKey: `public-key-${deviceId}`,
+    roles: ["node"],
+    tokens: {
+      node: { token: "test-node-token", role: "node", scopes: [], createdAtMs: 1 },
+    },
+    createdAtMs: 1,
+    approvedAtMs: 1,
+    ...device,
+    nodeSurface: { createdAtMs: 1, approvedAtMs: 1, ...nodeSurface },
+  };
+}
 
 export type TestWorkerService = Omit<
   WorkerEnvironmentServiceContract,
