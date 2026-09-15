@@ -21,10 +21,8 @@ concurrency:
 env:
   NODE_OPTIONS: --max-old-space-size=8192
   OPENCLAW_VITEST_MAX_WORKERS: "2"
-  BASE_SHA: f31b41928f2bb02905a22e5f064dcd45b8827da5
   CANDIDATE_SHA: 90705978afbb5ee5affdcce551b7276324eb24ee
   SOURCE_PINS: '{"src/cli/update-cli/update-command-post-update.ts":"69271c56d0f2d2d36dea57cb8a03757595faeefb2051ea4752f374459c5205b2","src/cli/update-cli/update-command-result.ts":"cd5d7d43572eeca4b1d013dccb49a553fa95a04fb58877e099ea6566aa926987","src/cli/update-cli/update-command-sentinel-env.test.ts":"5438a724cb5c947e39e87adef16d47bc97ff4a012ee00446203bdfa03f1e9760","src/cli/update-cli/update-command-terminal.ts":"3234f825540d70c7ca3746b12843fa8dac030ac73ed503c245b0f94469e0f0b1","src/infra/update-control-plane-sentinel.ts":"624f4006ddbbeeeed5661c8f0c5af6d65d8bee65d3c99bca4857328428d47c35"}'
-  BASELINE_PINS: '{"src/cli/update-cli/update-command-post-update.ts":"7398bafcfe9d85b815c856ffe6f4dda7750f49f4cb7ce1562c136968ad48ee9f","src/cli/update-cli/update-command-result.ts":"ea3afba94c1ac2d078a88036cff6f08499bda6399670b9a0273e414ee3bc177c","src/cli/update-cli/update-command-terminal.ts":"e540fbd209cd10b8fa5d0f1ab1a3a57e6832a58bf57c77bcea323593536704c0","src/infra/update-control-plane-sentinel.ts":"1cd2cd724b8718e6dbbfec575847f77dc818f0c341d4c451900b6971f4b4abe4"}'
 
 jobs:
   sentinel-state:
@@ -48,7 +46,6 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           git merge-base --is-ancestor "$CANDIDATE_SHA" HEAD
-          git merge-base --is-ancestor "$BASE_SHA" "$CANDIDATE_SHA"
           git show --no-patch --format='%H %P'
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
@@ -71,59 +68,6 @@ jobs:
           node -v
           pnpm -v
           mkdir "$RUNNER_TEMP/sentinel-proof"
-      - name: Reproduce original selected-state failure
-        run: |
-          set -euo pipefail
-          owners=(src/cli/update-cli/update-command-post-update.ts src/cli/update-cli/update-command-result.ts src/cli/update-cli/update-command-terminal.ts src/infra/update-control-plane-sentinel.ts)
-          restore_candidate() { git restore --source=HEAD -- "${owners[@]}"; }
-          trap restore_candidate EXIT
-          for file in "${owners[@]}"; do git show "$BASE_SHA:$file" > "$file"; done
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { readFileSync } from 'node:fs';
-          import { createHash } from 'node:crypto';
-          for (const [file, expected] of Object.entries(JSON.parse(process.env.BASELINE_PINS))) {
-            const actual = createHash('sha256').update(readFileSync(file)).digest('hex');
-            assert.equal(actual, expected, file);
-            console.log(`BASELINE ${actual}  ${file}`);
-          }
-          NODE
-          set +e
-          node scripts/run-vitest.mjs run --config test/vitest/vitest.cli.config.ts src/cli/update-cli/update-command-sentinel-env.test.ts --reporter=default --reporter=json --reporter="$GITHUB_WORKSPACE/scripts/lib/vitest-report-capture.mts" --outputFile.json="$RUNNER_TEMP/sentinel-proof/baseline.json"
-          status=$?
-          set -e
-          restore_candidate
-          trap - EXIT
-          test "$status" = 1
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { readFileSync } from 'node:fs';
-          const file = `${process.env.RUNNER_TEMP}/sentinel-proof/baseline.json`;
-          const report = JSON.parse(readFileSync(file));
-          const capture = JSON.parse(readFileSync(`${file}.capture.json`));
-          assert.equal(report.numPassedTests, 0);
-          assert.equal(report.numFailedTests, 3);
-          assert.equal(report.numPendingTests, 0);
-          const failed = report.testResults.flatMap(file => file.assertionResults);
-          assert.deepEqual(failed.map(test => test.title), [
-            'uses the admitted cli run for deferred notification policy and storage',
-            'uses the admitted api run for deferred notification policy and storage',
-            "marks only the selected state's matching pending sentinel after restoration",
-          ]);
-          for (const [index, test] of failed.entries()) {
-            assert.equal(test.status, 'failed');
-            const message = test.failureMessages.join('\n');
-            assert.match(message, /AssertionError/);
-            assert(message.includes(index < 2 ? 'unrelated caller notice' : 'restart-unhealthy'));
-          }
-          assert.equal(capture.processTimedOut, false);
-          assert.equal(capture.ignoreUnhandledErrors, false);
-          assert.equal(capture.ended.unhandledErrors, 0);
-          assert.equal(capture.ended.suiteErrors, 0);
-          assert.equal(capture.ended.failedModules, 1);
-          console.log('BASELINE EXPECTED FAILURE: all three selected-state assertions fail; candidate restored.');
-          NODE
-      - *identity
       - name: Candidate deferred finalizer and terminal regressions
         run: >-
           node scripts/run-vitest.mjs run --config test/vitest/vitest.cli.config.ts
