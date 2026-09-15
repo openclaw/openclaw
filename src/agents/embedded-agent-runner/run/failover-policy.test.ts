@@ -280,6 +280,40 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("sends assistant model_not_found failures directly to model fallback", () => {
+    // A missing model is not credential-specific; skip profile rotation and
+    // spend the configured fallback instead of another auth profile.
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        terminal: { kind: "ok" },
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "model_not_found",
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "model_not_found",
+    });
+  });
+
+  it("surfaces assistant model_not_found when no fallback is configured", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        terminal: { kind: "ok" },
+        fallbackConfigured: false,
+        failoverFailure: true,
+        failoverReason: "model_not_found",
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "model_not_found",
+    });
+  });
+
   it("does not fall back on stale classified assistant text after rotation is exhausted", () => {
     expect(
       resolveRunFailoverDecision({
