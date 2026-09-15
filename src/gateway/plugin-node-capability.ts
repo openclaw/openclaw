@@ -339,10 +339,19 @@ export function normalizePluginNodeCapabilityScopedUrl(
         malformedScopedPath = true;
       } else {
         url.pathname = canonicalPath;
-        // The path is the minted node URL. A copied stale query must never
-        // override the capability the current scoped path authorizes.
-        url.searchParams.set(PLUGIN_NODE_CAPABILITY_QUERY_PARAM, capabilityFromPath);
-        rewrittenUrl = `${url.pathname}${url.search}`;
+        if (url.pathname.startsWith("//")) {
+          // A leading "//" (including a backslash that the pathname setter
+          // normalizes to "/") reparses as a protocol-relative authority, so
+          // the raw scoped path, built-in route checks, and req.url re-parsing
+          // would disagree on the canonical path. Reject rather than let the
+          // scoped-URL consumers diverge.
+          malformedScopedPath = true;
+        } else {
+          // The path is the minted node URL. A copied stale query must never
+          // override the capability the current scoped path authorizes.
+          url.searchParams.set(PLUGIN_NODE_CAPABILITY_QUERY_PARAM, capabilityFromPath);
+          rewrittenUrl = `${url.pathname}${url.search}`;
+        }
       }
     }
   }
