@@ -1,6 +1,6 @@
 // Covers preserved environment-variable config normalization.
 import { describe, it, expect } from "vitest";
-import { restoreEnvVarRefs } from "./env-preserve.js";
+import { EnvRefArrayMutationError, restoreEnvVarRefs } from "./env-preserve.js";
 
 describe("restoreEnvVarRefs", () => {
   const env = {
@@ -828,5 +828,78 @@ describe("restoreEnvVarRefs", () => {
     expect(restoreEnvVarRefs({ toString: "resolved-value" }, parsed, testEnv)).toEqual({
       toString: "resolved-value",
     });
+  });
+});
+
+describe("restoreEnvVarRefs with edited arrays", () => {
+  it("keeps same-valued references attached to their stable array identities after edits", () => {
+    const parsed = [
+      { id: "first", token: "${FIRST_TOKEN}", obsolete: true },
+      { id: "second", token: "${SECOND_TOKEN}", nullable: null },
+    ];
+    const incoming = [
+      { id: "second", token: "shared-read-token", nullable: null, label: "edited" },
+      { id: "first", token: "shared-read-token" },
+    ];
+    expect(
+      restoreEnvVarRefs(incoming, parsed, {
+        FIRST_TOKEN: "shared-read-token",
+        SECOND_TOKEN: "shared-read-token",
+      }),
+    ).toEqual([
+      { id: "second", token: "${SECOND_TOKEN}", nullable: null, label: "edited" },
+      { id: "first", token: "${FIRST_TOKEN}" },
+    ]);
+    expect(incoming[0]?.token).toBe("shared-read-token");
+  });
+
+  it("restores a retained reference after an array deletion", () => {
+    expect(
+      restoreEnvVarRefs(
+        [{ id: "keep", token: "read-token" }],
+        [{ id: "remove" }, { id: "keep", token: "${PLUGIN_TOKEN}" }],
+        { PLUGIN_TOKEN: "read-token" },
+      ),
+    ).toEqual([{ id: "keep", token: "${PLUGIN_TOKEN}" }]);
+  });
+
+  it("rejects ambiguous array identities instead of matching equal secret values", () => {
+    expect(() =>
+      restoreEnvVarRefs(
+        [{ id: "duplicate", token: "same" }],
+        [
+          { id: "duplicate", token: "${FIRST_TOKEN}" },
+          { id: "duplicate", token: "${SECOND_TOKEN}" },
+        ],
+        { FIRST_TOKEN: "same", SECOND_TOKEN: "same" },
+      ),
+    ).toThrow(EnvRefArrayMutationError);
+  });
+
+  it("does not activate an escaped reference moved onto an active-reference owner", () => {
+    expect(() =>
+      restoreEnvVarRefs(
+        [
+          { id: "literal", token: "read-token" },
+          { id: "active", token: "${TOKEN}" },
+        ],
+        [
+          { id: "literal", token: "$${TOKEN}" },
+          { id: "active", token: "${TOKEN}" },
+        ],
+        { TOKEN: "read-token" },
+      ),
+    ).toThrow(EnvRefArrayMutationError);
+  });
+
+  it("keeps explicit changes without restoring a same-valued sibling literal", () => {
+    const incoming = { token: "replacement", sibling: "read-token", added: null };
+    expect(
+      restoreEnvVarRefs(
+        incoming,
+        { token: "${TOKEN}", sibling: "read-token", removed: "${OLD_TOKEN}" },
+        { TOKEN: "read-token", OLD_TOKEN: "old-token" },
+      ),
+    ).toEqual(incoming);
   });
 });

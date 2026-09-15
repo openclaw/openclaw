@@ -52,6 +52,7 @@ function expectGatewayAuthFieldValue(
 describe("redactConfigSnapshot", () => {
   it.each([true, false])("omits private snapshot fields when valid=%s", (valid) => {
     const token = "synthetic-canonical-token-canary";
+    const authoredToken = "synthetic-authored-token-canary";
     const preMigrationToken = "synthetic-pre-migration-token-canary";
     const snapshot = {
       ...makeSnapshot({
@@ -61,6 +62,7 @@ describe("redactConfigSnapshot", () => {
         },
       }),
       valid,
+      authoredConfig: { gateway: { auth: { token: authoredToken } } },
       sourceConfigBeforeMigrations: makeSnapshot({
         gateway: { auth: { token: preMigrationToken } },
       }).sourceConfig,
@@ -83,9 +85,11 @@ describe("redactConfigSnapshot", () => {
     const serialized = JSON.stringify(result);
 
     expect(serialized).not.toContain(preMigrationToken);
+    expect(serialized).not.toContain(authoredToken);
     expect(serialized).not.toContain(token);
     expect(serialized).not.toContain("/private/plugin/root");
     expect("sourceConfigBeforeMigrations" in result).toBe(false);
+    expect("authoredConfig" in result).toBe(false);
     expect("pluginMetadataSnapshot" in result).toBe(false);
     expect(result).toMatchObject({ path: snapshot.path, hash: "abc123", exists: true, valid });
     const expectedConfig = valid
