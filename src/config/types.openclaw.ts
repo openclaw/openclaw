@@ -186,6 +186,8 @@ export type OpenClawConfig = {
       chatFollowUpMode?: "steer" | "queue";
       /** Ordered page and pinned-session entries shown in the Control UI sidebar. */
       sidebarEntries?: string[];
+      /** Keep the agent Home shortcut pinned in the Control UI Pages section (default true). */
+      sidebarHomePinned?: boolean;
     };
   };
   /** Secret providers, defaults, and ref-resolution settings. */

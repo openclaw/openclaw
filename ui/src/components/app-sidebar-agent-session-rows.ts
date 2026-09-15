@@ -36,6 +36,7 @@ type AgentSessionRowsHost = {
   readonly sessionData: SessionDataController;
   visibleSessionCatalogs(): readonly SessionCatalog[];
   selectedAgentMainSessionKey(agentId: string): string;
+  readonly sidebarHomePinned: boolean;
   readonly sessionsShowCron: boolean;
   readonly sessionsShowSystem: boolean;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
@@ -123,7 +124,8 @@ export function projectSidebarAgentSessionRows({
   const ownsSubagents = (row: GatewaySessionRow) =>
     row.childSessions?.some(isSubagentSessionKey) ||
     subagentParentKeys.has(normalizeDefaultMainSessionAliasForUi(row.key));
-  // Home replaces an ordinary main row, but subagents need an expandable parent.
+  // A pinned Home replaces an ordinary main row, but subagents need an expandable parent.
+  const showMainSession = grouped || !host.sidebarHomePinned;
   const canonicalMainKeys = agentIds.map((agentId) => host.selectedAgentMainSessionKey(agentId));
   const isMainSession = (key: string) =>
     canonicalMainKeys.some((mainKey) => areUiSessionKeysEquivalent(key, mainKey));
@@ -134,13 +136,13 @@ export function projectSidebarAgentSessionRows({
           return row ? [row] : [];
         })
       : filterVisibleSessionRows(rows.filter(inScope), visibilityOptions).toSorted(compareSessions);
-  if (grouped || rows.some((row) => isMainSession(row.key) && ownsSubagents(row))) {
+  if (showMainSession || rows.some((row) => isMainSession(row.key) && ownsSubagents(row))) {
     // The generic chat filter excludes global streams; their canonical main
     // conversation still belongs to its agent in team mode.
     for (const row of rows) {
       if (
         row.kind === "global" &&
-        (grouped || ownsSubagents(row)) &&
+        (showMainSession || ownsSubagents(row)) &&
         inScope(row) &&
         isMainSession(row.key) &&
         sessionMatchesArchivedFilter(row, host.sessionsStatusFilter) &&
@@ -162,13 +164,14 @@ export function projectSidebarAgentSessionRows({
       !isSessionHidden(session) &&
       !adopted.has(session.key) &&
       (!isMainSession(session.key) ||
+        !host.sidebarHomePinned ||
         (grouped && navigationState.toSidebarSession(session).visuallyActive)),
   );
   const mainSessionKeys = new Set(canonicalMainKeys);
   const scopedRootRows = rootRows.filter((row) => {
     if (isMainSession(row.key)) {
       mainSessionKeys.add(row.key);
-      return grouped || ownsSubagents(row);
+      return showMainSession || ownsSubagents(row);
     }
     return true;
   });
@@ -185,6 +188,7 @@ export function projectSidebarAgentSessionRows({
       : lineageAgentId === selected || lineageRouteAgentId === selected) &&
     !adopted.has(lineageRoot.key) &&
     (!isMainSession(lineageRoot.key) ||
+      !host.sidebarHomePinned ||
       ownsSubagents(lineageRoot) ||
       (grouped && navigationState.toSidebarSession(lineageRoot).visuallyActive)) &&
     !scopedRootRows.some((row) => row.key === lineageRoot.key)
@@ -266,7 +270,15 @@ export function projectSidebarAgentSessionRows({
     ? []
     : collectPromotedMainChildRows({
         rows: sessionCandidateRows,
-        mainSessionKeys,
+        // Unpinning only nests children when their parent is actually loaded.
+        // A bounded window may contain a child without its main-session root.
+        mainSessionKeys: host.sidebarHomePinned
+          ? mainSessionKeys
+          : new Set(
+              [...mainSessionKeys].filter(
+                (key) => !scopedRootRows.some((row) => areUiSessionKeysEquivalent(row.key, key)),
+              ),
+            ),
         scopedRootKeys,
         showCron: host.sessionsShowCron,
         showSystem: host.sessionsShowSystem,

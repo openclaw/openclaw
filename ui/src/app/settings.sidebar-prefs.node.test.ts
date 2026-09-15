@@ -13,6 +13,19 @@ import { loadSettings, saveSettings } from "./settings.ts";
 describe("sidebar preference persistence", () => {
   installSettingsStorageLifecycle();
 
+  it("keeps Home pinned for existing preferences and persists unpinning independently of pages", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+    const gatewayUrl = expectedGatewayUrl("");
+    const sidebarEntries = ["route:usage"];
+    saveSettings(makeUiSettings(gatewayUrl, { sidebarEntries }));
+    expect(loadSettings().sidebarHomePinned).toBe(true);
+    saveSettings({ ...loadSettings(), sidebarHomePinned: false });
+    expect(loadSettings().sidebarHomePinned).toBe(false);
+    expect(loadSettings().sidebarEntries).toEqual(sidebarEntries);
+    saveSettings({ ...loadSettings(), sidebarHomePinned: true });
+    expect(loadSettings().sidebarHomePinned).toBe(true);
+  });
+
   it("defaults old or invalid agent modes to chip and persists explicit roster mode", () => {
     setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
     const gatewayUrl = expectedGatewayUrl("");

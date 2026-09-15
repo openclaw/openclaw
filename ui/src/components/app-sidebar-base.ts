@@ -45,6 +45,7 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) canPairDevice = false;
   @property({ attribute: false }) preferencesBrowserOnly = false;
   @property({ attribute: false }) sessionKey = "";
+  @property({ attribute: false }) sidebarHomePinned = true;
   @property({ attribute: false }) sidebarEntries: readonly string[] = DEFAULT_SIDEBAR_ENTRIES;
   @property({ attribute: false }) navigationVisible = true;
   @property({ attribute: false }) sidebarAgentsMode: "chip" | "roster" = "chip";
@@ -65,6 +66,7 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
     agentId: string,
     target?: NewSessionTarget,
   ) => void;
+  @property({ attribute: false }) onUpdateSidebarHomePinned?: (pinned: boolean) => void;
   @property({ attribute: false }) onUpdateSidebarEntries?: (entries: string[]) => void;
   @property({ attribute: false }) onPairMobile?: () => void;
   @property({ attribute: false })

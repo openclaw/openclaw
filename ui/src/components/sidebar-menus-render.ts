@@ -57,6 +57,8 @@ export function renderSidebarCustomizeMenuForController(controller: SidebarMenus
   const trigger = controller.customizeMenuTrigger;
   return renderSidebarCustomizeMenu({
     position,
+    homePinned: host.sidebarHomePinned,
+    onToggleHome: () => host.onUpdateSidebarHomePinned?.(!host.sidebarHomePinned),
     sidebarEntries: host.sidebarEntries,
     preferencesBrowserOnly: host.preferencesBrowserOnly,
     isRouteEnabled: (routeId) => controller.isRouteEnabled(routeId),
@@ -90,6 +92,7 @@ export function renderSidebarCustomizeMenuForController(controller: SidebarMenus
       const sessions = host
         .reconciledSidebarZone()
         .sidebarEntries.filter((entry) => entry.startsWith("session:"));
+      host.onUpdateSidebarHomePinned?.(true);
       host.onUpdateSidebarEntries?.([...DEFAULT_SIDEBAR_ENTRIES, ...sessions]);
       controller.closeCustomizeMenu({ restoreFocus: true });
     },

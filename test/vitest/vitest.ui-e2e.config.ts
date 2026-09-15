@@ -26,6 +26,7 @@ const uiE2eIncludePatterns = [
   automationManagementRealGatewayTest,
 ];
 export const uiE2eRealGatewayTestFiles = [
+  "ui/src/e2e/sidebar-home-pin.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
@@ -104,6 +105,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/session-management.delete.e2e.test.ts",
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
+  "ui/src/e2e/sidebar-home-pin.real-gateway.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
 ];
 

@@ -128,6 +128,10 @@ export const SYNCED_PREFS = {
     clearable: true,
     reset: () => ({ chatFollowUpMode: undefined }),
   }),
+  sidebarHomePinned: prefSpec<boolean>({
+    extract: (value) => (typeof value === "boolean" ? value : undefined),
+    local: (settings) => settings.sidebarHomePinned !== false,
+  }),
   sidebarEntries: prefSpec<string[]>({
     extract: (value) => normalizeSidebarEntries(value) ?? undefined,
     local: (settings) => settings.sidebarEntries,

@@ -211,6 +211,8 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
 }
 
 type SidebarCustomizeMenuParams = {
+  homePinned: boolean;
+  onToggleHome: () => void;
   position: SidebarMenuPosition;
   sidebarEntries: readonly string[];
   preferencesBrowserOnly: boolean;
@@ -235,7 +237,9 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
       @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
         event.preventDefault();
         const value = event.detail.item.value;
-        if (value === "reset") {
+        if (value === "home") {
+          params.onToggleHome();
+        } else if (value === "reset") {
           params.onReset();
         } else if (value?.startsWith("plugin:")) {
           const key = value.slice("plugin:".length);
@@ -265,6 +269,15 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
             </div>`
           : nothing
       }
+      <wa-dropdown-item
+        class="sidebar-customize-menu__item"
+        type="checkbox"
+        value="home"
+        .checked=${params.homePinned}
+      >
+        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.home}</span>
+        <span class="sidebar-customize-menu__text">${t("nav.home")}</span>
+      </wa-dropdown-item>
       ${SIDEBAR_NAV_ROUTES.filter((routeId) => params.isRouteEnabled(routeId)).map((routeId) => {
         const visible = params.sidebarEntries.includes(
           serializeSidebarEntry({ type: "route", route: routeId }),

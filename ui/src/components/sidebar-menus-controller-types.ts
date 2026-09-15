@@ -72,6 +72,8 @@ export interface SidebarMenusControllerHost
     params?: unknown;
     requiredScope?: "operator.write" | "operator.admin";
   }): import("../lib/session-method-access.ts").SessionMethodAccess;
+  readonly sidebarHomePinned: boolean;
+  readonly onUpdateSidebarHomePinned?: (pinned: boolean) => void;
   readonly sidebarEntries: readonly string[];
   readonly catalogProjectGrouping: CatalogProjectGrouping;
   setCatalogProjectGrouping(grouping: CatalogProjectGrouping): void;

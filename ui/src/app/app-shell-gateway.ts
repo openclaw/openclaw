@@ -102,6 +102,9 @@ export class ShellGatewayOwner {
       profileId: context.gateway.snapshot?.selfUser?.id,
       onThemeChanged: (theme) => context.theme.recordServerSelection(theme, scope),
       onApplied: (patch) => {
+        if (patch.sidebarHomePinned !== undefined) {
+          context.navigation.update({ sidebarHomePinned: patch.sidebarHomePinned });
+        }
         if (patch.sidebarEntries !== undefined) {
           context.navigation.update({ sidebarEntries: patch.sidebarEntries });
         }

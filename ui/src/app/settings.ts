@@ -214,6 +214,7 @@ export type UiSettings = {
   sidebarAgentsMode?: "chip" | "roster";
   sidebarPreTeamScope?: string | null; // null remembers All agents; undefined means unset.
   sidebarCollapsedAgentIds?: string[];
+  sidebarHomePinned?: boolean; // Keep the agent's Home shortcut in Pages (default true)
   sidebarEntries: string[]; // Ordered routes, plugin navigation, and pinned sessions below Home
   sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
   chatMessageMaxWidth?: string; // Browser-local centered chat transcript max width
@@ -477,6 +478,7 @@ export function loadUiPreferences(
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarAgentsMode: "chip",
+    sidebarHomePinned: true,
     sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
     sidebarLiveActivity: UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
     showAdvancedSettings: false,
@@ -570,6 +572,7 @@ export function loadUiPreferences(
       sidebarAgentsMode: parsed.sidebarAgentsMode === "roster" ? "roster" : "chip",
       sidebarPreTeamScope: normalizeSidebarPreTeamScope(parsed.sidebarPreTeamScope),
       sidebarCollapsedAgentIds: normalizeUniqueTrimmedStringList(parsed.sidebarCollapsedAgentIds),
+      sidebarHomePinned: parsed.sidebarHomePinned !== false,
       sidebarEntries:
         normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
         migratedSidebarEntries ??
@@ -737,6 +740,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
           sidebarCollapsedAgentIds: normalizeUniqueTrimmedStringList(next.sidebarCollapsedAgentIds),
         }
       : {}),
+    sidebarHomePinned: next.sidebarHomePinned !== false,
     sidebarEntries: next.sidebarEntries,
     ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
     ...(normalizeChatMessageMaxWidth(next.chatMessageMaxWidth)

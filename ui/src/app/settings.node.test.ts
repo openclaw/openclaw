@@ -375,6 +375,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatPersistCommentary: true,
       navWidth: 258,
       sidebarAgentsMode: "chip",
+      sidebarHomePinned: true,
       sidebarEntries: [],
       sessionsByGateway: {
         [gwUrl]: {

@@ -11,6 +11,7 @@ export function createApplicationNavigationPreferences(
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
     navCollapsed,
     navWidth: initialSettings.navWidth,
+    sidebarHomePinned: initialSettings.sidebarHomePinned !== false,
     sidebarEntries: initialSettings.sidebarEntries,
     pinnedAgentIds: initialSettings.pinnedAgentIds ?? [],
   };
@@ -24,6 +25,7 @@ export function createApplicationNavigationPreferences(
       const nextSnapshot = { ...snapshot, ...patch };
       const persistedChanged =
         nextSnapshot.navWidth !== snapshot.navWidth ||
+        nextSnapshot.sidebarHomePinned !== snapshot.sidebarHomePinned ||
         nextSnapshot.sidebarEntries !== snapshot.sidebarEntries ||
         nextSnapshot.pinnedAgentIds !== snapshot.pinnedAgentIds;
       if (!persistedChanged && nextSnapshot.navCollapsed === snapshot.navCollapsed) {
@@ -32,6 +34,7 @@ export function createApplicationNavigationPreferences(
       if (persistedChanged) {
         patchSettings({
           navWidth: nextSnapshot.navWidth,
+          sidebarHomePinned: nextSnapshot.sidebarHomePinned !== false,
           sidebarEntries: [...nextSnapshot.sidebarEntries],
           pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
         });
