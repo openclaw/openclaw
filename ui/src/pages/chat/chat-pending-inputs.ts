@@ -6,9 +6,11 @@ import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { readMessageClientSources } from "../../../../src/chat/message-client-source.js";
 import { t } from "../../i18n/index.ts";
-import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
+import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
@@ -40,12 +42,66 @@ type PendingInputView = {
 };
 const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
 
+function buildPendingInputAttachments(
+  inputId: string,
+  media: ReturnType<typeof readTranscriptMediaEntries>,
+): ChatAttachment[] {
+  return media.map((entry) => {
+    const attachment: ChatAttachment = {
+      id: `pending-input:${inputId}:media:${entry.factIndex}`,
+      previewUrl: entry.path,
+      mimeType: entry.mediaType ?? "application/octet-stream",
+    };
+    if (entry.fileName) {
+      attachment.fileName = entry.fileName;
+    }
+    if (entry.sizeBytes !== undefined) {
+      attachment.sizeBytes = entry.sizeBytes;
+    }
+    return attachment;
+  });
+}
+
+export function buildPendingInputQueueItems(
+  inputs: ChatPendingInputsPage["items"],
+  workspaceSyncPendingRunIds: readonly string[] = [],
+  workerSetupPending = false,
+): ChatQueueItem[] {
+  return inputs.flatMap((input) => {
+    if (input.state !== "queued") {
+      return [];
+    }
+    const media = readTranscriptMediaEntries(input.message);
+    const stateLabel =
+      input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))
+        ? t(
+            workerSetupPending
+              ? "chat.pendingInputs.waitingForWorkerSetup"
+              : "chat.pendingInputs.waitingForWorkspaceSync",
+          )
+        : undefined;
+    const sourceClients = readMessageClientSources(input.message);
+    return [
+      {
+        id: `pending-input:${input.id}`,
+        text: extractTextCached(input.message) ?? "",
+        createdAt: input.acceptedAt,
+        ...(input.runId ? { sendRunId: input.runId } : {}),
+        ...(media.length ? { attachments: buildPendingInputAttachments(input.id, media) } : {}),
+        custody: {
+          kind: "pending-input",
+          ...(stateLabel ? { stateLabel } : {}),
+          ...(sourceClients.length ? { sourceClients } : {}),
+        },
+      },
+    ];
+  });
+}
+
 export function buildPendingInputItems(
   inputs: ChatPendingInputsPage["items"],
   searchQuery?: string,
   browserInputs: readonly ChatQueueItem[] = [],
-  workspaceSyncPendingRunIds: readonly string[] = [],
-  workerSetupPending = false,
 ): ChatItem[] {
   // Custody records stay outside active-run ordering until the writer promotes them.
   const items: ChatItem[] = [];
@@ -53,6 +109,10 @@ export function buildPendingInputItems(
     return items;
   }
   for (const input of inputs) {
+    // Queued custody belongs to the composer tray. It is not model history yet.
+    if (input.state === "queued") {
+      continue;
+    }
     if (searchQuery?.trim() && !messageMatchesSearchQuery(input.message, searchQuery)) {
       continue;
     }
@@ -63,21 +123,6 @@ export function buildPendingInputItems(
         input.runId ? `send:${input.runId}` : `pending-input:${input.id}`,
       ),
     );
-    if (input.state === "queued") {
-      if (input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))) {
-        items.push({
-          kind: "notice",
-          key: `pending-input:${input.id}:state`,
-          timestamp: input.acceptedAt,
-          text: t(
-            workerSetupPending
-              ? "chat.pendingInputs.waitingForWorkerSetup"
-              : "chat.pendingInputs.waitingForWorkspaceSync",
-          ),
-        });
-      }
-      continue;
-    }
     items.push({
       kind: "notice",
       key: `pending-input:${input.id}:state`,

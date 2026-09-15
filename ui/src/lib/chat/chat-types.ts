@@ -148,6 +148,12 @@ export type ChatQueueItem = {
   sessionKey?: string;
   agentId?: string;
   sender?: SenderIdentity;
+  /** Read-only Gateway custody projected into the composer queue, never the transcript. */
+  custody?: {
+    kind: "pending-input";
+    stateLabel?: string;
+    sourceClients?: readonly MessageClientSource[];
+  };
 };
 
 /** Union type for items in the chat thread */

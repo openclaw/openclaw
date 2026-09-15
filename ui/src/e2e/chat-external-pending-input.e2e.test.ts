@@ -10,7 +10,7 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("shows another client's accepted follow-up during an active turn and promotes it once", async () => {
+  it("keeps another client's accepted follow-up above the composer until promotion", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
@@ -99,14 +99,12 @@ suite.define(() => {
           .poll(async () => (await gateway.getRequests("chat.history")).length)
           .toBeGreaterThan(readsBefore);
         await expect.poll(() => page.getByText(followup, { exact: true }).count()).toBe(1);
-        const externalGroup = page.locator(".chat-group.user", { hasText: followup });
+        const queuedRow = page.locator(".chat-queue__item", { hasText: followup });
+        await queuedRow.waitFor();
+        expect(await page.locator(".chat-group.user", { hasText: followup }).count()).toBe(0);
         await captureUiProof(suite, page, "external-pending-input", "02-after.png");
-        await externalGroup.getByText("via CLI (Release helper)", { exact: true }).waitFor();
-        expect(
-          await externalGroup
-            .locator(".chat-sender-name, .chat-avatar, .chat-author-avatar")
-            .count(),
-        ).toBe(0);
+        await queuedRow.getByText("via CLI (Release helper)", { exact: true }).waitFor();
+        expect(await queuedRow.locator("button").count()).toBe(0);
         expect(await stream.isVisible()).toBe(true);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
@@ -138,6 +136,8 @@ suite.define(() => {
           .poll(async () => (await gateway.getRequests("chat.history")).length)
           .toBeGreaterThan(promotionReadsBefore);
         await expect.poll(() => page.getByText(followup, { exact: true }).count()).toBe(1);
+        await expect.poll(() => queuedRow.count()).toBe(0);
+        const externalGroup = page.locator(".chat-group.user", { hasText: followup });
         expect(await externalGroup.locator(".chat-message-source").textContent()).toBe(
           "via CLI (Release helper)",
         );

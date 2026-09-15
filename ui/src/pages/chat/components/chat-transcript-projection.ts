@@ -149,15 +149,6 @@ export function projectChatTranscript(
     queue: props.queue,
     initialTurnId: props.initialTurnId,
     pendingInputs: props.pendingInputs,
-    workerSetupPending: ["requested", "provisioning", "syncing", "starting"].includes(
-      activeSession?.placement?.state ?? "",
-    ),
-    workspaceSyncPendingRunIds:
-      (activeSession?.placement?.state === "active" ||
-        activeSession?.placement?.state === "draining") &&
-      activeSession.placement.workspaceResultReconciling === true
-        ? activeSession.activeRunIds
-        : undefined,
     showToolCalls: props.showToolCalls,
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),

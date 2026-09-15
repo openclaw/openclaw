@@ -11,6 +11,7 @@ import {
 } from "../../../lib/chat/chat-queue-order.ts";
 import type { ChatQueueItem, HumanMention } from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
+import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
@@ -185,7 +186,8 @@ export function renderChatQueue(props: ChatQueueProps) {
     segments: movableSegments,
     // Whether this queue reorders at all, which is a queue-level fact: an open
     // edit shrinks the segments but must not retract the handle column.
-    offered: visibleQueue.filter(isMovableChatQueueItem).length > 1,
+    offered:
+      visibleQueue.filter((item) => !item.custody && isMovableChatQueueItem(item)).length > 1,
   };
   // Attempted sends live in the transcript but still own their FIFO position.
   // Keep their unresolved delivery visible beside the messages they block.
@@ -268,19 +270,27 @@ function renderChatQueueItem(
   props: ChatQueueProps,
   reorder: ChatQueueReorder,
 ) {
+  const pendingCustody = item.custody?.kind === "pending-input" ? item.custody : undefined;
   const authorAvatar = renderChatAuthorAvatar(item.sender);
   const hasAuthorAvatar = authorAvatar !== nothing;
   const failed = item.sendState === "failed" || item.sendState === "unconfirmed";
   const reconnecting = !failed && (props.offline || item.sendState === "waiting-reconnect");
-  const stateLabel = sendStateLabel(item, props.offline === true);
+  const stateLabel = pendingCustody?.stateLabel ?? sendStateLabel(item, props.offline === true);
+  const sourceLabel = pendingCustody?.sourceClients?.length
+    ? messageClientSourcesLabel(pendingCustody.sourceClients)
+    : null;
   const steered = item.queueMode === "steer" && stateLabel === null;
   const busy = item.sendState === "executing-command";
   const editing = props.editingId === item.id;
   const mentionText = editing ? (props.editingText ?? item.text) : item.text;
   const mentions = editing ? props.editingMentions : item.mentions;
   const canSteer =
-    Boolean(props.canAbort && props.onQueueSteer) && isSteerableQueuedMessage(item) && !editing;
+    !pendingCustody &&
+    Boolean(props.canAbort && props.onQueueSteer) &&
+    isSteerableQueuedMessage(item) &&
+    !editing;
   const showsSteer =
+    !pendingCustody &&
     Boolean(props.canAbort && props.onQueueSteer) &&
     !editing &&
     !item.localCommandName &&
@@ -296,7 +306,10 @@ function renderChatQueueItem(
   // Every row keeps its handle and action slots in every state and goes inert
   // instead of empty while an edit is open, so no column moves mid-flow.
   const editable =
-    Boolean(props.onQueueEdit) && isMovableChatQueueItem(item) && !item.localCommandName;
+    !pendingCustody &&
+    Boolean(props.onQueueEdit) &&
+    isMovableChatQueueItem(item) &&
+    !item.localCommandName;
   const canEdit = editable && !props.editingId;
   const text =
     item.text ||
@@ -503,6 +516,7 @@ function renderChatQueueItem(
                     >`
                   : nothing
               }
+              ${sourceLabel ? html`<span class="chat-queue__state">${sourceLabel}</span>` : nothing}
             </span>`
       }
       <span class="chat-queue__actions">
@@ -560,7 +574,7 @@ function renderChatQueueItem(
             : nothing
         }
         ${
-          busy || editing
+          busy || editing || pendingCustody
             ? nothing
             : html`
                 <openclaw-tooltip .content=${t("chat.queue.removeQueuedMessage")}>

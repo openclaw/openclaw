@@ -1,15 +1,12 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatHost } from "../pages/chat/chat-send-contract.ts";
-import {
-  takeControlUiElementScreenshot,
-  takeControlUiViewportScreenshot,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureUiProofEnabled,
   createChatFlowE2eSuite,
-  expectDefined,
   installMockGateway,
   requireRecord,
   requireString,
@@ -20,7 +17,7 @@ const suite = createChatFlowE2eSuite();
 const orders = ["receipt-first", "event-first"] as const;
 
 suite.define(() => {
-  it.each(orders)("keeps image previews through the history handoff (%s)", async (order) => {
+  it.each(orders)("moves accepted image above composer (%s)", async (order) => {
     const proofDir = captureUiProofEnabled ? suite.artifactDir : undefined;
     const imageBytes = await readFile(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
     await suite.withPage(
@@ -77,13 +74,12 @@ suite.define(() => {
           historyMessages: [],
           methodResponses: { "chat.startup": initialHistory, "chat.history": initialHistory },
         });
-        const capture = async (stage: string) => {
+        const proofSurface = page.locator(".shell");
+        const capture = async (stage: string, content: Locator) => {
           if (proofDir) {
             await writeFile(
               path.join(proofDir, `${stage}.png`),
-              await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-                page.locator(".chat-group.user img.chat-message-image"),
-              ]),
+              await takeControlUiViewportScreenshot(page, proofSurface, [content]),
             );
           }
         };
@@ -119,49 +115,7 @@ suite.define(() => {
             )
             .toBe(180);
           expect(await userImage.getAttribute("src")).toMatch(/^blob:/u);
-          const displayed = expectDefined(await userImage.elementHandle(), "submitted image");
-          const initialPixels = await takeControlUiElementScreenshot(page, userImage, [userImage]);
-          const continuity = await displayed.evaluateHandle((image) => {
-            const frames: boolean[] = [];
-            const initialBounds = image.getBoundingClientRect();
-            let frame = 0;
-            const sample = () => {
-              const bounds = image.getBoundingClientRect();
-              frames.push(
-                image.isConnected &&
-                  bounds.width > 0 &&
-                  bounds.height > 0 &&
-                  bounds.width === initialBounds.width &&
-                  bounds.height === initialBounds.height &&
-                  document.querySelectorAll(".chat-group.user img.chat-message-image").length ===
-                    1 &&
-                  document.querySelector(".chat-group.user [aria-busy='true']") === null,
-              );
-              frame = requestAnimationFrame(sample);
-            };
-            sample();
-            return {
-              stop: () => {
-                cancelAnimationFrame(frame);
-                return frames;
-              },
-            };
-          });
-          const expectImageStillVisible = async (stage: string) => {
-            await capture(stage);
-            expect(await displayed.evaluate((image) => image.isConnected)).toBe(true);
-            expect(await userImage.count()).toBe(1);
-            // Native pending sources may report zero dimensions while the browser
-            // still paints the current decoded image. Compare the actual pixels.
-            expect(
-              (await takeControlUiElementScreenshot(page, userImage, [userImage])).equals(
-                initialPixels,
-              ),
-              `${stage} preserves the displayed image pixels`,
-            ).toBe(true);
-            expect(await page.locator(".chat-group.user [aria-busy='true']").count()).toBe(0);
-          };
-          await expectImageStillVisible("01-submitted");
+          await capture("01-submitted", userImage);
           const acceptedAt = Date.now();
           const pendingInput = {
             id: "accepted-image-input",
@@ -202,9 +156,13 @@ suite.define(() => {
             session: sessionInfo,
           });
           await gateway.waitForRequest("chat.history", { after: histories });
-          // Custody starts the canonical media read while the send acknowledgment is held.
-          await expect.poll(() => metadataRequested).toBe(true);
-          await expectImageStillVisible("02-custody");
+          const pendingRow = page.locator(".chat-queue__item", { hasText: prompt });
+          await pendingRow.waitFor();
+          expect(await pendingRow.locator("button").count()).toBe(0);
+          expect(await page.locator(".chat-group.user", { hasText: prompt }).count()).toBe(0);
+          expect(await userImage.count()).toBe(0);
+          expect(metadataRequested).toBe(false);
+          await capture("02-custody", pendingRow);
           await gateway.resolveDeferred("chat.send", { runId, status: "started" });
           await waitForCommittedState(
             page,
@@ -259,15 +217,19 @@ suite.define(() => {
             messageSeq: 1,
             message: canonical,
           });
-          await page.locator('.chat-bubble[data-entry-id="accepted-image-input"]').waitFor();
+          const canonicalBubble = page.locator(
+            '.chat-bubble[data-entry-id="accepted-image-input"]',
+          );
+          await canonicalBubble.waitFor();
+          await expect.poll(() => pendingRow.count()).toBe(0);
           if (order === "event-first") {
             await gateway.resolveDeferred("chat.history", canonicalHistory);
           }
           await expect.poll(() => metadataRequested).toBe(true);
-          await expectImageStillVisible("03-canonical-metadata-loading");
+          await capture("03-canonical-metadata-loading", canonicalBubble);
           releaseMetadata();
           await expect.poll(() => imageRequested).toBe(true);
-          await expectImageStillVisible("04-canonical-image-loading");
+          await capture("04-canonical-image-loading", userImage);
           releaseImage();
           await expect.poll(() => userImage.getAttribute("src")).toContain("stable-image-ticket");
           await expect
@@ -277,15 +239,14 @@ suite.define(() => {
               ),
             )
             .toBe(180);
-          await expectImageStillVisible("05-canonical-image-ready");
-          const frames = await continuity.evaluate((sampler) => sampler.stop());
-          await continuity.dispose();
-          expect(frames.length).toBeGreaterThan(1);
-          expect(frames.every(Boolean)).toBe(true);
+          expect(await page.locator(".chat-group.user", { hasText: prompt }).count()).toBe(1);
+          await capture("05-canonical-image-ready", userImage);
         } finally {
           releaseMetadata();
           releaseImage();
-          await capture("06-final");
+          if ((await proofSurface.count()) > 0) {
+            await capture("06-final", proofSurface);
+          }
         }
       },
     );

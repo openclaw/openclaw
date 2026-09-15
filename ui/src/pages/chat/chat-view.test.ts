@@ -46,6 +46,7 @@ import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import * as chatProgress from "./chat-progress.ts";
 import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
+import * as chatThreadBuild from "./chat-thread-build.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import * as chatThread from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
@@ -1670,6 +1671,86 @@ describe("chat history pagination", () => {
 });
 
 describe("retained input navigation", () => {
+  it("keeps history cached while worker setup updates the composer custody notice", async () => {
+    const sessionKey = "agent:main:worker-setup";
+    const historyState = makeChatHost({ sessionKey, currentSessionId: "worker-setup-session" });
+    applyChatPendingInputs(historyState, {
+      total: 1,
+      items: [
+        {
+          id: "queued-follow-up",
+          runId: "queued-run",
+          acceptedAt: 3_000,
+          state: "queued",
+          message: { role: "user", content: "Queued follow-up", timestamp: 3_000 },
+        },
+      ],
+    });
+    const timing = { generation: 1, createdAtMs: 1, updatedAtMs: 1, stateChangedAtMs: 1 };
+    const props = createChatProps({
+      historyState,
+      sessionKey,
+      messages: [
+        { role: "user", content: "Earlier request", timestamp: 1_000 },
+        { role: "assistant", content: "Earlier reply", timestamp: 2_000 },
+      ],
+      selectedSession: {
+        key: sessionKey,
+        kind: "direct",
+        updatedAt: 1,
+        placement: { state: "requested", ...timing },
+      },
+    });
+    const container = document.body.appendChild(document.createElement("div"));
+    vi.mocked(chatThread.buildCachedChatItems).mockRestore();
+    resetTranscriptSession(props.paneId);
+    const buildSpy = vi.spyOn(chatThreadBuild, "buildChatItems");
+    const rerender = () => {
+      render(renderChat(props), container);
+      props.transcript.hostUpdated();
+    };
+    try {
+      rerender();
+      props.transcript.hostConnected();
+      await vi.waitFor(() => expect(buildSpy).toHaveBeenCalledOnce());
+      const custodyRow = expectDefined(
+        container.querySelector(".agent-chat__composer-shell .chat-queue__item"),
+        "composer custody row",
+      );
+      expect(custodyRow.textContent).toContain("Queued follow-up");
+      expect(custodyRow.textContent).toContain("Received · waiting for worker setup");
+      expect(container.querySelector(".agent-chat__transcript .chat-queue__item")).toBeNull();
+
+      rerender();
+      expect(buildSpy).toHaveBeenCalledOnce();
+
+      props.selectedSession = {
+        ...props.selectedSession,
+        key: sessionKey,
+        kind: "direct",
+        placement: {
+          state: "active",
+          ...timing,
+          environmentId: "worker:fixture",
+          activeOwnerEpoch: 1,
+          workerBundleHash: "a".repeat(64),
+          workspaceBaseManifestRef: "base-manifest",
+          remoteWorkspaceDir: "/worker/repo",
+        },
+      };
+      rerender();
+      expect(buildSpy).toHaveBeenCalledOnce();
+      const updatedCustodyRow = expectDefined(
+        container.querySelector(".agent-chat__composer-shell .chat-queue__item"),
+        "updated composer custody row",
+      );
+      expect(updatedCustodyRow.textContent).not.toContain("Received · waiting for worker setup");
+      expect(updatedCustodyRow.textContent).toContain("Queued follow-up");
+    } finally {
+      props.transcript.hostDisconnected();
+    }
+  });
+
   it("keeps an empty filtered page navigable without blocking an independent send", async () => {
     const sessionKey = "agent:main:hidden-page";
     const sessionId = "hidden-page-session";
@@ -1763,16 +1844,17 @@ describe("retained input navigation", () => {
       });
 
       const rows = container.querySelectorAll(".chat-queue__item");
-      expect([...rows].map((row) => row.getAttribute("data-chat-queue-item"))).toEqual([
-        "before",
-        "new",
-      ]);
+      expect([...rows].map((row) => row.getAttribute("data-chat-queue-item"))).toEqual(
+        source === "pending custody"
+          ? ["before", "pending-input:retained-input", "new"]
+          : ["before", "new"],
+      );
       const grips = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__grip")];
-      expect(grips).toHaveLength(2);
+      expect(grips).toHaveLength(source === "pending custody" ? 3 : 2);
       expect(grips.every((grip) => grip.disabled)).toBe(true);
       grips[1]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
       expect(onQueueMove).not.toHaveBeenCalled();
-      rows[1]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
+      rows[rows.length - 1]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
       expect(onQueueRemove).toHaveBeenCalledWith("new");
       expect(queue).toHaveLength(3);
     },

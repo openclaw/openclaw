@@ -28,6 +28,7 @@ import {
 import {
   applyChatPendingInputs,
   buildPendingInputItems,
+  buildPendingInputQueueItems,
   getChatPendingInputs,
 } from "./chat-pending-inputs.ts";
 import { admitQueuedMessageForSession, readChatQueueForScope } from "./chat-queue.ts";
@@ -83,43 +84,74 @@ describe("server-owned pending input display", () => {
   it("shows a durable receipt while an accepted input waits for workspace sync", () => {
     const queued = { ...input, state: "queued" as const };
 
-    const items = buildPendingInputItems([queued], undefined, [], ["run-queued"]);
+    const items = buildPendingInputItems([queued]);
+    const queue = buildPendingInputQueueItems([queued], ["run-queued"]);
 
-    expect(items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "notice",
-          text: "Received · waiting for workspace sync",
-        }),
-      ]),
-    );
+    expect(items).toEqual([]);
+    expect(queue).toEqual([
+      expect.objectContaining({
+        id: `pending-input:${input.id}`,
+        text: "Keep my accepted input",
+        custody: {
+          kind: "pending-input",
+          stateLabel: "Received · waiting for workspace sync",
+        },
+      }),
+    ]);
+  });
+
+  it("projects queued media and client attribution into a read-only composer row", () => {
+    const source = { id: "cli", mode: "cli", displayName: "Release helper" };
+    const queue = buildPendingInputQueueItems([
+      {
+        ...input,
+        state: "queued",
+        message: {
+          role: "user",
+          content: "Keep my accepted input",
+          timestamp: 100,
+          __openclaw: {
+            id: "pending:input-1",
+            transport: { clients: [source] },
+            media: [{ path: "media://pending/image.png", contentType: "image/png" }],
+          },
+        },
+      },
+    ]);
+
+    expect(queue).toMatchObject([
+      {
+        text: "Keep my accepted input",
+        attachments: [{ previewUrl: "media://pending/image.png", mimeType: "image/png" }],
+        custody: { kind: "pending-input", sourceClients: [source] },
+      },
+    ]);
   });
 
   it.each([
-    { state: "queued", runId: undefined, notice: undefined },
+    { state: "queued", runId: undefined, notice: undefined, message: false },
     {
       state: "interrupted",
       runId: "run-queued",
       notice:
         "Interrupted before the agent started it. It will not run automatically; copy it and send again.",
+      message: true,
     },
     {
       state: "cancelled",
       runId: "run-queued",
       notice:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
+      message: true,
     },
-  ] as const)(
-    "keeps $state custody out of the worker-setup notice without eligible execution",
-    ({ state, runId, notice }) => {
-      const items = buildPendingInputItems([{ ...input, state, runId }], undefined, [], [], true);
+  ] as const)("keeps $state custody in its owning surface", ({ state, runId, notice, message }) => {
+    const items = buildPendingInputItems([{ ...input, state, runId }]);
 
-      expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual(
-        notice ? [notice] : [],
-      );
-      expect(items.some((item) => item.kind === "message")).toBe(true);
-    },
-  );
+    expect(items.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual(
+      notice ? [notice] : [],
+    );
+    expect(items.some((item) => item.kind === "message")).toBe(message);
+  });
 
   it("keeps cached local submissions available after pane remount", async () => {
     const host = makeChatHost({ sessionKey, currentSessionId: sessionId, requestHandlers: {} });
@@ -839,7 +871,7 @@ describe("server-owned pending input display", () => {
     },
   );
 
-  it("replaces a server pending bubble with canonical persistence exactly once", () => {
+  it("renders only canonical persistence when queued custody shares its identity", () => {
     const clients = [{ id: "cli", mode: "cli", displayName: "Release helper" }];
     const promoted = {
       role: "user",
@@ -878,7 +910,7 @@ describe("server-owned pending input display", () => {
     });
   });
 
-  it("keeps unconsumed input in order without a generic queue notice", () => {
+  it("keeps queued custody out of transcript ordering", () => {
     const earlier = { role: "assistant", content: "Earlier reply", timestamp: 50 };
     const later = { role: "assistant", content: "Later reply", timestamp: 150 };
     const items = buildChatItems({
@@ -895,13 +927,11 @@ describe("server-owned pending input display", () => {
     });
 
     expect(items).toMatchObject([
-      { kind: "group", role: "assistant", messages: [{ message: earlier }] },
       {
         kind: "group",
-        role: "user",
-        messages: [{ message: { content: "Keep my accepted input" } }],
+        role: "assistant",
+        messages: [{ message: earlier }, { message: later }],
       },
-      { kind: "group", role: "assistant", messages: [{ message: later }] },
     ]);
   });
 

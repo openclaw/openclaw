@@ -250,41 +250,6 @@ describe("chat transcript full-message recovery", () => {
     await vi.waitFor(() => expect(pane.textContent).toContain("Revisited body."));
   });
 
-  it("keeps recovered pending-input text until that input leaves the source", async () => {
-    const load = vi
-      .fn<SidebarFullMessageLoader>()
-      .mockResolvedValue(fullMessage("Accepted input."));
-    const pane = mountTranscript("recovery-pending-input", load);
-    const pendingInputs: ChatThreadProps["pendingInputs"] = [
-      {
-        id: "accepted-1",
-        acceptedAt: 1_000,
-        state: "queued",
-        message: {
-          ...previewMessage,
-          role: "user",
-          __openclaw: { id: "pending:accepted-1", truncated: true },
-        },
-      },
-    ];
-    pane.props.messages = [];
-    pane.props.pendingInputs = pendingInputs;
-    await vi.waitFor(() => expect(pane.textContent).toContain("Accepted input."));
-    pane.requestUpdate();
-    await pane.updateComplete;
-    expect(load).toHaveBeenCalledOnce();
-    expect(pane.textContent).toContain("Accepted input.");
-
-    pane.props.pendingInputs = [];
-    pane.requestUpdate();
-    await pane.updateComplete;
-    load.mockResolvedValue(fullMessage("Revisited input."));
-    pane.props.pendingInputs = pendingInputs;
-    pane.requestUpdate();
-    await vi.waitFor(() => expect(pane.textContent).toContain("Revisited input."));
-    expect(load).toHaveBeenCalledTimes(2);
-  });
-
   it("fences a pruned request when the same message starts a new recovery", async () => {
     const first = createDeferred<FullMessageResult>();
     const second = createDeferred<FullMessageResult>();

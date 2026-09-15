@@ -168,29 +168,6 @@ function toolMessage(
   return chatMessage("tool", content, timestamp, { toolCallId, toolName, ...overrides });
 }
 
-it("invalidates cached custody notices when workspace sync ownership changes", () => {
-  const pendingInputs = [
-    {
-      acceptedAt: 1,
-      id: "pending-follow-up",
-      message: userMessage("continue", 1),
-      runId: "follow-up-run",
-      state: "queued" as const,
-    },
-  ];
-  const input = createProps({ pendingInputs });
-  const waiting = buildCachedChatItems({
-    ...input,
-    workspaceSyncPendingRunIds: ["follow-up-run"],
-  });
-  const active = buildCachedChatItems(input);
-
-  expect(waiting.filter((item) => item.kind === "notice").map((item) => item.text)).toEqual([
-    "Received · waiting for workspace sync",
-  ]);
-  expect(active.filter((item) => item.kind === "notice")).toEqual([]);
-});
-
 function queuedSend(
   id: string,
   text: string,
