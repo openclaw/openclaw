@@ -205,6 +205,7 @@ const ModelDefinitionSchema = Type.Object({
     }),
   ),
   contextWindow: Type.Optional(Type.Number()),
+  contextTokens: Type.Optional(Type.Number()),
   maxTokens: Type.Optional(Type.Number()),
   params: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),
@@ -851,6 +852,7 @@ export class ModelRegistry {
           input: runtimeInput,
           cost: normalizeResolvedPricing(modelDef.cost ?? {}),
           contextWindow: modelDef.contextWindow ?? 128000,
+          contextTokens: modelDef.contextTokens,
           contextWindows: modelDef.contextWindows,
           contextWindowDefault: modelDef.contextWindowDefault,
           maxTokens: modelDef.maxTokens ?? 16384,
@@ -1198,6 +1200,7 @@ export class ModelRegistry {
           input: modelDef.input,
           cost: modelDef.cost,
           contextWindow: modelDef.contextWindow,
+          contextTokens: modelDef.contextTokens,
           contextWindows: modelDef.contextWindows,
           contextWindowDefault: modelDef.contextWindowDefault,
           maxTokens: modelDef.maxTokens,
@@ -1246,6 +1249,7 @@ export interface ProviderConfigInput {
     input: ("text" | "image")[];
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
     contextWindow: number;
+    contextTokens?: number;
     contextWindows?: ModelCatalogContextWindowOption[];
     contextWindowDefault?: string;
     maxTokens: number;
