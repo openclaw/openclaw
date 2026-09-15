@@ -203,6 +203,29 @@ describe("Code Mode master switch resolution", () => {
 });
 
 describe("Code Mode guest source validation", () => {
+  it.each([
+    { code: "const answer = ;", location: "1:16" },
+    { code: "const first = 1;\nconst answer = ;", location: "2:16" },
+  ])("rejects malformed JavaScript at $location", ({ code, location }) => {
+    expect(() => prepareSource(code)).toThrow(
+      "SyntaxError at openclaw-code-mode:user.js:" + location,
+    );
+  });
+
+  it("bounds diagnostics containing long duplicate identifiers", () => {
+    const name = "a".repeat(10_000);
+    const code = "let " + name + "; let " + name + ";";
+    let error: unknown;
+    try {
+      prepareSource(code);
+    } catch (cause) {
+      error = cause;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain("SyntaxError at openclaw-code-mode:user.js:1:");
+    expect(String(error).length).toBeLessThan(500);
+  });
+
   it("reports syntax errors at user-relative locations", () => {
     expect(parseCodeModeScriptSyntax("const x = ;")).toEqual({
       ok: false,
@@ -304,7 +327,6 @@ describe("Code Mode guest source validation", () => {
       "ordinary import metadata property",
       "const api = { import: { meta: 42 } }; return api.import.meta;",
     ],
-    ["ordinary malformed JavaScript for guest syntax diagnostics", "const answer = ;"],
   ])("preserves %s", (_name, code) => {
     expect(prepareSource(code)).toBe(code);
   });
