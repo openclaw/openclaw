@@ -10,7 +10,7 @@ import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildOversizedFallbackPlanWithWorker,
-  buildStageSplitPlanWithWorker,
+  buildSummarizationStagePlanWithWorker,
   buildSummaryChunksWithWorker,
 } from "./compaction-planning-worker.js";
 import {
@@ -23,6 +23,10 @@ import {
 } from "./compaction-planning.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
+import {
+  isContextOverflowError,
+  isLikelyContextOverflowError,
+} from "./failover/context-overflow.js";
 import type {
   AgentMessage,
   CompactionSummaryPrompt,
@@ -87,6 +91,7 @@ type CompactionSummaryParams = {
   thinkingLevel?: ThinkingLevel;
   streamFn?: StreamFn;
   usageSink?: SessionModelUsageSink;
+  singlePass?: boolean;
 };
 
 function resolveIdentifierPreservationInstructions(
@@ -122,7 +127,7 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
 
   const chunks = await buildSummaryChunksWithWorker({
     messages: params.messages,
-    maxChunkTokens: params.maxChunkTokens,
+    maxChunkTokens: params.singlePass ? Number.MAX_SAFE_INTEGER : params.maxChunkTokens,
     signal: params.signal,
   });
   let summary = params.previousSummary;
@@ -160,7 +165,9 @@ async function summarizeChunks(params: CompactionSummaryParams): Promise<string>
           // Caller aborts and transport timeouts are terminal; provider-side
           // AbortErrors without caller cancellation remain retryable.
           shouldRetry: (err) =>
-            !params.signal.aborted && (isAbortError(err) || !isTimeoutError(err)),
+            !params.signal.aborted &&
+            !isLikelyContextOverflowError(formatErrorMessage(err)) &&
+            (isAbortError(err) || !isTimeoutError(err)),
         },
       );
     } catch (err) {
@@ -211,7 +218,10 @@ async function summarizeWithFallback(params: CompactionSummaryParams): Promise<s
     return await summarizeChunks(params);
   } catch (err) {
     lastError = err;
-    if (params.signal.aborted) {
+    if (
+      params.signal.aborted ||
+      (params.singlePass && isContextOverflowError(formatErrorMessage(lastError)))
+    ) {
       throw lastError;
     }
     log.warn(`Full summarization failed: ${formatErrorMessage(lastError)}`);
@@ -304,16 +314,46 @@ export async function summarizeInStages(
     return await summarizeWithFallback(params);
   }
 
-  const plan = await buildStageSplitPlanWithWorker({
+  const plan = await buildSummarizationStagePlanWithWorker({
     messages,
     maxChunkTokens: params.maxChunkTokens,
     parts: params.parts,
     minMessagesForSplit: params.minMessagesForSplit,
+    contextWindow: params.contextWindow,
+    customInstructions: buildCompactionSummarizationInstructions(
+      params.customInstructions,
+      params.summarizationInstructions,
+    ),
+    previousSummary: params.previousSummary,
+    summaryPrompt: params.summaryPrompt,
+    model: params.model,
+    reserveTokens: params.reserveTokens,
+    thinkingLevel: params.thinkingLevel,
     signal: params.signal,
   });
 
   if (plan.mode === "single") {
-    return await summarizeWithFallback(params);
+    // Only a verified whole-request fit may bypass the chunk budget; the planner's
+    // legacy single-stage shortcuts still need bounded requests.
+    const singlePass = plan.fitsWholeRequest === true;
+    try {
+      return await summarizeWithFallback({ ...params, singlePass });
+    } catch (err) {
+      if (
+        !singlePass ||
+        params.signal.aborted ||
+        (!isTimeoutError(err) && !isContextOverflowError(formatErrorMessage(err)))
+      ) {
+        throw err;
+      }
+      log.warn(
+        "single-pass summarization exceeded the provider request budget; retrying in chunks",
+        {
+          err,
+        },
+      );
+      return await summarizeWithFallback({ ...params, singlePass: false });
+    }
   }
 
   const partialSummaries: string[] = [];

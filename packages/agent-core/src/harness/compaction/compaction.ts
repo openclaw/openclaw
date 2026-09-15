@@ -1,5 +1,8 @@
+import { adjustMaxTokensForThinking } from "@openclaw/ai/providers";
 import {
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+  supportsClaudeAdaptiveThinking,
   type Model,
   type SimpleStreamOptions,
   type StreamFn,
@@ -682,6 +685,115 @@ function createSummarizationOptions(
   return options;
 }
 
+function buildSummarizationPromptText(params: {
+  messages: AgentMessage[];
+  prompt: string;
+  customInstructions?: string;
+  previousSummary?: string;
+}): string {
+  const conversationText = serializeConversation(convertToLlm(params.messages));
+  let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
+  if (params.previousSummary) {
+    promptText += `<previous-summary>\n${params.previousSummary}\n</previous-summary>\n\n`;
+  }
+  promptText += params.prompt;
+  // SDK callers also pass generated policy here; the host bounds raw operator focus.
+  if (params.customInstructions) {
+    promptText += `\n\nAdditional focus: ${params.customInstructions}`;
+  }
+  return promptText;
+}
+
+/** Managed-transport alias applied when the host requires OpenClaw's HTTP transport. */
+const MANAGED_ANTHROPIC_TRANSPORT_API = "openclaw-anthropic-messages-transport";
+
+/** Returns whether the api is the managed Anthropic Messages transport alias. */
+function isManagedAnthropicTransportApi(api: string): boolean {
+  return api === MANAGED_ANTHROPIC_TRANSPORT_API;
+}
+
+/** Returns whether the api routes through Anthropic Messages, alias included. */
+function isAnthropicMessagesApi(api: string): boolean {
+  return api === "anthropic-messages" || isManagedAnthropicTransportApi(api);
+}
+
+function isClaudeBedrockModel(model: Model): boolean {
+  if (model.api !== "bedrock-converse-stream") {
+    return false;
+  }
+  if (resolveClaudeModelIdentity(model).startsWith("claude-")) {
+    return true;
+  }
+  const id = model.id.toLowerCase();
+  const name = model.name?.toLowerCase() ?? "";
+  return (
+    id.includes("anthropic.claude") ||
+    id.includes("anthropic/claude") ||
+    name.includes("anthropic.claude") ||
+    name.includes("anthropic/claude") ||
+    name.includes("claude")
+  );
+}
+
+/**
+ * Returns the thinking level the model's executing transport will actually pass
+ * to `adjustMaxTokensForThinking`.
+ *
+ * `adjustMaxTokensForThinking` natively supports "max" (32 768) and only clamps
+ * "xhigh" internally, so any max->high narrowing is a per-transport decision:
+ *
+ * - `streamSimpleAnthropic` (packages/ai/src/providers/anthropic.ts) forwards
+ *   `reasoning` unchanged. This is the default simple-runtime route for
+ *   `anthropic-messages`, registered as `streamSimple` in register-builtins.ts.
+ * - `resolveSimpleBedrockOptions` (extensions/amazon-bedrock/stream.runtime.ts)
+ *   likewise forwards the requested level unchanged.
+ * - The managed transport stream (packages/ai/src/transports/anthropic-transport-stream.ts)
+ *   coerces "max" to "high". It only runs when the host reports a managed
+ *   transport requirement (request.proxy / request.tls / localService), which
+ *   `prepareTransportAwareSimpleModel` signals by rewriting `model.api` to the
+ *   `openclaw-anthropic-messages-transport` alias.
+ *
+ * Budgeting therefore follows the alias: an un-aliased model keeps the
+ * requested level, and only the managed-transport alias narrows "max".
+ */
+function resolveTransportThinkingLevel<TLevel extends Exclude<ThinkingLevel, "off">>(
+  model: Model,
+  reasoning: TLevel,
+): TLevel | "high" {
+  return isManagedAnthropicTransportApi(model.api) && reasoning === "max" ? "high" : reasoning;
+}
+
+function resolveSummarizationCompletionAllowance(params: {
+  model: Model;
+  maxTokens: number;
+  thinkingLevel?: ThinkingLevel;
+}): number {
+  const options = createSummarizationOptions(
+    params.model,
+    params.maxTokens,
+    undefined,
+    undefined,
+    undefined,
+    params.thinkingLevel,
+  );
+  const reasoning = options.reasoning;
+  if (
+    !reasoning ||
+    reasoning === "off" ||
+    (!isAnthropicMessagesApi(params.model.api) && !isClaudeBedrockModel(params.model)) ||
+    supportsClaudeAdaptiveThinking(params.model)
+  ) {
+    return params.maxTokens;
+  }
+  const adjusted = adjustMaxTokensForThinking(
+    params.maxTokens,
+    params.model.maxTokens,
+    resolveTransportThinkingLevel(params.model, reasoning),
+    options.thinkingBudgets,
+  );
+  return adjusted.thinkingBudget >= 1024 ? adjusted.maxTokens : params.maxTokens;
+}
+
 /** Runs one summarization completion and maps abort/error stops to CompactionError. */
 async function runSummarizationCompletion(params: {
   messages: AgentMessage[];
@@ -698,16 +810,7 @@ async function runSummarizationCompletion(params: {
   runtime?: AgentCoreCompletionRuntimeDeps;
   errorLabel: string;
 }): Promise<Result<string, CompactionError>> {
-  const conversationText = serializeConversation(convertToLlm(params.messages));
-  let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
-  if (params.previousSummary) {
-    promptText += `<previous-summary>\n${params.previousSummary}\n</previous-summary>\n\n`;
-  }
-  promptText += params.prompt;
-  // SDK callers also pass generated policy here; the host bounds raw operator focus.
-  if (params.customInstructions) {
-    promptText += `\n\nAdditional focus: ${params.customInstructions}`;
-  }
+  const promptText = buildSummarizationPromptText(params);
   const context = {
     systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
     messages: [
@@ -759,6 +862,70 @@ export type CompactionSummaryPrompt =
   | { kind: "turn-prefix" }
   | { kind: "custom"; instructions: string };
 
+/** Resolves the completion budget shared by compaction planning and execution. */
+function resolveSummaryOutputTokens(params: {
+  reserveTokens: number;
+  modelMaxTokens: number;
+  reserveRatio?: number;
+}): number {
+  return Math.min(
+    Math.floor((params.reserveRatio ?? 0.8) * params.reserveTokens),
+    params.modelMaxTokens > 0 ? params.modelMaxTokens : Number.POSITIVE_INFINITY,
+  );
+}
+
+function resolveSummaryPrompt(params: {
+  previousSummary?: string;
+  summaryPrompt?: CompactionSummaryPrompt;
+}): string {
+  const selectedPrompt =
+    params.summaryPrompt?.kind === "turn-prefix"
+      ? TURN_PREFIX_SUMMARIZATION_PROMPT
+      : params.summaryPrompt?.instructions;
+  return params.summaryPrompt
+    ? [
+        params.previousSummary &&
+          "Update the previous summary with the new conversation. Preserve relevant facts, decisions, and unresolved asks; remove stale or duplicate detail. Use the format below.",
+        selectedPrompt,
+      ]
+        .filter(Boolean)
+        .join("\n\n")
+    : params.previousSummary
+      ? UPDATE_SUMMARIZATION_PROMPT
+      : SUMMARIZATION_PROMPT;
+}
+
+/** The exact request pressure consumed by the summarization completion owner. */
+export function resolveSummarizationRequestBudget(params: {
+  messages: AgentMessage[];
+  customInstructions?: string;
+  previousSummary?: string;
+  summaryPrompt?: CompactionSummaryPrompt;
+  model: Model;
+  reserveTokens: number;
+  thinkingLevel?: ThinkingLevel;
+}): { singlePassInputTokens: number; completionAllowanceTokens: number } {
+  const maxTokens = resolveSummaryOutputTokens({
+    reserveTokens: params.reserveTokens,
+    modelMaxTokens: params.model.maxTokens,
+    reserveRatio: params.summaryPrompt?.kind === "turn-prefix" ? 0.5 : 0.8,
+  });
+  const promptText = buildSummarizationPromptText({
+    ...params,
+    prompt: resolveSummaryPrompt(params),
+  });
+  const inputChars =
+    estimateStringChars(SUMMARIZATION_SYSTEM_PROMPT) + estimateStringChars(promptText);
+  return {
+    singlePassInputTokens: Math.ceil(inputChars / CHARS_PER_TOKEN_ESTIMATE),
+    completionAllowanceTokens: resolveSummarizationCompletionAllowance({
+      model: params.model,
+      maxTokens,
+      thinkingLevel: params.thinkingLevel,
+    }),
+  };
+}
+
 /** Generate or update a conversation summary for compaction. */
 export async function generateSummary(
   currentMessages: AgentMessage[],
@@ -774,25 +941,12 @@ export async function generateSummary(
   runtime?: AgentCoreCompletionRuntimeDeps,
   summaryPrompt?: CompactionSummaryPrompt,
 ): Promise<Result<string, CompactionError>> {
-  const maxTokens = Math.min(
-    Math.floor((summaryPrompt?.kind === "turn-prefix" ? 0.5 : 0.8) * reserveTokens),
-    model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-  );
-  const selectedPrompt =
-    summaryPrompt?.kind === "turn-prefix"
-      ? TURN_PREFIX_SUMMARIZATION_PROMPT
-      : summaryPrompt?.instructions;
-  const prompt = summaryPrompt
-    ? [
-        previousSummary &&
-          "Update the previous summary with the new conversation. Preserve relevant facts, decisions, and unresolved asks; remove stale or duplicate detail. Use the format below.",
-        selectedPrompt,
-      ]
-        .filter(Boolean)
-        .join("\n\n")
-    : previousSummary
-      ? UPDATE_SUMMARIZATION_PROMPT
-      : SUMMARIZATION_PROMPT;
+  const maxTokens = resolveSummaryOutputTokens({
+    reserveTokens,
+    modelMaxTokens: model.maxTokens,
+    reserveRatio: summaryPrompt?.kind === "turn-prefix" ? 0.5 : 0.8,
+  });
+  const prompt = resolveSummaryPrompt({ previousSummary, summaryPrompt });
   return await runSummarizationCompletion({
     messages: currentMessages,
     prompt,

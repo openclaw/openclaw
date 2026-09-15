@@ -1,14 +1,17 @@
+import type { Model } from "@openclaw/llm-core";
 /**
  * Worker-thread entrypoint for serializable compaction planning requests.
  */
+import { resolveSummarizationRequestBudget } from "../../packages/agent-core/src/harness/compaction/compaction.js";
 import { serveWorkerTasks } from "../infra/worker-task-pool.js";
 import {
   buildOversizedFallbackPlan,
   buildStageSplitPlan,
   buildSummaryChunks,
   computeAdaptiveChunkRatio,
+  projectCompactionMessagesForPlanning,
 } from "./compaction-planning.js";
-import type { AgentMessage } from "./runtime/index.js";
+import type { AgentMessage, CompactionSummaryPrompt, ThinkingLevel } from "./runtime/index.js";
 
 /** Serializable request accepted by the compaction planning worker. */
 export type CompactionPlanningWorkerInput =
@@ -16,10 +19,28 @@ export type CompactionPlanningWorkerInput =
   | ({ kind: "oversizedFallback" } & Parameters<typeof buildOversizedFallbackPlan>[0])
   | ({ kind: "stageSplit" } & Parameters<typeof buildStageSplitPlan>[0])
   | {
+      kind: "summarizationStagePlan";
+      messages: AgentMessage[];
+      maxChunkTokens: number;
+      parts?: number;
+      minMessagesForSplit?: number;
+      contextWindow?: number;
+      customInstructions?: string;
+      previousSummary?: string;
+      summaryPrompt?: CompactionSummaryPrompt;
+      model: Model;
+      reserveTokens: number;
+      thinkingLevel?: ThinkingLevel;
+    }
+  | {
       kind: "adaptiveChunkRatio";
       messages: AgentMessage[];
       contextWindow: number;
     };
+
+type StageSplitWorkerValue =
+  | { mode: "single"; fitsWholeRequest?: boolean }
+  | { mode: "split"; chunkIndexes: number[][] };
 
 /** Serializable successful value returned by the compaction planning worker. */
 export type CompactionPlanningWorkerValue =
@@ -32,7 +53,8 @@ export type CompactionPlanningWorkerValue =
       smallMessageIndexes: number[];
       oversizedNotes: string[];
     }
-  | ({ kind: "stageSplit" } & ({ mode: "single" } | { mode: "split"; chunkIndexes: number[][] }))
+  | ({ kind: "stageSplit" } & StageSplitWorkerValue)
+  | ({ kind: "summarizationStagePlan" } & StageSplitWorkerValue)
   | {
       kind: "adaptiveChunkRatio";
       ratio: number;
@@ -50,6 +72,15 @@ function isWorkerInput(value: unknown): value is CompactionPlanningWorkerInput {
     case "summaryChunks":
     case "stageSplit":
       return typeof input.maxChunkTokens === "number" && Number.isFinite(input.maxChunkTokens);
+    case "summarizationStagePlan":
+      return (
+        typeof input.maxChunkTokens === "number" &&
+        Number.isFinite(input.maxChunkTokens) &&
+        typeof input.reserveTokens === "number" &&
+        Number.isFinite(input.reserveTokens) &&
+        Boolean(input.model) &&
+        typeof input.model === "object"
+      );
     case "oversizedFallback":
     case "adaptiveChunkRatio":
       return typeof input.contextWindow === "number" && Number.isFinite(input.contextWindow);
@@ -97,7 +128,26 @@ export function runCompactionPlanningWorkerInput(input: unknown): CompactionPlan
             mode: "split",
             chunkIndexes: plan.chunks.map(createMessageIndexer(input.messages)),
           }
-        : { kind: input.kind, mode: "single" };
+        : { kind: input.kind, mode: "single", fitsWholeRequest: plan.fitsWholeRequest };
+    }
+    case "summarizationStagePlan": {
+      const requestBudget = resolveSummarizationRequestBudget(input);
+      const projected = projectCompactionMessagesForPlanning(input.messages);
+      const plan = buildStageSplitPlan({
+        messages: projected,
+        maxChunkTokens: input.maxChunkTokens,
+        parts: input.parts,
+        minMessagesForSplit: input.minMessagesForSplit,
+        contextWindow: input.contextWindow,
+        ...requestBudget,
+      });
+      return plan.mode === "split"
+        ? {
+            kind: input.kind,
+            mode: "split",
+            chunkIndexes: plan.chunks.map(createMessageIndexer(projected)),
+          }
+        : { kind: input.kind, mode: "single", fitsWholeRequest: plan.fitsWholeRequest };
     }
     case "adaptiveChunkRatio":
       return {
