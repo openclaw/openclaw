@@ -299,9 +299,11 @@ export class PluginDiscoveryController {
     }
     this.searchTimer = setTimeout(() => {
       this.searchTimer = null;
-      this.committedQuery = query.trim();
-      // Attribute only settled manual input; refreshes and filter changes reuse no marker.
-      void this.refresh(this.committedQuery.length >= 2);
+      const nextQuery = query.trim();
+      // Whitespace edits and repeated input refresh results without recording another search.
+      const manual = nextQuery !== this.committedQuery && nextQuery.length >= 2;
+      this.committedQuery = nextQuery;
+      void this.refresh(manual);
     }, 250);
   }
 }

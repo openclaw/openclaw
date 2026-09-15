@@ -182,6 +182,14 @@ it("counts only settled manual searches across refresh, filters and connection i
   });
   expect(controller.result?.items).toEqual([entry(1)]);
 
+  for (const query of ["memory ", " memory", "memory"]) {
+    request.mockClear();
+    controller.updateQuery(query);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", query: "memory", pageSize: 100 });
+    expect(controller.result?.items).toEqual([entry(1)]);
+  }
+
   request.mockClear();
   await controller.refresh();
   controller.selectCategory("memory");
