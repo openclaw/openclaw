@@ -1,7 +1,7 @@
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import type { InstallationTarget } from "../infra/installation-target-context.js";
 
-export const TRIAGE_EXTERNAL_AGENTS = ["claude", "codex", "opencode", "pi"] as const;
+export const TRIAGE_EXTERNAL_AGENTS = ["codex", "claude", "opencode", "pi"] as const;
 export type TriageExternalAgent = (typeof TRIAGE_EXTERNAL_AGENTS)[number];
 
 /** Keep executable manual commands and the complete JSON handoff pinned to the same target. */
