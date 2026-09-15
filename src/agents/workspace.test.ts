@@ -412,6 +412,41 @@ describe("ensureAgentWorkspace", () => {
     expect((await readWorkspaceState(tempDir)).setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
   });
 
+  it("preserves readable custom-skill survival evidence under an unlistable root", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-skill-eacces-"));
+    try {
+      const tempDir = path.join(rootDir, "workspace");
+      await fs.mkdir(tempDir, { recursive: true });
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+      // Only a readable custom skill survives; the root becomes searchable but
+      // unlistable (0300). The exact-entry lookup on the root now raises EACCES,
+      // but the skill probe only needs search on the root and read on the skills
+      // subdirectory — it must still establish workspace survival so a recent
+      // attestation is not mistaken for a vanished workspace.
+      await fs.rm(tempDir, { recursive: true, force: true });
+      await fs.mkdir(path.join(tempDir, "skills", "local-skill"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "skills", "local-skill", "SKILL.md"), "---\n");
+      await fs.chmod(tempDir, 0o300);
+      try {
+        await expect(
+          ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true }),
+        ).resolves.toMatchObject({ dir: tempDir });
+      } finally {
+        await fs.chmod(tempDir, 0o700);
+      }
+      expect((await readWorkspaceState(tempDir)).setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
   it("refuses a recently attested workspace when only non-skill skills leftovers survive", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
@@ -988,6 +1023,120 @@ describe("loadWorkspaceBootstrapFiles", () => {
 
     const files = await loadWorkspaceBootstrapFiles(tempDir);
     expect(getMemoryEntries(files)).toHaveLength(0);
+  });
+
+  it("does not reject the whole bootstrap load when the workspace dir is unreadable", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    // root bypasses directory permission checks, so this scenario cannot be
+    // exercised as root.
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-eacces-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "memory", "utf8");
+      await fs.chmod(workspaceDir, 0o000);
+      try {
+        // An unreadable workspace directory must not turn an EACCES from the
+        // exact-entry lookup into a rejected bootstrap load; the guarded read
+        // reports the unreadable entry and other context remains readable.
+        await expect(loadWorkspaceBootstrapFiles(workspaceDir)).resolves.toBeDefined();
+      } finally {
+        await fs.chmod(workspaceDir, 0o700);
+      }
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not abort setup or reseed when the workspace dir becomes unlistable", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-unlistable-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "user memory", "utf8");
+
+      // Phase 1: real setup records existing state (skip-bootstrap).
+      await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: false });
+      const before = await fs.readdir(workspaceDir);
+
+      // Phase 2: the dir becomes unlistable (readdir EACCES, but known files
+      // still open). Setup must not abort from the exact-entry/listing lookup
+      // and must not mistake the unreadable workspace for an empty one.
+      await fs.chmod(workspaceDir, 0o100);
+      try {
+        await expect(
+          ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: false }),
+        ).resolves.toBeDefined();
+      } finally {
+        await fs.chmod(workspaceDir, 0o700);
+      }
+
+      // Phase 3: existing content and setup state survived (no reseed/clear).
+      const after = await fs.readdir(workspaceDir);
+      expect(after.sort()).toEqual(before.sort());
+      expect(await fs.readFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "utf8")).toBe(
+        "user memory",
+      );
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not mark a pending workspace complete when a lookup failure makes it unreadable", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      return;
+    }
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-pending-eacces-"));
+    try {
+      const workspaceDir = path.join(rootDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      // Phase 1: real setup seeds an unchanged-template pending workspace:
+      // BOOTSTRAP.md exists, templates match, setup is not yet complete.
+      await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: true });
+      const pendingState = await readWorkspaceState(workspaceDir);
+      expect(pendingState.setupCompletedAt).toBeUndefined();
+      await expect(
+        fs.access(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME)),
+      ).resolves.toBeUndefined();
+
+      // Phase 2: the dir becomes unreadable (readdir EACCES) but known files
+      // remain writable/searchable (0300). A lookup failure must NOT be treated
+      // as positive completion evidence: pending workspaces must keep their
+      // BOOTSTRAP.md and must not acquire a durable false setupCompletedAt.
+      await fs.chmod(workspaceDir, 0o300);
+      try {
+        await expect(
+          ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: true }),
+        ).resolves.toBeDefined();
+      } finally {
+        await fs.chmod(workspaceDir, 0o700);
+      }
+
+      // Phase 3: still pending — BOOTSTRAP.md survives and no false completion.
+      await expect(
+        fs.access(path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME)),
+      ).resolves.toBeUndefined();
+      const after = await readWorkspaceState(workspaceDir);
+      expect(after.setupCompletedAt).toBeUndefined();
+      expect(after.bootstrapSeededAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+    } finally {
+      await fs.rm(rootDir, { recursive: true, force: true });
+    }
   });
 
   it("treats hardlinked bootstrap aliases as unreadable", async () => {
