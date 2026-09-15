@@ -2,6 +2,7 @@
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
@@ -136,16 +137,17 @@ describe("plugins marketplace entries", () => {
 
   it("redacts query-bearing feed URLs from entries output", async () => {
     mocks.getRuntimeConfig.mockReturnValue({});
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
+    const result = Object.freeze({
       source: "bundled-fallback",
       entries: [],
       error:
         "hosted catalog feed fetch failed for https://clawhub.ai/v1/feeds/plugins?token=secret#frag",
-      metadata: {
+      metadata: Object.freeze({
         url: "https://clawhub.ai/v1/feeds/plugins?token=secret#frag",
         status: 503,
-      },
+      }),
     });
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(result);
 
     const { runPluginMarketplaceEntriesCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceEntriesCommand({
@@ -160,6 +162,16 @@ describe("plugins marketplace entries", () => {
       }),
     );
 
+    const payload = mocks.defaultRuntime.writeJson.mock.calls[0]?.[0];
+    expect(JSON.stringify(payload)).toBe(
+      '{"source":"bundled-fallback","entries":[],"metadata":{"url":"https://clawhub.ai/v1/feeds/plugins","status":503},"error":"hosted catalog feed fetch failed for https://clawhub.ai/v1/feeds/plugins","entryCount":0}',
+    );
+    expect(Object.keys(payload)).toEqual(["source", "entries", "metadata", "error", "entryCount"]);
+    expect(result.metadata.url).toBe("https://clawhub.ai/v1/feeds/plugins?token=secret#frag");
+    expect(result.error).toBe(
+      "hosted catalog feed fetch failed for https://clawhub.ai/v1/feeds/plugins?token=secret#frag",
+    );
+
     mocks.defaultRuntime.writeJson.mockClear();
     mocks.defaultRuntime.log.mockClear();
 
@@ -171,7 +183,47 @@ describe("plugins marketplace entries", () => {
     expect(output).toContain("https://clawhub.ai/v1/feeds/plugins");
     expect(output).not.toContain("token=secret");
     expect(output).not.toContain("#frag");
+    expect(stripVTControlCharacters(output)).toBe(
+      [
+        "Source: bundled fallback",
+        "Entries: 0",
+        "URL: https://clawhub.ai/v1/feeds/plugins",
+        "Fallback reason: hosted catalog feed fetch failed for https://clawhub.ai/v1/feeds/plugins",
+      ].join("\n"),
+    );
+    mocks.defaultRuntime.writeJson.mockClear();
+    await runPluginMarketplaceEntriesCommand({ json: true });
+    expect(JSON.stringify(mocks.defaultRuntime.writeJson.mock.calls[0]?.[0])).toBe(
+      '{"source":"bundled-fallback","entries":[],"metadata":{"url":"https://clawhub.ai/v1/feeds/plugins","status":503},"error":"hosted catalog feed fetch failed for https://clawhub.ai/v1/feeds/plugins","entryCount":0}',
+    );
   });
+
+  it.each([
+    { error: undefined, json: '{"source":"bundled-fallback","entries":[],"entryCount":0}' },
+    { error: "", json: '{"source":"bundled-fallback","entries":[],"error":"","entryCount":0}' },
+  ])(
+    "preserves the $error fallback error in entries JSON without metadata",
+    async ({ error, json }) => {
+      mocks.getRuntimeConfig.mockReturnValue({});
+      const result = Object.freeze({
+        source: "bundled-fallback",
+        entries: Object.freeze([]),
+        error,
+      });
+      mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(result);
+
+      const { runPluginMarketplaceEntriesCommand } = await import("./plugins-cli.runtime.js");
+      await runPluginMarketplaceEntriesCommand({ json: true });
+
+      expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledOnce();
+      const payload = mocks.defaultRuntime.writeJson.mock.calls[0]?.[0];
+      expect(JSON.stringify(payload)).toBe(json);
+      expect(Object.keys(payload)).toEqual(["source", "entries", "error", "entryCount"]);
+      expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
+      expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+      expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps replacement metacharacters literal while redacting feed URLs", async () => {
     const publicUrl = ["https://", "feed.example.invalid", "/$&"].join("");
@@ -307,6 +359,25 @@ describe("plugins marketplace entries", () => {
       feedTrustSignatureCount: 1,
       feedTrustThreshold: 1,
       feedTrustVerified: true,
+      offline: true,
+      payloadChecksumPresent: true,
+      snapshotUsed: true,
+      source: "hosted-snapshot",
+    });
+    expect(event?.attributes).toEqual({
+      command: "entries",
+      entries: 1,
+      fallbackCategory: "offline",
+      feedIdPresent: true,
+      feedProfileProvided: true,
+      feedSequence: 7,
+      feedTrustMode: "signed",
+      feedTrustSignatureCount: 1,
+      feedTrustThreshold: 1,
+      feedTrustVerified: true,
+      hasEtag: false,
+      hasLastModified: false,
+      httpStatus: 200,
       offline: true,
       payloadChecksumPresent: true,
       snapshotUsed: true,

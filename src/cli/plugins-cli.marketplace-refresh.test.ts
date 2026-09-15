@@ -2,6 +2,7 @@
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { createHostedMarketplaceFeedFixture } from "./plugins-marketplace-feed.test-support.js";
@@ -85,12 +86,13 @@ describe("plugins marketplace refresh", () => {
   it("refreshes an explicitly selected marketplace feed and prints JSON", async () => {
     const config = {};
     mocks.getRuntimeConfig.mockReturnValue(config);
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
-      createHostedMarketplaceFeedFixture({
-        entries: [{ name: "@acme/calendar" }, { name: "@acme/docs" }],
-        etag: '"abc"',
-      }),
-    );
+    const result = createHostedMarketplaceFeedFixture({
+      entries: [{ name: "@acme/calendar" }, { name: "@acme/docs" }],
+      etag: '"abc"',
+    });
+    Object.freeze(result.metadata);
+    Object.freeze(result);
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(result);
     mocks.pluginLifecycleGateway.mockResolvedValue({
       runtime: { generation: 4 },
       warnings: ["Previous plugin service could not stop."],
@@ -131,6 +133,11 @@ describe("plugins marketplace refresh", () => {
         verifiedAt: "2026-06-23T00:01:02.000Z",
       },
     });
+    const payload = mocks.defaultRuntime.writeJson.mock.calls[0]?.[0];
+    expect(JSON.stringify(payload)).toBe(
+      '{"source":"hosted","entries":2,"metadata":{"url":"https://packages.acme.example/openclaw/feed","status":200,"checksum":"feed-sha","etag":"\\"abc\\""},"feed":{"id":"acme-marketplace","generatedAt":"2026-06-23T00:00:00.000Z","sequence":7},"trust":{"mode":"signed","signedBy":"acme-root-2026","signatureCount":1,"threshold":1,"verifiedAt":"2026-06-23T00:01:02.000Z"}}',
+    );
+    expect(Object.keys(payload)).toEqual(["source", "entries", "metadata", "feed", "trust"]);
     expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
     expect(mocks.defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining("Previous plugin service could not stop."),
@@ -224,9 +231,11 @@ describe("plugins marketplace refresh", () => {
   it("keeps pinned snapshot JSON clean when the Gateway cannot refresh", async () => {
     const config = {};
     mocks.getRuntimeConfig.mockReturnValue(config);
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
-      createHostedMarketplaceFeedFixture({ source: "hosted-snapshot" }),
-    );
+    const result = createHostedMarketplaceFeedFixture({ source: "hosted-snapshot" });
+    Object.freeze(result.metadata);
+    Object.freeze(result.snapshot);
+    Object.freeze(result);
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(result);
     mocks.pluginLifecycleGateway.mockRejectedValue(new Error("runtime unavailable"));
 
     const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
@@ -242,6 +251,30 @@ describe("plugins marketplace refresh", () => {
       "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: hosted-snapshot).",
     ]);
     expect(mocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.defaultRuntime.exit).toHaveBeenCalledOnce();
+    const payload = mocks.defaultRuntime.writeJson.mock.calls[0]?.[0];
+    expect(JSON.stringify(payload)).toBe(
+      '{"source":"hosted-snapshot","entries":0,"metadata":{"url":"https://packages.acme.example/openclaw/feed","status":200,"checksum":"feed-sha"},"feed":{"id":"acme-marketplace","generatedAt":"2026-06-23T00:00:00.000Z","sequence":7},"trust":{"mode":"signed","signedBy":"acme-root-2026","signatureCount":1,"threshold":1,"verifiedAt":"2026-06-23T01:02:03.000Z"},"snapshot":{"savedAt":"2026-06-23T01:02:03.000Z"},"error":"hosted catalog feed offline mode"}',
+    );
+    expect(Object.keys(payload)).toEqual([
+      "source",
+      "entries",
+      "metadata",
+      "feed",
+      "trust",
+      "snapshot",
+      "error",
+    ]);
+    expect(mocks.defaultRuntime.error.mock.calls.map(([message]) => message)).toEqual([
+      "Marketplace catalog saved, but Gateway runtime application failed: runtime unavailable. Repair the reported problem, then rerun this refresh.",
+      "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: hosted-snapshot).",
+    ]);
+    const outputOrder = [
+      ...mocks.defaultRuntime.writeJson.mock.invocationCallOrder,
+      ...mocks.defaultRuntime.error.mock.invocationCallOrder,
+      ...mocks.defaultRuntime.exit.mock.invocationCallOrder,
+    ];
+    expect(outputOrder).toEqual(outputOrder.toSorted((left, right) => left - right));
   });
 
   it("keeps a hosted refresh successful and reports next-start state when the Gateway is offline", async () => {
@@ -306,16 +339,17 @@ describe("plugins marketplace refresh", () => {
 
   it("redacts query-bearing feed URLs from refresh output", async () => {
     mocks.getRuntimeConfig.mockReturnValue({});
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
+    const result = Object.freeze({
       source: "bundled-fallback",
       entries: [{ name: "@openclaw/acpx" }],
       error:
         "hosted catalog feed fetch failed for https://clawhub.ai/v1/feeds/plugins?token=secret#frag",
-      metadata: {
+      metadata: Object.freeze({
         url: "https://clawhub.ai/v1/feeds/plugins?token=secret#frag",
         status: 503,
-      },
+      }),
     });
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(result);
 
     const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceRefreshCommand({
@@ -330,6 +364,16 @@ describe("plugins marketplace refresh", () => {
       }),
     );
 
+    const payload = mocks.defaultRuntime.writeJson.mock.calls[0]?.[0];
+    expect(JSON.stringify(payload)).toBe(
+      '{"source":"bundled-fallback","entries":1,"metadata":{"url":"https://clawhub.ai/v1/feeds/plugins","status":503},"error":"hosted catalog feed fetch failed for https://clawhub.ai/v1/feeds/plugins"}',
+    );
+    expect(Object.keys(payload)).toEqual(["source", "entries", "metadata", "error"]);
+    expect(result.metadata.url).toBe("https://clawhub.ai/v1/feeds/plugins?token=secret#frag");
+    expect(result.error).toBe(
+      "hosted catalog feed fetch failed for https://clawhub.ai/v1/feeds/plugins?token=secret#frag",
+    );
+
     mocks.defaultRuntime.writeJson.mockClear();
     mocks.defaultRuntime.log.mockClear();
 
@@ -341,6 +385,14 @@ describe("plugins marketplace refresh", () => {
     expect(output).toContain("https://clawhub.ai/v1/feeds/plugins");
     expect(output).not.toContain("token=secret");
     expect(output).not.toContain("#frag");
+    expect(stripVTControlCharacters(output)).toBe(
+      [
+        "Source: bundled fallback",
+        "Entries: 1",
+        "URL: https://clawhub.ai/v1/feeds/plugins",
+        "Fallback reason: hosted catalog feed fetch failed for https://clawhub.ai/v1/feeds/plugins",
+      ].join("\n"),
+    );
   });
 
   it("fails checksum-pinned refreshes that fall back", async () => {
@@ -413,6 +465,24 @@ describe("plugins marketplace refresh", () => {
       feedTrustVerified: true,
       feedUrlOverride: true,
       hasEtag: true,
+      payloadChecksumPresent: true,
+      source: "hosted",
+    });
+    expect(event?.attributes).toEqual({
+      command: "refresh",
+      entries: 2,
+      expectedSha256Provided: true,
+      feedIdPresent: true,
+      feedProfileProvided: true,
+      feedSequence: 7,
+      feedTrustMode: "signed",
+      feedTrustSignatureCount: 1,
+      feedTrustThreshold: 1,
+      feedTrustVerified: true,
+      feedUrlOverride: true,
+      hasEtag: true,
+      hasLastModified: false,
+      httpStatus: 200,
       payloadChecksumPresent: true,
       source: "hosted",
     });
