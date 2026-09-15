@@ -2786,7 +2786,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
   });
 
-  it("fails closed when audit-required tail sections cannot fit the artifact cap", async () => {
+  it("degrades to the bounded fallback when audit-required tail sections cannot fit the artifact cap", async () => {
     mockSummarizeInStages.mockReset();
     const latestAsk = "preserve the pending deployment status";
     const identifier = `https://example.com/${"a".repeat(MAX_COMPACTION_SUMMARY_CHARS)}`;
@@ -2822,11 +2822,52 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
 
-    expect(result).toEqual({ cancel: true });
+    // Cancelling here left the session permanently uncompactable: the required facts
+    // never shrink, so every later attempt hits the same wall. Both terminal quality
+    // paths now commit the same bounded artifact and mark it as degraded.
+    expect(result).toMatchObject({
+      compaction: { details: { qualityDegraded: true } },
+    });
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-    expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toBe(
-      "Compaction safeguard required facts exceed the finalized summary budget.",
-    );
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
+  });
+
+  it("carries the pending ask and identifiers into the degraded fallback", async () => {
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "confirm the staging rollback finished";
+    const identifier = "/tmp/degraded-retention.log";
+    // A summary the audit rejects (no required headings) so the degrade fires, with facts
+    // small enough to fit - unlike the infeasible case above, these CAN be retained.
+    mockSummarizeInStages.mockResolvedValue(summaryResult("Core summary without headings"));
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 0,
+    });
+    const event = createCompactionEvent({
+      messageText: `${latestAsk} ${identifier}`,
+      tokensBefore: 1_500,
+    });
+    (
+      event.preparation as { settings?: { reserveTokens: number }; isSplitTurn?: boolean }
+    ).settings = { reserveTokens: 4_000 };
+    (event.preparation as { isSplitTurn?: boolean }).isSplitTurn = false;
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    // The degrade is lossy on purpose, but the pending request and exact identifiers are
+    // the facts worth carrying across a compaction. Finalizing without the retention plan
+    // dropped both and stored only the empty fallback template.
+    expect(result).toMatchObject({
+      compaction: { details: { qualityDegraded: true } },
+    });
+    const summary = (result as { compaction?: { summary?: string } }).compaction?.summary ?? "";
+    expect(summary).toContain(latestAsk);
+    expect(summary).toContain(identifier);
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
   });
 
   it("restores source ask evidence omitted by the split-turn summary", async () => {

@@ -102,7 +102,8 @@ type CompactionLoss =
   | "suffix-head"
   | "split-turn-head"
   | "split-turn-tail"
-  | "preserved-turn-head";
+  | "preserved-turn-head"
+  | "quality-retention";
 
 function prependPreviousSummaryForRedistill(params: {
   messages: AgentMessage[];
@@ -1021,6 +1022,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       },
       producerLosses: ReadonlySet<CompactionLoss> = new Set(),
       qualityRetention?: SummaryQualityRetention,
+      // The degrade path exists BECAUSE required facts would not fit. Retaining them
+      // there must not throw, or the branch re-strands the session it exists to rescue.
+      retentionOptional = false,
     ) => {
       workspaceContextPromise ??= readWorkspaceContextForSummary(
         runtime?.postCompactionSections,
@@ -1034,14 +1038,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         fileOpsSummary,
         workspaceContext: await workspaceContextPromise,
       });
-      const fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) =>
+      let fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) =>
         budgetCompactionSummary(body, suffix, maxChars, qualityRetention),
       );
+      const losses = new Set(producerLosses);
+      if (!fitted.ok && qualityRetention && retentionOptional) {
+        losses.add("quality-retention");
+        fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) =>
+          budgetCompactionSummary(body, suffix, maxChars),
+        );
+      }
       if (!fitted.ok) {
         throw fitted.error;
       }
       const finalized = fitted.value;
-      const losses = new Set(producerLosses);
       for (const section of Object.values(sections)) {
         if (typeof section !== "string" && section?.truncatedLoss) {
           losses.add(section.truncatedLoss);
@@ -1060,7 +1070,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       }
       return finalized;
     };
-    const compactionResult = (summary: string) => ({
+    const compactionResult = (summary: string, provenance?: { qualityDegraded: true }) => ({
       compaction: {
         summary,
         firstKeptEntryId: preparation.firstKeptEntryId,
@@ -1069,6 +1079,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           readFiles,
           modifiedFiles,
           ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
+          ...provenance,
         },
       },
     });
@@ -1372,16 +1383,56 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         if (!qualityGuardEnabled) {
           return compactionResult(finalized.summary);
         }
-        if (finalized.qualityRetentionInfeasible) {
+        // One degraded path for every quality exhaustion the guard can still act on.
+        // Cancelling here strands the session: the transcript never shrinks, so every
+        // later turn fails preflight the same way and the user has no way out. A lossy
+        // summary beats an uncompactable session. This branch is reached by a
+        // summarizer that SUCCEEDED and then failed the audit; a summarizer that throws
+        // never arrives here and still cancels above, as do a missing model and missing
+        // credentials.
+        const degradeToFallbackSummary = async (diagnostic: string) => {
           log.warn(
-            "Compaction safeguard: required quality facts exceed finalized artifact budget; " +
+            `Compaction safeguard: ${diagnostic}; using degraded fallback summary; ` +
+              "reasonCode=quality_guard_degraded_fallback",
+          );
+          const degradedBody = buildStructuredFallbackSummary(effectivePreviousSummary);
+          const degradedSections = {
+            // The generated split-turn prefix is separately summarized context.
+            // Omitting it here silently drops the active request on this path,
+            // which normal finalization above preserves.
+            generatedSplitTurnSection: splitTurnSectionLocal
+              ? `\n\n${splitTurnSectionLocal}`
+              : undefined,
+            preservedTurnsSection: preservedTurnsSectionLocal,
+          };
+          // Carry the same required facts the audited path budgets for. auditSummary is
+          // deliberately omitted: the fallback body contains none of the generated text, so
+          // claiming it does would let the planner drop facts it thinks are already there.
+          const degradedRetention: SummaryQualityRetention = {
+            identifiers,
+            latestAsk: latestUserAsk,
+            latestAskInRetainedTurn: splitUserAsk !== null,
+            latestUnresolvedUserRequest: latestUnresolvedUserRequest ?? undefined,
+            requiredAskContext,
+            identifierPolicy,
+          };
+          const degraded = await finalizeSummaryText(
+            degradedBody,
+            degradedSections,
+            producerLosses,
+            degradedRetention,
+            true,
+          );
+          // Record the degradation on the boundary it produced. The fallback template is
+          // the only other evidence, and reading intent back out of summary prose is the
+          // multi-signal inference this repo forbids.
+          return compactionResult(degraded.summary, { qualityDegraded: true });
+        };
+        if (finalized.qualityRetentionInfeasible) {
+          return degradeToFallbackSummary(
+            "required quality facts exceed finalized artifact budget; " +
               `requiredChars>${MAX_COMPACTION_SUMMARY_CHARS} identifierCount=${identifiers.length}`,
           );
-          setCompactionSafeguardCancellation(
-            ctx.sessionManager,
-            "Compaction safeguard required facts exceed the finalized summary budget.",
-          );
-          return { cancel: true };
         }
         const quality = auditSummaryQuality({
           summary: finalized.summary,
@@ -1400,15 +1451,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           const reasonCodes = [
             ...new Set(quality.reasons.map((reason) => reason.split(":", 1)[0])),
           ];
-          log.warn(
-            "Compaction safeguard: finalized summary failed quality checks; " +
+          return degradeToFallbackSummary(
+            "final quality attempt failed; " +
               `reasonCodes=${reasonCodes.join(",")} reasonCount=${quality.reasons.length}`,
           );
-          setCompactionSafeguardCancellation(
-            ctx.sessionManager,
-            "Compaction safeguard finalized summary failed quality checks.",
-          );
-          return { cancel: true };
         }
         const reasons = quality.reasons.join(", ");
         const qualityFeedbackInstruction =
