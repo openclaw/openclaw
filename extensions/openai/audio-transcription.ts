@@ -90,9 +90,14 @@ export const transcribeOpenAiAudioWithContext: NonNullable<
       if (auth.mode !== "oauth" && auth.mode !== "token") {
         throw new Error("OpenAI audio transcription requires an API key or OAuth profile.");
       }
-      if (!nativeEndpoint || context.headers || context.request) {
+      // The trusted provider-level network opt-in changes DNS policy, not the
+      // endpoint or credential. Other overrides still require API-key auth.
+      const hasRequestOverrides = Object.keys(context.request ?? {}).some(
+        (key) => key !== "allowPrivateNetwork",
+      );
+      if (!nativeEndpoint || context.headers || hasRequestOverrides) {
         throw new Error(
-          "OpenAI OAuth audio transcription requires the official endpoint without custom request overrides. Remove the overrides or select an OpenAI API-key profile.",
+          "OpenAI OAuth audio transcription requires the official endpoint without custom headers, auth, proxy, or TLS overrides. Remove the overrides or select an OpenAI API-key profile.",
         );
       }
     }

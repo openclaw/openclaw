@@ -70,7 +70,15 @@ selected API-key or ChatGPT/Codex OAuth profile. An OAuth login can transcribe
 when the account permits it; access, quota, and billing remain account-specific.
 The default model is `gpt-4o-transcribe`; configured models, prompts, and language
 hints are sent through the same multipart request for either credential class.
-Custom endpoints and request overrides require an API-key profile.
+Custom endpoints and headers, auth, proxy, or TLS overrides require an API-key
+profile. The existing trusted provider setting
+`models.providers.openai.request.allowPrivateNetwork` also applies to OAuth
+transcription. Enable it only when your trusted network resolves the official
+OpenAI hostname to a private or special-use address (for example, VPN fake DNS).
+It relaxes the IP-address guard for that provider; HTTPS certificate verification
+and the official OAuth endpoint requirement remain in place. Leave it unset on
+ordinary public DNS. This setting belongs to model-provider configuration, not
+`tools.media.audio.request`.
 
 Automatic selection can try another provider or local backend when the OpenAI
 plugin rejects authentication or configuration before uploading audio. The
