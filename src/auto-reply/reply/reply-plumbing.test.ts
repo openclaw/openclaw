@@ -264,6 +264,24 @@ describe("applyReplyThreading auto-threading", () => {
     expect(expectDefined(result[0], "result[0] test invariant").replyToId).toBe("42");
   });
 
+  it("preserves empty reply targets without consuming the first implicit reply", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "standalone", replyToId: "" }, { text: "threaded" }],
+      replyToMode: "first",
+      currentMessageId: "42",
+    });
+    expect(result.map((payload) => payload.replyToId)).toEqual(["", "42"]);
+  });
+
+  it("allows an explicit inline reply to override an empty implicit-target opt-out", () => {
+    const result = applyReplyThreading({
+      payloads: [{ text: "[[reply_to_current]] answer", replyToId: "" }],
+      replyToMode: "all",
+      currentMessageId: "42",
+    });
+    expect(result).toMatchObject([{ text: "answer", replyToId: "42", replyToTag: true }]);
+  });
+
   it("threads only first payload when mode is 'first'", () => {
     const result = applyReplyThreading({
       payloads: [{ text: "A" }, { text: "B" }],

@@ -44,8 +44,9 @@ function resolveReplyThreadingForPayload(params: {
     params.replyThreading,
   );
 
+  // An explicit empty target opts out of implicit threading, but not inline reply directives.
   let resolved: ReplyPayload =
-    payload.replyToId ||
+    payload.replyToId != null ||
     payload.replyToCurrent === false ||
     !implicitReplyToId ||
     !allowImplicitReplyToCurrentMessage
