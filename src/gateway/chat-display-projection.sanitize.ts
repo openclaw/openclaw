@@ -26,6 +26,10 @@ import {
   truncateChatHistoryText,
 } from "./chat-display-projection.helpers.js";
 import {
+  buildChatHistoryImagePlaceholderUrl,
+  resolveChatHistoryImageRecovery,
+} from "./chat-history-image-recovery.js";
+import {
   isSuppressedControlReplyText,
   stripSuppressedControlReplyToken,
 } from "./control-reply-text.js";
@@ -69,6 +73,7 @@ function projectChatHistoryMediaBlock(entry: Record<string, unknown>, fact = fal
     return false;
   }
   const media = entry as typeof entry & { type: "image" | "audio" | "video" };
+  const historyImageRecovery = fact ? undefined : resolveChatHistoryImageRecovery(media);
   const hasTopLevelPayload = typeof media.data === "string" || typeof media.blob === "string";
   const source = fact ? undefined : readRecord(media.source);
   const projectedSource = source ? { ...source } : undefined;
@@ -129,6 +134,17 @@ function projectChatHistoryMediaBlock(entry: Record<string, unknown>, fact = fal
       ? projectedSource
       : media
     ).bytes = estimateBase64DecodedBytes(encodedPayload);
+  }
+  if (
+    media.type === "image" &&
+    historyImageRecovery &&
+    ![media.url, media.openUrl, media.image_url, readRecord(media.source)?.url].some(
+      (value) => typeof value === "string" && value.trim().length > 0,
+    )
+  ) {
+    media.artifactId = historyImageRecovery.artifactId;
+    media.mimeType = historyImageRecovery.mimeType;
+    media.url = buildChatHistoryImagePlaceholderUrl(historyImageRecovery.artifactId);
   }
   return true;
 }

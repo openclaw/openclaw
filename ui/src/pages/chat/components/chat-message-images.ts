@@ -639,7 +639,9 @@ async function fetchManagedOutgoingImageBlob(
   variant: ManagedImageVariant,
   controller: AbortController,
 ): Promise<Blob | null> {
-  const requesterSessionKey = resolveManagedOutgoingMediaSessionKey(source);
+  const sourceSessionKey = resolveManagedOutgoingMediaSessionKey(source);
+  const requesterSessionKey =
+    sourceSessionKey === "__history__" ? (opts?.sessionKey?.trim() ?? null) : sourceSessionKey;
   const artifactDownload =
     requesterSessionKey && artifactId && opts?.resolveArtifactDownload
       ? await opts

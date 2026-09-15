@@ -103,11 +103,21 @@ export async function resolveChatArtifactDownload(
     { timeoutMs: CHAT_ARTIFACT_DOWNLOAD_TIMEOUT_MS },
   );
   const url = typeof result?.url === "string" ? result.url.trim() : "";
-  if (!url) {
+  if (url) {
+    const expiresAt = typeof result?.expiresAt === "string" ? result.expiresAt.trim() : undefined;
+    return { url, ...(expiresAt ? { expiresAt } : {}) };
+  }
+  const data = result?.encoding === "base64" ? result.data?.trim() : "";
+  const mimeType = result?.artifact?.mimeType?.trim().toLowerCase() ?? "";
+  if (
+    result?.artifact?.type !== "image" ||
+    !data ||
+    !/^image\/[a-z0-9.+-]+$/u.test(mimeType) ||
+    !/^[A-Za-z0-9+/]*={0,2}$/u.test(data)
+  ) {
     return null;
   }
-  const expiresAt = typeof result?.expiresAt === "string" ? result.expiresAt.trim() : undefined;
-  return { url, ...(expiresAt ? { expiresAt } : {}) };
+  return { url: `data:${mimeType};base64,${data}` };
 }
 
 export function dismissChatError(state: {

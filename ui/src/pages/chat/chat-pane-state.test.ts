@@ -124,6 +124,33 @@ describe("resolveChatArtifactDownload", () => {
       expiresAt: "2026-07-28T00:00:00.000Z",
     });
   });
+
+  it("turns recovered historical image bytes into a renderable local data URL", async () => {
+    const result = await resolveChatArtifactDownload(
+      {
+        connected: true,
+        client: {
+          request: async () => ({
+            artifact: {
+              id: "artifact_history_image_example",
+              type: "image",
+              title: "Image",
+              mimeType: "image/png",
+              download: { mode: "bytes" },
+            },
+            encoding: "base64",
+            data: "aGVsbG8=",
+          }),
+        } as never,
+      },
+      {
+        sessionKey: "agent:main:main",
+        artifactId: "artifact_history_image_example",
+      },
+    );
+
+    expect(result).toEqual({ url: "data:image/png;base64,aGVsbG8=" });
+  });
 });
 
 describe("SessionParticipationTracker", () => {

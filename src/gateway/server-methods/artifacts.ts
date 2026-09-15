@@ -26,6 +26,7 @@ import {
   ASSISTANT_DISPLAY_CONTENT_FIELD,
   readAssistantDisplayContent,
 } from "../../shared/assistant-display-content.js";
+import { resolveChatHistoryImageRecovery } from "../chat-history-image-recovery.js";
 import {
   parseManagedOutgoingArtifactId,
   resolveManagedOutgoingMediaArtifactDownload,
@@ -321,16 +322,20 @@ function collectArtifactsFromMessage(params: {
       `${type} ${params.collection.count}`;
     const declaredArtifactId =
       asNonEmptyString(block.artifactId) ?? asNonEmptyString(attachment?.artifactId);
+    const historyImageRecovery = resolveChatHistoryImageRecovery(attachment ?? block);
     const id =
       declaredArtifactId && parseManagedOutgoingArtifactId(declaredArtifactId)
         ? declaredArtifactId
-        : artifactId({
-            sessionKey: params.sessionKey,
-            messageSeq,
-            contentIndex,
-            title,
-            type,
-          });
+        : params.downloadArtifactId &&
+            params.downloadArtifactId === historyImageRecovery?.artifactId
+          ? historyImageRecovery.artifactId
+          : artifactId({
+              sessionKey: params.sessionKey,
+              messageSeq,
+              contentIndex,
+              title,
+              type,
+            });
     const includeData = params.downloadArtifactId
       ? params.downloadArtifactId === id
       : params.includeDownloadData !== false;
@@ -345,11 +350,12 @@ function collectArtifactsFromMessage(params: {
           asNonEmptyString(source?.url) ??
           mediaUrlValue(block.image_url))
       : undefined;
+    const resolvedMimeType = download.mimeType ?? historyImageRecovery?.mimeType;
     const summary: ArtifactRecord = {
       id: previewOnly ? `preview_${id}` : id,
       type,
       title,
-      ...(download.mimeType ? { mimeType: download.mimeType } : {}),
+      ...(resolvedMimeType ? { mimeType: resolvedMimeType } : {}),
       ...(download.sizeBytes !== undefined ? { sizeBytes: download.sizeBytes } : {}),
       sessionKey: params.sessionKey,
       ...(messageRunId ? { runId: messageRunId } : {}),
