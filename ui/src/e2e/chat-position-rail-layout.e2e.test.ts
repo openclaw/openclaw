@@ -67,7 +67,7 @@ suite.define(() => {
           await page.locator(`.chat-text[dir="${direction}"]`).first().waitFor();
           const card = page.locator(".session-progress-card--composer");
           await card.waitFor();
-          // Initial transcript scrolling can still change the automatic disclosure state.
+          // Let the transcript settle before measuring the rail and toggling the card.
           await waitForChatScrollIdle(page);
           const summary = card.locator("summary");
           if ((await card.getAttribute("open")) !== null) {

@@ -68,7 +68,10 @@ suite.define(() => {
           await page.waitForTimeout(400); // Recording-only pacing, not an assertion wait.
         }
         await page.locator(".chat-thread").hover();
-        await page.mouse.wheel(0, -600);
+        await page.mouse.wheel(0, -320);
+        await waitForChatScrollIdle(page);
+        await page.waitForTimeout(201); // Separate two user gestures at the 200 ms boundary.
+        await page.mouse.wheel(0, -320);
         await expect.poll(() => card.getAttribute("open")).toBeNull();
         await waitForChatScrollIdle(page);
         const closed = await cardHeight();
@@ -76,6 +79,9 @@ suite.define(() => {
           await page.waitForTimeout(400);
         }
         await page.locator('.chat-scroll-to-bottom[data-visible="true"]').click();
+        await waitForChatScrollIdle(page);
+        expect(await card.getAttribute("open")).toBeNull();
+        await card.locator("summary").click();
         await expect.poll(() => card.getAttribute("open")).toBe("");
         await waitForChatScrollIdle(page);
         const before = await cardHeight();

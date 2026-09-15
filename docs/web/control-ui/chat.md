@@ -401,10 +401,27 @@ The core [`show_widget`](/tools/show-widget) tool renders self-contained SVG or 
 
 ## Chat transcript layout
 
-Scrolling up to read earlier messages collapses the task progress card above the
-composer. Streaming output and layout adjustments keep that reading mode intact.
-Scroll back to the end or select **Latest** to resume following the conversation;
-an explicit choice to expand or collapse the card stays in effect for that task.
+The task progress card above the composer starts expanded for active work unless
+**Collapse task progress by default** is enabled. Mounting or switching sessions
+shows its initial state without a fold animation. While reading earlier messages,
+it collapses after at least two upward scroll gestures totaling 320 pixels, once
+scrolling has stopped for 300 milliseconds. Wheel bursts separated by more than
+200 milliseconds count separately; each touch drag counts as one gesture.
+Returning to the end resets the counts but does not reopen a collapsed card.
+Progress updates also leave it collapsed. Task completion can reopen it only if
+you are already at the end; returning there after completion does not reopen it.
+
+Manual choices are remembered per session in the current Gateway connection until
+reload. Switching Gateway connections starts with a fresh choice. A manual close prevents
+automatic reopening. After the first manual reopen during a visit or task,
+continued upward scrolling can collapse it again after three gestures and
+640 pixels, with the same pause. This clears the remembered open choice. A second
+manual reopen stops automatic collapse for that visit and task. Leaving and
+returning to the chat, or starting a new task, resets the thresholds while
+preserving any remembered manual choice.
+
+Streaming output and layout adjustments keep reading mode intact. Scroll back to
+the end or select **Latest** to resume following the conversation.
 
 Completed replies can show a compact **Sources** strip when their web links match
 recorded `web_search` or `web_fetch` results from the same run. Select a title and

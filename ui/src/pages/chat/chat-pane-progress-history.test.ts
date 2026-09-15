@@ -58,8 +58,11 @@ function createHistoryProgressPane(request: GatewayRequestHandler) {
   pane.sessionKey = "notes";
   state.sessionKey = "notes";
   state.settings = { sessionKey: "notes", lastActiveSessionKey: "notes" } as typeof state.settings;
-  const progress = (pane as TestChatPane & { progressCard: SessionProgressCardController })
-    .progressCard;
+  const presentation = pane as TestChatPane & {
+    progressCard: SessionProgressCardController;
+    readonly presentedProgressCard: ProgressCard | null;
+  };
+  const progress = presentation.progressCard;
   onTestFinished(() => progress.hostDisconnected());
   progress.hostConnected();
   const emit = (card: ProgressCard) => {
@@ -72,7 +75,7 @@ function createHistoryProgressPane(request: GatewayRequestHandler) {
       payload: { sessionKey: card.sessionKey, revision: card.revision },
     });
   };
-  return { pane, state, sessions, progress, emit };
+  return { pane, state, sessions, progress, emit, presentation };
 }
 
 describe("retained bare pane progress follows accepted history ownership", () => {
@@ -177,15 +180,18 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     "disconnect",
     "session replacement",
     "history reset",
+    "archive",
   ] as const)("retires the accepted progress identity after %s", async (transition) => {
     const card = progressCard();
     const request = vi.fn(async (method: string) =>
       method === "chat.history" ? history : { card },
     );
-    const { pane, state, progress } = createHistoryProgressPane(request);
+    const { pane, state, progress, presentation } = createHistoryProgressPane(request);
     await loadChatHistory(state, { deferBranches: true });
     progress.hostUpdate();
     await vi.waitFor(() => expect(progress.card).toEqual(card));
+
+    expect(presentation.presentedProgressCard).toEqual(card);
 
     if (transition === "navigation") {
       state.sessionKey = "scratch";
@@ -198,11 +204,16 @@ describe("retained bare pane progress follows accepted history ownership", () =>
       state.connected = false;
     } else if (transition === "session replacement") {
       state.currentSessionId = "replacement-notes";
+    } else if (transition === "archive") {
+      state.selectedChatSessionArchived = true;
     } else {
       resetChatHistoryProjection(state);
     }
     progress.hostUpdate();
     expect(progress.card).toBeNull();
+    expect(presentation.presentedProgressCard).toEqual(
+      transition === "reconnect" || transition === "disconnect" ? card : null,
+    );
     expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(1);
   });
 

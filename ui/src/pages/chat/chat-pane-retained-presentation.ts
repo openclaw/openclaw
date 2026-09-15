@@ -1,13 +1,24 @@
+import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import "../../components/modal-dialog.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
 import { boardProviderCacheKey } from "../../lib/board/provider.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
-import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import {
+  areUiSessionKeysEquivalent,
+  resolveUiSelectedSessionAgentId,
+} from "../../lib/sessions/session-key.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branches.ts";
-import { getChatHistoryLoadState, isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
+import {
+  chatHistoryRequests,
+  getAcceptedChatHistorySession,
+  getChatHistoryLoadState,
+  isInitialChatHistoryUnavailable,
+} from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import {
@@ -20,6 +31,7 @@ import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { refreshChatMetadata } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
@@ -37,6 +49,119 @@ const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   protected abstract syncActiveBindings(): void;
   protected abstract activateComposerPresentation(): void;
+
+  private progressPresentationSessionKey: string | undefined;
+  private progressPresentationReady = false;
+  private retainedProgressCard:
+    | {
+        gatewayScope: object;
+        client: ChatPageHost["client"];
+        sessionKey: string;
+        sessionId: ChatPageHost["currentSessionId"];
+        agentId: string | undefined;
+        card: ProgressCard;
+      }
+    | undefined;
+
+  protected get presentedProgressCard(): ProgressCard | null {
+    const state = this.state;
+    if (
+      !state ||
+      !this.presented ||
+      this.isCurrentSessionArchived(state) ||
+      parseCatalogSessionKey(state.sessionKey)
+    ) {
+      this.retainedProgressCard = undefined;
+      return null;
+    }
+    const gatewayScope = gatewayPresentationScope(this.context.gateway);
+    const agentId = resolveUiSelectedSessionAgentId(state);
+    const previous = this.retainedProgressCard;
+    if (
+      previous &&
+      (!chatHistoryRequests(state).acceptedHistory ||
+        previous.gatewayScope !== gatewayScope ||
+        previous.client !== state.client ||
+        previous.sessionKey !== state.sessionKey ||
+        previous.sessionId !== state.currentSessionId ||
+        previous.agentId !== agentId)
+    ) {
+      this.retainedProgressCard = undefined;
+    }
+    const card = this.progressCard.card;
+    if (card) {
+      this.retainedProgressCard = {
+        gatewayScope,
+        client: state.client,
+        sessionKey: state.sessionKey,
+        sessionId: state.currentSessionId,
+        agentId,
+        card,
+      };
+    } else if (!this.progressCard.loading) {
+      this.retainedProgressCard = undefined;
+    }
+    // Reconnect retires read admission, not the mounted card's disclosure state.
+    return this.retainedProgressCard?.card ?? null;
+  }
+
+  protected override initialProgressCardTarget() {
+    const state = this.state;
+    if (
+      !state?.connected ||
+      !this.presented ||
+      document.visibilityState === "hidden" ||
+      this.isCurrentSessionArchived(state) ||
+      parseCatalogSessionKey(state.sessionKey) ||
+      (!this.transcriptReady && !getAcceptedChatHistorySession(state))
+    ) {
+      return undefined;
+    }
+    // Unlike secondary metadata, the progress card determines transcript geometry.
+    return this.resolveChatReadTarget();
+  }
+
+  protected get progressCardInitialLoading(): boolean {
+    const state = this.state;
+    if (!state) {
+      return false;
+    }
+    if (this.progressPresentationSessionKey !== state.sessionKey) {
+      this.progressPresentationSessionKey = state.sessionKey;
+      this.progressPresentationReady = false;
+    }
+    if (this.progressPresentationReady) {
+      return false;
+    }
+    const phase = this.context.gateway.snapshot.phase;
+    if (
+      !this.isCurrentSessionArchived(state) &&
+      !parseCatalogSessionKey(state.sessionKey) &&
+      getChatHistoryLoadState(state).phase !== "failed"
+    ) {
+      if (phase === "connecting" || phase === "starting") {
+        return true;
+      }
+      if (state.connected) {
+        if (!this.presented || document.visibilityState === "hidden") {
+          return true;
+        }
+        if (!this.transcriptReady && !getAcceptedChatHistorySession(state)) {
+          return true;
+        }
+        if (
+          this.initialProgressCardTarget() &&
+          this.progressCard.loading &&
+          !this.progressCard.error
+        ) {
+          return true;
+        }
+      }
+    }
+    // Refreshes and reconnects must never replace an already usable composer.
+    this.progressPresentationReady = true;
+    return false;
+  }
 
   protected clearComposerPrefillAttention(): void {
     if (this.composerPrefillAttentionTimer !== null) {
@@ -162,6 +287,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   protected override presentedChanged(presented: boolean): void {
     if (!presented) {
       this.dashboardPresentationActivation = undefined;
+      this.retainedProgressCard = undefined;
     }
     if (!this.isConnected) {
       return;
