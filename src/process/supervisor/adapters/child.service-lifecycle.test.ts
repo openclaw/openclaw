@@ -702,7 +702,10 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
       activePids.add(descendantPid);
       try {
         adapter.kill(signal);
-        await expect(adapter.waitForExtinction!()).rejects.toThrow("cleanup identity lost");
+        await expect(adapter.waitForExtinction!()).rejects.toThrow(
+          "service child cleanup did not complete before its hard deadline",
+        );
+        await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
         expect(isAlive(descendantPid)).toBe(true);
       } finally {
         killPidIfAlive(descendantPid);
