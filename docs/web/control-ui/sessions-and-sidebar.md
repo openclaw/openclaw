@@ -155,7 +155,7 @@ Native CLI catalogs appear only when they contain sessions matching the current 
 
 **Mark as unread** creates a reminder that remains unread while the current chat stays open, including while a run streams or completes. Leave and reopen the session, or choose **Mark as read**, to clear it.
 
-Opening a read-only or suggestion session as a viewer leaves its unread marker intact. Draft sessions acknowledge reads automatically only for their owner or an administrator.
+Opening a session as a viewer leaves its unread marker intact, including shared sessions. Draft sessions acknowledge reads automatically only for their owner or an administrator. If the Gateway rejects an automatic read acknowledgement because of invalid session state or missing access, the UI reports the error once for that unread episode and waits for a new episode or for you to reopen the session. Temporary failures can retry on a later session update. Manual unread reminders still remain until you reopen the session or choose **Mark as read**.
 
 **Delete** removes the confirmed selection from loaded session lists immediately and leaves any deleted conversation that is open. The Gateway finishes deletion in the background, safely stopping and reclaiming an attached cloud worker first. If deletion fails, the affected session can reappear with an error; other successful deletions and any navigation you made in the meantime are preserved. Browser drafts are retired only after deletion is confirmed, not while the request is pending.
 

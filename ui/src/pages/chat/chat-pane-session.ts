@@ -292,6 +292,8 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     // not an operation failure and should not latch the unread retry guard.
     if (
       !access.allowed ||
+      // Shared visibility can still be capped to viewing by the caller's role.
+      row.sharingRole === "viewer" ||
       this.sessionParticipationTracker.resolve({
         catalog: parseCatalogSessionKey(state.sessionKey) !== null,
         listLoading: state.sessionsLoading,
@@ -317,10 +319,10 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
             this.unreadPatchGuard.patchFailed(guardKey);
           }
         },
-        () => {
-          // Unlatch so later unread snapshots retry; the session capability
-          // publishes the actionable error for the owning page.
-          this.unreadPatchGuard.patchFailed(guardKey);
+        (error: unknown) => {
+          // The capability publishes the error once; only transient failures
+          // may send another acknowledgement on the next snapshot.
+          this.unreadPatchGuard.patchFailed(guardKey, error);
         },
       );
   }
