@@ -60,7 +60,6 @@ import {
   enrichChatHistoryCompactionMarkers,
   readChatHistoryPage,
   resolveChatHistoryNextOffset,
-  shouldReplayOldestChatHistoryRecord,
 } from "./chat-history-pages.js";
 import { resolveEmbeddedAgentRunRecoverySnapshot } from "./chat-history-recovery.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
@@ -364,10 +363,7 @@ export async function handleChatHistoryRequest({
           totalMessages: pagination.totalMessages,
           offset: pagination.offset,
           rawPageMessages: pagination.rawPageMessages,
-          replayOldestRecord: shouldReplayOldestChatHistoryRecord({
-            projected: normalized,
-            bounded: capped,
-          }),
+          projected: normalized,
         });
   const hasMore =
     pagination !== undefined && candidateNextOffset !== undefined

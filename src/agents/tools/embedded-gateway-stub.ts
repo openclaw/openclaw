@@ -251,10 +251,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
           totalMessages: pagination.totalMessages,
           offset: pagination.offset,
           rawPageMessages: pagination.rawPageMessages,
-          replayOldestRecord: rt.shouldReplayOldestChatHistoryRecord({
-            projected: page.messages,
-            bounded: capped,
-          }),
+          projected: page.messages,
         })
       : 0;
   const hasMore =

@@ -23,7 +23,6 @@ export {
   capChatHistoryAroundMessage,
   readChatHistoryPage,
   resolveChatHistoryNextOffset,
-  shouldReplayOldestChatHistoryRecord,
 } from "../../gateway/server-methods/chat-history-pages.js";
 export { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 export {

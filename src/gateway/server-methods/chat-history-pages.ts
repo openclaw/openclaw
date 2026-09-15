@@ -80,38 +80,38 @@ function projectCliIdentityOntoPagedMessages(params: {
 
 export function resolveChatHistoryNextOffset(params: {
   messages: unknown[];
+  projected: unknown[];
   totalMessages: number;
   offset: number;
   rawPageMessages: number;
-  replayOldestRecord?: boolean;
 }): number {
-  const oldestSeq = params.messages
-    .map((message) => readChatHistoryMessageSeq(message))
-    .find((seq): seq is number => typeof seq === "number");
+  let oldestSeq: number | undefined;
+  let boundedSiblings = 0;
+  for (const message of params.messages) {
+    const seq = readChatHistoryMessageSeq(message);
+    oldestSeq ??= seq;
+    if (seq !== undefined && seq === oldestSeq) {
+      boundedSiblings += 1;
+    }
+  }
   if (oldestSeq === undefined) {
     return params.offset + params.rawPageMessages;
   }
   const recordOffset = params.totalMessages - oldestSeq + 1;
   const replayOffset = recordOffset - 1;
-  if (params.replayOldestRecord && replayOffset > params.offset) {
-    return replayOffset;
+  if (replayOffset > params.offset) {
+    let projectedSiblings = 0;
+    for (const message of params.projected) {
+      if (readChatHistoryMessageSeq(message) === oldestSeq) {
+        projectedSiblings += 1;
+        if (projectedSiblings > boundedSiblings) {
+          return replayOffset;
+        }
+      }
+    }
   }
   // A replay cursor that does not advance strands every older transcript record.
   return Math.max(params.offset + 1, recordOffset);
-}
-
-export function shouldReplayOldestChatHistoryRecord(params: {
-  projected: unknown[];
-  bounded: unknown[];
-}): boolean {
-  const oldestSeq = params.bounded
-    .map((message) => readChatHistoryMessageSeq(message))
-    .find((seq): seq is number => typeof seq === "number");
-  return (
-    oldestSeq !== undefined &&
-    params.bounded.filter((message) => readChatHistoryMessageSeq(message) === oldestSeq).length <
-      params.projected.filter((message) => readChatHistoryMessageSeq(message) === oldestSeq).length
-  );
 }
 
 function resolveChatHistoryActiveLeafEntryId(
