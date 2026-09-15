@@ -344,9 +344,11 @@ export default definePluginEntry({
               ...sessionContext,
               mainKey: liveConfig.session?.mainKey ?? api.config.session?.mainKey,
             };
+            // Use the producer's request, never infer it from user-controlled envelope markers.
+            const currentUserMessage = event.currentUserMessage ?? event.prompt;
             const recentTurns = extractRecentTurns(event.messages);
             const searchQuery = buildSearchQuery({
-              latestUserMessage: event.prompt,
+              latestUserMessage: currentUserMessage,
               recentTurns,
             });
             const memorySlot = normalizePluginsConfig(liveConfig.plugins).slots.memory;
@@ -388,7 +390,7 @@ export default definePluginEntry({
                   cfg: liveConfig,
                   agentId: effectiveAgentId,
                   query: searchQuery,
-                  message: event.prompt,
+                  message: currentUserMessage,
                   activeProjectKeys: ctx.activeProjectKeys,
                   signal: AbortSignal.timeout(triggerLookupTimeoutMs),
                   runId: ctx.runId,
@@ -453,7 +455,7 @@ export default definePluginEntry({
             }
             const escalationDecision = resolveRecallEscalationDecision({
               mode: invocationConfig.mode,
-              message: event.prompt,
+              message: currentUserMessage,
               hasStrongLaneOneHit: laneOne.hasStrongHit,
             });
             if (escalationDecision !== "recall") {
@@ -481,7 +483,7 @@ export default definePluginEntry({
                 ? { ...invocationConfig, toolsAllow: [productRecallToolName] }
                 : { ...invocationConfig, toolsAllow: allowedRecallTools };
             const query = buildQuery({
-              latestUserMessage: event.prompt,
+              latestUserMessage: currentUserMessage,
               recentTurns,
               config: recallConfig,
             });
@@ -499,6 +501,8 @@ export default definePluginEntry({
               messageProvider: ctx.messageProvider,
               channelId: ctx.channelId,
               query,
+              currentUserMessage: event.currentUserMessage,
+              currentUserMessageId: event.currentUserMessageId,
               searchQuery,
               currentModelProviderId: ctx.modelProviderId,
               currentModelId: ctx.modelId,

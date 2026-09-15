@@ -993,6 +993,52 @@ describe("active-memory plugin", () => {
     expect(secondSessionKey).not.toBe(firstSessionKey);
   });
 
+  it("does not escalate because projected history contains a recall request", async () => {
+    registerPluginConfig({ mode: "escalate" });
+    await runPromptBuild({
+      prompt: "Earlier conversation: what did I order last time?",
+      currentUserMessage: "hello",
+    });
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("reuses a request across prompt rebuilds but preserves independent message identity", async () => {
+    registerPluginConfig({ cacheTtlMs: 1000 });
+    const context = { runId: "run-projected-request", sessionKey: "agent:main:projected-request" };
+    const currentUserMessage = "what did I order last time?";
+    const first = await runPromptBuild(
+      { prompt: "projection one", currentUserMessage, currentUserMessageId: "message-1" },
+      context,
+    );
+    const second = await runPromptBuild(
+      { prompt: "projection two", currentUserMessage, currentUserMessageId: "message-1" },
+      context,
+    );
+    expectPrependContextContains(first, "lemon pepper wings");
+    expectPrependContextContains(second, "lemon pepper wings");
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(lastEmbeddedRunParams().prompt).toContain(currentUserMessage);
+    expect(lastEmbeddedRunParams().prompt).not.toContain("projection one");
+    // Expire the independent cross-turn cache so request identity is observable.
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 2000);
+    await runPromptBuild(
+      { prompt: "projection three", currentUserMessage, currentUserMessageId: "message-2" },
+      context,
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+    await runPromptBuild(
+      {
+        prompt: "projection four",
+        currentUserMessage: "what wings do I prefer?",
+        currentUserMessageId: "message-2",
+      },
+      context,
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
+    clock.mockRestore();
+  });
+
   it("does not share recall results across changed prompts in one run", async () => {
     const context = {
       runId: "run-changed-prompt-retry",
@@ -1043,7 +1089,7 @@ describe("active-memory plugin", () => {
     expectPrependContextContains(secondResult, "lemon pepper wings");
   });
 
-  it("waits for timeout cleanup before replacing a recall in the same run", async () => {
+  it("retains a timed-out recall while cleanup settles and until the run ends", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
@@ -1082,52 +1128,25 @@ describe("active-memory plugin", () => {
       cleanupGate.resolve();
     }
 
-    await expect(retry).resolves.toEqual(
-      expect.objectContaining({ prependContext: expect.stringContaining("lemon pepper wings") }),
-    );
+    await expect(retry).resolves.toBeUndefined();
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    await expect(runPromptBuild(event, context)).resolves.toBeUndefined();
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    await requireHook("agent_end")({}, context);
+    await runPromptBuild(event, context);
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
   });
 
-  it("evicts a rejected replacement after timeout cleanup settles", async () => {
-    let releaseCleanup: () => void = () => {
-      throw new Error("cleanup gate was not initialized");
-    };
-    const cleanupGate = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
-    const initialResult = { status: "timeout" as const, elapsedMs: 1, summary: null };
+  it("evicts a rejected attempt before timeout cleanup starts", async () => {
     await expect(
-      resolveActiveRecallForRun("run-rejected-replacement", async (onTimeoutCleanup) => {
-        onTimeoutCleanup(cleanupGate);
-        return initialResult;
+      resolveActiveRecallForRun("run-rejected-start", async () => {
+        throw new Error("start failed");
       }),
-    ).resolves.toEqual(initialResult);
-
-    let rejectedReplacementStarts = 0;
-    const rejectedReplacement = resolveActiveRecallForRun("run-rejected-replacement", async () => {
-      rejectedReplacementStarts++;
-      throw new Error("retry deadline expired");
-    });
-    releaseCleanup();
-    await expect(rejectedReplacement).rejects.toThrow("retry deadline expired");
-
-    const freshResult = {
-      status: "ok" as const,
-      elapsedMs: 2,
-      rawReply: "recovered",
-      summary: "recovered",
-    };
-    let freshStarts = 0;
+    ).rejects.toThrow("start failed");
+    const result = { status: "ok" as const, elapsedMs: 1, summary: "recovered" };
     await expect(
-      resolveActiveRecallForRun("run-rejected-replacement", async () => {
-        freshStarts++;
-        return freshResult;
-      }),
-    ).resolves.toEqual(freshResult);
-    expect({ freshStarts, rejectedReplacementStarts }).toEqual({
-      freshStarts: 1,
-      rejectedReplacementStarts: 1,
-    });
+      resolveActiveRecallForRun("run-rejected-start", async () => result),
+    ).resolves.toEqual(result);
   });
 
   it("deduplicates cache-disabled private recall until the run ends", async () => {

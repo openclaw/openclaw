@@ -119,6 +119,8 @@ type ActiveRecallParams = {
   messageProvider?: string;
   channelId?: string;
   query: string;
+  currentUserMessage?: string;
+  currentUserMessageId?: string;
   searchQuery: string;
   currentModelProviderId?: string;
   currentModelId?: string;
@@ -458,7 +460,14 @@ async function maybeResolveActiveRecall(params: ActiveRecallParams): Promise<Act
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
-    query: params.query,
+    // Run-local reuse follows request identity; the cross-turn content cache stays query-based.
+    query:
+      params.currentUserMessage !== undefined
+        ? JSON.stringify({
+            message: params.currentUserMessage,
+            messageId: params.currentUserMessageId,
+          })
+        : params.query,
     authorityFingerprint: params.authorityFingerprint,
     memorySlot: params.memorySlot,
     activeProjectKeys: params.activeProjectKeys,

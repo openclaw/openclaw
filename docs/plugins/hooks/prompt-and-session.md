@@ -33,7 +33,12 @@ Use the phase-specific hooks for new plugins:
 - `agent_turn_prepare`: receives the current prompt, prepared session
   messages, and queued injections consumed for this session.
   Return `prependContext` or `appendContext`.
-- `before_prompt_build`: receives the current prompt and session messages.
+- `before_prompt_build`: receives the prepared prompt and session messages.
+  Harnesses may also supply `currentUserMessage`, the current request before
+  history/context projection, and `currentUserMessageId`, its native admission
+  identity. Use the explicit request for intent detection when available;
+  `prompt` may contain reconstructed history. Do not parse envelope markers to
+  recover request boundaries. These fields are optional for existing harnesses.
   Return `prependContext`, `appendContext`, `systemPrompt`,
   `prependSystemContext`, `appendSystemContext`, or `toolsAllow`. `toolsAllow`
   can only narrow the host-resolved tool surface for the current turn; `[]`

@@ -21,6 +21,10 @@ export type PluginHookBeforeModelResolveResult = {
 // before_prompt_build hook
 export type PluginHookBeforePromptBuildEvent = {
   prompt: string;
+  /** Current request before history/context projection, when supplied by the harness. */
+  currentUserMessage?: string;
+  /** Native request identity; distinguishes identical messages admitted within one run. */
+  currentUserMessageId?: string;
   /** Session messages prepared for this run. */
   messages: unknown[];
 };
