@@ -122,6 +122,29 @@ describe("SessionRowSchema", () => {
     },
   );
 
+  it.each(["runtime", "override", "configured"] as const)(
+    "accepts model selection source %s",
+    (source) => {
+      expect(
+        Value.Check(SessionRowSchema, {
+          key: "agent:main:main",
+          kind: "global",
+          modelSelectionSource: source,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects an invalid model selection source", () => {
+    expect(
+      Value.Check(SessionRowSchema, {
+        key: "agent:main:main",
+        kind: "global",
+        modelSelectionSource: "default",
+      }),
+    ).toBe(false);
+  });
+
   it("rejects an invalid model override source", () => {
     expect(
       Value.Check(SessionRowSchema, {

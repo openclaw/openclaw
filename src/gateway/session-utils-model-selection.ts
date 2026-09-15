@@ -1,3 +1,4 @@
+import type { SessionModelSelectionSource } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { readSessionRuntimeOwnership } from "../agents/harness/session-runtime-ownership.js";
 import type { ModelManifestNormalizationContext } from "../agents/model-ref-shared.js";
 import { resolveSessionModelRefCore } from "../agents/session-model-ref.js";
@@ -23,6 +24,9 @@ export function resolveSessionSelectedModelRef(
   } & ModelManifestNormalizationContext,
 ): ReturnType<typeof resolveSessionModelRefCore> & {
   storedOverrideSource: StoredModelOverride["source"] | null;
+  // Callers cannot otherwise tell an observed selection from the configured default this
+  // resolution falls back to when no runtime or override reports one.
+  selectionSource: SessionModelSelectionSource;
 } {
   // Ownership is session-specific; never reuse the ordinary override cache for native tuples.
   const ownership = readSessionRuntimeOwnership({
@@ -32,7 +36,7 @@ export function resolveSessionSelectedModelRef(
     sessionEntry: params.source.entry,
   });
   if (ownership?.modelRef) {
-    return { ...ownership.modelRef, storedOverrideSource: null };
+    return { ...ownership.modelRef, storedOverrideSource: null, selectionSource: "runtime" };
   }
   const cachePrefix = `${normalizeAgentId(params.agentId)}\0${params.allowPluginNormalization !== false}\0`;
   const defaultKey = `${cachePrefix}\0\0`;
@@ -55,7 +59,7 @@ export function resolveSessionSelectedModelRef(
     manifestPlugins: params.manifestPlugins,
   });
   if (!storedOverride) {
-    return { ...configuredDefault, storedOverrideSource: null };
+    return { ...configuredDefault, storedOverrideSource: null, selectionSource: "configured" };
   }
   const selectedEntry = {
     providerOverride: storedOverride.provider,
@@ -71,12 +75,12 @@ export function resolveSessionSelectedModelRef(
   ].join("\0")}`;
   const cached = params.rowContext?.selectedModelByOverrideRef.get(key);
   if (cached) {
-    return { ...cached, storedOverrideSource: storedOverride.source };
+    return { ...cached, storedOverrideSource: storedOverride.source, selectionSource: "override" };
   }
   const selected = resolveSessionModelRefCore(params.cfg, selectedEntry, params.agentId, {
     allowPluginNormalization: params.allowPluginNormalization,
     manifestPlugins: params.manifestPlugins,
   });
   params.rowContext?.selectedModelByOverrideRef.set(key, selected);
-  return { ...selected, storedOverrideSource: storedOverride.source };
+  return { ...selected, storedOverrideSource: storedOverride.source, selectionSource: "override" };
 }

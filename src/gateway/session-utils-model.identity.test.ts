@@ -160,7 +160,12 @@ test.each(["custom/model", "middle"])(
             allowPluginNormalization: false,
           }),
         )
-        .toEqual({ provider: "custom", model, storedOverrideSource: "session" });
+        .toEqual({
+          provider: "custom",
+          model,
+          storedOverrideSource: "session",
+          selectionSource: "override",
+        });
       expect(entry).toEqual(original);
     });
   },
@@ -192,11 +197,53 @@ test.each([false, true])(
               allowPluginNormalization: false,
             }),
           )
-          .toEqual({ provider: "custom", model, storedOverrideSource: "session" });
+          .toEqual({
+            provider: "custom",
+            model,
+            storedOverrideSource: "session",
+            selectionSource: "override",
+          });
       }
     });
   },
 );
+
+test("separates a configured-default row from a pinned row naming the same model", async () => {
+  await withStateDirEnv("session-model-provenance-", async ({ stateDir }) => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: false },
+      agents: { entries: { main: {} }, defaults: { model: "custom/default" } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const store = {
+      "agent:main:unreported": { sessionId: "unreported", updatedAt: 1 },
+      "agent:main:pinned": {
+        sessionId: "pinned",
+        updatedAt: 1,
+        providerOverride: "custom",
+        modelOverride: "default",
+        modelOverrideRouteResolution: "resolved",
+      },
+    } satisfies Record<string, SessionEntry>;
+    const rows = Object.entries(store).map(([key, entry]) =>
+      buildGatewaySessionRow({
+        cfg,
+        agentId: "main",
+        storePath: stateDir,
+        store,
+        key,
+        entry,
+        lightweightListRow: true,
+        skipTranscriptUsageFallback: true,
+      }),
+    );
+    // Neither session reports a runtime model, so both rows name the configured default and
+    // the value alone cannot say which one was actually selected.
+    expect(rows.map((row) => row.model)).toEqual(["default", "default"]);
+    expect(rows.map((row) => row.modelSelectionSource)).toEqual(["configured", "override"]);
+  });
+});
 
 test.each([
   { provider: "demo-cli", model: "shared-model", expectedProvider: "demo-provider" },

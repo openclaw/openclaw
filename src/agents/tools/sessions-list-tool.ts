@@ -126,6 +126,7 @@ const SessionListRowOutputSchema = Type.Object(
     updatedAt: Type.Optional(Type.Number()),
     stateVersion: Type.Optional(Type.Number()),
     model: Type.Optional(Type.String()),
+    modelSelectionSource: SessionRowSchema.properties.modelSelectionSource,
     contextTokens: Type.Optional(Type.Number()),
     totalTokens: Type.Optional(Type.Number()),
     status: Type.Optional(SessionRunStatusSchema),
@@ -497,6 +498,7 @@ export function createSessionsListTool(opts?: {
         const model = readStringValue(entry.model);
         // sessions.list owns runtime/context provenance; this tool only filters and
         // narrows its GatewaySessionListRow without reinterpreting raw session state.
+        const modelSelectionSource = entry.modelSelectionSource;
         const contextTokens =
           typeof entry.contextTokens === "number" ? entry.contextTokens : undefined;
         const totalTokens = typeof entry.totalTokens === "number" ? entry.totalTokens : undefined;
@@ -555,7 +557,7 @@ export function createSessionsListTool(opts?: {
           ...(parentSessionKey ? { parentSessionKey } : {}),
           ...(updatedAt !== undefined ? { updatedAt } : {}),
           ...(stateVersion ? { stateVersion } : {}),
-          ...(model ? { model } : {}),
+          ...(model ? { model, ...(modelSelectionSource ? { modelSelectionSource } : {}) } : {}),
           ...(contextTokens !== undefined ? { contextTokens } : {}),
           ...(totalTokens !== undefined ? { totalTokens } : {}),
           ...(status ? { status } : {}),

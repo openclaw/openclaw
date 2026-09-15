@@ -33,6 +33,21 @@ export const SessionRunStatusSchema = Type.Union([
   Type.Literal("timeout"),
 ]);
 
+/**
+ * Which resolution stage produced the reported `model`.
+ *
+ * - `runtime`: the session's harness reported the model bound to its runtime.
+ * - `override`: a stored model override on the session (or inherited from its parent).
+ * - `configured`: neither of the above was available, so the row reports the agent's
+ *   configured default. The session may still be executing a different model chosen by
+ *   a source this resolution cannot observe, such as an automation payload model.
+ */
+export const SessionModelSelectionSourceSchema = Type.Union([
+  Type.Literal("runtime"),
+  Type.Literal("override"),
+  Type.Literal("configured"),
+]);
+
 export const SessionEntryArchiveReasonSchema = Type.Union([
   Type.Literal("manual"),
   Type.Literal("active-session-cap"),
@@ -229,6 +244,8 @@ export const SessionRowSchema = Type.Object(
     estimatedCostUsd: Type.Optional(Type.Number()),
     model: Type.Optional(Type.String()),
     modelProvider: Type.Optional(Type.String()),
+    /** Which resolution stage produced `model`; omission means not projected. */
+    modelSelectionSource: Type.Optional(SessionModelSelectionSourceSchema),
     /** Runtime model serving this session while it differs from the selected model. */
     activeModel: Type.Optional(Type.String()),
     activeModelProvider: Type.Optional(Type.String()),
@@ -250,6 +267,7 @@ export type SessionCreatedActor = Static<typeof SessionCreatedActorSchema>;
 export type SessionPermissionMode = Static<typeof SessionPermissionModeSchema>;
 export type SessionOwner = Static<typeof SessionOwnerSchema>;
 export type SessionRunStatus = Static<typeof SessionRunStatusSchema>;
+export type SessionModelSelectionSource = Static<typeof SessionModelSelectionSourceSchema>;
 export type SessionToolOverrides = Static<typeof SessionToolOverridesSchema>;
 export type SessionRow = Static<typeof SessionRowSchema>;
 export type SessionEntryArchiveReason = Static<typeof SessionEntryArchiveReasonSchema>;

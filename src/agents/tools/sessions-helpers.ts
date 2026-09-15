@@ -1,5 +1,6 @@
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
+  SessionModelSelectionSource,
   SessionRow,
   SessionRunStatus,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
@@ -100,6 +101,7 @@ export type GatewaySessionListRow = SessionInventoryMetadata & {
   sessionId?: string;
   stateVersion?: number;
   model?: string;
+  modelSelectionSource?: SessionModelSelectionSource;
   contextTokens?: number | null;
   totalTokens?: number | null;
   estimatedCostUsd?: number;
@@ -146,6 +148,7 @@ export type SessionListRow = SessionInventoryMetadata & {
   pinned: boolean;
   stateVersion?: number;
   model?: string;
+  modelSelectionSource?: SessionModelSelectionSource;
   contextTokens?: number;
   totalTokens?: number;
   status?: SessionRunStatus;
