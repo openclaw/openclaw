@@ -1,5 +1,6 @@
 // Msteams plugin module implements channel behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
@@ -891,7 +892,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
                 if (!query) {
                   return actionError("Search requires a target (to) and query.");
                 }
-                const limit = typeof ctx.params.limit === "number" ? ctx.params.limit : undefined;
+                const limit = readPositiveIntegerParam(ctx.params, "limit");
                 const from =
                   typeof ctx.params.from === "string" ? ctx.params.from.trim() : undefined;
                 const { searchMessagesMSTeams } = await loadMSTeamsChannelRuntime();

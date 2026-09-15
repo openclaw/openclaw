@@ -10,6 +10,7 @@ import type { ChannelThreadingToolContext } from "../src/channels/plugins/types.
 import { createDefaultDeps } from "../src/cli/deps.js";
 import { createMessageCliHelpers } from "../src/cli/program/message/helpers.js";
 import { registerMessageDiscordAdminCommands } from "../src/cli/program/message/register.discord-admin.js";
+import { registerMessageSearchCommand } from "../src/cli/program/message/register.permissions-search.js";
 import { messageCommand } from "../src/commands/message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
@@ -118,6 +119,7 @@ afterEach(async () => {
 async function createFixture(
   currentContext: "channel" | "chat" | "none" = "channel",
   origin: "bundled" | "global" = "bundled",
+  searchMatches = 1,
 ) {
   const cfg: OpenClawConfig = {
     channels: {
@@ -236,12 +238,10 @@ async function createFixture(
       path === `/v1.0/teams/${destination.teamId}/channels/${destination.channelId}/messages`
     ) {
       body = {
-        value: [
-          {
-            id: destination.messageId,
-            body: { content: destination.text, contentType: "text" },
-          },
-        ],
+        value: Array.from({ length: searchMatches }, (_, index) => ({
+          id: index === 0 ? destination.messageId : `${destination.messageId}-${index}`,
+          body: { content: destination.text, contentType: "text" },
+        })),
       };
     } else {
       response.statusCode = 404;
@@ -399,44 +399,57 @@ function expectGraphRequests(requests: GraphRequest[], action: Action, destinati
   );
 }
 
-describe("Teams member info CLI", () => {
-  it("reads a selected channel member without current conversation context", async () => {
-    const fixture = await createFixture("none");
+describe("Teams message CLI", () => {
+  async function runCli(
+    register: typeof registerMessageDiscordAdminCommands,
+    args: string[],
+    action: Action,
+  ) {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const command = new Command().name("message").exitOverride();
-    registerMessageDiscordAdminCommands(command, {
+    register(command, {
       ...createMessageCliHelpers("msteams"),
-      runMessageAction: async (action, opts) => {
-        await messageCommand({ ...opts, action }, createDefaultDeps(), runtime);
+      runMessageAction: async (name, opts) => {
+        await messageCommand({ ...opts, action: name }, createDefaultDeps(), runtime);
       },
     });
 
-    await command.parseAsync(
-      [
-        "member",
-        "info",
-        "--channel",
-        "msteams",
-        "--user-id",
-        memberId,
-        "--channel-id",
-        otherTarget,
-        "--json",
-      ],
-      { from: "user" },
-    );
+    await command.parseAsync([...args, "--channel", "msteams", "--json"], { from: "user" });
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
     expect(runtime.error).not.toHaveBeenCalled();
     const result = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
     expect(result).toMatchObject({
-      action: "member-info",
+      action,
       channel: "msteams",
       dryRun: false,
       handledBy: "plugin",
     });
-    expectReadResult(result.payload, "member-info", other);
+    return result.payload;
+  }
+
+  it("reads a selected channel member without current conversation context", async () => {
+    const fixture = await createFixture("none");
+    const payload = await runCli(
+      registerMessageDiscordAdminCommands,
+      ["member", "info", "--user-id", memberId, "--channel-id", otherTarget],
+      "member-info",
+    );
+    expectReadResult(payload, "member-info", other);
     expectGraphRequests(fixture.requests, "member-info", other);
+  });
+
+  it("searches a selected channel with the requested limit and no guild", async () => {
+    const fixture = await createFixture("none", "bundled", 30);
+    const payload = await runCli(
+      registerMessageSearchCommand,
+      ["search", "--channel-id", otherTarget, "--query", "planning", "--limit", "30"],
+      "search",
+    );
+    expect(payload).toMatchObject({ ok: true, channel: "msteams", action: "search" });
+    expect(payload.messages).toHaveLength(30);
+    expect(payload.truncated).toBe(false);
+    expectGraphRequests(fixture.requests, "search", other);
   });
 });
 
