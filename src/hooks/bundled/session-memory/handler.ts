@@ -5,6 +5,7 @@
  * Creates a new dated memory file with a timestamp slug by default
  */
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,12 +15,15 @@ import {
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { resolveUserTimezone } from "../../../agents/date-time.js";
-import { createMemoryWriteProvenanceObserver } from "../../../agents/memory-write-provenance.js";
+import {
+  createMemoryWriteProvenanceObserver,
+  type MemoryExclusiveCreateObserver,
+} from "../../../agents/memory-write-provenance.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../../infra/env.js";
-import { root } from "../../../infra/fs-safe.js";
+import { FsSafeError, root, type Root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../../routing/session-key.js";
@@ -71,26 +75,82 @@ function formatLocalSessionTimestamp(
   };
 }
 
-async function resolveAvailableMemoryFilename(params: {
-  memoryDir: string;
-  dateStr: string;
-  slug: string;
-}): Promise<string> {
-  const basename = `${params.dateStr}-${params.slug}`;
-  let suffix = 1;
+const MAX_MEMORY_FILENAME_SUFFIX_ATTEMPTS = 64;
+const MAX_MEMORY_FILENAME_UNIQUE_ATTEMPTS = 8;
+const OCCUPIED_MEMORY_PATH_CODES = new Set(["already-exists", "not-file", "path-alias"]);
 
-  while (true) {
-    const filename = suffix === 1 ? `${basename}.md` : `${basename}-${suffix}.md`;
+function buildMemoryFilename(basename: string, suffix: number): string {
+  return suffix === 1 ? `${basename}.md` : `${basename}-${suffix}.md`;
+}
+
+function* iterateMemoryFilenameCandidates(basename: string): Generator<string> {
+  for (let suffix = 1; suffix <= MAX_MEMORY_FILENAME_SUFFIX_ATTEMPTS; suffix += 1) {
+    yield buildMemoryFilename(basename, suffix);
+  }
+  for (let attempt = 0; attempt < MAX_MEMORY_FILENAME_UNIQUE_ATTEMPTS; attempt += 1) {
+    yield `${basename}-${randomUUID().slice(0, 8)}.md`;
+  }
+}
+
+async function memoryCandidateExists(candidatePath: string): Promise<boolean> {
+  try {
+    await fs.lstat(candidatePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isOccupiedMemoryCandidate(err: unknown, candidatePath: string): Promise<boolean> {
+  if (!(err instanceof FsSafeError) || !OCCUPIED_MEMORY_PATH_CODES.has(err.code)) {
+    return false;
+  }
+  return await memoryCandidateExists(candidatePath);
+}
+
+async function claimMemoryFilename(params: {
+  memoryRoot: Root;
+  memoryDir: string;
+  basename: string;
+  entry: string;
+  provenanceObserver: MemoryExclusiveCreateObserver;
+}): Promise<{ filename: string; filePath: string }> {
+  let lastOccupiedError: unknown;
+  for (const candidate of iterateMemoryFilenameCandidates(params.basename)) {
+    const candidatePath = path.join(params.memoryDir, candidate);
+    if (await memoryCandidateExists(candidatePath)) {
+      log.debug("Memory filename already taken, trying next candidate", {
+        filename: candidate,
+      });
+      continue;
+    }
     try {
-      await fs.access(path.join(params.memoryDir, filename));
-      suffix += 1;
-    } catch (err) {
-      if ((err as { code?: string }).code === "ENOENT") {
-        return filename;
+      const outcome = await params.provenanceObserver.createExclusive({
+        absolutePath: candidatePath,
+        contentAfter: params.entry,
+        commit: async () =>
+          await params.memoryRoot.create(candidate, params.entry, { encoding: "utf-8" }),
+      });
+      if (outcome === "occupied") {
+        log.debug("Memory filename reserved by a concurrent capture, trying next candidate", {
+          filename: candidate,
+        });
+        continue;
       }
-      throw err;
+      return { filename: candidate, filePath: candidatePath };
+    } catch (err) {
+      if (!(await isOccupiedMemoryCandidate(err, candidatePath))) {
+        throw err;
+      }
+      lastOccupiedError = err;
+      log.debug("Memory filename claimed concurrently, trying next candidate", {
+        filename: candidate,
+      });
     }
   }
+  throw new Error(`Unable to claim a session memory filename for ${params.basename}`, {
+    cause: lastOccupiedError,
+  });
 }
 
 function resolveDisplaySessionKey(params: {
@@ -209,13 +269,8 @@ async function saveSessionMemoryNow(
       log.debug("Using fallback timestamp slug", { slug });
     }
 
-    // Create filename with date and slug
-    const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
-    const memoryFilePath = path.join(memoryDir, filename);
-    log.debug("Memory file path resolved", {
-      filename,
-      path: shortenHomePath(memoryFilePath),
-    });
+    const memoryBasename = `${dateStr}-${slug}`;
+    log.debug("Memory file basename resolved", { basename: memoryBasename });
 
     const timeStr = localTimestamp.time;
 
@@ -262,13 +317,14 @@ async function saveSessionMemoryNow(
       sessionKey: event.sessionKey,
       now: () => now.getTime(),
     });
-    const commit = () => memoryRoot.write(filename, entry, { encoding: "utf-8" });
-    await provenanceObserver.write({
-      absolutePath: memoryFilePath,
-      contentBefore: "",
-      contentAfter: entry,
-      commit,
+    const claimed = await claimMemoryFilename({
+      memoryRoot,
+      memoryDir,
+      basename: memoryBasename,
+      entry,
+      provenanceObserver,
     });
+    const memoryFilePath = claimed.filePath;
     log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)

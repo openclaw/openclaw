@@ -179,6 +179,55 @@ export async function recordMemoryArtifactWriteProvenance(params: {
   };
 }
 
+export type MemoryArtifactCreateClaim =
+  | { status: "claimed"; rollback: () => Promise<void> }
+  | { status: "occupied" }
+  | { status: "unclassified" };
+
+export async function claimMemoryArtifactCreateProvenance(params: {
+  workspaceDir: string;
+  relativePath: string;
+  contentAfter: string;
+  originClass: MemoryArtifactOriginClass;
+  observedAt: number;
+  sessionId?: string;
+  sessionKey?: string;
+}): Promise<MemoryArtifactCreateClaim> {
+  const address = resolveAddress(params);
+  if (!address) {
+    return { status: "unclassified" };
+  }
+  const store = openStore();
+  const reservationId = randomUUID();
+  const claimed = await store.update(address.storeKey, (current) =>
+    current === undefined
+      ? {
+          version: 1,
+          workspaceKey: address.workspaceKey,
+          relativePath: address.relativePath,
+          fileHash: sha256(params.contentAfter),
+          originClass: params.originClass,
+          observedAt: params.observedAt,
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          reservationId,
+        }
+      : undefined,
+  );
+  if (!claimed) {
+    return { status: "occupied" };
+  }
+  return {
+    status: "claimed",
+    rollback: async () => {
+      await openStore().deleteIf(
+        address.storeKey,
+        (current) => current.reservationId === reservationId,
+      );
+    },
+  };
+}
+
 export async function clearMemoryArtifactProvenance(params: {
   workspaceDir: string;
   relativePath: string;
