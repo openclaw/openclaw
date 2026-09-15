@@ -23,8 +23,8 @@ import type { RelayToolCallLedger } from "./tool-call-ledger.js";
 
 export const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 export const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
-export const MAX_RELAY_SESSIONS_PER_CONN = 2;
-export const MAX_RELAY_SESSIONS_GLOBAL = 64;
+const MAX_RELAY_SESSIONS_PER_CONN = 2;
+const MAX_RELAY_SESSIONS_GLOBAL = 64;
 const RELAY_EVENT = "talk.event";
 export const RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS = 12_000;
 
