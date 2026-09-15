@@ -40,6 +40,35 @@ export function isAppleDoubleMetadataFile(pathname: string): boolean {
 const SQLITE_SIDECAR_HASH_BUFFER_BYTES = 1024 * 1024;
 const sqliteFilesLog = createSubsystemLogger("state/sqlite");
 
+/** Every SQLite database file starts with this 16-byte header magic string. */
+const SQLITE_DATABASE_HEADER_MAGIC = Buffer.from("SQLite format 3\0", "utf8");
+
+/**
+ * Reports whether the regular file at `pathname` carries the SQLite database
+ * header magic. Names alone never classify a file as a database: missing,
+ * unreadable, symlinked, or non-regular files are reported as false.
+ */
+export function hasSqliteDatabaseHeader(pathname: string): boolean {
+  const opened = openRootFileSync({
+    absolutePath: pathname,
+    rootPath: path.dirname(pathname),
+    boundaryLabel: "SQLite database directory",
+    rejectHardlinks: false,
+  });
+  if (!opened.ok) {
+    return false;
+  }
+  try {
+    const header = Buffer.alloc(SQLITE_DATABASE_HEADER_MAGIC.length);
+    const bytesRead = fs.readSync(opened.fd, header, 0, header.length, 0);
+    return bytesRead === header.length && header.equals(SQLITE_DATABASE_HEADER_MAGIC);
+  } catch {
+    return false;
+  } finally {
+    fs.closeSync(opened.fd);
+  }
+}
+
 class SqliteOrphanedSidecarsError extends Error {
   constructor(pathname: string, sidecarPaths: string[], cause: unknown) {
     super(

@@ -33,6 +33,7 @@ import { hasErrnoCode } from "./errno.js";
 import { collectErrorGraphCandidates, formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import {
+  hasSqliteDatabaseHeader,
   isAppleDoubleMetadataFile,
   resolveSqliteDatabaseFilePaths,
   SQLITE_SIDECAR_SUFFIXES,
@@ -73,10 +74,21 @@ function resolveSqliteBackupDatabasePath(sourcePath: string): string | undefined
   for (const suffix of SQLITE_SIDECAR_SUFFIXES) {
     if (sourcePath.endsWith(suffix)) {
       const databasePath = sourcePath.slice(0, -suffix.length);
-      return databasePath.endsWith(".sqlite") ? databasePath : undefined;
+      return resolveSnapshotDatabaseCandidate(databasePath);
     }
   }
-  return sourcePath.endsWith(".sqlite") ? sourcePath : undefined;
+  return resolveSnapshotDatabaseCandidate(sourcePath);
+}
+
+/**
+ * `.sqlite` names stay trusted by policy; every other candidate must prove it
+ * is a SQLite database through its on-disk header before backup treats the
+ * family as a live database rather than ordinary archive bytes.
+ */
+function resolveSnapshotDatabaseCandidate(databasePath: string): string | undefined {
+  return databasePath.endsWith(".sqlite") || hasSqliteDatabaseHeader(databasePath)
+    ? databasePath
+    : undefined;
 }
 
 export function classifyBackupSqliteSource(
@@ -161,7 +173,9 @@ async function discoverBackupSqliteSources(params: {
         continue;
       }
       discoveredSourcePaths.add(entryPath);
-      if (entry.name.endsWith(".sqlite")) {
+      // Sidecar-suffixed names belong to their main database's snapshot;
+      // every other discovered source is a main database file.
+      if (!SQLITE_SIDECAR_SUFFIXES.some((suffix) => entry.name.endsWith(suffix))) {
         snapshotPaths.add(entryPath);
       }
     }
