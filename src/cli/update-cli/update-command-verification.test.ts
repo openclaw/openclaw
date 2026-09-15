@@ -68,6 +68,44 @@ afterEach(async () => {
 });
 
 describe("update readiness generation", () => {
+  it("rechecks executor authority after native supervision inspection", async () => {
+    mockProcessPlatform("darwin");
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    let revoked = false;
+    vi.mocked(service.isLoaded).mockImplementation(async () => {
+      revoked = true;
+      return true;
+    });
+    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 8000 }],
+      hints: [],
+    });
+    callGateway.mockImplementation(gatewayHealthResponse());
+    const reason = new Error("executor revoked during native inspection");
+    const onVerified = vi.fn();
+    await expect(
+      verifyUpdatedGateway({
+        result: { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+        opts: { json: true, run: { runId: "synthetic-update", env: {} } },
+        serviceEnv: {},
+        gatewayPort: 18789,
+        requireRunningService: true,
+        assertCurrent: () => {
+          if (revoked) {
+            throw reason;
+          }
+        },
+        onVerified,
+      }),
+    ).rejects.toBe(reason);
+    expect(service.isLoaded).toHaveBeenCalledOnce();
+    expect(onVerified).not.toHaveBeenCalled();
+    expect(recordUpdateRunVerification).not.toHaveBeenCalled();
+  });
+
   it.each([
     { startupAtMs: 0, verified: true },
     { startupAtMs: 1_500, verified: false },

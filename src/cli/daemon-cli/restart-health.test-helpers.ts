@@ -112,6 +112,7 @@ export function makeGatewayService(
   runtime: { status: "running"; pid: number } | { status: "stopped" },
 ): GatewayService {
   return {
+    isLoaded: vi.fn(async () => false),
     readRuntime: vi.fn(async () => runtime),
     readCommand: vi.fn(async () => null),
   } as unknown as GatewayService;

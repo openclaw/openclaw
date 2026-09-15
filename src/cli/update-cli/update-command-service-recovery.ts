@@ -126,18 +126,6 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   return { health, launchAgentRecovery };
 }
 
-export async function hasLoadedLaunchdKeepAliveSupervisor(params: {
-  service: GatewayService;
-  env?: NodeJS.ProcessEnv;
-}): Promise<boolean> {
-  if (process.platform !== "darwin") {
-    return false;
-  }
-  // OpenClaw's loaded LaunchAgent has canonical KeepAlive policy. Read this once before
-  // polling so an unloaded agent can still reach the existing recovery path promptly.
-  return await params.service.isLoaded({ env: params.env }).catch(() => false);
-}
-
 function formatPostUpdateGatewayRecoveryLine(platform: NodeJS.Platform): string {
   const restartCommand = formatCliCommand("openclaw gateway restart");
   const installCommand = formatCliCommand("openclaw gateway install --force");

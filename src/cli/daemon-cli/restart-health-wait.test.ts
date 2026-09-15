@@ -340,14 +340,14 @@ describe("restart health", () => {
       listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
       hints: [],
     });
-    const readRuntime = vi
-      .fn()
+    const service = makeGatewayService({ status: "running", pid: 8000 });
+    vi.mocked(service.readRuntime)
       .mockResolvedValueOnce({ status: "stopped" })
       .mockResolvedValue({ status: "running", pid: 8000 });
 
     const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
     const snapshot = await waitForGatewayHealthyRestart({
-      service: { readRuntime, readCommand: vi.fn(async () => null) } as unknown as GatewayService,
+      service,
       port: 18789,
       expectedVersion: "2026.4.24",
       requireRunningService: true,

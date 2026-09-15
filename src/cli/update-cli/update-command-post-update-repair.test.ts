@@ -89,10 +89,6 @@ vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => {
     waitForGatewayHttpReadiness: mocks.readyz,
   };
 });
-vi.mock("./update-command-service-recovery.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-service-recovery.js")>()),
-  hasLoadedLaunchdKeepAliveSupervisor: async () => false,
-}));
 vi.mock("./update-command-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service.js")>()),
   maybeRestartService: mocks.restart,

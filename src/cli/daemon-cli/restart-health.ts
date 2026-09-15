@@ -348,6 +348,21 @@ export async function waitForGatewayHealthyRestart(params: {
       env: params.env,
       command: await params.service.readCommand(params.env ?? process.env).catch(() => null),
     }));
+  let supervisorKeepsAlive = params.supervisorKeepsAlive;
+  if (supervisorKeepsAlive === undefined && process.platform === "darwin") {
+    // Loaded canonical LaunchAgents retain KeepAlive across a stopped throttle window.
+    // Inspect once inside this wait's budget; zero would leave the native probe unbounded.
+    const timeoutMs = Math.floor(
+      Math.min(5000, standardDeadlineMs - (performance.now() - startedAtMs)),
+    );
+    params.signal?.throwIfAborted();
+    if (timeoutMs > 0) {
+      supervisorKeepsAlive = await params.service
+        .isLoaded({ env: params.env, timeoutMs })
+        .catch(() => false);
+      params.signal?.throwIfAborted();
+    }
+  }
   let snapshot = await inspectGatewayRestart({
     service: params.service,
     port: params.port,
@@ -449,7 +464,7 @@ export async function waitForGatewayHealthyRestart(params: {
     // startup grace for it and for published 2026.9.3 processes without owner rows.
     if (
       (!owner || owner.state === "dead") &&
-      !params.supervisorKeepsAlive &&
+      !supervisorKeepsAlive &&
       shouldEarlyExitStoppedFree(snapshot, attempt, minAttemptForEarlyExit)
     ) {
       consecutiveStoppedFreeCount += 1;

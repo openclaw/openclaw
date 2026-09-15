@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
-import type { GatewayService } from "../../daemon/service.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -922,41 +921,6 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
     expect(result.health.waitOutcome).toBe("timeout");
     expect(result.launchAgentRecovery?.attempted).toBe(true);
     expect(result.launchAgentRecovery?.recovered).toBe(true);
-  });
-});
-
-describe("hasLoadedLaunchdKeepAliveSupervisor", () => {
-  it("requires a loaded LaunchAgent before extending restart health", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    const isLoaded = vi.fn().mockResolvedValue(false);
-    const service = { isLoaded } as unknown as GatewayService;
-
-    await expect(
-      updateCommandServiceTesting.hasLoadedLaunchdKeepAliveSupervisor({
-        service,
-        env: { OPENCLAW_PROFILE: "work" },
-      }),
-    ).resolves.toBe(false);
-    isLoaded.mockResolvedValue(true);
-    await expect(
-      updateCommandServiceTesting.hasLoadedLaunchdKeepAliveSupervisor({ service }),
-    ).resolves.toBe(true);
-
-    platformSpy.mockRestore();
-  });
-
-  it("does not inspect KeepAlive supervision outside macOS", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const isLoaded = vi.fn().mockResolvedValue(true);
-
-    await expect(
-      updateCommandServiceTesting.hasLoadedLaunchdKeepAliveSupervisor({
-        service: { isLoaded } as unknown as GatewayService,
-      }),
-    ).resolves.toBe(false);
-    expect(isLoaded).not.toHaveBeenCalled();
-
-    platformSpy.mockRestore();
   });
 });
 
