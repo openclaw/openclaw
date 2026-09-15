@@ -1,5 +1,6 @@
 // Delivery queue storage persists replayable outbound send intents and tracks
 // platform-send recovery state in the shared SQLite queue.
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import {
   promoteDeliveryQueueEntryPlatformSend,
   transitionOwnedDeliveryQueueEntry,
@@ -16,6 +17,7 @@ import {
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   reserveDeliveryQueueEntryAttempt,
+  resolveDeliveryQueueStateEnv,
   terminalizePendingDeliveryQueueEntry,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
@@ -41,6 +43,7 @@ import {
   StableDeliveryPreparationLostError,
   type StableDeliveryPreparation,
 } from "./delivery-queue-preparation.js";
+import { restoreDeliveryAttemptBeforeDispatchInDatabase } from "./delivery-queue-storage.kernel.js";
 import type {
   LegacyQueuedDelivery,
   LegacyQueuedDeliveryPreparation,
@@ -399,26 +402,16 @@ export function restoreDeliveryAttemptBeforeDispatch(
   claimedAttemptId?: string,
   context?: DeliveryQueueStateContext,
 ): void {
-  updateQueuedDelivery(
-    entry.id,
-    stateDir,
-    (current) => {
-      if (current.attemptCount !== reservedAttemptCount) {
-        throw new Error(`Delivery attempt reservation changed before rollback: ${entry.id}`);
-      }
-      return {
-        ...current,
-        attemptCount: entry.attemptCount,
-        availableAt: entry.availableAt,
-        producerClaimId: entry.producerClaimId,
-        platformSendAttemptId: entry.platformSendAttemptId,
-        platformSendStartedAt: entry.platformSendStartedAt,
-        effectiveReplyToId: entry.effectiveReplyToId,
-        recoveryState: entry.recoveryState,
-      };
-    },
-    claimedAttemptId ?? null,
-    context,
+  runOpenClawStateWriteTransaction(
+    (database) =>
+      restoreDeliveryAttemptBeforeDispatchInDatabase(
+        database,
+        entry,
+        reservedAttemptCount,
+        claimedAttemptId,
+      ),
+    { env: resolveDeliveryQueueStateEnv(stateDir, context) },
+    { operationLabel: `mutate owned ${OUTBOUND_DELIVERY_QUEUE_NAME} delivery platform send` },
   );
 }
 
