@@ -107,6 +107,7 @@ describe("prepared channel turn after a transcript rewind", () => {
       {
         role: "user",
         content: "retained question",
+        idempotencyKey: `conversation-inbound:${conversationRef}:101`,
         __openclaw: { transport: { channel: "telegram", conversationRef, messageId: "101" } },
       },
       "2026-07-18T00:00:01.000Z",
@@ -123,6 +124,7 @@ describe("prepared channel turn after a transcript rewind", () => {
       {
         role: "user",
         content: "discarded question",
+        idempotencyKey: `conversation-inbound:${conversationRef}:102`,
         __openclaw: { transport: { channel: "telegram", conversationRef, messageId: "102" } },
       },
       "2026-07-18T00:00:03.000Z",

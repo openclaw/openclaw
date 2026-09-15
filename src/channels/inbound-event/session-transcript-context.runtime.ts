@@ -3,9 +3,8 @@ import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import {
-  inactiveTransportMessageKey,
-  readInactiveSessionContextIdentities,
-  type SessionInactiveContextIdentities,
+  isInactiveTranscriptEntry,
+  isInactiveTransportMessage,
 } from "../../config/sessions/transcript-inactive-identities.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -104,27 +103,24 @@ function mergeableChatWindowEntries(ctx: FinalizedMsgContext) {
 }
 
 /** Cached channel messages whose transcript turn a rewind/branch switch cut from the active path. */
-function isInactiveBranchWindowMessage(
+async function isInactiveBranchWindowMessage(
   message: PromptMessage,
-  identities: SessionInactiveContextIdentities,
-  channel: string | undefined,
+  scope: { agentId?: string; sessionKey: string; storePath: string },
   conversationRef: string | undefined,
-): boolean {
+): Promise<boolean> {
   const transcriptId =
     typeof message.session_transcript_id === "string" ? message.session_transcript_id.trim() : "";
-  if (transcriptId && identities.transcriptEntryIds.has(transcriptId)) {
+  if (transcriptId && (await isInactiveTranscriptEntry(scope, transcriptId))) {
     return true;
   }
   const messageId = typeof message.message_id === "string" ? message.message_id.trim() : "";
   // session: ids belong to transcript turns merged in earlier, not to the channel cache.
   // Without the current conversation the origin of a cached id cannot be
   // established, so the entry stays: transport ids repeat across conversations.
-  if (!messageId || messageId.startsWith("session:") || !channel || !conversationRef) {
+  if (!messageId || messageId.startsWith("session:") || !conversationRef) {
     return false;
   }
-  return identities.transportMessageKeys.has(
-    inactiveTransportMessageKey({ channel, conversationRef, messageId }),
-  );
+  return isInactiveTransportMessage(scope, { conversationRef, messageId });
 }
 
 async function pruneInactiveBranchWindowMessages(
@@ -136,42 +132,28 @@ async function pruneInactiveBranchWindowMessages(
   },
   windows: ReturnType<typeof mergeableChatWindowEntries>,
 ): Promise<void> {
-  if (
-    !windows.some(
-      (window) => Array.isArray(window.payload.messages) && window.payload.messages.length > 0,
-    )
-  ) {
-    return;
-  }
-  const identities = await readInactiveSessionContextIdentities({
+  const scope = {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionKey: params.sessionKey,
     storePath: params.storePath,
-  });
-  if (identities.transcriptEntryIds.size === 0 && identities.transportMessageKeys.size === 0) {
-    return;
-  }
+  };
   for (const window of windows) {
     if (!Array.isArray(window.payload.messages)) {
       continue;
     }
-    const channel =
-      typeof window.source === "string" && window.source.trim()
-        ? window.source.trim().toLowerCase()
-        : undefined;
-    const retained = window.payload.messages.filter(
-      (message) =>
-        !message ||
-        typeof message !== "object" ||
-        Array.isArray(message) ||
-        !isInactiveBranchWindowMessage(
-          // SAFETY: the filter above retains non-objects, so only plain message objects reach this assertion.
-          message as PromptMessage,
-          identities,
-          channel,
-          params.conversationRef,
-        ),
-    );
+    const retained: unknown[] = [];
+    for (const message of window.payload.messages) {
+      if (!message || typeof message !== "object" || Array.isArray(message)) {
+        retained.push(message);
+        continue;
+      }
+      if (
+        // SAFETY: non-object entries are retained above, so only plain message objects reach this assertion.
+        !(await isInactiveBranchWindowMessage(message as PromptMessage, scope, params.conversationRef))
+      ) {
+        retained.push(message);
+      }
+    }
     if (retained.length !== window.payload.messages.length) {
       window.payload = { ...window.payload, messages: retained };
     }

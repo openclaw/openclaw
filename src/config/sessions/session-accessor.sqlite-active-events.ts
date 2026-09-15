@@ -1,5 +1,4 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -164,53 +163,76 @@ export function readSessionTranscriptActivePathEntryRelation(
   });
 }
 
-export type SessionTranscriptInactiveMessageEvent = {
-  eventId: string;
-  event: TranscriptEvent;
-};
-
 /**
- * Reads user/assistant message events cut from the active branch, decoding only
- * their payloads. The anti-join against the active projection runs on indexed
- * identity columns, so a session that never rewound pays an index scan with no
- * JSON materialization; only events the projection confirms as inactive have
- * their payloads decoded here.
+ * Point membership check for one transcript entry against the active
+ * projection: true when the entry is on the active path, false when a rewind
+ * or branch switch cut it, undefined when no such entry is recorded (its
+ * provenance cannot be established). Indexed point reads only; nothing is
+ * decoded, so the cost is per candidate, not per discarded history.
  */
-export function readInactiveSessionTranscriptMessageEvents(
+export function readSessionTranscriptEntryActiveState(
   scope: SessionTranscriptReadScope,
-): SessionTranscriptInactiveMessageEvent[] {
+  entryId: string,
+): boolean | undefined {
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const db = getActiveTranscriptKysely(projection.database);
-    const rows = iterateSqliteQuerySync(
+    const identity = executeSqliteQueryTakeFirstSync(
       projection.database.db,
       db
         .selectFrom("transcript_event_identities as identity")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "identity.session_id")
-            .onRef("event.seq", "=", "identity.seq"),
-        )
-        .leftJoin("session_transcript_active_events as active", (join) =>
-          join
-            .onRef("active.session_id", "=", "identity.session_id")
-            .onRef("active.event_seq", "=", "identity.seq"),
-        )
-        .select(["identity.event_id", "event.event_json"])
+        .select("identity.seq")
         .where("identity.session_id", "=", projection.resolved.sessionId)
-        .where("active.event_seq", "is", null)
-        .orderBy("identity.seq", "asc"),
+        .where("identity.event_id", "=", entryId),
     );
-    const inactive: SessionTranscriptInactiveMessageEvent[] = [];
-    for (const row of rows) {
-      // SAFETY: transcript event_json rows serialize TranscriptEvent payloads.
-      const event = JSON.parse(row.event_json) as TranscriptEvent;
-      const message = asOptionalRecord(asOptionalRecord(event)?.message);
-      if (message?.role !== "user" && message?.role !== "assistant") {
-        continue;
-      }
-      inactive.push({ eventId: row.event_id, event });
+    if (!identity) {
+      return undefined;
     }
-    return inactive;
+    const active = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_active_events as active")
+        .select("active.event_seq")
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .where("active.event_seq", "=", identity.seq),
+    );
+    return active !== undefined;
+  });
+}
+
+/**
+ * Point inactivity check for one cached transport message. True only when the
+ * exact conversation turn is recorded and no longer on the active path. The
+ * idempotency key is the join the writer already made for it
+ * (`conversation-inbound:<conversationRef>:<messageId>`), so an entry whose
+ * provenance cannot be established returns false and is retained.
+ */
+export function readSessionTransportMessageInactiveState(
+  scope: SessionTranscriptReadScope,
+  params: { conversationRef: string; messageId: string },
+): boolean {
+  const idempotencyKey = `conversation-inbound:${params.conversationRef}:${params.messageId}`;
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const db = getActiveTranscriptKysely(projection.database);
+    const identity = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("transcript_event_identities as identity")
+        .select("identity.seq")
+        .where("identity.session_id", "=", projection.resolved.sessionId)
+        .where("identity.message_idempotency_key", "=", idempotencyKey),
+    );
+    if (!identity) {
+      return false;
+    }
+    const active = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_active_events as active")
+        .select("active.event_seq")
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .where("active.event_seq", "=", identity.seq),
+    );
+    return active === undefined;
   });
 }
 

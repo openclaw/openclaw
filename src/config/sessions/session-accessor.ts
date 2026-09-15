@@ -295,20 +295,20 @@ export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-trans
 export { validateSessionTranscriptContextAdmission } from "./session-accessor.sqlite-model-context.js";
 export {
   isSessionTranscriptProjectionUnavailableError,
-  readInactiveSessionTranscriptMessageEvents,
   readLatestSessionTranscriptMessageEvent,
   readRecentSessionTranscriptActiveEvents,
   readSessionTranscriptActiveStats,
   readSessionTranscriptBoundedMessageTailPage,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActivePathEntryRelation,
+  readSessionTranscriptEntryActiveState,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
   readSessionTranscriptVisibleMessageDeltaCore,
+  readSessionTransportMessageInactiveState,
   SessionTranscriptProjectionUnavailableError,
   waitForSessionTranscriptProjection,
   withRecentSessionTranscriptActiveEvents,
-  type SessionTranscriptInactiveMessageEvent,
 } from "./session-accessor.sqlite-active-events.js";
 export {
   readSessionTranscriptTitleProbeBatch,

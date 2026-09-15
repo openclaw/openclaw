@@ -4,10 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
-import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import {
-  inactiveTransportMessageKey,
-  readInactiveSessionContextIdentities,
+  isInactiveTranscriptEntry,
+  isInactiveTransportMessage,
 } from "../../config/sessions/transcript-inactive-identities.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import { runPreparedChannelTurn } from "../turn/execution.js";
@@ -17,26 +16,14 @@ vi.mock("../../config/sessions/transcript.js", () => ({
   readRecentUserAssistantTextForSession: vi.fn(),
 }));
 
-vi.mock("../../config/sessions/transcript-inactive-identities.js", async (importOriginal) => ({
-  ...(await importOriginal()),
-  readInactiveSessionContextIdentities: vi.fn(),
+vi.mock("../../config/sessions/transcript-inactive-identities.js", () => ({
+  isInactiveTranscriptEntry: vi.fn(async () => false),
+  isInactiveTransportMessage: vi.fn(async () => false),
 }));
 
 const readRecent = vi.mocked(readRecentUserAssistantTextForSession);
-const readInactive = vi.mocked(readInactiveSessionContextIdentities);
-
-const noInactiveBranches = {
-  transcriptEntryIds: new Set<string>(),
-  transportMessageKeys: new Set<string>(),
-};
-
-function currentRef(ctx: FinalizedMsgContext): string {
-  const ref = conversationIdentityFromMsgContext({ ctx })?.conversationRef;
-  if (!ref) {
-    throw new Error("test context must resolve a conversation");
-  }
-  return ref;
-}
+const inactiveEntry = vi.mocked(isInactiveTranscriptEntry);
+const inactiveTransport = vi.mocked(isInactiveTransportMessage);
 
 function context(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -60,8 +47,8 @@ describe("session transcript inbound context", () => {
 
   beforeEach(() => {
     readRecent.mockReset();
-    readInactive.mockReset();
-    readInactive.mockResolvedValue(noInactiveBranches);
+    inactiveEntry.mockReset().mockResolvedValue(false);
+    inactiveTransport.mockReset().mockResolvedValue(false);
   });
 
   it("restores Slack assistant context when the live window is empty after restart", async () => {
@@ -261,16 +248,8 @@ describe("session transcript inbound context", () => {
         },
       ],
     });
-    readInactive.mockResolvedValue({
-      transcriptEntryIds: new Set(["assistant-cut"]),
-      transportMessageKeys: new Set([
-        inactiveTransportMessageKey({
-          channel: "telegram",
-          conversationRef: currentRef(ctx),
-          messageId: "102",
-        }),
-      ]),
-    });
+    inactiveEntry.mockImplementation(async (_scope, entryId) => entryId === "assistant-cut");
+    inactiveTransport.mockImplementation(async (_scope, message) => message.messageId === "102");
 
     await mergeSessionTranscriptContext({
       agentId: "main",
@@ -312,16 +291,7 @@ describe("session transcript inbound context", () => {
         },
       ],
     });
-    readInactive.mockResolvedValue({
-      transcriptEntryIds: new Set<string>(),
-      transportMessageKeys: new Set([
-        inactiveTransportMessageKey({
-          channel: "telegram",
-          conversationRef: currentRef(ctx),
-          messageId: "102",
-        }),
-      ]),
-    });
+    inactiveTransport.mockImplementation(async (_scope, message) => message.messageId === "102");
 
     await mergeSessionTranscriptContext({
       agentId: "main",
@@ -336,7 +306,7 @@ describe("session transcript inbound context", () => {
     ]);
   });
 
-  it("keeps cached entries whose channel does not match the cut turns", async () => {
+  it("keeps cached entries when the transport probe abstains", async () => {
     readRecent.mockResolvedValue([]);
     const ctx = context({
       ChannelStructuredContext: [
@@ -352,16 +322,8 @@ describe("session transcript inbound context", () => {
         },
       ],
     });
-    readInactive.mockResolvedValue({
-      transcriptEntryIds: new Set<string>(),
-      transportMessageKeys: new Set([
-        inactiveTransportMessageKey({
-          channel: "telegram",
-          conversationRef: currentRef(ctx),
-          messageId: "102",
-        }),
-      ]),
-    });
+    // the probe answers false: nothing confirmed inactive for this conversation
+    inactiveTransport.mockResolvedValue(false);
 
     await mergeSessionTranscriptContext({
       agentId: "main",
@@ -389,27 +351,17 @@ describe("session transcript inbound context", () => {
             relation: "selected_for_current_message",
             messages: [
               { message_id: "101", sender: "Pat", body: "retained", timestamp_ms: 1_000 },
-              {
-                message_id: "102",
-                sender: "Pat",
-                body: "same id, other chat",
-                timestamp_ms: 2_000,
-              },
+              { message_id: "102", sender: "Pat", body: "same id, other chat", timestamp_ms: 2_000 },
             ],
           },
         },
       ],
     });
-    readInactive.mockResolvedValue({
-      transcriptEntryIds: new Set<string>(),
-      transportMessageKeys: new Set([
-        inactiveTransportMessageKey({
-          channel: "telegram",
-          conversationRef: "telegram:acct-1:dm:someone-else",
-          messageId: "102",
-        }),
-      ]),
-    });
+    // the same transport id was cut in another conversation, not this one
+    inactiveTransport.mockImplementation(
+      async (_scope, message) =>
+        message.conversationRef === "telegram:acct-1:dm:someone-else" && message.messageId === "102",
+    );
 
     await mergeSessionTranscriptContext({
       agentId: "main",
@@ -448,16 +400,6 @@ describe("session transcript inbound context", () => {
         },
       ],
     });
-    readInactive.mockResolvedValue({
-      transcriptEntryIds: new Set<string>(),
-      transportMessageKeys: new Set([
-        inactiveTransportMessageKey({
-          channel: "telegram",
-          conversationRef: "telegram:acct-1:dm:someone",
-          messageId: "102",
-        }),
-      ]),
-    });
 
     await mergeSessionTranscriptContext({
       agentId: "main",
@@ -471,9 +413,11 @@ describe("session transcript inbound context", () => {
       "101",
       "102",
     ]);
+    // with no current conversation the transport probe must not run at all
+    expect(inactiveTransport).not.toHaveBeenCalled();
   });
 
-  it("skips the inactive-branch read when no window carries messages", async () => {
+  it("skips the inactive-branch probes when no window carries messages", async () => {
     readRecent.mockResolvedValue([]);
     const ctx = context();
 
@@ -484,7 +428,8 @@ describe("session transcript inbound context", () => {
       storePath: "/tmp/sessions.json",
     });
 
-    expect(readInactive).not.toHaveBeenCalled();
+    expect(inactiveEntry).not.toHaveBeenCalled();
+    expect(inactiveTransport).not.toHaveBeenCalled();
   });
 
   it("preserves a provider-owned thread window while enriching a populated session prompt", async () => {
