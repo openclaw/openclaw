@@ -39,6 +39,7 @@ import {
 } from "./update-managed-service-handoff-runtime.test-support.js";
 import {
   managedServiceStateUpdateScript,
+  readManagedServiceHandoffLease,
   readRestartSentinelPayload,
 } from "./update-managed-service-handoff-state.test-support.js";
 import {
@@ -439,19 +440,7 @@ export function createManagedServiceManagerBoundary({
 
       const databasePath = String(generated.updateLeaseDatabasePath);
       const owner = String(generated.updateLeaseOwner);
-      const readLease = (): Record<string, unknown> | null => {
-        const db = new DatabaseSync(databasePath, { readOnly: true });
-        try {
-          const row = db
-            .prepare(
-              "SELECT payload_json FROM managed_update_handoffs WHERE install_root = ? AND owner = ?",
-            )
-            .get(root, owner) as { payload_json: string } | undefined;
-          return row ? (JSON.parse(row.payload_json) as Record<string, unknown>) : null;
-        } finally {
-          db.close();
-        }
-      };
+      const readLease = () => readManagedServiceHandoffLease(databasePath, root, owner);
       expect(readLease()).toEqual({
         version: 2,
         executor: { pid: runningHelper.pid, startIdentity: expect.any(String) },
