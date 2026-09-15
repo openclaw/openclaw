@@ -107,7 +107,7 @@ pnpm tsx scripts/bench-cli-startup.ts --runtime-rss --case status --runs 3
 
 Presets:
 
-- `startup`: `--version`, `--help`, `health`, `health --json`, `status --json`, `status`
+- `startup`: `--version`, `--help`, `--help` with inert plugins (`helpInertPlugins`), `health`, `health --json`, `status --json`, `status`
 - `real`: `health`, `status`, `status --json`, `sessions`, `sessions --json`, `tasks --json`, `tasks list --json`, `tasks audit --json`, `agents list --json`, `gateway status`, `gateway status --json`, `gateway health --json`, `config get gateway.port`
 - `all`: both presets combined
 
