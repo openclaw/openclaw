@@ -24,6 +24,7 @@ import { executePluginStateCommand } from "../plugin-state/plugin-state.worker.j
 import { readPluginMetadataStateRowSync } from "../plugins/installed-plugin-index-row.js";
 import {
   ensureProjectRegistrySchema,
+  removeProjectRegistryInDatabase,
   resolveRecordedProjectRootInDatabase,
 } from "../projects/project-registry.kernel.js";
 import { mapTaskFlowView } from "../tasks/task-domain-views.js";
@@ -69,6 +70,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
+import { assertOpenClawStateLeaseWorkerOwnedInTransaction } from "./openclaw-state-lease-worker.js";
 import type {
   OpenClawStateWorkerOperations,
   OpenClawStateWorkerInspectionOperations,
@@ -350,6 +352,20 @@ function createSharedStateWorkerBackend(
       if (command.type === "projects.findRoot") {
         ensureProjectRegistrySchema(writeOptions);
         return resolveRecordedProjectRootInDatabase(database.db, command.input.repoRoot);
+      }
+      if (command.type === "projects.remove") {
+        return runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            const { project, lease } = command.input;
+            if (lease.scope !== "projects.checkout" || lease.key !== project.repoRoot) {
+              throw new Error("Project registry mutation requires its checkout lifecycle lease");
+            }
+            assertOpenClawStateLeaseWorkerOwnedInTransaction(db, lease);
+            return removeProjectRegistryInDatabase(db, project);
+          },
+          writeOptions,
+          { operationLabel: "projects.registry.remove" },
+        );
       }
       if (command.type === "config.health.patch") {
         const { configPath, patch, expected, updatedAtMs } = command.input;

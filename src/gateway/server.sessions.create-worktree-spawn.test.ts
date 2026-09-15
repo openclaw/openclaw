@@ -24,7 +24,10 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
@@ -163,6 +166,7 @@ beforeEach(async () => {
   const defaultWorkspace = path.join(state.root, "non-git-workspace");
   await fs.mkdir(defaultWorkspace);
   repository = await createRepository("selected-project");
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace: defaultWorkspace };
   ({ storePath } = await createSessionStoreDir());
@@ -176,6 +180,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   projectCloneMocks.materializeProjectClone.mockReset();
   projectCloneMocks.refreshProjectClone.mockReset();
@@ -496,6 +501,7 @@ test("worktree spawns do not inherit an unregistered parent working directory", 
 
 test("keyed worktree creation reuses its recorded base after reopening the registry", async () => {
   const params = { ...parentCreateParams, cwd: repository };
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   const reused = await directSessionReq<CreatedWorktreeSession>(
     "sessions.create",

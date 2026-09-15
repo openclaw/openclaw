@@ -3,6 +3,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/snapshot/git-backup.test.ts",
   "src/state/backup-run-records.test.ts",
   "src/claws/provenance-runtime-read.async.test.ts",
+  "src/projects/project-registry.test.ts",
   "src/auto-reply/reply/commands-plugins.install.test.ts",
   "src/auto-reply/reply/commands-plugins.install-clawhub-spec.test.ts",
   "src/system-agent/setup-inference-credentials.lifecycle.test.ts",

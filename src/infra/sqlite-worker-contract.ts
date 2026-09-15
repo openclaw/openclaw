@@ -29,6 +29,7 @@ export type SqliteWorkerRequest = {
   gatewaySchemaFence?: MessagePort;
   maintenanceSchemaFence?: MessagePort;
   stateLifecycle?: MessagePort;
+  operationAdmission?: MessagePort;
 } & (
   | {
       type: "open";

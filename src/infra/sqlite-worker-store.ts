@@ -11,6 +11,7 @@ import {
   type SqliteWorkerOperations,
   type SqliteWorkerStore,
 } from "./sqlite-worker-contract.js";
+import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 function withCallerErrors<T>(result: Promise<T>): Promise<T> {
@@ -49,6 +50,7 @@ export function runSqliteWorkerStoreOperation<Operations extends SqliteWorkerOpe
   operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
   stateContext?: SqliteWorkerStateContext,
   assertCurrent?: (commandType: PropertyKey) => void,
+  createAdmission?: SqliteWorkerAdmissionFactory,
 ): Promise<T> {
   return withCallerErrors(
     resolveSqliteWorkerBroker().runOperation(
@@ -56,6 +58,7 @@ export function runSqliteWorkerStoreOperation<Operations extends SqliteWorkerOpe
       (scope) => operation(bindCallerExecute(scope)),
       stateContext,
       assertCurrent,
+      createAdmission,
     ),
   );
 }

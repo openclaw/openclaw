@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -23,14 +22,14 @@ import {
   withOpenClawStateLease,
 } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { ensureProjectRegistrySchema } from "./project-registry.kernel.js";
+import {
+  ensureProjectRegistrySchema,
+  readMatchingProjectRow,
+  type ProjectRegistryIdentity,
+} from "./project-registry.kernel.js";
 
-export type ProjectRegistryRecord = {
-  id: string;
+export type ProjectRegistryRecord = ProjectRegistryIdentity & {
   displayName: string;
-  repoRoot: string;
-  originUrl?: string;
-  source: "workspace" | "registered" | "cloned";
   agentId?: string;
 };
 
@@ -62,27 +61,6 @@ function rowToProject(row: ProjectRow): ProjectRegistryRecord {
     ...(row.origin_url ? { originUrl: row.origin_url } : {}),
     source: row.source as "registered" | "cloned",
   };
-}
-
-function matchesProjectRecord(row: ProjectRow, project: ProjectRegistryRecord): boolean {
-  return (
-    row.id === project.id &&
-    row.repo_root === project.repoRoot &&
-    row.source === project.source &&
-    (row.origin_url ?? undefined) === project.originUrl
-  );
-}
-
-function readMatchingProject(
-  sqlite: DatabaseSync,
-  project: ProjectRegistryRecord,
-): ProjectRegistryRecord | undefined {
-  const db = getNodeSqliteKysely<ProjectsDatabase>(sqlite);
-  const row = executeSqliteQueryTakeFirstSync(
-    sqlite,
-    db.selectFrom("projects").selectAll().where("id", "=", project.id),
-  );
-  return row && matchesProjectRecord(row, project) ? rowToProject(row) : undefined;
 }
 
 function insertProjectRegistry(
@@ -367,8 +345,8 @@ export function resolveProjectCloneRefreshOwner(
   return runOpenClawStateWriteTransaction(
     ({ db: sqlite }) => {
       lease.assertOwnedInTransaction(sqlite);
-      const current = readMatchingProject(sqlite, project);
-      return current?.source === "cloned" ? current : undefined;
+      const current = readMatchingProjectRow(sqlite, project);
+      return current?.source === "cloned" ? rowToProject(current) : undefined;
     },
     options,
     { operationLabel: "projects.registry.refresh-owner.resolve" },
@@ -393,25 +371,28 @@ export async function resolveRecordedProjectRoot(
 
 export async function removeProjectRegistry(
   project: ProjectRegistryRecord,
-  options: OpenClawStateDatabaseOptions = {},
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
 ): Promise<boolean> {
-  return await withProjectCheckoutLifecycle(project.repoRoot, options, async (lease) =>
-    runOpenClawStateWriteTransaction(
-      ({ db: transaction }) => {
-        lease.assertOwnedInTransaction(transaction);
-        if (!readMatchingProject(transaction, project)) {
-          return false;
-        }
-        const db = getNodeSqliteKysely<ProjectsDatabase>(transaction);
-        return (
-          executeSqliteQuerySync(
-            transaction,
-            db.deleteFrom("projects").where("id", "=", project.id),
-          ).numAffectedRows === 1n
-        );
-      },
-      options,
-      { operationLabel: "projects.registry.remove" },
-    ),
+  const selectedProject: ProjectRegistryIdentity = {
+    id: project.id,
+    repoRoot: project.repoRoot,
+    source: project.source,
+    originUrl: project.originUrl,
+  };
+  const env = { ...(options.env ?? process.env) };
+  const context = captureOpenClawStateWorkerContext({ path: options.path, env });
+  return await withProjectCheckoutLifecycle(
+    selectedProject.repoRoot,
+    { path: context.admission.databasePath, env },
+    async (lease) => {
+      const { runWithOpenClawStateLeaseWorker } =
+        await import("../state/openclaw-state-worker-store.js");
+      return await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
+        scope.execute({
+          type: "projects.remove",
+          input: { project: selectedProject, lease: identity },
+        }),
+      );
+    },
   );
 }

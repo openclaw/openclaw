@@ -24,6 +24,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/server-methods.test.ts",
   "src/gateway/server-methods/worktrees.authorization.test.ts",
   "src/gateway/server-methods/worktrees.test.ts",
+  "src/gateway/server.sessions.create-worktree-spawn.test.ts",
   "src/gateway/session-delivery-clock-jump.integration.test.ts",
   "src/gateway/setup-inference.first-signin.integration.test.ts",
 ];

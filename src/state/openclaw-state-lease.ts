@@ -9,6 +9,11 @@ import { StateDatabaseCoordinatorContentionError } from "../infra/state-database
 import { loggingState } from "../logging/state.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateLeaseContext } from "./openclaw-state-lease-context.js";
+import {
+  OpenClawStateLeaseError,
+  toOpenClawStateLeaseVerificationError,
+  type OpenClawStateLeaseErrorCode,
+} from "./openclaw-state-lease-error.js";
 import { createOpenClawStateLeaseExclusion } from "./openclaw-state-lease-exclusion.js";
 import { startOpenClawStateLeaseHeartbeat } from "./openclaw-state-lease-heartbeat.js";
 import {
@@ -23,6 +28,7 @@ import {
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
 } from "./openclaw-state-lease-store.js";
+import { createOpenClawStateLeaseWorkerOwner } from "./openclaw-state-lease-worker-owner.js";
 
 type OpenClawStateLeaseOptions = {
   scope: string;
@@ -40,23 +46,7 @@ type OpenClawStateLeaseOptions = {
 };
 
 export type { OpenClawStateLeaseContext } from "./openclaw-state-lease-context.js";
-
-type OpenClawStateLeaseErrorCode =
-  | "OPENCLAW_STATE_LEASE_INVALID_INPUT"
-  | "OPENCLAW_STATE_LEASE_TIMEOUT"
-  | "OPENCLAW_STATE_LEASE_ABORTED"
-  | "OPENCLAW_STATE_LEASE_LOST"
-  | "OPENCLAW_STATE_LEASE_STORAGE_FAILED";
-
-export class OpenClawStateLeaseError extends Error {
-  readonly code: OpenClawStateLeaseErrorCode;
-
-  constructor(message: string, options: { code: OpenClawStateLeaseErrorCode; cause?: unknown }) {
-    super(message, { cause: options.cause });
-    this.name = "OpenClawStateLeaseError";
-    this.code = options.code;
-  }
-}
+export { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 
 const ACQUIRE_BACKOFF = {
   initialMs: 25,
@@ -239,14 +229,7 @@ function verifyLeaseOwnership(
     }
     return readLeaseDatabase(params.database, (db) => assertLeaseOwnedInDatabase(db, params));
   } catch (error) {
-    if (error instanceof OpenClawStateLeaseError) {
-      throw error;
-    }
-    throw leaseError(
-      "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
-      `failed to verify ${params.leaseLabel} ${params.scope}/${params.key}`,
-      error,
-    );
+    throw toOpenClawStateLeaseVerificationError(params, error);
   }
 }
 
@@ -389,15 +372,17 @@ export async function withOpenClawStateLease<T>(
     leaseLabel: validated.leaseLabel,
   };
   let closed = false;
+  let workerOperations: ReturnType<typeof createOpenClawStateLeaseWorkerOwner> | undefined;
   let workerHeartbeat: ReturnType<typeof startOpenClawStateLeaseHeartbeat> | undefined;
   let startingHeartbeat: ReturnType<typeof startOpenClawStateLeaseHeartbeat> | undefined;
   // `process.exit()` skips async `finally` blocks. Release synchronously so a normal CLI error
   // cannot strand the lease until its TTL and block the next lifecycle command.
   const unregisterProcessExitCleanup = registerProcessExitLeaseCleanup(() => {
     closed = true;
+    workerOperations?.close();
     workerHeartbeat?.close();
     startingHeartbeat?.close();
-    if (!fileExclusion.canRelease()) {
+    if (!fileExclusion.canRelease() || (workerOperations && !workerOperations.canRelease())) {
       return;
     }
     release({
@@ -598,6 +583,23 @@ export async function withOpenClawStateLease<T>(
     },
   });
 
+  const drain = async () => {
+    const errors: unknown[] = [];
+    for (const finish of [() => workerOperations?.drain(), () => fileExclusion.drain()]) {
+      try {
+        await finish();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw createSqliteLifecycleAggregateError(errors, "state lease drainage failed", errors[0]);
+    }
+  };
+
   try {
     let result: T;
     try {
@@ -612,8 +614,8 @@ export async function withOpenClawStateLease<T>(
       // Acquisition and callback entry are separate scheduling points. A
       // suspended process must not enter after its persisted lease expires.
       assertOperationOwned();
-      result = await fileExclusion.runWithOwnerScope(() =>
-        run({
+      result = await fileExclusion.runWithOwnerScope(() => {
+        const lease: OpenClawStateLeaseContext = {
           withDatabaseFileExclusion: (operation, bindCaptured) =>
             fileExclusion.run(operation, bindCaptured),
           withDatabaseFileMutation: (operation) => fileExclusion.runMutation(operation),
@@ -621,13 +623,29 @@ export async function withOpenClawStateLease<T>(
           renew: renewOperation,
           assertOwned: assertOperationOwned,
           assertOwnedInTransaction: assertOperationOwned,
-        }),
-      );
-      await fileExclusion.drain();
+        };
+        workerOperations = createOpenClawStateLeaseWorkerOwner({
+          lease,
+          identity: { scope: identity.scope, key: identity.key, owner: identity.owner },
+          databasePath: resolveLeaseDatabasePath(validated.database),
+          assertCurrent: () => {
+            assertActive();
+            if (
+              validated.heartbeat === "worker" ||
+              validated.database.schemaPolicy === "existing" ||
+              fileExclusion.assertIfExcluded()
+            ) {
+              throw new Error("This lease mode does not support worker writes");
+            }
+          },
+        });
+        return run(lease);
+      });
+      await drain();
     } catch (error) {
       let failure = error;
       try {
-        await fileExclusion.drain();
+        await drain();
       } catch (drainError) {
         if (drainError !== error) {
           failure = createSqliteLifecycleAggregateError(
@@ -642,6 +660,7 @@ export async function withOpenClawStateLease<T>(
         : validated.signal?.aborted
           ? abortError(validated.signal, "operation", validated.leaseLabel)
           : undefined;
+      workerOperations?.rethrowIfUncertain(failure, authorityError);
       if (authorityError instanceof Error) {
         if (failure !== error && authorityError instanceof OpenClawStateLeaseError) {
           // Nested owners may observe the same failed capture differently. Keep
@@ -656,6 +675,7 @@ export async function withOpenClawStateLease<T>(
     return result;
   } finally {
     closed = true;
+    workerOperations?.close();
     unregisterProcessExitCleanup();
     validated.signal?.removeEventListener("abort", stopWorker);
     clearInterval(heartbeat);
@@ -663,7 +683,7 @@ export async function withOpenClawStateLease<T>(
       clearTimeout(expiryTimer);
     }
     await workerHeartbeat?.stop();
-    if (fileExclusion.canRelease()) {
+    if (fileExclusion.canRelease() && (!workerOperations || workerOperations.canRelease())) {
       await releaseBestEffort({
         ...identity,
         database: validated.database,
