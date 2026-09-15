@@ -29,6 +29,9 @@ export const CALL_RECORD_CHUNK_MAX_ENTRIES =
 const RAW_CALL_RECORD_CHUNK_BYTES = 47 * 1024;
 const CALL_RECORD_READ_BATCH_KEYS = 128;
 let callRecordEventSequence = 0;
+// UUID event keys are unique across roots. Track only this process's live writes,
+// not a queue: an earlier paused save must not hold up a later snapshot.
+const pendingCallRecordEvents = new Set<string>();
 
 /** Metadata row for a chunked call record event. */
 export type CallRecordEventMeta = {
@@ -86,11 +89,13 @@ function createCallRecordStateStores(
     events: runtime.state.openKeyedStore<CallRecordEventMeta>({
       namespace: CALL_RECORD_EVENTS_NAMESPACE,
       maxEntries: CALL_RECORD_EVENT_META_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
       env,
     }),
     chunks: runtime.state.openKeyedStore<CallRecordEventChunk>({
       namespace: CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
       maxEntries: CALL_RECORD_CHUNK_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
       env,
     }),
   };
@@ -253,42 +258,62 @@ export function encodeCallRecordEvent(call: CallRecord) {
   };
 }
 
-/** Register a serialized call record event and its chunks, then prune old events. */
+/**
+ * Publish metadata before chunks so every interrupted runtime write has an owner.
+ * Independent row commits are not a transaction across the entire snapshot.
+ */
 async function registerCallRecordEvent(
   stores: CallRecordStateStores,
   eventKey: string,
   call: CallRecord,
   order: { persistedAt: number; sequence: number },
 ): Promise<void> {
-  // Capture the snapshot before chunk writes yield to later call mutations.
+  // Capture bytes and ordering before the first await, without serializing saves.
   const encoded = encodeCallRecordEvent(call);
-  for (let index = 0; index < encoded.meta.chunkCount; index += 1) {
-    await stores.chunks.register(buildChunkKey(eventKey, index), encoded.chunk(index));
+  pendingCallRecordEvents.add(eventKey);
+  try {
+    await stores.events.register(eventKey, {
+      ...encoded.meta,
+      persistedAt: order.persistedAt,
+      sequence: order.sequence,
+    });
+    try {
+      for (let index = 0; index < encoded.meta.chunkCount; index += 1) {
+        await stores.chunks.register(buildChunkKey(eventKey, index), encoded.chunk(index));
+      }
+    } catch (error) {
+      try {
+        await deleteCallRecordEventRows(stores, eventKey);
+      } catch {
+        // Keep metadata if cleanup fails; startup can retry. Preserve the write error.
+      }
+      throw error;
+    }
+    pendingCallRecordEvents.delete(eventKey);
+    // A prune failure must not roll back the newly completed snapshot.
+    await pruneCallRecordEvents(stores);
+  } finally {
+    pendingCallRecordEvents.delete(eventKey);
   }
-  await stores.events.register(eventKey, {
-    ...encoded.meta,
-    persistedAt: order.persistedAt,
-    sequence: order.sequence,
-  });
-  await pruneCallRecordEvents(stores);
 }
 
-/** Delete metadata and all chunk rows for one call record event. */
+/** Delete chunks before their metadata; failed cleanup remains discoverable. */
 async function deleteCallRecordEventRows(
   stores: CallRecordStateStores,
   eventKey: string,
 ): Promise<void> {
   const meta = await stores.events.lookup(eventKey);
-  await stores.events.delete(eventKey);
-  if (!meta) {
+  if (!isValidCallRecordEventMeta(meta)) {
+    // Unknown metadata cannot authorize a bounded deletion of its payload.
     return;
   }
   for (let index = 0; index < meta.chunkCount; index += 1) {
     await stores.chunks.delete(buildChunkKey(eventKey, index));
   }
+  await stores.events.delete(eventKey);
 }
 
-/** Keep only the newest bounded call record events. */
+/** Retain the newest complete snapshots, excluding live and interrupted saves. */
 async function pruneCallRecordEvents(stores: CallRecordStateStores): Promise<void> {
   if (stores.events.count && (await stores.events.count()) <= MAX_CALL_RECORD_EVENTS) {
     return;
@@ -297,10 +322,115 @@ async function pruneCallRecordEvents(stores: CallRecordStateStores): Promise<voi
   if (rows.length <= MAX_CALL_RECORD_EVENTS) {
     return;
   }
-  const sorted = rows.toSorted((a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key));
-  for (const row of sorted.slice(0, rows.length - MAX_CALL_RECORD_EVENTS)) {
+  // Snapshot eligibility before any chunk read: a live write that finishes during
+  // the scan must not count as a replacement for an already retained snapshot.
+  const eligible = rows.filter(
+    (row) => !pendingCallRecordEvents.has(row.key) && isValidCallRecordEventMeta(row.value),
+  );
+  const complete: typeof rows = [];
+  for await (const { entry, call } of readCallRecordEventEntries(stores, eligible)) {
+    if (call && !pendingCallRecordEvents.has(entry.key)) {
+      complete.push(entry);
+    }
+  }
+  const sorted = complete.toSorted(
+    (a, b) =>
+      (a.value.persistedAt ?? a.createdAt) - (b.value.persistedAt ?? b.createdAt) ||
+      (a.value.sequence ?? parseEventKeySequence(a.key)) -
+        (b.value.sequence ?? parseEventKeySequence(b.key)) ||
+      a.key.localeCompare(b.key),
+  );
+  for (const row of sorted.slice(0, Math.max(0, sorted.length - MAX_CALL_RECORD_EVENTS))) {
     await deleteCallRecordEventRows(stores, row.key);
   }
+}
+
+/** Shared read-only completion check for runtime retention and Doctor admission. */
+export async function hasCompleteCallRecordEvent(
+  stores: CallRecordStateStores,
+  eventKey: string,
+  meta: unknown,
+): Promise<boolean> {
+  return (
+    !pendingCallRecordEvents.has(eventKey) &&
+    isValidCallRecordEventMeta(meta) &&
+    Boolean(await readCallRecordEvent(stores, eventKey, meta))
+  );
+}
+
+function isValidCallRecordEventMeta(meta: unknown): meta is CallRecordEventMeta {
+  if (!meta || typeof meta !== "object" || !("chunkCount" in meta) || !("byteLength" in meta)) {
+    return false;
+  }
+  return (
+    typeof meta.chunkCount === "number" &&
+    isValidCallRecordChunkCount(meta.chunkCount) &&
+    typeof meta.byteLength === "number" &&
+    Number.isSafeInteger(meta.byteLength) &&
+    meta.byteLength > (meta.chunkCount - 1) * RAW_CALL_RECORD_CHUNK_BYTES &&
+    meta.byteLength <= meta.chunkCount * RAW_CALL_RECORD_CHUNK_BYTES
+  );
+}
+
+/** Identify rows startup can reclaim; unknown owners and complete payloads stay protected. */
+export function isInterruptedCallRecordEvent(
+  eventKey: string,
+  meta: unknown,
+  storedChunkKeys: ReadonlySet<string>,
+): boolean {
+  if (
+    !eventKey.startsWith("event:") ||
+    pendingCallRecordEvents.has(eventKey) ||
+    !isValidCallRecordEventMeta(meta)
+  ) {
+    return false;
+  }
+  for (let index = 0; index < meta.chunkCount; index++) {
+    if (!storedChunkKeys.has(buildChunkKey(eventKey, index))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Reclaim only interrupted runtime events. Doctor owns jsonl: prefixes and may
+ * replay them from retained source; history/status must never invoke this work.
+ */
+async function reconcileCallRecordEventRows(stores: CallRecordStateStores): Promise<void> {
+  // Keep writes protected even if they finish between the two inventory reads.
+  const liveAtInventory = new Set(pendingCallRecordEvents);
+  const events = await stores.events.entries();
+  const inventoriedEventKeys = new Set(events.map((entry) => entry.key));
+  for (const key of pendingCallRecordEvents) {
+    liveAtInventory.add(key);
+  }
+  // The public namespace API returns rows; retain only keys after that read.
+  const storedChunkKeys = new Set((await stores.chunks.entries()).map((entry) => entry.key));
+  for (const entry of events) {
+    if (
+      liveAtInventory.has(entry.key) ||
+      !isInterruptedCallRecordEvent(entry.key, entry.value, storedChunkKeys)
+    ) {
+      continue;
+    }
+    await deleteCallRecordEventRows(stores, entry.key);
+  }
+  for (const chunkKey of storedChunkKeys) {
+    const eventKey = /^(event:[^:]+:[0-9]+:[^:]+):chunk:[0-9]{4}$/.exec(chunkKey)?.[1];
+    if (!eventKey || inventoriedEventKeys.has(eventKey) || pendingCallRecordEvents.has(eventKey)) {
+      continue;
+    }
+    // Inventoried owners were handled above, including malformed rows that must
+    // stay intact. Only unowned candidates need fresh point reads.
+    // A writer may have published after the inventory read. Recheck ownership
+    // on the original store; new runtime events always publish metadata first.
+    const meta = await stores.events.lookup(eventKey);
+    if (meta === undefined && !pendingCallRecordEvents.has(eventKey)) {
+      await stores.chunks.delete(chunkKey);
+    }
+  }
+  await pruneCallRecordEvents(stores);
 }
 
 function isValidCallRecordChunkCount(chunkCount: number): boolean {
@@ -339,12 +469,11 @@ async function readCallRecordEvent(
   return parseVoiceCallRecordLine(serialized)?.call ?? null;
 }
 
-/** Read all persisted call records in stable persisted order. */
-async function readCallRecordEvents(stores: CallRecordStateStores): Promise<CallRecord[]> {
-  const entries = (await stores.events.entries()).toSorted(
-    (a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key),
-  );
-  const sqliteCalls: PersistedCallRecord[] = [];
+/** Decode bounded batches in entry order without letting a later error overtake an earlier row. */
+async function* readCallRecordEventEntries(
+  stores: CallRecordStateStores,
+  entries: Awaited<ReturnType<CallRecordStateStores["events"]["entries"]>>,
+) {
   let batchEnd = 0;
   let chunkOffset = 0;
   let chunkRecords: CallRecordChunkResults | undefined;
@@ -378,6 +507,17 @@ async function readCallRecordEvents(stores: CallRecordStateStores): Promise<Call
     if (chunkRecords) {
       chunkOffset += entry.value.chunkCount;
     }
+    yield { entry, call };
+  }
+}
+
+/** Read all persisted call records in stable persisted order. */
+async function readCallRecordEvents(stores: CallRecordStateStores): Promise<CallRecord[]> {
+  const entries = (await stores.events.entries()).toSorted(
+    (a, b) => a.createdAt - b.createdAt || a.key.localeCompare(b.key),
+  );
+  const sqliteCalls: PersistedCallRecord[] = [];
+  for await (const { entry, call } of readCallRecordEventEntries(stores, entries)) {
     if (call) {
       sqliteCalls.push({
         call,
@@ -424,6 +564,13 @@ export async function loadActiveCallsFromStore(
 }> {
   const stores = tryCreateCallRecordStateStores(storePath, stateRuntime);
   let calls: CallRecord[] = [];
+  if (stores) {
+    try {
+      await reconcileCallRecordEventRows(stores);
+    } catch (err) {
+      console.error("[voice-call] Failed to reconcile call record rows:", err);
+    }
+  }
   try {
     calls = stores ? await readCallRecordEvents(stores) : [];
   } catch (err) {

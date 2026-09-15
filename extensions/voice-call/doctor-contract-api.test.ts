@@ -24,9 +24,17 @@ import {
 } from "./src/manager.test-harness.js";
 import {
   CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
+  CALL_RECORD_EVENTS_NAMESPACE,
+  CALL_RECORD_CHUNK_MAX_ENTRIES,
+  CALL_RECORD_EVENT_META_MAX_ENTRIES,
+  buildVoiceCallLegacyJsonlEventKey,
+  encodeCallRecordEvent,
+  type CallRecordEventMeta,
+  persistCallRecord,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
 } from "./src/manager/store.js";
+import { CallRecordSchema } from "./src/types.js";
 
 function createDoctorContext(
   env: NodeJS.ProcessEnv,
@@ -522,5 +530,390 @@ describe("voice-call doctor state migration", () => {
     await fs.access(sourcePath);
     await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
     expect((await loadActiveCallsFromStore(storePath)).activeCalls.has("call-valid")).toBe(true);
+  });
+  it.each(["runtime-first", "doctor-first"] as const)(
+    "uses compatible non-evicting namespaces across %s opens",
+    async (order) => {
+      const runtimeCall = CallRecordSchema.parse(makePersistedCall({ callId: "runtime-policy" }));
+      const legacyCall = makePersistedCall({ callId: "doctor-policy" });
+      writeLegacyCallsJsonl(storePath, [legacyCall]);
+      if (order === "runtime-first") {
+        await persistCallRecord(storePath, runtimeCall);
+      }
+      const result = await expectDefined(
+        stateMigrations[0],
+        "voice-call state migration",
+      ).migrateLegacyState({
+        config: { plugins: { entries: { "voice-call": { config: { store: storePath } } } } },
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        context: createDoctorContext(env),
+      });
+      expect(result.warnings).toEqual([]);
+      if (order === "doctor-first") {
+        await persistCallRecord(storePath, runtimeCall);
+      }
+      const history = await getCallHistoryFromStore(storePath);
+      expect(history).toEqual(expect.arrayContaining([runtimeCall, legacyCall]));
+      expect(history).toHaveLength(2);
+    },
+  );
+
+  it("replays a complete prefix after failed metadata publication at full chunk capacity", async () => {
+    const call = makePersistedCall({
+      callId: "doctor-metadata-retry",
+      transcript: [{ timestamp: 1, speaker: "user", text: "x".repeat(100_000), isFinal: true }],
+    });
+    writeLegacyCallsJsonl(storePath, [call]);
+    const source = await fs.readFile(path.join(storePath, "calls.jsonl"));
+    const params = {
+      config: { plugins: { entries: { "voice-call": { config: { store: storePath } } } } },
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env, (namespace) => {
+        if (namespace === CALL_RECORD_EVENTS_NAMESPACE) {
+          throw new Error("metadata publication refused");
+        }
+      }),
+    };
+    const migration = expectDefined(stateMigrations[0], "voice-call state migration");
+    const failed = await migration.migrateLegacyState(params);
+    expect(failed.warnings).toEqual([
+      "Failed migrating Voice Call call-log line 1: Error: metadata publication refused",
+      "Left Voice Call call-log source in place because migration was incomplete",
+    ]);
+    expect(await fs.readFile(path.join(storePath, "calls.jsonl"))).toEqual(source);
+    const { db } = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: storePath } });
+    const prefix = db
+      .prepare(
+        "SELECT entry_key, value_json FROM plugin_state_entries WHERE namespace = ? ORDER BY entry_key",
+      )
+      .all(CALL_RECORD_EVENT_CHUNKS_NAMESPACE);
+    expect(prefix.length).toBeGreaterThan(1);
+    // Leave no room for new chunk keys; overwriting the owned prefix is sufficient.
+    db.prepare(`
+      WITH RECURSIVE slots(n) AS (
+        SELECT 1 UNION ALL SELECT n + 1 FROM slots WHERE n < ?
+      )
+      INSERT INTO plugin_state_entries
+        (plugin_id, namespace, entry_key, value_json, created_at, expires_at)
+      SELECT 'voice-call', ?, 'pressure:' || n, '{}', 0, NULL FROM slots
+    `).run(CALL_RECORD_CHUNK_MAX_ENTRIES - prefix.length, CALL_RECORD_EVENT_CHUNKS_NAMESPACE);
+    await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([]);
+    // Runtime startup must leave Doctor's retained prefix to its replay owner.
+    await loadActiveCallsFromStore(storePath);
+    expect(
+      db
+        .prepare(
+          "SELECT entry_key, value_json FROM plugin_state_entries WHERE namespace = ? AND entry_key LIKE 'jsonl:%' ORDER BY entry_key",
+        )
+        .all(CALL_RECORD_EVENT_CHUNKS_NAMESPACE),
+    ).toEqual(prefix);
+    const retried = await migration.migrateLegacyState({
+      ...params,
+      context: createDoctorContext(env),
+    });
+    expect(retried.warnings).toEqual([]);
+    expect(await fs.readFile(path.join(storePath, "calls.jsonl.migrated"))).toEqual(source);
+    await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([call]);
+    expect(
+      (
+        await migration.migrateLegacyState({
+          ...params,
+          context: createDoctorContext(env),
+        })
+      ).warnings,
+    ).toEqual([]);
+    await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([call]);
+  });
+
+  it("retains source and previous history when chunk capacity prevents a new import", async () => {
+    const previous = CallRecordSchema.parse(makePersistedCall({ callId: "capacity-previous" }));
+    await persistCallRecord(storePath, previous);
+    const incoming = makePersistedCall({ callId: "capacity-unimported" });
+    writeLegacyCallsJsonl(storePath, [incoming]);
+    const source = await fs.readFile(path.join(storePath, "calls.jsonl"));
+    const { db } = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: storePath } });
+    db.prepare(`
+      WITH RECURSIVE slots(n) AS (
+        SELECT 1 UNION ALL SELECT n + 1 FROM slots WHERE n < ?
+      )
+      INSERT INTO plugin_state_entries
+        (plugin_id, namespace, entry_key, value_json, created_at, expires_at)
+      SELECT 'voice-call', ?, 'pressure:' || n, '{}', 0, NULL FROM slots
+    `).run(CALL_RECORD_CHUNK_MAX_ENTRIES - 1, CALL_RECORD_EVENT_CHUNKS_NAMESPACE);
+    const retained = db
+      .prepare("SELECT * FROM plugin_state_entries ORDER BY namespace, entry_key")
+      .all();
+    const result = await expectDefined(
+      stateMigrations[0],
+      "voice-call state migration",
+    ).migrateLegacyState({
+      config: { plugins: { entries: { "voice-call": { config: { store: storePath } } } } },
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    });
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped Voice Call call-log migration for 1 record because chunk capacity is unavailable",
+      "Left Voice Call call-log source in place because migration was incomplete",
+    ]);
+    expect(await fs.readFile(path.join(storePath, "calls.jsonl"))).toEqual(source);
+    await expect(fs.access(path.join(storePath, "calls.jsonl.migrated"))).rejects.toThrow();
+    expect(
+      db.prepare("SELECT * FROM plugin_state_entries ORDER BY namespace, entry_key").all(),
+    ).toEqual(retained);
+    await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([previous]);
+  });
+
+  // Seed complete snapshots through the runtime writer and incomplete owners
+  // through the same real keyed store, without running destructive recovery.
+  async function seedRetentionFixture(completeCount: number, incompleteCount = 0) {
+    const calls = Array.from({ length: completeCount }, (_, index) =>
+      CallRecordSchema.parse(makePersistedCall({ callId: `retained-${index}` })),
+    );
+    for (const call of calls) {
+      await persistCallRecord(storePath, call);
+    }
+    const events = createPluginStateKeyedStoreForTests<CallRecordEventMeta>("voice-call", {
+      namespace: CALL_RECORD_EVENTS_NAMESPACE,
+      maxEntries: CALL_RECORD_EVENT_META_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+      env: { ...env, OPENCLAW_STATE_DIR: storePath },
+    });
+    const incompleteMeta = encodeCallRecordEvent(
+      CallRecordSchema.parse(makePersistedCall({ callId: "interrupted-runtime" })),
+    ).meta;
+    for (let index = 0; index < incompleteCount; index++) {
+      await events.register(
+        `event:interrupted:${String(index).padStart(6, "0")}:fixture`,
+        incompleteMeta,
+      );
+    }
+    const { db } = openOpenClawStateDatabase({ env: { ...env, OPENCLAW_STATE_DIR: storePath } });
+    return {
+      calls,
+      events,
+      incompleteMeta,
+      rows: () =>
+        db
+          .prepare(
+            "SELECT * FROM plugin_state_entries WHERE plugin_id = 'voice-call' ORDER BY namespace, entry_key",
+          )
+          .all(),
+    };
+  }
+
+  function retentionMigrationParams(context = createDoctorContext(env)) {
+    return {
+      config: { plugins: { entries: { "voice-call": { config: { store: storePath } } } } },
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    };
+  }
+
+  it("imports the 1000th complete record beside interrupted runtime metadata without reclaiming it", async () => {
+    const { calls, events, incompleteMeta, rows } = await seedRetentionFixture(999, 1);
+    const incoming = CallRecordSchema.parse(makePersistedCall({ callId: "eligible-jsonl" }));
+    writeLegacyCallsJsonl(storePath, [incoming]);
+    const sourcePath = path.join(storePath, "calls.jsonl");
+    const source = await fs.readFile(sourcePath);
+    const retained = rows();
+    const result = await expectDefined(
+      stateMigrations[0],
+      "voice-call state migration",
+    ).migrateLegacyState(retentionMigrationParams());
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Migrated 1 Voice Call call-log record"),
+      expect.stringContaining("Archived Voice Call call-log legacy source"),
+    ]);
+    expect(await fs.readFile(`${sourcePath}.migrated`)).toEqual(source);
+    await expect(fs.access(sourcePath)).rejects.toThrow();
+    expect(await events.lookup("event:interrupted:000000:fixture")).toEqual(incompleteMeta);
+    expect(await events.count?.()).toBe(1001);
+    expect(rows()).toEqual(expect.arrayContaining(retained));
+    const history = await getCallHistoryFromStore(storePath, 1001);
+    expect(history).toHaveLength(1000);
+    expect(history).toEqual(expect.arrayContaining([...calls, incoming]));
+    // No source left to replay, and the incomplete owner is still untouched.
+    const afterImport = rows();
+    expect(
+      await expectDefined(stateMigrations[0], "voice-call state migration").migrateLegacyState(
+        retentionMigrationParams(),
+      ),
+    ).toEqual({ changes: [], warnings: [] });
+    expect(rows()).toEqual(afterImport);
+  });
+
+  it("keeps deliberate retention pruning when 1000 complete records already exist", async () => {
+    const { calls, rows } = await seedRetentionFixture(1000);
+    const incoming = makePersistedCall({ callId: "over-complete-quota" });
+    writeLegacyCallsJsonl(storePath, [incoming]);
+    const sourcePath = path.join(storePath, "calls.jsonl");
+    const source = await fs.readFile(sourcePath);
+    const retained = rows();
+    const result = await expectDefined(
+      stateMigrations[0],
+      "voice-call state migration",
+    ).migrateLegacyState(retentionMigrationParams());
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Pruned 1 older Voice Call call-log record"),
+    ]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Archived Voice Call call-log legacy source"),
+    ]);
+    expect(await fs.readFile(`${sourcePath}.migrated`)).toEqual(source);
+    await expect(fs.access(sourcePath)).rejects.toThrow();
+    expect(rows()).toEqual(retained);
+    await expect(getCallHistoryFromStore(storePath, 1001)).resolves.toEqual(calls);
+  });
+
+  it("retains eligible source when incomplete owners occupy all physical metadata slots", async () => {
+    const { calls, rows } = await seedRetentionFixture(
+      999,
+      CALL_RECORD_EVENT_META_MAX_ENTRIES - 999,
+    );
+    writeLegacyCallsJsonl(storePath, [makePersistedCall({ callId: "physical-room-refused" })]);
+    const sourcePath = path.join(storePath, "calls.jsonl");
+    const source = await fs.readFile(sourcePath);
+    const retained = rows();
+    const result = await expectDefined(
+      stateMigrations[0],
+      "voice-call state migration",
+    ).migrateLegacyState(retentionMigrationParams());
+    expect(result).toEqual({
+      warningDisposition: "recoverable",
+      changes: [],
+      warnings: [
+        "Skipped Voice Call call-log migration for 1 record because metadata capacity is unavailable",
+        "Left Voice Call call-log source in place because migration was incomplete",
+      ],
+    });
+    expect(await fs.readFile(sourcePath)).toEqual(source);
+    await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
+    expect(rows()).toEqual(retained);
+    await expect(getCallHistoryFromStore(storePath, 1001)).resolves.toEqual(calls);
+    // The updater can now finish without deleting live rows from Doctor. A real
+    // runtime start reclaims interruption debris, and a later repair imports it.
+    await loadActiveCallsFromStore(storePath);
+    const completed = await expectDefined(
+      stateMigrations[0],
+      "voice-call state migration",
+    ).migrateLegacyState(retentionMigrationParams());
+    expect(completed.warnings).toEqual([]);
+    expect(await fs.readFile(`${sourcePath}.migrated`)).toEqual(source);
+    await expect(fs.access(sourcePath)).rejects.toThrow();
+    expect(await getCallHistoryFromStore(storePath, 1001)).toHaveLength(1000);
+  });
+
+  it.each(["unknown", "malformed", "unreadable"] as const)(
+    "keeps metadata capacity blocking when %s owners cannot be recovered by runtime",
+    async (kind) => {
+      const { events, rows } = await seedRetentionFixture(0);
+      const chunks = createDoctorContext(env).openPluginStateKeyedStore({
+        namespace: CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
+        maxEntries: CALL_RECORD_CHUNK_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+        env: { ...env, OPENCLAW_STATE_DIR: storePath },
+      });
+      const invalidPayload = Buffer.from("not-json");
+      for (let index = 0; index < CALL_RECORD_EVENT_META_MAX_ENTRIES; index++) {
+        const key = `${kind === "unknown" ? "unknown" : "event"}:blocked:${index}:fixture`;
+        await events.register(key, {
+          chunkCount: kind === "malformed" ? 0 : 1,
+          byteLength: kind === "malformed" ? 0 : invalidPayload.length,
+        });
+        if (kind === "unreadable") {
+          await chunks.register(`${key}:chunk:0000`, {
+            index: 0,
+            dataBase64: invalidPayload.toString("base64"),
+          });
+        }
+      }
+      writeLegacyCallsJsonl(storePath, [makePersistedCall({ callId: "not-recoverable" })]);
+      const sourcePath = path.join(storePath, "calls.jsonl");
+      const source = await fs.readFile(sourcePath);
+      const retained = rows();
+      const result = await expectDefined(
+        stateMigrations[0],
+        "voice-call state migration",
+      ).migrateLegacyState(retentionMigrationParams());
+      expect(result.warningDisposition).toBeUndefined();
+      expect(result.warnings).toContain(
+        "Skipped Voice Call call-log migration for 1 record because metadata capacity is unavailable",
+      );
+      expect(rows()).toEqual(retained);
+      expect(await fs.readFile(sourcePath)).toEqual(source);
+      await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
+    },
+  );
+
+  it("does not treat an unreadable existing deterministic owner as an imported source record", async () => {
+    const { events, rows } = await seedRetentionFixture(0);
+    const call = CallRecordSchema.parse(makePersistedCall({ callId: "incomplete-jsonl-owner" }));
+    writeLegacyCallsJsonl(storePath, [call]);
+    const sourcePath = path.join(storePath, "calls.jsonl");
+    const source = await fs.readFile(sourcePath);
+    const line = expectDefined(source.toString("utf8").split("\n")[0], "legacy line");
+    await events.register(
+      buildVoiceCallLegacyJsonlEventKey(line, 0),
+      encodeCallRecordEvent(call).meta,
+    );
+    const retained = rows();
+    const result = await expectDefined(
+      stateMigrations[0],
+      "voice-call state migration",
+    ).migrateLegacyState(retentionMigrationParams());
+    expect(result).toEqual({
+      changes: [],
+      warnings: [
+        "Skipped Voice Call call-log migration for line 1 because existing metadata is incomplete",
+        "Left Voice Call call-log source in place because migration was incomplete",
+      ],
+    });
+    expect(rows()).toEqual(retained);
+    expect(await fs.readFile(sourcePath)).toEqual(source);
+    await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
+  });
+
+  it("preserves a completion-read error and live source before admitting any import", async () => {
+    const { rows } = await seedRetentionFixture(1);
+    writeLegacyCallsJsonl(storePath, [makePersistedCall({ callId: "unadmitted-jsonl" })]);
+    const sourcePath = path.join(storePath, "calls.jsonl");
+    const source = await fs.readFile(sourcePath);
+    const retained = rows();
+    const failure = new Error("completion lookup failed");
+    const context: PluginDoctorStateMigrationContext = {
+      openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
+        const store = createPluginStateKeyedStoreForTests<T>("voice-call", {
+          ...options,
+          env: options.env ?? env,
+        });
+        if (options.namespace !== CALL_RECORD_EVENT_CHUNKS_NAMESPACE) {
+          return store;
+        }
+        return {
+          ...store,
+          async lookup(_key: string): Promise<T | undefined> {
+            throw failure;
+          },
+        };
+      },
+    };
+    await expect(
+      expectDefined(stateMigrations[0], "voice-call state migration").migrateLegacyState(
+        retentionMigrationParams(context),
+      ),
+    ).rejects.toBe(failure);
+    expect(rows()).toEqual(retained);
+    expect(await fs.readFile(sourcePath)).toEqual(source);
+    await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
   });
 });

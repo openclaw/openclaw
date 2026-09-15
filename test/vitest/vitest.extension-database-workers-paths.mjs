@@ -94,6 +94,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/voice-call/src/manager/events.inbound.test.ts",
   "extensions/voice-call/src/manager/events.test.ts",
   "extensions/voice-call/src/manager/outbound.persistence.test.ts",
+  "extensions/voice-call/src/manager/store.retention.test.ts",
   "extensions/voice-call/src/manager/store.test.ts",
   "extensions/voice-call/src/runtime.realtime-routing.test.ts",
   "extensions/voice-call/src/webhook.auto-response.lifecycle.test.ts",

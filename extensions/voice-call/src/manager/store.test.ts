@@ -26,11 +26,16 @@ import {
   CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
   CALL_RECORD_EVENTS_NAMESPACE,
   CALL_RECORD_CHUNK_MAX_ENTRIES,
+  CALL_RECORD_EVENT_META_MAX_ENTRIES,
+  MAX_CALL_RECORD_EVENTS,
+  buildChunkKey,
+  encodeCallRecordEvent,
   findCallInStore,
   getCallHistoryFromStore,
   loadActiveCallsFromStore,
   persistCallRecord,
 } from "./store.js";
+import { installStateRuntime, withPersistenceFixture } from "./store.test-harness.js";
 
 const { sleepMock } = vi.hoisted(() => ({ sleepMock: vi.fn() }));
 vi.mock("../../api.js", async (importOriginal) => ({
@@ -39,50 +44,6 @@ vi.mock("../../api.js", async (importOriginal) => ({
 }));
 
 const MANAGER_REPLAY_KEY_LIMIT = 10_000;
-
-function installStateRuntime({
-  bulkReads = true,
-  beforeOperation,
-}: {
-  bulkReads?: boolean;
-  beforeOperation?: (
-    namespace: string,
-    operation: "register" | "entries" | "count",
-    key?: string,
-  ) => Promise<void>;
-} = {}): void {
-  const state = createVoiceCallStateRuntimeForTests();
-  setVoiceCallStateRuntime({
-    state: {
-      ...state,
-      openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
-        const backingStore = state.openKeyedStore<T>(options);
-        const store = beforeOperation
-          ? {
-              ...backingStore,
-              async register(...args: Parameters<typeof backingStore.register>) {
-                await beforeOperation(options.namespace, "register", args[0]);
-                await backingStore.register(...args);
-              },
-              async entries() {
-                await beforeOperation(options.namespace, "entries");
-                return backingStore.entries();
-              },
-              async count() {
-                await beforeOperation(options.namespace, "count");
-                return (await backingStore.count?.()) ?? (await backingStore.entries()).length;
-              },
-            }
-          : backingStore;
-        if (bulkReads) {
-          return store;
-        }
-        const { lookupMany: _lookupMany, count: _count, ...legacy } = store;
-        return legacy;
-      },
-    },
-  });
-}
 
 describe("voice-call call record store", () => {
   beforeEach(() => {
@@ -275,6 +236,7 @@ describe("voice-call call record store", () => {
         }>("voice-call", {
           namespace: CALL_RECORD_EVENTS_NAMESPACE,
           maxEntries: 1100,
+          overflowPolicy: "reject-new",
           env,
         });
         const rows = (await events.entries()).toSorted(
@@ -342,6 +304,7 @@ describe("voice-call call record store", () => {
         {
           namespace: CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
           maxEntries: CALL_RECORD_CHUNK_MAX_ENTRIES,
+          overflowPolicy: "reject-new",
           env,
         },
       );
@@ -372,62 +335,55 @@ describe("voice-call call record store", () => {
     },
   );
 
-  it.each([1, 2])(
-    "stops at failed chunk write %s without publishing metadata",
-    async (failedWrite) => {
-      const call = CallRecordSchema.parse(
-        makePersistedCall({
-          transcript: [{ timestamp: 1, speaker: "user", text: "x".repeat(100_000), isFinal: true }],
-        }),
-      );
-      const failure = new Error("chunk write failed");
-      let writes = 0;
-      const beforeWrite = vi.fn((_namespace: string) => {
-        if (++writes === failedWrite) {
-          throw failure;
-        }
-      });
-      installStateRuntime({
-        beforeOperation: async (namespace, operation) => {
-          if (operation === "register") {
-            beforeWrite(namespace);
-          }
-        },
-      });
-      const storePath = createTestStorePath();
-      const toString = vi.spyOn(Buffer.prototype, "toString");
-      try {
-        await expect(persistCallRecord(storePath, call)).rejects.toBe(failure);
-        expect(beforeWrite.mock.calls).toEqual(
-          Array.from({ length: failedWrite }, () => [CALL_RECORD_EVENT_CHUNKS_NAMESPACE]),
-        );
-        expect(toString.mock.calls.filter(([encoding]) => encoding === "base64")).toHaveLength(
-          failedWrite,
-        );
-        toString.mockRestore();
-        const { db } = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: storePath } });
-        expect(
-          db
-            .prepare(
-              "SELECT namespace, json_extract(value_json, '$.index') AS chunk_index FROM plugin_state_entries WHERE plugin_id = ? ORDER BY entry_key",
-            )
-            .all("voice-call"),
-        ).toEqual(
-          Array.from({ length: failedWrite - 1 }, (_, index) => ({
-            namespace: CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
-            chunk_index: index,
-          })),
-        );
-        resetPluginStateStoreForTests();
-        expect((await loadActiveCallsFromStore(storePath)).activeCalls.size).toBe(0);
-      } finally {
-        toString.mockRestore();
-        await closeOpenClawStateDatabaseAsync();
-        resetPluginStateStoreForTests();
-        fs.rmSync(storePath, { recursive: true, force: true });
+  it.each([1, 2])("rolls back owned rows after chunk write %s fails", async (failedWrite) => {
+    const call = CallRecordSchema.parse(
+      makePersistedCall({
+        transcript: [{ timestamp: 1, speaker: "user", text: "x".repeat(100_000), isFinal: true }],
+      }),
+    );
+    const failure = new Error("chunk write failed");
+    let writes = 0;
+    const beforeWrite = vi.fn((_namespace: string) => {
+      if (_namespace === CALL_RECORD_EVENT_CHUNKS_NAMESPACE && ++writes === failedWrite) {
+        throw failure;
       }
-    },
-  );
+    });
+    installStateRuntime({
+      beforeOperation: async (namespace, operation) => {
+        if (operation === "register") {
+          beforeWrite(namespace);
+        }
+      },
+    });
+    const storePath = createTestStorePath();
+    const toString = vi.spyOn(Buffer.prototype, "toString");
+    try {
+      await expect(persistCallRecord(storePath, call)).rejects.toBe(failure);
+      expect(beforeWrite.mock.calls).toEqual([
+        [CALL_RECORD_EVENTS_NAMESPACE],
+        ...Array.from({ length: failedWrite }, () => [CALL_RECORD_EVENT_CHUNKS_NAMESPACE]),
+      ]);
+      expect(toString.mock.calls.filter(([encoding]) => encoding === "base64")).toHaveLength(
+        failedWrite,
+      );
+      toString.mockRestore();
+      const { db } = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: storePath } });
+      expect(
+        db
+          .prepare(
+            "SELECT namespace, json_extract(value_json, '$.index') AS chunk_index FROM plugin_state_entries WHERE plugin_id = ? ORDER BY entry_key",
+          )
+          .all("voice-call"),
+      ).toEqual([]);
+      resetPluginStateStoreForTests();
+      expect((await loadActiveCallsFromStore(storePath)).activeCalls.size).toBe(0);
+    } finally {
+      toString.mockRestore();
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+      fs.rmSync(storePath, { recursive: true, force: true });
+    }
+  });
 
   it("persists oversized records in SQLite without creating a JSONL fallback", async () => {
     const storePath = createTestStorePath();
@@ -688,6 +644,400 @@ describe("voice-call call record store", () => {
     expect(await findCallInStore(storePath, "provider-target")).toMatchObject({
       callId: "call-target",
       state: "completed",
+    });
+  });
+});
+
+describe("voice-call interrupted persistence", () => {
+  beforeEach(() => {
+    resetPluginStateStoreForTests();
+    installStateRuntime();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("refuses metadata publication before any chunk without losing previous history", async () => {
+    await withPersistenceFixture(async ({ storePath, rows }) => {
+      const previous = CallRecordSchema.parse(makePersistedCall({ state: "ringing" }));
+      await persistCallRecord(storePath, previous);
+      const retained = rows();
+      const failure = new Error("metadata admission refused");
+      const chunks = vi.fn();
+      installStateRuntime({
+        beforeOperation: async (namespace, operation) => {
+          if (operation === "register" && namespace === CALL_RECORD_EVENTS_NAMESPACE) {
+            throw failure;
+          }
+          if (operation === "register" && namespace === CALL_RECORD_EVENT_CHUNKS_NAMESPACE) {
+            chunks();
+          }
+        },
+      });
+      await expect(persistCallRecord(storePath, { ...previous, state: "answered" })).rejects.toBe(
+        failure,
+      );
+      expect(chunks).not.toHaveBeenCalled();
+      expect(rows()).toEqual(retained);
+      await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([previous]);
+    });
+  });
+
+  it.each([CALL_RECORD_EVENT_CHUNKS_NAMESPACE, CALL_RECORD_EVENTS_NAMESPACE])(
+    "retains recoverable ownership when rollback deletion of %s fails",
+    async (failedNamespace) => {
+      await withPersistenceFixture(async ({ storePath, events, chunks, rows }) => {
+        const previous = CallRecordSchema.parse(makePersistedCall({ state: "ringing" }));
+        await persistCallRecord(storePath, previous);
+        const originalKeys = new Set((await events.entries()).map((entry) => entry.key));
+        const failure = new Error("primary write failure");
+        const cleanupFailure = new Error("secondary cleanup failure");
+        installStateRuntime({
+          beforeOperation: async (namespace, operation, key) => {
+            if (
+              operation === "register" &&
+              namespace === CALL_RECORD_EVENT_CHUNKS_NAMESPACE &&
+              key?.endsWith(":chunk:0001")
+            ) {
+              throw failure;
+            }
+            if (operation === "delete" && namespace === failedNamespace) {
+              throw cleanupFailure;
+            }
+          },
+        });
+        const next = CallRecordSchema.parse({
+          ...previous,
+          state: "answered",
+          transcript: [{ timestamp: 1, speaker: "user", text: "x".repeat(100_000), isFinal: true }],
+        });
+        await expect(persistCallRecord(storePath, next)).rejects.toBe(failure);
+        const incomplete = expectDefined(
+          (await events.entries()).find((entry) => !originalKeys.has(entry.key)),
+          "retained failed event owner",
+        );
+        if (failedNamespace === CALL_RECORD_EVENT_CHUNKS_NAMESPACE) {
+          expect(await chunks.lookup(buildChunkKey(incomplete.key, 0))).toBeDefined();
+        } else {
+          expect(await chunks.lookup(buildChunkKey(incomplete.key, 0))).toBeUndefined();
+        }
+        const retained = rows();
+        await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([previous]);
+        await expect(findCallInStore(storePath, previous.callId)).resolves.toEqual(previous);
+        expect(rows()).toEqual(retained);
+        installStateRuntime();
+        await closeOpenClawStateDatabaseAsync();
+        resetPluginStateStoreForTests();
+        expect(
+          (await loadActiveCallsFromStore(storePath)).activeCalls.get(previous.callId),
+        ).toEqual(previous);
+        expect(await events.lookup(incomplete.key)).toBeUndefined();
+        expect(await chunks.lookup(buildChunkKey(incomplete.key, 0))).toBeUndefined();
+      });
+    },
+  );
+
+  it.each([CALL_RECORD_EVENTS_NAMESPACE, CALL_RECORD_EVENT_CHUNKS_NAMESPACE, "plugin-fuse"])(
+    "keeps the previous complete snapshot under real %s capacity refusal",
+    async (pressure) => {
+      await withPersistenceFixture(async ({ storePath, events, chunks, rows, fill }) => {
+        const previous = CallRecordSchema.parse(makePersistedCall({ state: "ringing" }));
+        await persistCallRecord(storePath, previous);
+        const previousKey = expectDefined((await events.entries())[0], "previous event").key;
+        const previousMeta = await events.lookup(previousKey);
+        const previousChunk = await chunks.lookup(buildChunkKey(previousKey, 0));
+        fill(
+          pressure === "plugin-fuse" ? "fixture-other" : pressure,
+          pressure === CALL_RECORD_EVENTS_NAMESPACE
+            ? CALL_RECORD_EVENT_META_MAX_ENTRIES
+            : pressure === CALL_RECORD_EVENT_CHUNKS_NAMESPACE
+              ? CALL_RECORD_CHUNK_MAX_ENTRIES
+              : 49_998,
+        );
+        const retained = rows();
+        await expect(
+          persistCallRecord(storePath, { ...previous, state: "answered" }),
+        ).rejects.toMatchObject({
+          code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+        });
+        expect(await events.lookup(previousKey)).toEqual(previousMeta);
+        expect(await chunks.lookup(buildChunkKey(previousKey, 0))).toEqual(previousChunk);
+        expect(rows()).toEqual(retained);
+      });
+    },
+  );
+
+  it("recovers old runtime orphans but preserves malformed owners and Doctor prefixes", async () => {
+    await withPersistenceFixture(async ({ storePath, events, chunks, rows }) => {
+      const previous = CallRecordSchema.parse(makePersistedCall());
+      await persistCallRecord(storePath, previous);
+      const encoded = encodeCallRecordEvent(previous);
+      const orphan = "event:old:000000:orphan";
+      const partial = "event:old:000001:partial";
+      const malformed = "event:old:000002:malformed";
+      const inconsistent = "event:old:000003:inconsistent";
+      const doctor = "jsonl:00000000:retained-source";
+      await chunks.register(buildChunkKey(orphan, 0), encoded.chunk(0));
+      const partialEncoded = encodeCallRecordEvent(
+        CallRecordSchema.parse({
+          ...previous,
+          transcript: [{ timestamp: 1, speaker: "user", text: "x".repeat(100_000), isFinal: true }],
+        }),
+      );
+      await events.register(partial, partialEncoded.meta);
+      await chunks.register(buildChunkKey(partial, 0), partialEncoded.chunk(0));
+      await events.register(malformed, { chunkCount: -1, byteLength: 1 });
+      await chunks.register(buildChunkKey(malformed, 0), encoded.chunk(0));
+      await events.register(inconsistent, { chunkCount: 2, byteLength: 1 });
+      await chunks.register(buildChunkKey(inconsistent, 0), encoded.chunk(0));
+      await chunks.register(buildChunkKey(doctor, 0), encoded.chunk(0));
+      const retained = rows();
+      await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([previous]);
+      expect(rows()).toEqual(retained);
+      expect((await loadActiveCallsFromStore(storePath)).activeCalls.get(previous.callId)).toEqual(
+        previous,
+      );
+      expect(await chunks.lookup(buildChunkKey(orphan, 0))).toBeUndefined();
+      expect(await events.lookup(partial)).toBeUndefined();
+      expect(await chunks.lookup(buildChunkKey(partial, 0))).toBeUndefined();
+      expect(await events.lookup(malformed)).toEqual({ chunkCount: -1, byteLength: 1 });
+      expect(await chunks.lookup(buildChunkKey(malformed, 0))).toEqual(encoded.chunk(0));
+      expect(await events.lookup(inconsistent)).toEqual({ chunkCount: 2, byteLength: 1 });
+      expect(await chunks.lookup(buildChunkKey(inconsistent, 0))).toEqual(encoded.chunk(0));
+      expect(await chunks.lookup(buildChunkKey(doctor, 0))).toEqual(encoded.chunk(0));
+    });
+  });
+
+  it("does not prune a complete snapshot to make room for a still-pending replacement", async () => {
+    await withPersistenceFixture(async ({ storePath, events }) => {
+      const calls = Array.from({ length: MAX_CALL_RECORD_EVENTS }, (_, index) =>
+        CallRecordSchema.parse(makePersistedCall({ callId: `retained-${index}` })),
+      );
+      for (const call of calls) {
+        await persistCallRecord(storePath, call);
+      }
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const failure = new Error("paused replacement failed");
+      let blocked = false;
+      installStateRuntime({
+        beforeOperation: async (namespace, operation) => {
+          if (
+            !blocked &&
+            operation === "register" &&
+            namespace === CALL_RECORD_EVENT_CHUNKS_NAMESPACE
+          ) {
+            blocked = true;
+            entered.resolve();
+            await release.promise;
+            throw failure;
+          }
+        },
+      });
+      const pending = persistCallRecord(
+        storePath,
+        CallRecordSchema.parse(makePersistedCall({ callId: "incomplete" })),
+      );
+      const rejected = expect(pending).rejects.toBe(failure);
+      try {
+        await entered.promise;
+        const next = CallRecordSchema.parse(makePersistedCall({ callId: "new-complete" }));
+        await persistCallRecord(storePath, next);
+        await expect(
+          getCallHistoryFromStore(storePath, MAX_CALL_RECORD_EVENTS + 1),
+        ).resolves.toEqual([...calls.slice(1), next]);
+        expect((await events.entries()).length).toBe(MAX_CALL_RECORD_EVENTS + 1);
+        // Recovery during the pause must not reclaim the active event's metadata.
+        await loadActiveCallsFromStore(storePath);
+        expect((await events.entries()).length).toBe(MAX_CALL_RECORD_EVENTS + 1);
+      } finally {
+        release.resolve();
+        await rejected;
+      }
+      expect((await events.entries()).length).toBe(MAX_CALL_RECORD_EVENTS);
+    });
+  });
+
+  it.each([CALL_RECORD_EVENT_CHUNKS_NAMESPACE, CALL_RECORD_EVENTS_NAMESPACE])(
+    "keeps a newly complete snapshot when pruning %s fails and retries at recovery",
+    async (failedNamespace) => {
+      await withPersistenceFixture(async ({ storePath, events }) => {
+        for (let index = 0; index < MAX_CALL_RECORD_EVENTS; index++) {
+          await persistCallRecord(
+            storePath,
+            CallRecordSchema.parse(makePersistedCall({ callId: `old-${index}` })),
+          );
+        }
+        const failure = new Error("prune deletion failed");
+        installStateRuntime({
+          beforeOperation: async (namespace, operation) => {
+            if (namespace === failedNamespace && operation === "delete") {
+              throw failure;
+            }
+          },
+        });
+        const latest = CallRecordSchema.parse(
+          makePersistedCall({ callId: "completed-before-prune" }),
+        );
+        await expect(persistCallRecord(storePath, latest)).rejects.toBe(failure);
+        await expect(findCallInStore(storePath, latest.callId)).resolves.toEqual(latest);
+        expect(await events.count?.()).toBe(MAX_CALL_RECORD_EVENTS + 1);
+        installStateRuntime();
+        expect((await loadActiveCallsFromStore(storePath)).activeCalls.get(latest.callId)).toEqual(
+          latest,
+        );
+        expect(await events.count?.()).toBe(MAX_CALL_RECORD_EVENTS);
+      });
+    },
+  );
+
+  it("keeps a save that completes after recovery's chunk inventory was captured", async () => {
+    await withPersistenceFixture(async ({ storePath, events, chunks }) => {
+      const writeEntered = createDeferred<void>();
+      const releaseWrite = createDeferred<void>();
+      const inventoryEntered = createDeferred<void>();
+      const releaseInventory = createDeferred<void>();
+      const state = createVoiceCallStateRuntimeForTests();
+      let firstWrite = true;
+      let firstInventory = true;
+      setVoiceCallStateRuntime({
+        state: {
+          ...state,
+          openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+            const backing = state.openKeyedStore<T>(options);
+            if (options.namespace !== CALL_RECORD_EVENT_CHUNKS_NAMESPACE) {
+              return backing;
+            }
+            return {
+              ...backing,
+              async register(...args: Parameters<typeof backing.register>) {
+                if (firstWrite) {
+                  firstWrite = false;
+                  writeEntered.resolve();
+                  await releaseWrite.promise;
+                }
+                await backing.register(...args);
+              },
+              async entries() {
+                const captured = await backing.entries();
+                if (firstInventory) {
+                  firstInventory = false;
+                  inventoryEntered.resolve();
+                  await releaseInventory.promise;
+                }
+                return captured;
+              },
+            };
+          },
+        },
+      });
+      const call = CallRecordSchema.parse(makePersistedCall({ callId: "inventory-race" }));
+      const pending = persistCallRecord(storePath, call);
+      let recovery: ReturnType<typeof loadActiveCallsFromStore> | undefined;
+      try {
+        await writeEntered.promise;
+        recovery = loadActiveCallsFromStore(storePath);
+        await inventoryEntered.promise;
+        releaseWrite.resolve();
+        await pending;
+        releaseInventory.resolve();
+        expect((await recovery).activeCalls.get(call.callId)).toEqual(call);
+        expect(await events.count?.()).toBe(1);
+        expect(await chunks.count?.()).toBe(1);
+      } finally {
+        releaseWrite.resolve();
+        releaseInventory.resolve();
+        await Promise.allSettled([pending, ...(recovery ? [recovery] : [])]);
+      }
+    });
+  });
+
+  it("uses inventoried ownership without point-reading metadata for each healthy chunk", async () => {
+    await withPersistenceFixture(async ({ storePath, rows }) => {
+      const call = CallRecordSchema.parse(
+        makePersistedCall({
+          callId: "inventoried-owner",
+          transcript: [{ timestamp: 1, speaker: "user", text: "x".repeat(100_000), isFinal: true }],
+        }),
+      );
+      await persistCallRecord(storePath, call);
+      const retained = rows();
+      const lookups = vi.fn();
+      const state = createVoiceCallStateRuntimeForTests();
+      setVoiceCallStateRuntime({
+        state: {
+          ...state,
+          openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+            const store = state.openKeyedStore<T>(options);
+            if (options.namespace !== CALL_RECORD_EVENTS_NAMESPACE) {
+              return store;
+            }
+            return {
+              ...store,
+              async lookup(key: string) {
+                lookups(key);
+                return store.lookup(key);
+              },
+            };
+          },
+        },
+      });
+      expect((await loadActiveCallsFromStore(storePath)).activeCalls.get(call.callId)).toEqual(
+        call,
+      );
+      expect(lookups).not.toHaveBeenCalled();
+      expect(rows()).toEqual(retained);
+    });
+  });
+
+  it("rechecks an owner published after metadata inventory before deleting apparent orphan chunks", async () => {
+    await withPersistenceFixture(async ({ storePath, events, chunks }) => {
+      const call = CallRecordSchema.parse(
+        makePersistedCall({
+          callId: "post-inventory-owner",
+          transcript: [{ timestamp: 1, speaker: "user", text: "x".repeat(100_000), isFinal: true }],
+        }),
+      );
+      const lookups = vi.fn();
+      const state = createVoiceCallStateRuntimeForTests();
+      let publishAfterInventory = true;
+      setVoiceCallStateRuntime({
+        state: {
+          ...state,
+          openKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+            const store = state.openKeyedStore<T>(options);
+            if (options.namespace !== CALL_RECORD_EVENTS_NAMESPACE) {
+              return store;
+            }
+            return {
+              ...store,
+              async entries() {
+                const captured = await store.entries();
+                if (publishAfterInventory) {
+                  publishAfterInventory = false;
+                  // Finish a real save after the empty metadata snapshot; it is
+                  // no longer pending when the chunk inventory sees its rows.
+                  await persistCallRecord(storePath, call);
+                }
+                return captured;
+              },
+              async lookup(key: string) {
+                lookups(key);
+                return store.lookup(key);
+              },
+            };
+          },
+        },
+      });
+      expect((await loadActiveCallsFromStore(storePath)).activeCalls.get(call.callId)).toEqual(
+        call,
+      );
+      const event = expectDefined((await events.entries())[0], "post-inventory owner");
+      expect(lookups).toHaveBeenCalledWith(event.key);
+      expect(await events.count?.()).toBe(1);
+      expect(await chunks.count?.()).toBe(encodeCallRecordEvent(call).meta.chunkCount);
+      await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([call]);
     });
   });
 });

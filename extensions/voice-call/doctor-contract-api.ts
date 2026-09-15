@@ -18,6 +18,8 @@ import {
   buildChunkKey,
   buildVoiceCallLegacyJsonlEventKey,
   encodeCallRecordEvent,
+  hasCompleteCallRecordEvent,
+  isInterruptedCallRecordEvent,
   type CallRecordEventChunk,
   type CallRecordEventMeta,
   CALL_RECORD_CHUNK_MAX_ENTRIES,
@@ -205,35 +207,95 @@ async function readLegacyCallRecords(filePath: string): Promise<{
   return { entries, warnings };
 }
 
-/** Select newest missing records that fit remaining plugin state capacity. */
+/** Select newest missing records within complete-history and physical capacity limits. */
 async function selectEntriesForImport(params: {
   entries: PreparedLegacyCallRecord[];
   eventStore: PluginStateKeyedStore<CallRecordEventMeta>;
   chunkStore: PluginStateKeyedStore<CallRecordEventChunk>;
   warnings: string[];
-}): Promise<{ existingEventKeys: Set<string>; entries: PreparedLegacyCallRecord[] }> {
-  const existingEventKeys = new Set((await params.eventStore.entries()).map((entry) => entry.key));
-  const missingEntries = params.entries.filter((entry) => !existingEventKeys.has(entry.eventKey));
+}): Promise<{
+  existingEventKeys: Set<string>;
+  entries: PreparedLegacyCallRecord[];
+  recoverableMetadataWarning?: string;
+}> {
+  const existingEvents = await params.eventStore.entries();
+  const existingEventKeys = new Set(existingEvents.map((entry) => entry.key));
+  const completeEventKeys = new Set<string>();
+  const stores = { events: params.eventStore, chunks: params.chunkStore };
+  for (const entry of existingEvents) {
+    if (await hasCompleteCallRecordEvent(stores, entry.key, entry.value)) {
+      completeEventKeys.add(entry.key);
+    }
+  }
+  const missingEntries = params.entries.filter((entry) => {
+    if (!existingEventKeys.has(entry.eventKey)) {
+      return true;
+    }
+    if (!completeEventKeys.has(entry.eventKey)) {
+      // Do not overwrite an unknown owner or archive its only replay source.
+      params.warnings.push(
+        `Skipped Voice Call call-log migration for line ${entry.lineNumber} because existing metadata is incomplete`,
+      );
+    }
+    return false;
+  });
   const existingChunks = await params.chunkStore.entries();
-  let eventRoom = Math.max(0, MAX_CALL_RECORD_EVENTS - existingEventKeys.size);
+  const existingChunkKeys = new Set(existingChunks.map((entry) => entry.key));
+  // Metadata-first runtime writes may be interrupted: physical rows are not
+  // proof of completed history. Doctor observes them without running recovery.
+  let completedRoom = Math.max(0, MAX_CALL_RECORD_EVENTS - completeEventKeys.size);
+  let metadataRoom = Math.max(0, CALL_RECORD_EVENT_META_MAX_ENTRIES - existingEventKeys.size);
   let chunkRoom = Math.max(0, CALL_RECORD_CHUNK_MAX_ENTRIES - existingChunks.length);
   const selected: PreparedLegacyCallRecord[] = [];
   let pruned = 0;
+  let capacitySkipped = 0;
+  let metadataCapacitySkipped = 0;
   for (const entry of missingEntries.toReversed()) {
-    if (eventRoom <= 0 || entry.chunks.length > chunkRoom) {
+    if (completedRoom <= 0) {
       pruned++;
       continue;
     }
+    if (metadataRoom <= 0) {
+      metadataCapacitySkipped++;
+      continue;
+    }
+    // An interrupted deterministic import already owns its written prefix.
+    const missingChunks = entry.chunks.filter(
+      (chunk) => !existingChunkKeys.has(buildChunkKey(entry.eventKey, chunk.index)),
+    ).length;
+    if (missingChunks > chunkRoom) {
+      capacitySkipped++;
+      continue;
+    }
     selected.push(entry);
-    eventRoom--;
-    chunkRoom -= entry.chunks.length;
+    completedRoom--;
+    metadataRoom--;
+    chunkRoom -= missingChunks;
+  }
+  let recoverableMetadataWarning: string | undefined;
+  if (metadataCapacitySkipped > 0) {
+    const warning = `Skipped Voice Call call-log migration for ${metadataCapacitySkipped} ${metadataCapacitySkipped === 1 ? "record" : "records"} because metadata capacity is unavailable`;
+    params.warnings.push(warning);
+    const reclaimable = existingEvents.filter((entry) =>
+      isInterruptedCallRecordEvent(entry.key, entry.value, existingChunkKeys),
+    ).length;
+    if (capacitySkipped === 0 && reclaimable >= Math.min(metadataCapacitySkipped, completedRoom)) {
+      // Do not run recovery from Doctor: another process may still own a write.
+      // Keep source intact and allow the updated runtime to recover on startup.
+      recoverableMetadataWarning = warning;
+    }
+  }
+  if (capacitySkipped > 0) {
+    params.warnings.push(
+      `Skipped Voice Call call-log migration for ${capacitySkipped} ${capacitySkipped === 1 ? "record" : "records"} because chunk capacity is unavailable`,
+    );
   }
   if (pruned > 0) {
     params.warnings.push(
       `Pruned ${pruned} older Voice Call call-log ${pruned === 1 ? "record" : "records"} during migration because plugin state keeps the newest ${MAX_CALL_RECORD_EVENTS} records`,
     );
   }
-  return { existingEventKeys, entries: selected.toReversed() };
+  return { existingEventKeys, entries: selected.toReversed(), recoverableMetadataWarning };
 }
 
 /** Import prepared legacy call records into plugin state. */
@@ -242,7 +304,7 @@ async function importLegacyCallRecords(params: {
   eventStore: PluginStateKeyedStore<CallRecordEventMeta>;
   chunkStore: PluginStateKeyedStore<CallRecordEventChunk>;
   warnings: string[];
-}): Promise<number> {
+}): Promise<{ imported: number; recoverableMetadataWarning?: string }> {
   const selected = await selectEntriesForImport(params);
   let imported = 0;
   for (const entry of selected.entries) {
@@ -262,7 +324,7 @@ async function importLegacyCallRecords(params: {
       );
     }
   }
-  return imported;
+  return { imported, recoverableMetadataWarning: selected.recoverableMetadataWarning };
 }
 
 /** Doctor migrations owned by the voice-call plugin. */
@@ -338,14 +400,16 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const eventStore = params.context.openPluginStateKeyedStore<CallRecordEventMeta>({
         namespace: CALL_RECORD_EVENTS_NAMESPACE,
         maxEntries: CALL_RECORD_EVENT_META_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
         env,
       });
       const chunkStore = params.context.openPluginStateKeyedStore<CallRecordEventChunk>({
         namespace: CALL_RECORD_EVENT_CHUNKS_NAMESPACE,
         maxEntries: CALL_RECORD_CHUNK_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
         env,
       });
-      const imported = await importLegacyCallRecords({
+      const { imported, recoverableMetadataWarning } = await importLegacyCallRecords({
         entries,
         eventStore,
         chunkStore,
@@ -365,8 +429,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
             warning.startsWith("Skipped Voice Call call-log migration"),
         )
       ) {
+        const recoverable =
+          recoverableMetadataWarning !== undefined &&
+          warnings.every((warning) => warning === recoverableMetadataWarning);
         warnings.push("Left Voice Call call-log source in place because migration was incomplete");
-        return { changes, warnings };
+        return {
+          changes,
+          warnings,
+          ...(recoverable ? { warningDisposition: "recoverable" as const } : {}),
+        };
       }
       await archiveLegacyStateSource({ filePath, label: "Voice Call call-log", changes, warnings });
       return { changes, warnings };
