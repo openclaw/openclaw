@@ -4868,7 +4868,7 @@ jobs:
           OPENCLAW_VITEST_MAX_WORKERS: ${{ runner.environment == 'self-hosted' && 4 || 1 }}
           WINDOWS_TARGETS_JSON: ${{ toJSON(matrix.targets || null) }}
         shell: bash
-        run: |
+        run: &windows_test_command |
           set -euo pipefail
           # Native allocation can be smaller than the runner label. Keep projects
           # serial within each machine; matrix rows own disjoint complete files.
@@ -4910,6 +4910,15 @@ jobs:
               exit 1
               ;;
           esac
+
+      # Mixed source/workflow PRs retain full suites, but must also exercise the
+      # selected command on Windows. Reuse the exact executor, not a substitute.
+      - name: Verify native selected-test execution
+        if: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.frozen_target != 'true' && matrix.task == 'test-1' }}
+        env:
+          TASK: test-selected
+          SELECTED_TESTS_JSON: '["extensions/canvas/scripts/pnpm-runner.test.ts"]'
+        run: *windows_test_command
 
   macos-node:
     permissions:

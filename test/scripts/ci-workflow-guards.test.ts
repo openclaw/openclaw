@@ -5535,6 +5535,24 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
     },
   );
 
+  it("exercises the exact selected command on native Windows for full-suite PRs", () => {
+    const steps = readCiWorkflow().jobs["checks-windows"].steps;
+    const runStep = steps.find(
+      (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
+    );
+    const proofStep = steps.find(
+      (step: WorkflowStep) => step.name === "Verify native selected-test execution",
+    );
+    expect(proofStep.if).toBe(
+      "${{ github.event_name == 'pull_request' && needs.preflight.outputs.frozen_target != 'true' && matrix.task == 'test-1' }}",
+    );
+    expect(proofStep.env).toEqual({
+      TASK: "test-selected",
+      SELECTED_TESTS_JSON: JSON.stringify(["extensions/canvas/scripts/pnpm-runner.test.ts"]),
+    });
+    expect(proofStep.run).toBe(runStep.run);
+  });
+
   it("runs selected Windows test arguments unchanged and propagates failures", () => {
     const step = readCiWorkflow().jobs["checks-windows"].steps.find(
       (candidate: WorkflowStep) =>
