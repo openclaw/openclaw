@@ -17,6 +17,51 @@ import { persistCliAssistantTranscript } from "./cli-run-transcript.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawAgentDatabasesForTest());
 
+it("keeps CLI usage unmarked when the backend reports no separate turn total", async () => {
+  const root = tempDirs.make("openclaw-cli-usage-transcript-");
+  const target = {
+    agentId: "main",
+    sessionId: "cli-usage-session",
+    sessionKey: "agent:main:cli-usage",
+    storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
+  };
+  await upsertSessionEntry({
+    ...target,
+    entry: { sessionId: target.sessionId, updatedAt: Date.now() },
+  });
+
+  await persistCliAssistantTranscript({
+    runParams: {
+      ...target,
+      sessionFile: `sqlite://agents/main/${target.sessionId}`,
+      workspaceDir: root,
+      prompt: "hi",
+      provider: "codex-cli",
+      runId: "cli-usage-run",
+      timeoutMs: 1_000,
+      persistAssistantTranscript: true,
+    },
+    text: "reply",
+    modelId: "gpt-5.4",
+    usage: { input: 10, output: 5, cacheRead: 100 },
+    stopReason: "stop",
+  });
+
+  const messages = (await loadTranscriptEvents(target)).flatMap((event) =>
+    typeof event === "object" && event !== null && "message" in event ? [event.message] : [],
+  );
+  expect(messages).toHaveLength(1);
+  // Without a separate turn total there is no proof the counters describe one model call.
+  expect((messages[0] as AssistantMessage).usage).toEqual({
+    input: 10,
+    output: 5,
+    cacheRead: 100,
+    cacheWrite: 0,
+    totalTokens: 115,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  });
+});
+
 it.each([
   { kind: "completed", yielded: undefined, stopReason: "stop" },
   { kind: "yielded", yielded: true, stopReason: "stop" },

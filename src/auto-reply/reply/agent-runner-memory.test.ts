@@ -2686,6 +2686,60 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(requireCompactEmbeddedAgentSessionCall().currentTokenCount).toBe(88_876);
   });
+  it("sizes preflight from the CLI context marker when counters cover the whole turn", async () => {
+    const sessionKey = "agent:main:main";
+    const storePath = path.join(rootDir, "sessions.json");
+    await writeTestSessionTranscript({
+      rootDir,
+      sessionKey,
+      events: [
+        {
+          type: "message",
+          message: {
+            role: "assistant",
+            api: "cli",
+            content: "multi-call turn",
+            // Counters sum every model call in the turn; contextUsage is the latest call.
+            usage: {
+              input: 135_864,
+              output: 30_000,
+              cacheRead: 37_888,
+              totalTokens: 203_752,
+              contextUsage: { state: "available", promptTokens: 86_876, totalTokens: 88_876 },
+            },
+          },
+        },
+      ],
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+      compactionCount: 0,
+    };
+
+    await runSessionCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        provider: "anthropic",
+        model: "claude",
+        sessionId: "session",
+        sessionKey,
+      }),
+      promptForEstimate: "",
+      defaultModel: "anthropic/claude",
+      modelContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      ...createCompactionLifecycle(createReplyOperation()),
+    });
+
+    expect(requireCompactEmbeddedAgentSessionCall().currentTokenCount).toBe(88_876);
+  });
+
   it("updates the active preflight run after transcript rotation", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     await writeTestSessionTranscript({

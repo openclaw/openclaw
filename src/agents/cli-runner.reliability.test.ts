@@ -2599,6 +2599,77 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("persists the terminal Claude turn usage for a multi-call turn", async () => {
+    const { dir, sessionFile, sessionTarget, storePath } = createSessionFixture();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      makeManagedRun({
+        stdout: [
+          JSON.stringify({
+            type: "assistant",
+            message: {
+              id: "msg-first-call",
+              content: [{ type: "text", text: "Checking." }],
+              usage: { input_tokens: 4, output_tokens: 15, cache_read_input_tokens: 27_255 },
+            },
+          }),
+          JSON.stringify({
+            type: "assistant",
+            message: {
+              id: "msg-last-call",
+              content: [{ type: "text", text: "done" }],
+              usage: { input_tokens: 2, output_tokens: 1, cache_read_input_tokens: 27_376 },
+            },
+          }),
+          JSON.stringify({
+            type: "result",
+            subtype: "success",
+            result: "done",
+            usage: { input_tokens: 6, output_tokens: 77, cache_read_input_tokens: 54_631 },
+          }),
+        ].join("\n"),
+      }),
+    );
+    const context = makeClaudePreparedContext({
+      sessionKey: sessionTarget.sessionKey,
+      runId: "run-claude-turn-usage",
+    });
+    context.preparedBackend.backend = {
+      ...context.preparedBackend.backend,
+      output: "jsonl",
+      input: "stdin",
+      jsonlDialect: "claude-stream-json",
+    };
+    context.backendResolved.config = context.preparedBackend.backend;
+    Object.assign(context.params, {
+      sessionFile,
+      sessionTarget,
+      storePath,
+      workspaceDir: dir,
+      persistAssistantTranscript: true,
+    });
+
+    try {
+      const result = await runPreparedCliAgent(context);
+
+      // Live context metadata stays on the latest model call.
+      expect(result.meta.agentMeta?.lastCallUsage).toMatchObject({ output: 1, cacheRead: 27_376 });
+      const messages = await readTranscriptMessages(sessionTarget);
+      expect(messages).toHaveLength(1);
+      // Transcript counters account for the whole turn; the context marker keeps the last call.
+      expect(requireRecord(messages[0], "assistant message").usage).toEqual({
+        input: 6,
+        output: 77,
+        cacheRead: 54_631,
+        cacheWrite: 0,
+        totalTokens: 54_714,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        contextUsage: { state: "available", promptTokens: 27_378, totalTokens: 27_379 },
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ["rejected", { details: { status: "rejected", error: "not accepted" } }],
     ["malformed accepted", { details: { status: "accepted", runId: "run-without-session" } }],
