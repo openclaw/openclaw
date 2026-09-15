@@ -502,8 +502,9 @@ export const runWithGatewayRootWorkReadmission = <T>(run: () => Promise<T>): Pro
 export function runWithGatewayIndependentRootWorkContinuation<T>(
   run: () => Promise<T>,
   origin = "independent",
+  signal?: AbortSignal,
 ): Promise<T> {
-  return runWithGatewayRootWorkContinuation(run, origin, false);
+  return runWithGatewayRootWorkContinuation(run, origin, false, signal);
 }
 
 /**
@@ -516,20 +517,24 @@ export function runWithGatewayIndependentRootWorkContinuation<T>(
 export function runWithGatewayDetachedWorkContinuation<T>(
   run: () => Promise<T>,
   origin = "independent",
+  signal?: AbortSignal,
 ): Promise<T> {
-  return runWithGatewayRootWorkContinuation(run, origin, true);
+  return runWithGatewayRootWorkContinuation(run, origin, true, signal);
 }
 
 function runWithGatewayRootWorkContinuation<T>(
   run: () => Promise<T>,
   origin: string,
   detachedWork: boolean,
+  signal?: AbortSignal,
 ): Promise<T> {
   const parent = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
   if (!parent || parent.released) {
+    // No live parent to reserve off: this call owns the closed-admission wait,
+    // so it must honor cancellation the same way a fresh root admission does.
     return detachedWork
-      ? runWithGatewayDetachedWorkAdmission(run, origin)
-      : runWithGatewayIndependentRootWorkAdmission(run, origin);
+      ? runWithGatewayDetachedWorkAdmission(run, origin, signal)
+      : runWithGatewayIndependentRootWorkAdmission(run, origin, signal);
   }
   const admission = createGatewayRootWorkAdmission(origin, detachedWork);
   return admission.run(run).finally(admission.release);
