@@ -517,7 +517,21 @@ export async function applySessionEntryLifecycleMutation(params: {
       });
     }, toDatabaseOptions(resolved));
     publish();
-    return { archivedTranscripts, beforeCount, maintenancePlans, removedSessionKeys };
+    return {
+      archivedTranscripts,
+      beforeCount,
+      maintenancePlans,
+      removedSessionKeys,
+      // Fresh upserts do not own unrelated archive recovery. Removal retries and
+      // Doctor transfers still publish when this commit produced no new archive.
+      publishArchives:
+        params.skipMaintenance !== true ||
+        params.allowCanonicalRepair === true ||
+        params.afterUpsertsInTransaction !== undefined ||
+        removals.length > 0 ||
+        projected.upsertedEntries.length === 0 ||
+        projected.upsertedEntries.some(({ expectedEntry }) => expectedEntry !== undefined),
+    };
   }
 
   const { archivedTranscripts: maintenanceArchivedTranscripts, ...maintenance } =
@@ -528,10 +542,12 @@ export async function applySessionEntryLifecycleMutation(params: {
     );
   let publishedRemovalTranscripts: SessionLifecycleArchivedTranscript[] = [];
   try {
-    publishedRemovalTranscripts = await publishSessionStateArchives(
-      resolved,
-      committed.archivedTranscripts,
-    );
+    if (committed.publishArchives) {
+      publishedRemovalTranscripts = await publishSessionStateArchives(
+        resolved,
+        committed.archivedTranscripts,
+      );
+    }
   } catch (error) {
     captureArtifactCleanupError(error);
   }
