@@ -253,6 +253,37 @@ sidebarTitle: "Setup"
     Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix
     profile ids and order entries before relying on profile ordering.
 
+    ### Advanced Account Security recovery
+
+    OpenAI's [Advanced Account Security](https://help.openai.com/en/articles/20001221-advanced-account-security)
+    enrollment signs you out of existing devices and may require interactive
+    sign-in more often. Complete a fresh browser OAuth login with your passkey
+    or security key for the same OpenClaw agent and profile that owns the
+    failing route:
+
+    ```bash
+    openclaw models auth login --agent <id> --provider openai
+    openclaw models status --agent <id> --probe --probe-provider openai
+    ```
+
+    If you use multiple profiles, include the same `--agent <id>` selector
+    used by that route. The selectors differ between the two commands: login
+    names its profiles with `--profile-id`, while `models status` probes
+    select profiles with `--probe-profile`. A standalone `codex login`
+    updates native Codex user-home credentials; it does not replace an
+    OpenClaw-managed OAuth profile. Native user-home authentication is a
+    separate, explicitly configured mode described in the
+    [Codex harness authentication reference](/plugins/codex-harness-reference/auth).
+
+    Verify the intended agent, runtime, and model with a real request. A model
+    listing or successful browser callback alone does not prove that the
+    selected profile can access the model. If a fresh login still fails, record
+    the sanitized error and stage: browser or security-key interaction,
+    localhost callback, token exchange, refresh, or model request. Keep
+    model-specific authorization errors separate from general account-login
+    failures. Do not disable Advanced Account Security, copy tokens, delete
+    credential stores, or silently switch to API-key billing as recovery steps.
+
     ### Status indicator
 
     Chat `/status` shows which model runtime is active for the current
