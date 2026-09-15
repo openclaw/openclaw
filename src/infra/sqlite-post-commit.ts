@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 // One connection can cross native and transformed SDK module graphs mid-transaction.
@@ -10,6 +11,15 @@ const pendingTransactionState = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteTransactionState"),
   () => new WeakMap<DatabaseSync, Array<{ commit: () => void; rollback: () => void }>>(),
 );
+
+const postCommitLog = createSubsystemLogger("sqlite/post-commit");
+
+function reportPostCommitObserverFailure(phase: string, error: unknown): void {
+  postCommitLog.warn(`sqlite post-commit ${phase} failed`, {
+    async: false,
+    error: error instanceof Error ? error.message : String(error),
+  });
+}
 
 /** Publications are non-throwing observers, never part of a durable transaction's result. */
 export function deferSqlitePostCommitPublication(db: DatabaseSync, publish: () => void): boolean {
@@ -45,7 +55,12 @@ export function discardSqliteTransactionState(db: DatabaseSync): void {
   pendingPublications.delete(db);
   pendingTransactionState.delete(db);
   for (const state of rolledBackState.toReversed()) {
-    state.rollback();
+    try {
+      state.rollback();
+    } catch (error) {
+      // One failing rollback must not strand the remaining staged state.
+      reportPostCommitObserverFailure("rollback", error);
+    }
   }
 }
 
@@ -67,7 +82,13 @@ export function withSqlitePostCommitPublications<T>(db: DatabaseSync, transactio
     publications?.splice(publicationStart);
     const rolledBackState = transactionState?.splice(stateStart) ?? [];
     for (const state of rolledBackState.toReversed()) {
-      state.rollback();
+      try {
+        state.rollback();
+      } catch (rollbackError) {
+        // Preserve the transaction failure; a failing rollback must not mask
+        // it or strand the remaining staged state.
+        reportPostCommitObserverFailure("rollback", rollbackError);
+      }
     }
     throw error;
   } finally {
@@ -77,11 +98,21 @@ export function withSqlitePostCommitPublications<T>(db: DatabaseSync, transactio
     }
   }
   if (!nested) {
+    // The durable commit already succeeded. Each observer runs even when a
+    // sibling fails, and observer failures never fail the committed result.
     for (const state of transactionState ?? []) {
-      state.commit();
+      try {
+        state.commit();
+      } catch (error) {
+        reportPostCommitObserverFailure("commit", error);
+      }
     }
     for (const publish of publications ?? []) {
-      publish();
+      try {
+        publish();
+      } catch (error) {
+        reportPostCommitObserverFailure("publication", error);
+      }
     }
   }
   return result;

@@ -287,7 +287,11 @@ describe("Codex initialization through the registered session deletion owner", (
           flow === "fork" ? invokeFork : fixture.adopt,
         );
 
-        expect(result).toMatchObject({ status: "failed" });
+        // Post-commit publication failures are isolated and warn-logged; the
+        // committed readiness still reports success.
+        expect(result).toMatchObject({
+          status: failure === "readiness publication" ? "created" : "failed",
+        });
         const identity = {
           kind: "session" as const,
           agentId: "main",

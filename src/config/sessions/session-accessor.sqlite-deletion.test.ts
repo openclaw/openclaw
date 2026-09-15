@@ -567,6 +567,8 @@ describe("session deletion and native owner state", () => {
     await seed();
     const owner = nativeOwner();
 
+    // Post-commit publication failures are isolated and warn-logged; the
+    // committed deletion still succeeds.
     await expect(
       owner.run(() =>
         applySessionEntryLifecycleMutation({
@@ -582,7 +584,7 @@ describe("session deletion and native owner state", () => {
           },
         }),
       ),
-    ).rejects.toThrow("injected publication failure");
+    ).resolves.toBeDefined();
 
     expect(read()).toBeUndefined();
     expect(bindings.has(sessionKey)).toBe(false);

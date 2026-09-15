@@ -134,6 +134,8 @@ describe("committed pending input release", () => {
     async ({ collected, observerFails }) => {
       const { receipt, sources } = await prepare(collected);
       if (observerFails) {
+        // Post-commit observer failures are isolated and warn-logged; the
+        // committed custody release still succeeds.
         expect(() =>
           runOpenClawAgentWriteTransaction((current) => {
             deferOpenClawAgentPostCommitPublication(current, () => {
@@ -141,7 +143,7 @@ describe("committed pending input release", () => {
             });
             promoteSync(receipt);
           }, options()),
-        ).toThrow("postcommit observer failed");
+        ).not.toThrow();
       } else {
         expect(
           await receipt.run(() => appendTranscriptMessage(scope(), { message: receipt.message })),
