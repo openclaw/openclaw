@@ -556,7 +556,7 @@ export function pluginBlobLookup<TMetadata>(params: {
       return row
         ? {
             ...decodeBlobInfo<TMetadata>(row, "lookup", params.env),
-            bytes: Uint8Array.from(row.blob),
+            bytes: row.blob,
           }
         : undefined;
     },
