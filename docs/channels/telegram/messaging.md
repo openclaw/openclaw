@@ -201,6 +201,29 @@ Active turns keep their captured delivery settings.
 
   </Accordion>
 
+  <Accordion title="DM topic auto-rename">
+    When a DM arrives in a forum topic (`message_thread_id`) on a bot with topics enabled, OpenClaw generates a short label from the user's first message in the session and edits the topic name. The rename runs asynchronously off the reply path, so it never delays or blocks the first reply, and a failed rename leaves the topic on Telegram's default name.
+
+    `channels.telegram.autoTopicLabel` (default: `true`):
+
+    - `true` — auto-rename with the built-in prompt (2–4 words, ≤ 25 characters, no emoji, same language as the message, sentence case)
+    - `false` — disable auto-rename; topics keep Telegram's default name
+    - `{ enabled?: boolean, prompt?: string }` — opt in explicitly and/or customize the label prompt
+
+    Per-DM override: `channels.telegram.direct.<chatId>.autoTopicLabel` wins over the channel-level setting for that chat.
+
+    ```json5
+    {
+      channels: {
+        telegram: {
+          autoTopicLabel: { prompt: "Reply with a 2-3 word title for this chat, no punctuation." },
+        },
+      },
+    }
+    ```
+
+  </Accordion>
+
   <Accordion title="Limits and CLI targets">
     - `channels.telegram.textChunkLimit` default 4000; `streaming.chunkMode="newline"` prefers paragraph boundaries (blank lines) before length splitting.
     - `channels.telegram.mediaMaxMb` (default 100) caps inbound and outbound media size.
