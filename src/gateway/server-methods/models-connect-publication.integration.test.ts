@@ -12,6 +12,7 @@ import {
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as modelCatalogAuth from "../server-model-catalog-auth.js";
+import * as connectModelCatalog from "../server/ws-connection/connect-model-catalog.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
@@ -227,6 +228,19 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       }
       const acquisitionStarted = createDeferred();
       const releaseAcquisition = createDeferred();
+      const publicationSettled = createDeferred();
+      const publishConnectModelCatalog = connectModelCatalog.publishConnectModelCatalog;
+      const publicationSpy = vi
+        .spyOn(connectModelCatalog, "publishConnectModelCatalog")
+        .mockImplementationOnce(async (...args) => {
+          try {
+            await publishConnectModelCatalog(...args);
+            publicationSettled.resolve();
+          } catch (error) {
+            publicationSettled.reject(error);
+            throw error;
+          }
+        });
       const readPreparedCatalog = modelCatalogAuth.readPreparedCatalog;
       const acquisition = vi
         .spyOn(modelCatalogAuth, "readPreparedCatalog")
@@ -279,6 +293,8 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         expect(racingPublications).toEqual([]);
         expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
         releaseAcquisition.resolve();
+        // Wait for the operation we paused before asserting that its admission drained.
+        await withTestTimeout(publicationSettled.promise, 10_000, "Initial catalog did not settle");
         await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
         // A response on this same socket is a delivery barrier after initial work settles.
         await expect(
@@ -300,6 +316,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       } finally {
         releaseAcquisition.resolve();
         acquisition.mockRestore();
+        publicationSpy.mockRestore();
         if (racingClient) {
           await disconnectGatewayClient(racingClient);
         }
