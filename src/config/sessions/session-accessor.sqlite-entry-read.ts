@@ -139,7 +139,7 @@ function parseReadableSessionEntryData(
   );
 }
 
-function validateDeliveryCanonicalSessionEntry(
+export function validateDeliveryCanonicalSessionEntry(
   sessionKey: string,
   entry: SessionEntry,
 ): SessionEntry {
