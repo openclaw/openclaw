@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { lstat, mkdir, readFile, readdir, stat as fsStat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
@@ -381,6 +382,79 @@ export function desktopProofSource(
     prEventBase: expected.base || null,
     testedBase: kind === "pr-merge" ? (actual.parents[0] ?? null) : null,
   };
+}
+
+function desktopProofSourceStatus(head: string, trackedPaths: Buffer, output: Buffer) {
+  // Only names from the verified commit are public; the index can contain private new files.
+  const tracked = new Set(trackedPaths.toString("utf8").split("\0"));
+  const entries: Array<{ status: string; path: string }> = [];
+  let totalEntries = 0;
+  for (let offset = 0; offset < output.length;) {
+    const end = output.indexOf(0, offset);
+    totalEntries += 1;
+    if (end < 0) {
+      break;
+    }
+    // Count every bounded command record, but decode only a small prefix for publication.
+    if (end < 64 * 1024 && end - offset <= 515 && entries.length < 32) {
+      const record = output.toString("utf8", offset, end);
+      const status = record.slice(0, 2);
+      const name = record.slice(3);
+      if (
+        /^[ MTADU]{2} /u.test(record) &&
+        status !== "  " &&
+        name !== "." &&
+        !path.posix.isAbsolute(name) &&
+        name === path.posix.normalize(name) &&
+        !/(?:^|\/)\.\.(?:\/|$)|[\\\p{C}\uFFFD]/u.test(name) &&
+        tracked.has(name)
+      ) {
+        entries.push({ status, path: name });
+      }
+    }
+    offset = end + 1;
+  }
+  return {
+    head,
+    bytes: output.length,
+    totalEntries,
+    entries,
+    omittedEntries: totalEntries - entries.length,
+  };
+}
+
+export type DesktopProofSourceStatus = ReturnType<typeof desktopProofSourceStatus>;
+
+/** Record sanitized source facts before refusing a dirty checkout; never publish raw Git output. */
+export async function readDesktopProofSource(
+  runGit: (label: string, args: string[]) => Promise<Buffer>,
+  expected: Parameters<typeof desktopProofSource>[1],
+  recordStatus: (status: DesktopProofSourceStatus | null) => void,
+) {
+  recordStatus(null);
+  const head = (await runGit("source-head", ["rev-parse", "--verify", "HEAD"])).toString().trim();
+  const commit = await runGit("source-identity", ["cat-file", "commit", head]);
+  const source = desktopProofSource(desktopProofCommit(head, commit.toString()), expected);
+  const tracked = await runGit("source-files", [
+    "ls-tree",
+    "-r",
+    "-z",
+    "--name-only",
+    "--full-tree",
+    head,
+  ]);
+  // NUL framing preserves filenames; disabling renames avoids a second pathname per record.
+  // Keep this command last so the runner retains source-clean as the dirty-refusal phase.
+  const status = await runGit("source-clean", [
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--no-renames",
+    "--untracked-files=all",
+  ]);
+  recordStatus(desktopProofSourceStatus(head, tracked, status));
+  assert.equal(status.length, 0, "Desktop proof requires a clean source checkout");
+  return source;
 }
 
 function geometry(value: unknown) {

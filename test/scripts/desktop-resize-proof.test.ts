@@ -1,8 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { chmod, mkdir, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 import {
+  type DesktopProofSourceStatus,
   desktopProofAssets,
   desktopProofCommit,
   desktopProofSource,
@@ -12,6 +22,7 @@ import {
   exportDesktopResizeProof,
   inspectDesktopSshdRuntimeDirectory,
   readDesktopProofPhase,
+  readDesktopProofSource,
   readDesktopProofTestReport,
   sanitizeDesktopResizeProof,
   withDesktopProofCleanup,
@@ -26,6 +37,34 @@ const merge = "c".repeat(40);
 const tree = "d".repeat(40);
 const size = { width: 1200, height: 850 };
 const assets = { "index-fixture.js": "e".repeat(64) };
+function sourceAdmissionFixture(status: string, tracked: string[]) {
+  const receipt = { phase: "preflight", sourceStatus: null as DesktopProofSourceStatus | null };
+  const replies: Record<string, string> = {
+    "rev-parse": `${head}\n`,
+    "cat-file": `tree ${tree}\nparent ${base}\n\nfixture\n`,
+    "ls-tree": `${tracked.join("\0")}\0`,
+    status,
+  };
+  return {
+    receipt,
+    replies,
+    read: () =>
+      readDesktopProofSource(
+        async (label, args) => {
+          receipt.phase = label;
+          const reply = replies[args[0]!];
+          if (reply === undefined) {
+            throw new Error("Git command failed with private details");
+          }
+          return Buffer.from(reply);
+        },
+        { checkout: head },
+        (value) => {
+          receipt.sourceStatus = value;
+        },
+      ),
+  };
+}
 const rawTestReport = (
   message = "AssertionError: private-token",
   metadata: Record<string, unknown> = {},
@@ -552,6 +591,156 @@ describe("desktop proof identity and public evidence", () => {
       ).rejects.toThrow(/bound/u);
     },
   );
+
+  it("records canonical dirty paths before refusing source admission at source-clean", async () => {
+    const tracked = ["src/edited.ts", "src/deleted.ts", 'src/space and "quote".ts'];
+    const status = [
+      ` M ${tracked[0]}\0`,
+      `D  ${tracked[1]}\0`,
+      `MM ${tracked[2]}\0`,
+      "A  staged-private.txt\0",
+      "?? untracked-private\n M src/edited.ts\0",
+    ].join("");
+    const fixture = sourceAdmissionFixture(status, tracked);
+    await expect(fixture.read()).rejects.toMatchObject({ code: "ERR_ASSERTION" });
+    expect(fixture.receipt).toEqual({
+      phase: "source-clean",
+      sourceStatus: {
+        head,
+        bytes: Buffer.byteLength(status),
+        totalEntries: 5,
+        entries: [
+          { status: " M", path: tracked[0] },
+          { status: "D ", path: tracked[1] },
+          { status: "MM", path: tracked[2] },
+        ],
+        omittedEntries: 2,
+      },
+    });
+    expect(JSON.stringify(fixture.receipt)).not.toContain("private");
+  });
+
+  it("admits only empty status output, including when no dirty paths are publishable", async () => {
+    const fixture = sourceAdmissionFixture("", ["src/edited.ts"]);
+    await expect(fixture.read()).resolves.toMatchObject({ head, tree, parents: [base] });
+    expect(fixture.receipt.sourceStatus).toEqual({
+      head,
+      bytes: 0,
+      totalEntries: 0,
+      entries: [],
+      omittedEntries: 0,
+    });
+    fixture.replies.status = "?? private-only.txt\0";
+    await expect(fixture.read()).rejects.toMatchObject({ code: "ERR_ASSERTION" });
+    expect(fixture.receipt.sourceStatus).toMatchObject({
+      totalEntries: 1,
+      entries: [],
+      omittedEntries: 1,
+    });
+  });
+
+  it.each(["rev-parse", "cat-file", "ls-tree", "status"])(
+    "clears earlier source status before a failed %s recheck",
+    async (command) => {
+      const fixture = sourceAdmissionFixture("", ["src/edited.ts"]);
+      await fixture.read();
+      expect(fixture.receipt.sourceStatus).not.toBeNull();
+      delete fixture.replies[command];
+      await expect(fixture.read()).rejects.toThrow("Git command failed");
+      expect(fixture.receipt.sourceStatus).toBeNull();
+      expect(JSON.stringify(fixture.receipt)).not.toContain("private");
+    },
+  );
+
+  it("bounds published source entries and counts names omitted by privacy and size limits", async () => {
+    const tracked = Array.from({ length: 34 }, (_, index) => `src/file-${index}.ts`);
+    const fixture = sourceAdmissionFixture(
+      tracked.map((name) => ` M ${name}\0`).join("") + "?? private-last.txt\0",
+      tracked,
+    );
+    await expect(fixture.read()).rejects.toMatchObject({ code: "ERR_ASSERTION" });
+    expect(fixture.receipt.sourceStatus?.entries).toHaveLength(32);
+    expect(fixture.receipt.sourceStatus).toMatchObject({ totalEntries: 35, omittedEntries: 3 });
+    expect(JSON.stringify(fixture.receipt)).not.toMatch(/file-32|file-33|private/u);
+  });
+
+  it("does not decode paths beyond the status byte budget or publish unsafe canonical names", async () => {
+    const names = [
+      "src/\nprivate.ts",
+      "../private.ts",
+      "/private.ts",
+      "src/\\private.ts",
+      `src/${"é".repeat(255)}.ts`,
+      "src/late.ts",
+    ];
+    const status =
+      names
+        .slice(0, -1)
+        .map((name) => ` M ${name}\0`)
+        .join("") + `?? ${"private".repeat(10_000)}\0 M src/late.ts\0`;
+    const fixture = sourceAdmissionFixture(status, names);
+    await expect(fixture.read()).rejects.toMatchObject({ code: "ERR_ASSERTION" });
+    expect(fixture.receipt.sourceStatus).toMatchObject({
+      totalEntries: 7,
+      entries: [],
+      omittedEntries: 7,
+    });
+    expect(JSON.stringify(fixture.receipt)).not.toMatch(/private|late|é/u);
+  });
+
+  it("uses real NUL status without leaking either private additions or a rename destination", async () => {
+    const root = dirs.make("desktop-source-status-");
+    const git = (args: string[]) =>
+      execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
+        cwd: root,
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "Test Author",
+          GIT_AUTHOR_EMAIL: "author@example.invalid",
+          GIT_COMMITTER_NAME: "Test Committer",
+          GIT_COMMITTER_EMAIL: "committer@example.invalid",
+          GIT_NO_LAZY_FETCH: "1",
+          GIT_NO_REPLACE_OBJECTS: "1",
+        },
+      });
+    git(["init", "--quiet"]);
+    await writeFile(path.join(root, "tracked.txt"), "tracked contents\n");
+    git(["add", "--", "tracked.txt"]);
+    const objectTree = git(["write-tree"]).toString().trim();
+    const checkout = git(["commit-tree", objectTree, "-m", "source fixture"]).toString().trim();
+    git(["update-ref", "HEAD", checkout]);
+    git(["config", "status.renames", "true"]);
+    const receipt = { phase: "preflight", sourceStatus: null as DesktopProofSourceStatus | null };
+    const check = () =>
+      readDesktopProofSource(
+        async (label, args) => {
+          receipt.phase = label;
+          return git(args);
+        },
+        { checkout },
+        (value) => {
+          receipt.sourceStatus = value;
+        },
+      );
+    await expect(check()).resolves.toMatchObject({ head: checkout, tree: objectTree });
+    await rename(path.join(root, "tracked.txt"), path.join(root, "renamed-private.txt"));
+    await writeFile(path.join(root, "staged-private.txt"), "private contents\n");
+    git(["add", "--all"]);
+    await writeFile(path.join(root, "untracked-private.txt"), "private contents\n");
+    await expect(check()).rejects.toMatchObject({ code: "ERR_ASSERTION" });
+    expect(receipt).toMatchObject({
+      phase: "source-clean",
+      sourceStatus: {
+        head: checkout,
+        totalEntries: 4,
+        entries: [{ status: "D ", path: "tracked.txt" }],
+        omittedEntries: 3,
+      },
+    });
+    expect(JSON.stringify(receipt)).not.toContain("private");
+  });
+
   it("distinguishes literal head proof from GitHub merge-tree proof", () => {
     expect(
       desktopProofSource({ head, tree, parents: [base] }, { checkout: head, head, base }).kind,
