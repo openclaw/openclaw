@@ -406,15 +406,10 @@ export function projectLiveSessionMessage(
       if (terminalMatch.inferred && durable.identity && runId && run) {
         // Keep the original live entry until authoritative history confirms
         // the inference or restores it after revealing a later assistant row.
+        const inferredSnapshotTerminal = { entry: provisional, matchedIdentity: durable.identity };
         state = {
           ...state,
-          runs: {
-            ...state.runs,
-            [runId]: {
-              ...run,
-              inferredSnapshotTerminal: { entry: provisional, matchedIdentity: durable.identity },
-            },
-          },
+          runs: { ...state.runs, [runId]: { ...run, inferredSnapshotTerminal } },
         };
       }
     }

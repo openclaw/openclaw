@@ -91,7 +91,7 @@ describe("session projection final-answer dedup", () => {
         state = reduceSessionProjection(state, { type: "messagePersisted", message: saved });
       }
       expect(state.messages).toEqual([saved]);
-      expect(state.runs["announce:repro"].inferredSnapshotTerminal?.entry.message).toBe(live);
+      expect(state.runs["announce:repro"]?.inferredSnapshotTerminal?.entry.message).toBe(live);
 
       state = reconcileSessionProjectionSnapshot(state, [saved], scope);
       expect(state.messages).toEqual([saved]);
