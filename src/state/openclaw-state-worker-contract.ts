@@ -72,6 +72,10 @@ export type OpenClawStateWorkerOperations = PluginStateWorkerOperations &
       input: { project: ProjectRegistryIdentity; lease: OpenClawStateLeaseIdentity };
       output: boolean;
     };
+    "projects.resolveRefreshOwner": {
+      input: { project: ProjectRegistryIdentity; lease: OpenClawStateLeaseIdentity };
+      output: ProjectRegistryRecord | undefined;
+    };
     "modelCatalog.remote.read": {
       input: { artifactPreservingReadOnly: boolean };
       output: ReturnType<typeof readRemoteModelCatalog>;
