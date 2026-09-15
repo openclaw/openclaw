@@ -904,7 +904,6 @@ describe("config model validation", () => {
         value: "provider-a/model",
         agentId: "next",
         fallback: false,
-        dependency: true,
       },
     });
   });
