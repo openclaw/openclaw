@@ -1304,14 +1304,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
   });
 
-  it.each([true, false])(
-    "permits authorized SSH updates without bypassing local ownership (gateway=%s)",
-    (gateway) => {
+  it.each([
+    { gateway: true, promptMode: "full" },
+    { gateway: false, promptMode: "full" },
+    { gateway: true, promptMode: "minimal" },
+    { gateway: false, promptMode: "minimal" },
+  ] as const)(
+    "permits remote updates without detached host repair bypasses ($gateway, $promptMode)",
+    ({ gateway, promptMode }) => {
       const prompt = buildAgentSystemPrompt({
         workspaceDir: "/tmp/openclaw",
+        promptMode,
         toolNames: gateway ? ["gateway", "exec"] : ["exec"],
       });
       expect(prompt).toContain("For the Gateway hosting this session:");
+      expect(prompt).toContain(
+        "Never run openclaw update, npm install -g openclaw, swap installations, or stop/restart the gateway service via exec or detached jobs.",
+      );
       expect(prompt).toContain("For a user-requested update on another host");
       expect(prompt).toContain("verify it is not this Gateway");
       expect(prompt).toContain("exec/SSH with `openclaw update --yes`");
@@ -1335,7 +1344,7 @@ describe("buildAgentSystemPrompt", () => {
       "Update OpenClaw: `gateway` action update.run, only on an explicit owner request; the runtime coordinates restart and completion notices.",
     );
     expect(prompt).toContain(
-      "Never run openclaw update, npm install -g openclaw, or stop/restart the gateway service via exec.",
+      "Never run openclaw update, npm install -g openclaw, swap installations, or stop/restart the gateway service via exec or detached jobs.",
     );
     expect(prompt).not.toContain("Use config.schema to");
     expect(prompt).not.toContain("config.schema, config.apply");
@@ -1356,7 +1365,7 @@ describe("buildAgentSystemPrompt", () => {
         "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`.",
       );
       expect(prompt).toContain(
-        "Never run openclaw update, npm install -g openclaw, or stop/restart the gateway service via exec.",
+        "Never run openclaw update, npm install -g openclaw, swap installations, or stop/restart the gateway service via exec or detached jobs.",
       );
       expect(prompt).toContain("For a chat update request, direct the user to `/update`.");
       expect(prompt).not.toContain("System controls unavailable");
@@ -1377,7 +1386,7 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).toContain("Outside chat, use the Control UI or ask the operator");
       expect(prompt).toContain("Missing chat ownership needs owner setup");
       expect(prompt).toContain(
-        "Never run openclaw update, npm install -g openclaw, or stop/restart the gateway service via exec.",
+        "Never run openclaw update, npm install -g openclaw, swap installations, or stop/restart the gateway service via exec or detached jobs.",
       );
       expect(prompt).not.toContain("System controls unavailable");
       expect(prompt).not.toContain("update.run");

@@ -198,7 +198,7 @@ describe("update.run current owner authority", () => {
       }
       expect(runGatewayUpdateMock).not.toHaveBeenCalled();
       expect(guidance).toContain(
-        "Never run openclaw update, npm install -g openclaw, or stop/restart the gateway service via exec.",
+        "Never run openclaw update, npm install -g openclaw, swap installations, or stop/restart the gateway service via exec or detached jobs.",
       );
     },
   );
