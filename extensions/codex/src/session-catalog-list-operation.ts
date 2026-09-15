@@ -153,6 +153,21 @@ function managedMarker(
   };
 }
 
+function createNodePublicationTracker(
+  publications: { pending: number },
+  waitUntil: ListParams["waitUntil"],
+) {
+  const settled = () => {
+    publications.pending--;
+  };
+  return (completion: Promise<void>) => {
+    publications.pending++;
+    // Keep long-lived node callbacks outside the driver's request scope.
+    void completion.then(settled, settled);
+    waitUntil?.(completion);
+  };
+}
+
 /** Holds only one logical filled list; no native producer is suspended between next calls. */
 class CodexCatalogListDriver {
   private params: ListParams | undefined;
@@ -160,6 +175,8 @@ class CodexCatalogListDriver {
   private locals: LocalHost[] = [];
   private nodeHosts: CodexSessionCatalogHost[] | undefined;
   private nodeActive = false;
+  private nodeDiscoveryFailed = false;
+  private readonly nodePublications = { pending: 0 };
   private nodesStarted = false;
   private localFailed = false;
   private active = 0;
@@ -247,7 +264,13 @@ class CodexCatalogListDriver {
   }
 
   private canPause(): boolean {
-    return !this.localFailed && this.nodeHosts?.length === 0 && !this.nodeActive;
+    return (
+      !this.localFailed &&
+      this.nodeHosts !== undefined &&
+      !this.nodeDiscoveryFailed &&
+      !this.nodeActive &&
+      this.nodePublications.pending === 0
+    );
   }
 
   private async readHost(host: LocalHost): Promise<void> {
@@ -322,6 +345,7 @@ class CodexCatalogListDriver {
         }
       }
     } catch (error) {
+      this.nodeDiscoveryFailed = true;
       const host: CodexSessionCatalogHost = {
         hostId: "node:registry",
         label: "Paired nodes",
@@ -349,6 +373,7 @@ class CodexCatalogListDriver {
       diagnostics.fields.pairedNodeCalls = 0;
       diagnostics.fields.pairedNodeSettled = 0;
     }
+    const trackPublication = createNodePublicationTracker(this.nodePublications, params.waitUntil);
     const pendingHosts = nodes.toSorted(compareNodeLabels).map((node) => {
       const nodeStarted = diagnostics ? performance.now() : 0;
       if (diagnostics && !diagnostics.closed) {
@@ -361,7 +386,7 @@ class CodexCatalogListDriver {
         query,
         adoptedSessions: adopted,
         terminalCapabilities: codexNodeTerminalCapability(node),
-        waitUntil: params.waitUntil,
+        waitUntil: trackPublication,
         signal: params.signal,
         ...(params.onHost ? { onHost: params.onHost } : {}),
       });
