@@ -570,15 +570,12 @@ async function dispatchBufferedReply(overrides: BufferedReplyOverrides = {}) {
     connectionId: "conn",
     context: finalizedContext({ Body: "hi" }),
     deliverReply: async () => acceptedDeliveryResult(),
-    groupHistories: new Map(),
-    groupHistoryKey: "+1000",
     maxMediaBytes: 1,
     inbound: makePreparedInbound(msg),
     replyLogger: makeReplyLogger(),
     replyPipeline: {} as never,
     replyResolver: (async () => undefined) as never,
     route: makeRoute(),
-    shouldClearGroupHistory: false,
     transport: buildWhatsAppInboundTransportContext(msg),
   };
 
@@ -1046,26 +1043,6 @@ describe("whatsapp inbound dispatch", () => {
     });
 
     expect(responsePrefix).toBe("[legacy]");
-  });
-
-  it("clears pending group history when the dispatcher does not queue a final reply", async () => {
-    const groupHistories = new Map<string, Array<{ sender: string; body: string }>>([
-      ["whatsapp:default:group:123@g.us", [{ sender: "Alice (+111)", body: "first" }]],
-    ]);
-
-    await dispatchBufferedReply({
-      context: { Body: "second" },
-      groupHistories,
-      groupHistoryKey: "whatsapp:default:group:123@g.us",
-      msg: makeMsg({
-        admission: groupAdmission("123@g.us"),
-        platform: { senderE164: "+222" },
-      }),
-      route: makeRoute({ sessionKey: "agent:main:whatsapp:group:123@g.us" }),
-      shouldClearGroupHistory: true,
-    });
-
-    expect(groupHistories.get("whatsapp:default:group:123@g.us") ?? []).toHaveLength(0);
   });
 
   it("replaces duplicate media-only interim payloads with the final captioned WhatsApp media", async () => {

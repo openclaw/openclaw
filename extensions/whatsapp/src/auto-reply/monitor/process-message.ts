@@ -85,6 +85,22 @@ const WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS = {
   timeoutMs: 2_000,
 };
 
+function mapWhatsAppIngressToTurnAdmission(
+  ingress: ReturnType<typeof requireWhatsAppInboundAdmission>["ingress"],
+) {
+  const reason = ingress.reasonCode;
+  if (ingress.admission === "dispatch") {
+    return { kind: "dispatch" as const, reason };
+  }
+  if (ingress.admission === "observe") {
+    return { kind: "observeOnly" as const, reason };
+  }
+  if (ingress.admission === "skip") {
+    return { kind: "handled" as const, reason };
+  }
+  return { kind: "drop" as const, reason, recordHistory: false };
+}
+
 type WhatsAppMessageReceivedHookConfig = {
   pluginHooks?: {
     messageReceived?: boolean;
@@ -319,7 +335,6 @@ export async function processMessage(params: {
     envelope: envelopeOptions,
     visibleReplyTo,
   });
-  let shouldClearGroupHistory = false;
   const visibleGroupHistory =
     conversationKind === "group"
       ? resolveVisibleWhatsAppGroupHistory({
@@ -359,7 +374,6 @@ export async function processMessage(params: {
         },
       });
     }
-    shouldClearGroupHistory = !(params.suppressGroupHistoryClear ?? false);
   }
 
   // When statusReactions.enabled, a StatusReactionController takes over lifecycle
@@ -501,6 +515,9 @@ export async function processMessage(params: {
     suppressMessageReceivedHooks: true,
   });
   const { inbound, turnInput, ctxPayload } = prepared;
+  const turnAdmission = mapWhatsAppIngressToTurnAdmission(
+    inbound.channelIngress?.ingress ?? admission.ingress,
+  );
   const transport = buildWhatsAppInboundTransportContext(params.msg);
   const ingressLifecycle = resolveWhatsAppIngressLifecycle(params.msg);
   const turnAdoptionLifecycle = ingressLifecycle
@@ -536,33 +553,13 @@ export async function processMessage(params: {
     ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
     adapter: {
       ingest: () => turnInput,
-      preflight: () => {
-        const reason = admission.ingress.reasonCode;
-        if (admission.ingress.admission === "dispatch") {
-          return { admission: { kind: "dispatch", reason } };
-        }
-        if (admission.ingress.admission === "observe") {
-          return { admission: { kind: "observeOnly", reason } };
-        }
-        if (admission.ingress.admission === "skip") {
-          return { admission: { kind: "handled", reason } };
-        }
-        return {
-          admission: {
-            kind: "drop",
-            reason,
-            recordHistory: false,
-          },
-        };
-      },
+      preflight: () => ({ admission: turnAdmission }),
       resolveTurn: () => {
         const { finalize, ...replyPlan } = createWhatsAppReplyPlan({
           cfg: params.cfg,
           connectionId: params.connectionId,
           context: ctxPayload,
           deliverReply: deliverWebReply,
-          groupHistories: params.groupHistories,
-          groupHistoryKey: params.groupHistoryKey,
           maxMediaBytes: params.maxMediaBytes,
           maxMediaTextChunkLimit: params.maxMediaTextChunkLimit,
           inbound,
@@ -574,7 +571,6 @@ export async function processMessage(params: {
           },
           replyResolver: params.replyResolver,
           route: params.route,
-          shouldClearGroupHistory,
           statusReactionController,
           transport,
           turnAdoptionLifecycle,
@@ -602,6 +598,20 @@ export async function processMessage(params: {
               trackBackgroundTask(params.backgroundTasks, task);
             },
           },
+          // Core observe-only plans may resolve the agent with no-op delivery. Only actual
+          // dispatch turns own successful group-history finalization.
+          ...(turnAdmission.kind === "dispatch" &&
+          conversationKind === "group" &&
+          params.suppressGroupHistoryClear !== true
+            ? {
+                history: {
+                  isGroup: true,
+                  historyKey: params.groupHistoryKey,
+                  historyMap: params.groupHistories,
+                  limit: params.groupHistoryLimit,
+                },
+              }
+            : {}),
           ...replyPlan,
         };
       },
