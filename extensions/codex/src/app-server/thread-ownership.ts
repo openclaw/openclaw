@@ -21,6 +21,7 @@ import { withCodexAppServerThreadMutation } from "./thread-ownership-queue.js";
 
 export {
   withCodexAppServerThreadMutation,
+  withCodexAppServerThreadMutationHold,
   withCodexConversationThreadActivity,
 } from "./thread-ownership-queue.js";
 

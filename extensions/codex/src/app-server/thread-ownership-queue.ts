@@ -16,6 +16,34 @@ export async function withCodexAppServerThreadMutation<T>(
   return await nativeThreadOwners.enqueue(`thread:${threadId}`, run);
 }
 
+/** Runs a mutation while retaining the lane after an uncertain cleanup. */
+export function withCodexAppServerThreadMutationHold<T>(
+  threadId: string,
+  run: (hold: (until: Promise<unknown>) => void) => Promise<T>,
+): Promise<T> {
+  let resolveResult!: (value: T | PromiseLike<T>) => void;
+  let rejectResult!: (reason?: unknown) => void;
+  const result = new Promise<T>((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
+  });
+  let heldUntil: Promise<unknown> | undefined;
+  const queued = nativeThreadOwners.enqueue(`thread:${threadId}`, async () => {
+    try {
+      resolveResult(
+        await run((until) => {
+          heldUntil ??= until;
+        }),
+      );
+    } catch (error) {
+      rejectResult(error);
+    }
+    await heldUntil;
+  });
+  void queued.catch((error) => rejectResult(error));
+  return result;
+}
+
 /** Serializes bound turns and retirement so detach cannot unsubscribe an active turn. */
 export async function withCodexConversationThreadActivity<T>(
   bindingId: string,
