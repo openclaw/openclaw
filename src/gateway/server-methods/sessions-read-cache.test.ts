@@ -127,6 +127,9 @@ describe("sessions.list single-flight", () => {
             { hasActiveRun: true, status: "running" },
           );
           operation.complete();
+          if (!filtered) {
+            vi.spyOn(Date, "now").mockReturnValue(Date.now() + 1_000);
+          }
           const settled = await listSessions({ client, context, request });
           if (filtered) {
             expect(settled.sessions).toEqual([]);
@@ -668,7 +671,7 @@ describe("sessions.list single-flight", () => {
       expect(retained.sessions.map((session) => session.key)).toEqual([parentSessionKey]);
       expect(retained.sessions[0]?.childSessions).toEqual([childSessionKey]);
 
-      clock.mockReturnValue(1_800_401);
+      clock.mockReturnValue(1_801_400);
       const expired = await listSessions({ client, context, request });
       expect(expired.sessions.map((session) => session.key)).toEqual([parentSessionKey]);
       expect(expired.sessions[0]?.childSessions).toBeUndefined();
@@ -712,13 +715,15 @@ describe("sessions.list single-flight", () => {
         });
 
         clock.mockReturnValue(now + 250);
+        expect(await listSessions({ client, context, request })).toBe(first);
+        clock.mockReturnValue(now + 1_000);
         const fresh = await Promise.all(
           Array.from({ length: 8 }, () => listSessions({ client, context, request })),
         );
         expect(fresh.every((result) => result === fresh[0])).toBe(true);
         expect(fresh[0]?.sessions[0]).toMatchObject({
           hasActiveSubagentRun: true,
-          runtimeMs: 1_250,
+          runtimeMs: 2_000,
         });
         expect(loader.calls).toHaveBeenCalledTimes(2);
       } finally {
@@ -819,46 +824,6 @@ describe("sessions.list single-flight", () => {
         expect.objectContaining({ code: "INVALID_REQUEST" }),
       );
       expect(loader.calls).not.toHaveBeenCalled();
-    });
-  });
-
-  it("rebuilds a completed result when a projected run ends without a store mutation", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const config = await seedSessions();
-      const context = requestContext(config);
-      const client = identifiedClient("owner@example.com");
-      const request = { agentId: "main", archived: "all" as const, limit: 100 };
-      const runId = "sessions-list-cache-active-run";
-      registerAgentRunContext(runId, {
-        agentId: "main",
-        projectSessionActive: true,
-        sessionId: "main-active",
-        sessionKey: "agent:main:active",
-      });
-
-      const active = await listSessions({ client, context, request });
-      expect(active.sessions.find((session) => session.key === "agent:main:active")).toMatchObject({
-        hasActiveRun: true,
-      });
-      const activeCached = await listSessions({ client, context, request });
-      expect(activeCached).not.toBe(active);
-      expect(
-        activeCached.sessions.find((session) => session.key === "agent:main:active"),
-      ).toMatchObject({ hasActiveRun: true });
-      expect(loader.calls).toHaveBeenCalledTimes(2);
-
-      clearAgentRunContext(runId);
-      const settled = await listSessions({ client, context, request });
-      expect(settled.sessions.find((session) => session.key === "agent:main:active")).toMatchObject(
-        {
-          hasActiveRun: false,
-        },
-      );
-      expect(loader.calls).toHaveBeenCalledTimes(3);
-
-      const settledCached = await listSessions({ client, context, request });
-      expect(settledCached).toBe(settled);
-      expect(loader.calls).toHaveBeenCalledTimes(3);
     });
   });
 

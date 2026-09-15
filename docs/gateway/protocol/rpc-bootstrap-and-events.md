@@ -28,6 +28,18 @@ the snapshot is being built. Reconcile those events with the response and issue
 a trailing `sessions.list` refresh when needed, including when an event only
 invalidates the cached list. Reconnects require a new subscription and snapshot.
 
+Matching list requests can reuse a completed page containing live runs or child
+sessions for up to one second, matching the Control UI's maximum refresh wait.
+Session identity, visibility/access, profile, database membership, and
+configuration changes invalidate reuse immediately. Transcript, activity,
+run-index, and worker-inventory changes preserve an already-cached live page
+until its original deadline; an earlier agent-status expiry still forces a
+refresh. A mutation that also publishes an access invalidation ends reuse early,
+including conservative notifications at run boundaries. Clients should continue
+reconciling `sessions.changed` events with list responses. Active-only,
+activity-window, search, and parent-filtered lists share only concurrent work and
+do not reuse completed pages.
+
 Both methods accept `activeOnly: true` to select currently running or queued sessions before pagination. Activity comes from the live runtime owners, not a stored status flag. Ordinary listing behavior is unchanged when the option is omitted or false. Active-only results include each visible agent-owned `global` and `unknown` session with its raw key and captured `agentId`; callers identify rows by agent, key, and `sessionId` together. Literal `agent:<id>:global` and `agent:<id>:unknown` sessions remain different rows. Active-only raw sentinel rows omit the optional `childSessions` and `hasActiveSubagentRun` fields; use `hasActiveRun` for direct activity. Normal permissions, archive/inclusion filters, and page limits still apply. Sessionless/internal runs are outside the session index.
 
 Both methods accept `ownerFirst: true` to prepend up to 60 matching viewer-owned

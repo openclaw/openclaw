@@ -13,6 +13,7 @@ import {
   readOpenIncognitoAgentDatabaseGeneration,
 } from "../../state/openclaw-agent-db.js";
 import { readUserProfileVersion } from "../../state/user-profile-events.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { readPreparedGatewayModelCatalogMetadata } from "../server-model-catalog-view.js";
 import { readSessionActivitySummaryVersion } from "../session-activity-summary-state.js";
@@ -27,17 +28,20 @@ import { readSessionsMutationVersion } from "./session-change-event.js";
 import type { SessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-type SessionListFence = {
-  agentRunIndexVersion: number;
+type SessionListHardFence = {
+  gatewayAccessRevision: number;
   agentDatabaseRegistryToken: symbol;
   incognitoDatabaseGeneration: number;
+  sessionIdentityMutationVersion: number;
+  userProfileVersion: number;
+};
+type SessionListFence = SessionListHardFence & {
+  agentRunIndexVersion: number;
   lifecyclePersistenceVersion: number;
   sessionAutomationVersion: number;
-  sessionIdentityMutationVersion: number;
   sessionLifecycleVersion: number;
   sessionObserverDigestVersion: number;
   sessionActivitySummaryVersion: number;
-  userProfileVersion: number;
   sessionsMutationVersion: number;
   sessionTranscriptUpdateVersion: number;
   titleProjectionUnavailableVersion: number;
@@ -59,6 +63,8 @@ type SessionListState = SessionListFence & {
 };
 
 const SESSIONS_LIST_COMPLETED_CACHE_LIMIT = 64;
+// Match the Control UI's maximum wait for a debounced session-list refresh.
+const SESSIONS_LIST_LIVE_REUSE_MS = 1_000;
 const sessionListsByContext = new WeakMap<GatewayRequestContext, SessionListState>();
 const modelCatalogRevisions = new WeakMap<object, number>();
 let nextModelCatalogRevision = 1;
@@ -98,6 +104,7 @@ function readSessionListModelCatalogFence(
 
 function readSessionListFence(context: GatewayRequestContext): SessionListFence {
   return {
+    gatewayAccessRevision: readGatewayAccessRevision(),
     agentRunIndexVersion: readAgentRunIndexVersion(),
     agentDatabaseRegistryToken: readOpenClawAgentDatabaseRegistryToken(),
     incognitoDatabaseGeneration: readOpenIncognitoAgentDatabaseGeneration(),
@@ -110,7 +117,7 @@ function readSessionListFence(context: GatewayRequestContext): SessionListFence 
     userProfileVersion: readUserProfileVersion(),
     sessionsMutationVersion: readSessionsMutationVersion(context),
     // Rows embed transcript-derived previews/titles; a committed transcript
-    // write without a session mutation must still invalidate reuse.
+    // write without a session mutation must still fence new projection work.
     sessionTranscriptUpdateVersion: readSessionTranscriptUpdateVersion(),
     titleProjectionUnavailableVersion: readSessionTitleProjectionUnavailableVersion(),
     workerEnvironmentInventoryVersion: context.workerEnvironmentService?.inventoryVersion() ?? 0,
@@ -121,18 +128,28 @@ function readSessionListFence(context: GatewayRequestContext): SessionListFence 
   };
 }
 
-function matchesSessionListFence(value: SessionListFence, fence: SessionListFence): boolean {
+function matchesSessionListHardFence(
+  value: SessionListHardFence,
+  fence: SessionListHardFence,
+): boolean {
   return (
-    value.agentRunIndexVersion === fence.agentRunIndexVersion &&
+    value.gatewayAccessRevision === fence.gatewayAccessRevision &&
     value.agentDatabaseRegistryToken === fence.agentDatabaseRegistryToken &&
     value.incognitoDatabaseGeneration === fence.incognitoDatabaseGeneration &&
+    value.sessionIdentityMutationVersion === fence.sessionIdentityMutationVersion &&
+    value.userProfileVersion === fence.userProfileVersion
+  );
+}
+
+function matchesSessionListFence(value: SessionListFence, fence: SessionListFence): boolean {
+  return (
+    matchesSessionListHardFence(value, fence) &&
+    value.agentRunIndexVersion === fence.agentRunIndexVersion &&
     value.lifecyclePersistenceVersion === fence.lifecyclePersistenceVersion &&
     value.sessionAutomationVersion === fence.sessionAutomationVersion &&
-    value.sessionIdentityMutationVersion === fence.sessionIdentityMutationVersion &&
     value.sessionLifecycleVersion === fence.sessionLifecycleVersion &&
     value.sessionObserverDigestVersion === fence.sessionObserverDigestVersion &&
     value.sessionActivitySummaryVersion === fence.sessionActivitySummaryVersion &&
-    value.userProfileVersion === fence.userProfileVersion &&
     value.sessionsMutationVersion === fence.sessionsMutationVersion &&
     value.sessionTranscriptUpdateVersion === fence.sessionTranscriptUpdateVersion &&
     value.titleProjectionUnavailableVersion === fence.titleProjectionUnavailableVersion &&
@@ -166,14 +183,22 @@ function sessionListState(
   config: OpenClawConfig,
 ): SessionListState {
   let state = sessionListsByContext.get(context);
-  // Every input that can change a projected row must fence reuse. Session identity,
-  // Gateway projection, and live-run mutations have separate monotonic owners.
   const fence = readSessionListFence(context);
   if (!state || state.config !== config || !matchesSessionListFence(state, fence)) {
-    // Pending callers retain their generation until they settle, but its completed
-    // pages are already unusable and must not remain reachable through those callers.
+    const completed = new Map<string, SessionListCompleted>();
+    if (state?.config === config && matchesSessionListHardFence(state, fence)) {
+      const now = Date.now();
+      // Soft changes preserve bounded reuse without extending the original deadline.
+      // Idle pages without an expiry still need immediate mutation invalidation.
+      for (const [key, entry] of state.completed) {
+        if (entry.expiresAt !== undefined && entry.expiresAt > now) {
+          completed.set(key, entry);
+        }
+      }
+    }
+    // In-flight work stays generation-bound; pending callers must not retain old pages.
     state?.completed.clear();
-    state = { ...fence, completed: new Map(), config, inFlight: new Map() };
+    state = { ...fence, completed, config, inFlight: new Map() };
     sessionListsByContext.set(context, state);
   }
   return state;
@@ -196,13 +221,13 @@ function readCompletedSessionList(
   return undefined;
 }
 
-function resolveSessionListExpiration(result: SessionsListResult): number | null | undefined {
+function resolveSessionListExpiration(result: SessionsListResult, now: number): number | undefined {
   let expiresAt: number | undefined;
   for (const session of result.sessions) {
     // Live work can settle without a session/index mutation, running durations tick,
-    // and a retained child can sit outside this page. None has a safe cache deadline.
+    // and a retained child can sit outside this page. Bound their staleness explicitly.
     if (session.hasActiveRun || session.hasActiveSubagentRun || session.childSessions?.length) {
-      return null;
+      expiresAt = Math.min(expiresAt ?? Infinity, now + SESSIONS_LIST_LIVE_REUSE_MS);
     }
     const statusExpiration = session.agentStatus?.expiresAt;
     if (
@@ -267,8 +292,9 @@ export async function respondWithCachedSessionList(params: {
         matchesSessionListFence(state, readSessionListFence(params.context)) &&
         readSessionListModelCatalogFence(params.modelCatalog) === modelCatalogRevision
       ) {
-        const expiresAt = resolveSessionListExpiration(result);
-        if (expiresAt !== null && (expiresAt === undefined || expiresAt > Date.now())) {
+        const now = Date.now();
+        const expiresAt = resolveSessionListExpiration(result, now);
+        if (expiresAt === undefined || expiresAt > now) {
           state.completed.delete(workKey);
           state.completed.set(workKey, { modelCatalogRevision, result, expiresAt });
           pruneMapToMaxSize(state.completed, SESSIONS_LIST_COMPLETED_CACHE_LIMIT);
