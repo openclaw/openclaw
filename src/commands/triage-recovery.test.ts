@@ -39,7 +39,7 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
   runUtf8CommandWithTimeout: mocks.runUtf8CommandWithTimeout,
 }));
 
-const agents = ["claude", "codex", "opencode", "pi"] as const;
+const agents = ["codex", "claude", "opencode", "pi"] as const;
 const printOnlyModes = [
   { mode: "JSON", json: true, nonInteractive: false, terminal: true },
   { mode: "--non-interactive", json: false, nonInteractive: true, terminal: true },
@@ -288,8 +288,8 @@ describe("triage external recovery handoff", () => {
         }),
       );
       expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
-        "/usr/local/bin/claude",
-        ["--safe-mode", expect.any(String)],
+        "/usr/local/bin/codex",
+        [expect.any(String)],
         expect.objectContaining({
           cwd: state.workspaceDir,
           stdio: "inherit",
@@ -300,7 +300,7 @@ describe("triage external recovery handoff", () => {
           }),
         }),
       );
-      const prompt = String(mocks.spawn.mock.calls[0]?.[1]?.[1]);
+      const prompt = String(mocks.spawn.mock.calls[0]?.[1]?.[0]);
       expect(prompt).toContain("injected-doctor-failure");
       expect(prompt).toContain("2026.8.25");
       expect(prompt).toContain("2026.8.26");
@@ -369,8 +369,8 @@ describe("triage external recovery handoff", () => {
         );
 
         expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
-          "/usr/local/bin/claude",
-          ["--safe-mode", expect.stringContaining("injected-doctor-failure")],
+          "/usr/local/bin/codex",
+          [expect.stringContaining("injected-doctor-failure")],
           expect.objectContaining({ cwd: state.workspaceDir, stdio: "inherit" }),
         );
         const output = JSON.stringify([runtime.log.mock.calls, runtime.error.mock.calls]);
