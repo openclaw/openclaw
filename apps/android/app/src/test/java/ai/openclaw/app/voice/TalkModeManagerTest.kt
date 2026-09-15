@@ -511,6 +511,25 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun realtimeAuthenticationFailureRemainsAvailableAfterCloseAndClearsOnStop() {
+    val manager = createManager()
+    assertNull(manager.failureText.value)
+    installRealtimeSession(manager, "relay-1")
+    setMutableStateFlow(manager, "_isEnabled", true)
+    manager.realtimeEvent(
+      """{"relaySessionId":"relay-1","type":"error","message":"Realtime provider authentication failed. Check the provider credentials and try again."}""",
+    )
+    manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"close","reason":"error"}""")
+    assertFalse(manager.isEnabled.value)
+    assertEquals(
+      "Talk failed: Realtime provider authentication failed. Check the provider credentials and try again.",
+      manager.failureText.value,
+    )
+    manager.stopAllCapture()
+    assertNull(manager.failureText.value)
+  }
+
+  @Test
   fun aDeferredTerminalNotificationCannotStopAReplacementTalkStart() {
     var claim: (() -> Boolean)? = null
     val manager = createManager(onStoppedByRelay = { claim = it })
@@ -534,6 +553,7 @@ class TalkModeManagerTest {
     manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"close","reason":"error"}""")
 
     assertEquals("Échec de Talk : session refusée.", manager.statusText.value)
+    assertEquals("Échec de Talk : session refusée.", manager.failureText.value)
   }
 
   @Test
