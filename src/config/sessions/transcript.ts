@@ -1,4 +1,4 @@
-// Session transcript facade resolves transcript files, appends mirror messages, and reads tails.
+// Session transcript facade appends mirror messages and reads tails.
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -156,8 +156,6 @@ class SessionTranscriptAgentScopeMismatchError extends Error {
 }
 
 export type LatestAssistantTranscriptText = AssistantTranscriptText;
-
-export { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 
 function parseAssistantTranscriptText(
   line: string,
