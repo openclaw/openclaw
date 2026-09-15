@@ -184,6 +184,11 @@ struct OnboardingAISetupView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                 }
+                if self.model.canUseVerifiedPendingInference {
+                    Button("Use current model") { self.model.useVerifiedPendingInference() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                }
             }
         }
     }

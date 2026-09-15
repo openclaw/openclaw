@@ -69,9 +69,12 @@ has no macOS app asset, use the newest one that does, or build from source with
 
 During onboarding, an existing Gateway's configured model also waits for your
 selection before its live check. A successful check opens the normal dashboard
-and preserves the configured route. If the Gateway cannot connect or its default
-agent has no model, inference onboarding remains available for recovery.
-Normal app launches after onboarding continue to use the saved Gateway.
+and preserves the configured route. If a previous AI test is still finishing,
+the app waits without changing inference settings; **Check again** re-verifies,
+and **Use current model** opens the dashboard when that check already succeeded.
+If the Gateway cannot connect or its default agent has no model, inference
+onboarding remains available for recovery. Normal app launches after onboarding
+continue to use the saved Gateway.
 
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).

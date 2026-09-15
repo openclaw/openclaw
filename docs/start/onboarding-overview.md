@@ -80,7 +80,10 @@ CLI command docs: [`openclaw onboard`](/cli/onboard)
 [Download the macOS app](/platforms/macos#download), then open it. If its
 configured local or remote Gateway is reachable and the default agent already
 has a configured model, onboarding offers **Current model**. Select it to run a
-real model check and open the normal dashboard. Loading the page only detects
+real model check and open the normal dashboard. If a previous AI test is still
+finishing after you configured that model outside the app, **Check again**
+re-verifies without changing settings, and **Use current model** opens the
+dashboard once that check succeeds. Loading the page only detects
 available connections, including when this Mac is new to an existing Gateway.
 
 For a fresh or incomplete Gateway, native setup handles the Gateway connection,

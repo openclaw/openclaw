@@ -178,73 +178,96 @@ extension OnboardingView {
                 expectedRouteIdentity: expectedRouteIdentity,
                 knownVisible: knownVisible)
             else { return }
-            let pendingState = OnboardingSystemAgentResumeStore.pendingState(
-                for: expectedRouteIdentity,
-                defaults: self.systemAgentDefaults)
-            if intent != .inspectOnly {
-                self.schedulePendingActivationRecheckIfNeeded(pendingState, routeIdentity: expectedRouteIdentity)
-            }
+            await self.handleConfiguredGatewayProbeOutcome(
+                outcome,
+                intent: intent,
+                expectedPendingState: expectedPendingState,
+                expectedActivationOwner: expectedActivationOwner,
+                expectedRouteIdentity: expectedRouteIdentity,
+                knownAISetupPage: knownAISetupPage)
+        }
+    }
 
-            switch outcome {
-            case let .configured(modelRef, _):
-                switch pendingState {
-                case .activating, .activationExpired, .completed:
-                    // A live setup/verification already owns this marker. A
-                    // reconnect must not downgrade connected state or fork a
-                    // second resume operation.
-                    guard !self.aiSetup.connected else { return }
-                    // Reopening a receipt authorizes observation, never another automatic test.
-                    let recoveryIntent = intent == .inspectOnly ? intent : .resumePending
-                    await self.resumePendingSystemAgent(modelRef: modelRef, intent: recoveryIntent).value
-                    return
-                case .verified:
-                    // Inference was observed, but the dropped activation can
-                    // still be mutating until the same durable deadline.
-                    self.waitForPendingInferenceSetup()
-                    return
-                case .none:
-                    break
-                }
-            case .missing:
-                // A route-bound activation/verification can complete while the
-                // earlier agents.list request is suspended. Never let that
-                // stale absence reset connected inference or its handoff marker.
+    private func handleConfiguredGatewayProbeOutcome(
+        _ outcome: OnboardingConfiguredGatewayProbe.Outcome,
+        intent: OnboardingAISetupModel.SetupIntent,
+        expectedPendingState: OnboardingSystemAgentResumeStore.PendingState,
+        expectedActivationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?,
+        expectedRouteIdentity: String?,
+        knownAISetupPage: Bool) async
+    {
+        let pendingState = OnboardingSystemAgentResumeStore.pendingState(
+            for: expectedRouteIdentity,
+            defaults: self.systemAgentDefaults)
+        if intent != .inspectOnly {
+            self.schedulePendingActivationRecheckIfNeeded(pendingState, routeIdentity: expectedRouteIdentity)
+        }
+
+        switch outcome {
+        case let .configured(modelRef, _):
+            switch pendingState {
+            case .activating, .activationExpired, .completed:
+                // A live setup/verification already owns this marker. A
+                // reconnect must not downgrade connected state or fork a
+                // second resume operation.
                 guard !self.aiSetup.connected else { return }
-                switch pendingState {
-                case .activating, .verified:
-                    // A dropped activation may still be committing. Keep this
-                    // route read-only until its durable maximum deadline.
+                // Reopening a receipt authorizes observation, never another automatic test.
+                let recoveryIntent = intent == .inspectOnly ? intent : .resumePending
+                await self.resumePendingSystemAgent(modelRef: modelRef, intent: recoveryIntent).value
+                return
+            case .verified:
+                // Automatic reconnects stay read-only until the lease
+                // ends. Check again re-verifies so the user can open the
+                // already-working route without another activation write.
+                if intent == .inspectOnly {
+                    guard !self.aiSetup.connected else { return }
+                    await self.resumePendingSystemAgent(modelRef: modelRef, intent: intent).value
+                } else {
                     self.waitForPendingInferenceSetup()
-                    return
-                case .activationExpired, .completed:
-                    // The absence result was dispatched for the receipt visible
-                    // at probe start. A replacement attempt owns its own retry.
-                    guard intent != .inspectOnly,
-                          expectedPendingState != .none,
-                          let expectedRouteIdentity,
-                          OnboardingSystemAgentResumeStore.clear(
-                              ifOwnedBy: expectedRouteIdentity,
-                              activationOwner: expectedActivationOwner,
-                              defaults: self.systemAgentDefaults)
-                    else { return }
-                    self.resumePendingInferenceSetup()
-                    return
-                case .none:
-                    break
                 }
-            case .unavailable, .authIssue:
-                self.showConfiguredGatewayProbeBlocker(outcome)
                 return
-            case .superseded:
+            case .none:
+                break
+            }
+        case .missing:
+            // A route-bound activation/verification can complete while the
+            // earlier agents.list request is suspended. Never let that
+            // stale absence reset connected inference or its handoff marker.
+            guard !self.aiSetup.connected else { return }
+            switch pendingState {
+            case .activating, .verified:
+                // A dropped activation may still be committing. Keep this
+                // route read-only until its durable maximum deadline.
+                self.waitForPendingInferenceSetup()
                 return
+            case .activationExpired, .completed:
+                // The absence result was dispatched for the receipt visible
+                // at probe start. A replacement attempt owns its own retry.
+                guard intent != .inspectOnly,
+                      expectedPendingState != .none,
+                      let expectedRouteIdentity,
+                      OnboardingSystemAgentResumeStore.clear(
+                          ifOwnedBy: expectedRouteIdentity,
+                          activationOwner: expectedActivationOwner,
+                          defaults: self.systemAgentDefaults)
+                else { return }
+                self.resumePendingInferenceSetup()
+                return
+            case .none:
+                break
             }
-            // Both configured and empty Gateways enter the picker only after
-            // native receipt recovery. A configured label never authorizes a live test.
-            if intent != .inspectOnly,
-               knownAISetupPage || self.activePageIndex == self.aiPageIndex
-            {
-                self.aiSetup.startIfNeeded()
-            }
+        case .unavailable, .authIssue:
+            self.showConfiguredGatewayProbeBlocker(outcome)
+            return
+        case .superseded:
+            return
+        }
+        // Both configured and empty Gateways enter the picker only after
+        // native receipt recovery. A configured label never authorizes a live test.
+        if intent != .inspectOnly,
+           knownAISetupPage || self.activePageIndex == self.aiPageIndex
+        {
+            self.aiSetup.startIfNeeded()
         }
     }
 

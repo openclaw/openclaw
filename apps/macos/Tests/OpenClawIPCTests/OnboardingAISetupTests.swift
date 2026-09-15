@@ -4501,6 +4501,7 @@ struct OnboardingAISetupTests {
                 ? .verified(deadline: deadline) : originalPendingState
             #expect(pendingState(defaults) == expectedState)
             #expect(view.aiSetup.waitingForPendingActivationDeadline)
+            #expect(view.aiSetup.canUseVerifiedPendingInference == canVerifyOwner)
         } else if configured {
             #expect(pendingState(defaults) == .none)
             #expect(view.aiSetup.phase == .ready)
@@ -4579,13 +4580,124 @@ struct OnboardingAISetupTests {
         #expect(!methods.contains("openclaw.setup.activate"))
         #expect(!view.aiSetup.connected)
         #expect(view.aiSetup.waitingForPendingActivationDeadline)
+        #expect(view.aiSetup.canUseVerifiedPendingInference)
+        #expect(view.aiSetup.verifiedPendingConfiguredModel == "openai/gpt-5.5")
         #expect({
             if case .verified = pendingState(defaults) {
                 return true
             }
             return false
         }())
+
+        let inspectRecheck = try #require(view.retryConfiguredGatewayProbe(intent: .inspectOnly))
+        await inspectRecheck.value
+        await settleQueuedAISetupTasks()
+        let inspectedMethods = await harness.recorder.snapshot().methods
+        #expect(inspectedMethods.filter { $0 == "openclaw.setup.verify" }.count == 2)
+        #expect(!inspectedMethods.contains("openclaw.setup.activate"))
+        #expect(!view.aiSetup.connected)
+        #expect(view.aiSetup.canUseVerifiedPendingInference)
+
         view.onboardingDidDisappear()
+    }
+
+    @Test func `verified pending inference can open the current model without another activation`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingUseVerifiedPendingModelTests"))
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let harness = AISetupHarness(url: url) { _, request, _ in
+            switch request.method {
+            case "agents.list":
+                return configuredModelResponse(id: request.id)
+            case "openclaw.setup.verify":
+                return verifiedSetupResponse(id: request.id)
+            case "openclaw.setup.detect", "openclaw.setup.activate":
+                Issue.record("Unexpected mutating setup request: \(request.method)")
+                return failedActivationResponse(id: request.id)
+            default:
+                return nil
+            }
+        }
+        let route = try #require(await harness.gateway.captureRoute())
+        let owner = try OnboardingSystemAgentResumeStore.ActivationOwner(
+            id: "cli-configured-activation",
+            routeFingerprint: #require(route.activationOwnershipFingerprint)
+        )
+        let deadline = try #require(markPending(defaults, owner: owner, timeoutMs: 30000))
+        let appState = AppState(preview: true)
+        appState.connectionMode = .local
+        let view = harness.view(
+            state: appState,
+            defaults: defaults,
+            routeIdentityProvider: { "local" },
+            gatewaySelectionPersister: { true }
+        )
+        view.prepareSystemAgentHandoff()
+
+        let probe = try #require(view.probeConfiguredGatewayForDashboard(knownVisible: true))
+        await probe.value
+        await settleQueuedAISetupTasks()
+
+        #expect(!view.aiSetup.connected)
+        #expect(!view.finishState.didFinish)
+        #expect(view.aiSetup.canUseVerifiedPendingInference)
+        guard case let .verified(verifiedDeadline) = pendingState(defaults) else {
+            Issue.record("Expected the pending activation to be verified")
+            return
+        }
+        #expect(abs(verifiedDeadline.timeIntervalSince(deadline)) < 0.001)
+        #expect(storedActivationOwner(defaults) == owner)
+
+        let waiting = await inspectAISetupSurface(OnboardingAISetupView(
+            model: view.aiSetup,
+            returnToGatewayAuthentication: {},
+            retryConfiguredGatewayProbe: { _ in }
+        ))
+        #expect(waiting.actions["Check again"] == true)
+        #expect(waiting.actions["Use current model"] == true)
+
+        view.aiSetup.useVerifiedPendingInference()
+        await settleQueuedAISetupTasks()
+
+        #expect(view.aiSetup.connected)
+        #expect(view.aiSetup.verifiedExistingInference)
+        #expect(view.finishState.didFinish)
+        guard case let .verified(retainedDeadline) = pendingState(defaults) else {
+            Issue.record("Expected the verified activation receipt to remain pending")
+            return
+        }
+        #expect(abs(retainedDeadline.timeIntervalSince(verifiedDeadline)) < 0.001)
+        #expect(storedActivationOwner(defaults) == owner)
+        #expect(await harness.recorder.snapshot().methods == [
+            "agents.list",
+            "openclaw.setup.verify",
+        ])
+        view.onboardingDidDisappear()
+        await harness.gateway.shutdown()
+    }
+
+    @Test func `unbound pending receipt cannot use the current model`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingUnboundPendingModelTests"))
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let harness = AISetupHarness(url: url) { _, request, _ in
+            request.method == "agents.list" ? configuredModelResponse(id: request.id) : nil
+        }
+        let owner = OnboardingSystemAgentResumeStore.ActivationOwner.unbound()
+        markPending(defaults, owner: owner, timeoutMs: 30000)
+        let appState = AppState(preview: true)
+        appState.connectionMode = .local
+        let view = harness.view(state: appState, defaults: defaults, routeIdentityProvider: { "local" })
+
+        let probe = try #require(view.probeConfiguredGatewayForDashboard(knownVisible: true))
+        await probe.value
+        await settleQueuedAISetupTasks()
+
+        #expect(view.aiSetup.waitingForPendingActivationDeadline)
+        #expect(!view.aiSetup.canUseVerifiedPendingInference)
+        view.aiSetup.useVerifiedPendingInference()
+        #expect(!view.aiSetup.connected)
+        #expect(storedActivationOwner(defaults) == owner)
+        view.onboardingDidDisappear()
+        await harness.gateway.shutdown()
     }
 
     @Test(arguments: [false, true])

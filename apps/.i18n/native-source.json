@@ -3705,6 +3705,7 @@
     {"id":"native.apple.a7fe7981e9a79541","source":"Use Manual Gateway","surface":"apple","sites":[{"kind":"ui-call","path":"apps/ios/Sources/Design/SettingsProTabSections.swift"}]},
     {"id":"native.apple.7ae3e7ca4af23408","source":"Use Manual Setup","surface":"apple","sites":[{"kind":"ui-call","path":"apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift"},{"kind":"ui-call","path":"apps/ios/Sources/Onboarding/OnboardingWizardConnectionSections.swift"}]},
     {"id":"native.apple.927cfaa2ccf2e93d","source":"Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.","surface":"apple","sites":[{"kind":"ui-call","path":"apps/ios/Sources/Design/SettingsProTabSections.swift"}]},
+    {"id":"native.apple.bca40839c67fc249","source":"Use current model","surface":"apple","sites":[{"kind":"ui-call","path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift"}]},
     {"id":"native.apple.3b975adec06add52","source":"Use default","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/Sources/Design/ChatModelControlsMenu.swift"}]},
     {"id":"native.apple.73e3645b48d79f89","source":"Use file version","surface":"apple","sites":[{"kind":"ui-call","path":"apps/macos/Sources/OpenClaw/GatewayConfigConflict.swift"}]},
     {"id":"native.apple.498aee3bbead969d","source":"Use iPhone Settings to enable direct connection.","surface":"apple","sites":[{"kind":"ui-localized-call","path":"apps/ios/WatchApp/Sources/WatchDirectNode.swift"}]},

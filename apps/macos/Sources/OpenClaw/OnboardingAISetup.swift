@@ -46,6 +46,9 @@ final class OnboardingAISetupModel {
     private(set) var detectError: Failure?
     private(set) var pendingActivationVerification = false
     private(set) var waitingForPendingActivationDeadline = false
+    /// Live `openclaw.setup.verify` success observed while a mutation lease is
+    /// still active. This is not a handoff; the user must choose to use it.
+    private(set) var verifiedPendingConfiguredModel: String?
     private(set) var configuredGatewayBlocker: ConfiguredGatewayBlocker?
 
     var manualProviderID = ""
@@ -308,13 +311,16 @@ final class OnboardingAISetupModel {
                 switch pendingState {
                 case .activating, .verified:
                     // This proves inference works, but not that the dropped
-                    // activation stopped mutating. Preserve its deadline.
+                    // activation stopped mutating. Preserve its deadline and
+                    // let the user open the already-working route without a
+                    // second activation write.
                     OnboardingSystemAgentResumeStore.markVerified(
                         ifOwnedBy: context.routeIdentity,
                         activationOwner: self.pendingActivationOwner,
                         defaults: self.defaults)
                     self.pendingActivationVerification = false
                     self.detectError = nil
+                    self.verifiedPendingConfiguredModel = modelRef
                     self.beginPendingActivationDeadlineWait()
                     return .notConnected
                 case .activationExpired, .none:
@@ -467,9 +473,26 @@ final class OnboardingAISetupModel {
         let model = modelRef.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.pendingActivationVerification, !model.isEmpty else { return }
         guard self.pendingActivationOwner == nil else { return }
-        finishConnected(
-            kind: "existing-model",
-            handoff: .dashboard)
+        finishConnected(kind: "existing-model", handoff: .dashboard)
+    }
+
+    /// True after live verify while a mutation lease still blocks activation.
+    var canUseVerifiedPendingInference: Bool {
+        guard self.waitingForPendingActivationDeadline,
+              !(self.verifiedPendingConfiguredModel?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true),
+              self.pendingActivationOwner?.isUnbound != true,
+              let routeIdentity = routeIdentityProvider()
+        else { return false }
+        switch OnboardingSystemAgentResumeStore.pendingState(for: routeIdentity, defaults: self.defaults) {
+        case .activating, .verified: return true
+        case .activationExpired, .completed, .none: return false
+        }
+    }
+
+    /// Open the already-working route without a second activation write.
+    func useVerifiedPendingInference() {
+        guard self.canUseVerifiedPendingInference else { return }
+        finishConnected(kind: "existing-model", handoff: .dashboard)
     }
 
     /// Clear only the completed receipt created by this setup attempt.
@@ -523,6 +546,7 @@ final class OnboardingAISetupModel {
         self.detectError = nil
         self.pendingActivationVerification = false
         self.waitingForPendingActivationDeadline = false
+        self.verifiedPendingConfiguredModel = nil
         self.configuredGatewayBlocker = nil
         self.serverLease = nil
         self.manualProviderID = ""
