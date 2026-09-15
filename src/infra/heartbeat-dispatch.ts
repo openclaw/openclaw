@@ -158,6 +158,29 @@ function prepareHeartbeatTargetAwareness(params: {
   }
 }
 
+/**
+ * Determines whether to set an indicator type for heartbeat delivery.
+ * This is used when delivery would otherwise be suppressed but we still want
+ * to indicate that the heartbeat completed successfully.
+ *
+ * Returns "alert" when alerts are disabled but delivery would otherwise succeed,
+ * and "sent" when the heartbeat was sent. Returns undefined in all other cases.
+ */
+function shouldSetIndicator(
+  noChannelTarget: boolean,
+  visibility: { showAlerts: boolean; useIndicator: boolean },
+): "sent" | "alert" | undefined {
+  if (noChannelTarget || !visibility.useIndicator) {
+    return undefined;
+  }
+  // When alerts are disabled, use "alert" indicator to show heartbeat was processed.
+  if (!visibility.showAlerts) {
+    return "alert";
+  }
+  // Otherwise, heartbeat was sent successfully.
+  return "sent";
+}
+
 /** Monitoring decides which final is public before ordinary dispatch can send it. */
 async function prepareHeartbeatDispatchReply(
   policy: HeartbeatDispatch,
@@ -419,11 +442,14 @@ async function prepareHeartbeatDispatchReply(
       return {};
     }
   }
-  if (!channel || !delivery.to || !visibility.showAlerts || (failed && outcome.shouldSkipMain)) {
+  // Exec-completion wakes on a WebChat-internal session have no external
+  // channel/route by design (delivery.channel stays "none"), but the reply
+  // still belongs on the originating session's own transcript, so the
+  // no-channel/no-target gate below does not apply to this case (#147387).
+  const noChannelTarget = !prepared.isWebChatExecCompletion && (!channel || !delivery.to);
+  if (noChannelTarget || !visibility.showAlerts || (failed && outcome.shouldSkipMain)) {
     if (!failed) {
-      await unconfirmed(
-        !channel || !delivery.to ? (delivery.reason ?? "no-target") : "alerts-disabled",
-      );
+      await unconfirmed(noChannelTarget ? (delivery.reason ?? "no-target") : "alerts-disabled");
       if (!visibility.showAlerts) {
         await restoreActivity();
       }
@@ -435,20 +461,23 @@ async function prepareHeartbeatDispatchReply(
         : {
             ...event,
             status: "skipped",
-            reason: !channel || !delivery.to ? (delivery.reason ?? "no-target") : "alerts-disabled",
+            reason: noChannelTarget ? (delivery.reason ?? "no-target") : "alerts-disabled",
             hasMedia: outcome.mediaUrls.length > 0,
-            indicatorType:
-              channel && delivery.to && !visibility.showAlerts && visibility.useIndicator
-                ? resolveIndicatorType("sent")
-                : undefined,
+            indicatorType: shouldSetIndicator(noChannelTarget, visibility)
+              ? resolveIndicatorType("sent")
+              : undefined,
           },
       !failed,
     );
     return {};
   }
-  const readiness = await resolveHeartbeatChannelPlugin(channel)
-    ?.heartbeat?.checkReady?.({ cfg, accountId: delivery.accountId, deps: opts.deps })
-    .catch((error: unknown) => ({ ok: false, reason: formatErrorMessage(error) }));
+  // A WebChat exec-completion reply has no channel plugin to ready-check;
+  // it delivers straight to the originating session's own transcript.
+  const readiness = channel
+    ? await resolveHeartbeatChannelPlugin(channel)
+        ?.heartbeat?.checkReady?.({ cfg, accountId: delivery.accountId, deps: opts.deps })
+        .catch((error: unknown) => ({ ok: false, reason: formatErrorMessage(error) }))
+    : undefined;
   if (readiness && !readiness.ok) {
     await unconfirmed(readiness.reason ?? HEARTBEAT_SKIP_CHANNEL_NOT_READY);
     await restoreActivity();
@@ -539,9 +568,16 @@ export async function deliverHeartbeatDispatch(
   signal?: AbortSignal,
 ) {
   const { cfg, agentId, startedAt } = policy.wake;
-  const { delivery, runSessionKey, storePath, outboundPolicySessionKey } = policy.prepared;
+  const { delivery, runSessionKey, storePath, outboundPolicySessionKey, isWebChatExecCompletion } =
+    policy.prepared;
   if (delivery.channel === "none" || !delivery.to) {
-    return { visibleReplySent: false };
+    // A WebChat-internal exec-completion reply has no external channel to
+    // send to, but it was already projected onto the session's own
+    // transcript by the ordinary turn-completion path (#147387). Report it
+    // as visibly sent so the triggering system event is consumed here too;
+    // otherwise a later wake would see the same event as still pending and
+    // relay the same completion a second time.
+    return { visibleReplySent: isWebChatExecCompletion === true };
   }
   const onDeliveredPayload = policy.projectTarget
     ? prepareHeartbeatTargetAwareness({

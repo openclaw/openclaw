@@ -391,9 +391,23 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     channel: delivery.channel !== "none" ? delivery.channel : undefined,
     accountId: delivery.accountId,
   });
-  const canRelayToUser = Boolean(
-    delivery.channel !== "none" && delivery.to && visibility.showAlerts,
-  );
+  // Exec-completion wakes on a WebChat-internal session have no external
+  // channel/route (delivery.channel stays "none"), but the originating
+  // session still has its own live transcript that WebChat/Companion reads
+  // directly. Without this, the model is told delivery is disabled and the
+  // completion is silently dropped (#147387).
+  // `delivery.kind === "internal"` alone is not a WebChat/Companion-specific
+  // signal: hidden internal-effects sessions (internal-session-effects.ts,
+  // voice bare rows) share the exact same delivery state. Exclude sessions
+  // explicitly created via that hidden path (`createdVia === "internal"`) so
+  // the bypass cannot relay into a session no client ever reads.
+  const isWebChatExecCompletion =
+    wake.wakeSource === "exec-event" &&
+    conversationEntry?.delivery?.kind === "internal" &&
+    conversationEntry?.createdVia !== "internal";
+  const canRelayToUser =
+    (delivery.channel !== "none" && delivery.to && visibility.showAlerts) ||
+    isWebChatExecCompletion;
   let useHeartbeatResponseToolPrompt = shouldUseHeartbeatResponseToolPrompt({
     cfg,
     agentId,
@@ -537,6 +551,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     replyPrefix,
     runSessionKey,
     outboundPolicySessionKey,
+    isWebChatExecCompletion,
     ...heartbeatRunPrompt,
   } as const;
 }
