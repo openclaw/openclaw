@@ -931,7 +931,13 @@ function scheduleDeliveredSourceReplyTranscriptMirror(params: {
 }
 
 export const sendHandlers: GatewayRequestHandlers = {
-  "message.action": async ({ params: request, respond, context, client }) => {
+  "message.action": async ({
+    params: request,
+    respond,
+    context,
+    client,
+    sessionMutationCommitGuard,
+  }) => {
     if (!assertValidParams(request, validateMessageActionParams, "message.action", respond)) {
       return;
     }
@@ -944,7 +950,12 @@ export const sendHandlers: GatewayRequestHandlers = {
       client,
       requestedOrigin: request.conversationReadOrigin,
     });
-    const agentRuntimeAuthority = createAgentRuntimeAuthorityGuard(client, context, respond);
+    const agentRuntimeAuthority = createAgentRuntimeAuthorityGuard(
+      client,
+      context,
+      respond,
+      sessionMutationCommitGuard,
+    );
     const assertDirectAdapterHandoff = agentRuntimeAuthority.commitGuard;
     const onPlatformSendDispatch = assertDirectAdapterHandoff
       ? async () => assertDirectAdapterHandoff()
@@ -1260,7 +1271,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       },
     });
   },
-  send: async ({ params: request, respond, context, client }) => {
+  send: async ({ params: request, respond, context, client, sessionMutationCommitGuard }) => {
     if (!assertValidParams(request, validateSendParams, "send", respond)) {
       return;
     }
@@ -1284,7 +1295,12 @@ export const sendHandlers: GatewayRequestHandlers = {
     const requestedAccountId = normalizeOptionalString(request.accountId);
     const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
-    const agentRuntimeAuthority = createAgentRuntimeAuthorityGuard(client, context, respond);
+    const agentRuntimeAuthority = createAgentRuntimeAuthorityGuard(
+      client,
+      context,
+      respond,
+      sessionMutationCommitGuard,
+    );
     const hasAgentRuntimeAuthority = client?.internal?.agentRuntimeIdentity !== undefined;
     const commitAgentRuntimeAuthority = agentRuntimeAuthority.commitGuard;
     const onPlatformSendDispatch = commitAgentRuntimeAuthority

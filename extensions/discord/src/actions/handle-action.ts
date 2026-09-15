@@ -21,6 +21,7 @@ import {
 } from "../active-turn-thread-route.js";
 import { coerceDiscordComponentParam } from "../components.js";
 import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
+import { withDiscordRequestAuthority } from "../internal/request-authority.js";
 import {
   DISCORD_PRESENTATION_CAPABILITIES,
   isDiscordComponentSpecWithinMessageLimit,
@@ -58,25 +59,37 @@ function readCurrentDiscordTarget(
   return target || undefined;
 }
 
+type DiscordMessageActionContext = Pick<
+  ChannelMessageActionContext,
+  | "action"
+  | "params"
+  | "cfg"
+  | "accountId"
+  | "requesterAccountId"
+  | "requesterSenderId"
+  | "senderIsOwner"
+  | "toolContext"
+  | "mediaAccess"
+  | "mediaLocalRoots"
+  | "mediaReadFile"
+  | "sessionKey"
+  | "inboundEventKind"
+  | "conversationReadOrigin"
+  | "reply"
+  | "assertDirectAdapterHandoff"
+>;
+
 export async function handleDiscordMessageAction(
-  ctx: Pick<
-    ChannelMessageActionContext,
-    | "action"
-    | "params"
-    | "cfg"
-    | "accountId"
-    | "requesterAccountId"
-    | "requesterSenderId"
-    | "senderIsOwner"
-    | "toolContext"
-    | "mediaAccess"
-    | "mediaLocalRoots"
-    | "mediaReadFile"
-    | "sessionKey"
-    | "inboundEventKind"
-    | "conversationReadOrigin"
-    | "reply"
-  >,
+  ctx: DiscordMessageActionContext,
+): Promise<AgentToolResult<unknown>> {
+  ctx.assertDirectAdapterHandoff?.();
+  return await withDiscordRequestAuthority(ctx.assertDirectAdapterHandoff, () =>
+    dispatchDiscordMessageAction(ctx),
+  );
+}
+
+async function dispatchDiscordMessageAction(
+  ctx: DiscordMessageActionContext,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(params, "accountId");
