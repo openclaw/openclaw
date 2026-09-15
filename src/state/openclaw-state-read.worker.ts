@@ -1,5 +1,6 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { SKILL_LIBRARY_MAX_SELECTIONS } from "../../packages/gateway-protocol/src/schema/skill-library.js";
 import {
   countMcpOAuthPrincipalsInDatabase,
   listMcpOAuthStoreKeysInDatabase,
@@ -10,8 +11,13 @@ import {
 import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/registry.kernel.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { serveWorkerTasks } from "../infra/worker-task-pool.js";
+import {
+  selectSkillLibraryRevisionMetadataBatch,
+  selectSkillLibraryRevisionManifestsBatch,
+} from "../skills/library/selection-read.kernel.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { withOpenClawStateReadOnlyLocation } from "./openclaw-state-db-readonly.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type {
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
@@ -35,6 +41,14 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
     typeof coordinatorRuntime.directory === "string" &&
     typeof coordinatorRuntime.keepAlive === "boolean" &&
     (input.command.type === "admit" ||
+      ((input.command.type === "skills.library.descriptions" ||
+        input.command.type === "skills.library.manifests") &&
+        Array.isArray(input.command.input) &&
+        input.command.input.length <= SKILL_LIBRARY_MAX_SELECTIONS &&
+        input.command.input.every(
+          (pin) =>
+            isRecord(pin) && typeof pin.skillId === "string" && typeof pin.revision === "string",
+        )) ||
       input.command.type === "fleet.list" ||
       (input.command.type === "fleet.get" && typeof input.command.tenantId === "string") ||
       (input.command.type === "mcpOAuth.statuses" &&
@@ -73,6 +87,24 @@ serveWorkerTasks((input): OpenClawStateReadReply => {
         ({ db }) => {
           sourceAdmitted = true;
           switch (command.type) {
+            case "skills.library.descriptions":
+              return {
+                ok: true,
+                type: command.type,
+                sourceAdmitted,
+                value: tableExists(db, "skill_library_entries")
+                  ? selectSkillLibraryRevisionMetadataBatch(db, command.input)
+                  : undefined,
+              };
+            case "skills.library.manifests":
+              return {
+                ok: true,
+                type: command.type,
+                sourceAdmitted,
+                value: tableExists(db, "skill_library_entries")
+                  ? selectSkillLibraryRevisionManifestsBatch(db, command.input)
+                  : undefined,
+              };
             case "fleet.list":
               return {
                 ok: true,

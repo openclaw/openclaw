@@ -10,6 +10,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import { openRootFileSync, readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
+import type { OpenClawStateReadCaller } from "../../state/openclaw-state-read.types.js";
 import {
   parseSkillFrontmatter,
   resolveSkillInvocationPolicy,
@@ -19,6 +20,8 @@ import { materializeSkill } from "../loading/skill-materializer.js";
 import type { SkillEntry } from "../types.js";
 import { readSkillLibraryManifestTree, skillLibraryRevisionDir } from "./bundle.js";
 import { SkillLibraryError } from "./errors.js";
+import { readSkillLibrarySelectionDescriptions } from "./selection-read.js";
+import { selectSkillLibraryRevisionMetadataBatch } from "./selection-read.kernel.js";
 import {
   projectSkillLibraryEntry,
   readSkillLibraryStore,
@@ -26,7 +29,6 @@ import {
   resolveSkillLibraryActor,
   selectSkillLibraryRevision,
   selectSkillLibraryRevisionMetadata,
-  selectSkillLibraryRevisionMetadataBatch,
   skillLibraryDb,
   type SkillLibraryAuthority,
 } from "./store.js";
@@ -208,71 +210,115 @@ export function loadSkillLibrarySelection(
   if (selections.length > SKILL_LIBRARY_MAX_SELECTIONS) {
     throw new SkillLibraryError("LIMIT", "Invalid session skill selection.");
   }
-  const entries = readSkillLibraryStore((db) => {
-    const revisions = selectSkillLibraryRevisionMetadataBatch(db, selections);
-    return selections.map((selection, index) => {
-      const revision = revisions[index];
-      if (!revision) {
-        throw new SkillLibraryError(
-          "NOT_FOUND",
-          "A pinned skill revision is unavailable; restore the library artifact or detach it explicitly.",
-        );
-      }
-      const baseDir = skillLibraryRevisionDir(selection.skillId, selection.revision, options.env);
-      const filePath = path.join(baseDir, "SKILL.md");
-      const opened = openRootFileSync({
-        absolutePath: filePath,
-        rootPath: baseDir,
-        boundaryLabel: "skill library revision",
-        maxBytes: SKILL_LIBRARY_MAX_FILE_BYTES,
-        rejectHardlinks: true,
-        symlinks: "reject",
-      });
-      if (!opened.ok) {
-        throw new SkillLibraryError(
-          "INVALID_BUNDLE",
-          "Pinned skill instructions could not be read; restore the library artifact or detach it explicitly.",
-          undefined,
-          { cause: opened.error },
-        );
-      }
-      let content: string;
-      try {
-        content = readFileDescriptorBoundedSync(opened.fd, SKILL_LIBRARY_MAX_FILE_BYTES).toString(
-          "utf8",
-        );
-      } finally {
-        fs.closeSync(opened.fd);
-      }
-      const frontmatter = parseSkillFrontmatter(content);
-      const metadata = resolveSkillManifestMetadata(frontmatter);
-      const invocation = resolveSkillInvocationPolicy(frontmatter);
-      const name = selection.name;
-      return {
-        skill: materializeSkill({
-          content,
-          frontmatter,
-          name,
-          description: revision.description,
-          baseDir,
-          filePath,
-          source: "openclaw-library",
-          sourceOptions: { source: "openclaw-library" },
-        }),
-        frontmatter,
-        invocation,
-        // Untrusted frontmatter can constrain executable eligibility, but cannot claim global credentials/config.
-        metadata: {
-          skillKey: name,
-          os: metadata?.os,
-          requires: metadata?.requires,
-        },
-        disableCommandDispatch: true,
-        syncSourceDir: baseDir,
-        syncDirName: `library-${selection.skillId}-${selection.revision}`,
-      } satisfies SkillEntry;
+  const entries = readSkillLibraryStore(
+    (db) =>
+      materializeSkillLibrarySelection(
+        selections,
+        selectSkillLibraryRevisionMetadataBatch(db, selections),
+        options.env,
+      ),
+    options,
+  );
+  return cacheSkillLibrarySelection(cacheKey, entries);
+}
+
+/** Prepare immutable pins without borrowing a caller's synchronous database handle. */
+export async function prepareSkillLibrarySelection(
+  selections: readonly SkillLibrarySelection[],
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env">,
+  caller: OpenClawStateReadCaller,
+): Promise<SkillEntry[]> {
+  caller.assertCurrent?.();
+  if (!selections.length) {
+    return [];
+  }
+  // Cache identity retains the caller's original path shape; transport uses the captured path.
+  const cacheKey = JSON.stringify([resolveStateDir(options.env), options.path, selections]);
+  const cached = selectedEntryCache.get(cacheKey);
+  if (cached) {
+    return [...cached];
+  }
+  if (selections.length > SKILL_LIBRARY_MAX_SELECTIONS) {
+    throw new SkillLibraryError("LIMIT", "Invalid session skill selection.");
+  }
+  const revisions = await readSkillLibrarySelectionDescriptions(selections, caller);
+  caller.assertCurrent?.();
+  return cacheSkillLibrarySelection(
+    cacheKey,
+    revisions && materializeSkillLibrarySelection(selections, revisions, options.env),
+  );
+}
+
+function materializeSkillLibrarySelection(
+  selections: readonly SkillLibrarySelection[],
+  revisions: ReturnType<typeof selectSkillLibraryRevisionMetadataBatch>,
+  env: NodeJS.ProcessEnv | undefined,
+): SkillEntry[] {
+  return selections.map((selection, index) => {
+    const revision = revisions[index];
+    if (!revision) {
+      throw new SkillLibraryError(
+        "NOT_FOUND",
+        "A pinned skill revision is unavailable; restore the library artifact or detach it explicitly.",
+      );
+    }
+    const baseDir = skillLibraryRevisionDir(selection.skillId, selection.revision, env);
+    const filePath = path.join(baseDir, "SKILL.md");
+    const opened = openRootFileSync({
+      absolutePath: filePath,
+      rootPath: baseDir,
+      boundaryLabel: "skill library revision",
+      maxBytes: SKILL_LIBRARY_MAX_FILE_BYTES,
+      rejectHardlinks: true,
+      symlinks: "reject",
     });
-  }, options);
+    if (!opened.ok) {
+      throw new SkillLibraryError(
+        "INVALID_BUNDLE",
+        "Pinned skill instructions could not be read; restore the library artifact or detach it explicitly.",
+        undefined,
+        { cause: opened.error },
+      );
+    }
+    let content: string;
+    try {
+      content = readFileDescriptorBoundedSync(opened.fd, SKILL_LIBRARY_MAX_FILE_BYTES).toString(
+        "utf8",
+      );
+    } finally {
+      fs.closeSync(opened.fd);
+    }
+    const frontmatter = parseSkillFrontmatter(content);
+    const metadata = resolveSkillManifestMetadata(frontmatter);
+    const invocation = resolveSkillInvocationPolicy(frontmatter);
+    const name = selection.name;
+    return {
+      skill: materializeSkill({
+        content,
+        frontmatter,
+        name,
+        description: revision.description,
+        baseDir,
+        filePath,
+        source: "openclaw-library",
+        sourceOptions: { source: "openclaw-library" },
+      }),
+      frontmatter,
+      invocation,
+      // Untrusted frontmatter can constrain executable eligibility, but cannot claim global credentials/config.
+      metadata: {
+        skillKey: name,
+        os: metadata?.os,
+        requires: metadata?.requires,
+      },
+      disableCommandDispatch: true,
+      syncSourceDir: baseDir,
+      syncDirName: `library-${selection.skillId}-${selection.revision}`,
+    } satisfies SkillEntry;
+  });
+}
+
+function cacheSkillLibrarySelection(cacheKey: string, entries: SkillEntry[] | undefined) {
   if (!entries) {
     throw new SkillLibraryError(
       "NOT_FOUND",

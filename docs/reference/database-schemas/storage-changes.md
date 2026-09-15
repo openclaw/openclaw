@@ -129,6 +129,15 @@ Requester MCP setup reads its sorted authorization set in one current read-worke
 operation. The worker decodes selected rows in caller order and returns only
 status facts; each message still observes current storage before runtime reuse.
 
+Worker skill-resource preparation reads cold pinned descriptions and delivered
+revision manifests through the shared read-only worker owner. It retains the
+caller's state snapshot, disposable-read scope, and artifact-preserving policy
+without creating library tables or repairing schema. Synchronous discovery and
+async preparation share the same instruction cache; only delivered pins load
+manifests. Immutable bundle verification and current turn-authority checks remain
+with resource preparation, and ordinary library list/read and selection mutation
+keep their existing owners.
+
 Model-context reads and session transcript preparation use the session-transcript
 worker with separate bounded queues. Background preparation cannot occupy the
 foreground context queue. Session exports read events, statistics, and session

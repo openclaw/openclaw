@@ -74,6 +74,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/entry.memory-json.test.ts",
   "src/gateway/server-methods/memory-search.test.ts",
   "src/memory/memory-artifact-provenance.test.ts",
+  "src/skills/library/resource-read.test.ts",
+  "src/skills/library/service.test.ts",
   "src/plugin-sdk/memory-host-core.test.ts",
   "src/plugin-sdk/memory-host-event-export.test.ts",
   "src/plugin-sdk/memory-host-events.test.ts",
