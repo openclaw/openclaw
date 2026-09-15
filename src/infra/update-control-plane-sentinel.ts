@@ -169,9 +169,10 @@ export async function writeControlPlaneUpdateRestartSentinel(
 export async function markControlPlaneUpdateRestartSentinelFailure(
   reason: string,
   meta?: UpdateRestartSentinelMeta,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinelPayload | null> {
-  if (meta?.runId && !shouldPublishUpdateRestartNotice(getUpdateRun(meta.runId), meta)) {
+  if (meta?.runId && !shouldPublishUpdateRestartNotice(getUpdateRun(meta.runId, { env }), meta)) {
     return null;
   }
-  return (await markUpdateRestartSentinelFailure(reason, process.env, meta))?.payload ?? null;
+  return (await markUpdateRestartSentinelFailure(reason, env, meta))?.payload ?? null;
 }

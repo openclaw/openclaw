@@ -339,6 +339,7 @@ async function publishPreMutationUpdateOutcome(
       meta: params.controlPlaneUpdateSentinelMeta,
       result,
       jsonMode: Boolean(params.opts.json),
+      env: run?.env,
     });
   }
   if (params.opts.json && params.message) {
