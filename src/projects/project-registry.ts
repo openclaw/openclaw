@@ -16,11 +16,11 @@ import {
 } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { withProjectCheckoutLifecycle } from "./project-checkout.js";
 import { registerResolvedProject } from "./project-registration.js";
 import {
   ensureProjectRegistrySchema,
-  readMatchingProjectRow,
   rowToProject,
   type ProjectRegistryIdentity,
   type ProjectRegistryRecord,
@@ -159,20 +159,18 @@ export function removeProjectCheckoutReference(
   );
 }
 
-export function resolveProjectCloneRefreshOwner(
-  project: ProjectRegistryRecord,
+export async function resolveProjectCloneRefreshOwner(
+  project: ProjectRegistryIdentity,
   lease: OpenClawStateLeaseContext,
-  options: OpenClawStateDatabaseOptions = {},
-): ProjectRegistryRecord | undefined {
-  ensureProjectRegistrySchema(options);
-  return runOpenClawStateWriteTransaction(
-    ({ db: sqlite }) => {
-      lease.assertOwnedInTransaction(sqlite);
-      const current = readMatchingProjectRow(sqlite, project);
-      return current?.source === "cloned" ? rowToProject(current) : undefined;
-    },
-    options,
-    { operationLabel: "projects.registry.refresh-owner.resolve" },
+  context: OpenClawStateWorkerContext,
+): Promise<ProjectRegistryRecord | undefined> {
+  const { runWithOpenClawStateLeaseWorker } =
+    await import("../state/openclaw-state-worker-store.js");
+  return await runWithOpenClawStateLeaseWorker(lease, context, (scope, identity) =>
+    scope.execute({
+      type: "projects.resolveRefreshOwner",
+      input: { project, lease: identity },
+    }),
   );
 }
 

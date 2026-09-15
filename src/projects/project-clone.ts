@@ -29,6 +29,7 @@ import {
   resolveProjectCloneRefreshOwner,
   type ProjectRegistryRecord,
 } from "./project-registry.js";
+import type { ProjectRegistryIdentity } from "./project-registry.kernel.js";
 
 const PROJECT_CLONE_LEASE_MS = 30_000;
 const PROJECT_CLONE_WAIT_MS = 30_000;
@@ -168,8 +169,7 @@ export async function materializeProjectClone(
 /** Refreshes an existing project clone while holding its checkout lifecycle lease. */
 export async function refreshProjectClone(
   project: ProjectRegistryRecord,
-  options: OpenClawStateDatabaseOptions & {
-    env?: NodeJS.ProcessEnv;
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
     signal?: AbortSignal;
     timeoutMs?: number;
     token?: string;
@@ -178,31 +178,45 @@ export async function refreshProjectClone(
   if (project.source !== "cloned") {
     return;
   }
-  await withProjectCheckoutLifecycle(project.repoRoot, options, async (lease) => {
-    // Removal and registration share this lease. Re-read now so a queued stale record cannot
-    // authorize network, object-store, or ref effects after checkout ownership changes.
-    const current = resolveProjectCloneRefreshOwner(project, lease, options);
-    if (!current) {
-      throw new ProjectCloneError(
-        "clone_failed",
-        "This project is no longer a Gateway-managed clone. Reselect the repository and retry.",
+  const selectedProject: ProjectRegistryIdentity = {
+    id: project.id,
+    repoRoot: project.repoRoot,
+    source: project.source,
+    originUrl: project.originUrl,
+  };
+  const { signal, timeoutMs, token } = options;
+  const env = { ...(options.env ?? process.env) };
+  const context = captureOpenClawStateWorkerContext({ path: options.path, env });
+  await withProjectCheckoutLifecycle(
+    selectedProject.repoRoot,
+    { path: context.admission.databasePath, env, signal },
+    async (lease) => {
+      // Removal and registration share this lease. Re-read now so a queued stale record cannot
+      // authorize network, object-store, or ref effects after checkout ownership changes.
+      const current = await resolveProjectCloneRefreshOwner(selectedProject, lease, context);
+      lease.assertOwned();
+      if (!current) {
+        throw new ProjectCloneError(
+          "clone_failed",
+          "This project is no longer a Gateway-managed clone. Reselect the repository and retry.",
+        );
+      }
+      // Materialization validates the source URL; retries retain that registry identity.
+      const originUrl = current.originUrl;
+      if (!originUrl) {
+        throw new ProjectCloneError(
+          "invalid_url",
+          "Saved project repository is invalid; select the repository and retry.",
+        );
+      }
+      // The registry owns source identity; origin can be changed inside the shared checkout.
+      await refreshProjectCheckout(
+        { target: current.repoRoot, url: originUrl },
+        { env, signal: lease.signal, timeoutMs, token },
       );
-    }
-    // Materialization validates the source URL; retries retain that registry identity.
-    const originUrl = current.originUrl;
-    if (!originUrl) {
-      throw new ProjectCloneError(
-        "invalid_url",
-        "Saved project repository is invalid; select the repository and retry.",
-      );
-    }
-    // The registry owns source identity; origin can be changed inside the shared checkout.
-    await refreshProjectCheckout(
-      { target: current.repoRoot, url: originUrl },
-      { ...options, signal: lease.signal },
-    );
-    lease.assertOwned();
-  });
+      lease.assertOwned();
+    },
+  );
 }
 
 async function resolveClonedProjectCheckout(

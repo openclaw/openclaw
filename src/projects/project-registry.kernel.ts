@@ -131,7 +131,7 @@ function matchesProjectRecord(row: ProjectRow, project: ProjectRegistryIdentity)
   );
 }
 
-export function readMatchingProjectRow(
+function readMatchingProjectRow(
   database: DatabaseSync,
   project: ProjectRegistryIdentity,
 ): ProjectRow | undefined {
@@ -141,6 +141,14 @@ export function readMatchingProjectRow(
     db.selectFrom("projects").selectAll().where("id", "=", project.id),
   );
   return row && matchesProjectRecord(row, project) ? row : undefined;
+}
+
+export function resolveProjectCloneRefreshOwnerInDatabase(
+  database: DatabaseSync,
+  project: ProjectRegistryIdentity,
+): ProjectRegistryRecord | undefined {
+  const current = readMatchingProjectRow(database, project);
+  return current?.source === "cloned" ? rowToProject(current) : undefined;
 }
 
 export function removeProjectRegistryInDatabase(
