@@ -3308,14 +3308,16 @@ function createCompactNodeTestShardBundles(
       bin.every(isParallelCompactGroup)
         ? 2
         : 1;
-    // Tooling and the full CLI need host capacity while keeping serial isolation.
-    // Promote only the emitted runner so packing, names and timing keys stay stable.
+    // Measured 32-class starvation on 2026-09-15 moves ordinary two-slot bins
+    // to the 16-class; the executor's capacity gate serializes smaller hosts.
+    // Retain explicit 32-class owners and promote only the emitted runner.
     const capacityRunner =
       runner === EXTRA_LARGE_NODE_TEST_RUNNER ||
-      planConcurrency === 2 ||
       (isBlacksmithProfile && bin.some((group) => group.configs.includes(TOOLING_CONFIG)))
         ? EXTRA_LARGE_NODE_TEST_RUNNER
-        : usesBlacksmithCapacity(runner) && bin.some((group) => group.shard_name === "agentic-cli")
+        : planConcurrency === 2 ||
+            (usesBlacksmithCapacity(runner) &&
+              bin.some((group) => group.shard_name === "agentic-cli"))
           ? CLI_NODE_TEST_RUNNER
           : runner;
     compactJobs.push({

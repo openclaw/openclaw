@@ -264,7 +264,10 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   outliers reuse the existing file splitter. Preserve serial execution, worker
   pins and complete timing-history floors; no blanket increase in sharding.
 - Blacksmith and hybrid compact bins with multiple ordinary groups request the
-  existing 32-vCPU class and two child slots with a 360s aggregate budget.
+  existing 16-vCPU class and retain two child slots with a 360s aggregate budget.
+  Existing 32-class requirements, including Blacksmith-profile tooling and agent
+  support, remain intact. The 2026-09-15 queue evidence in `docs/ci/capacity.md`
+  motivates the move; native timing proof on the new labels remains required.
   Compatible two-slot bins use the time budget without the ten-group cutoff;
   serial bins retain that cutoff. Blacksmith serial bins retain 200/276s, hybrid serial bins retain 210s,
   exclusive bins retain 150s by default, and groups above their serial cap stay alone.
@@ -296,8 +299,9 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   separate. Other hybrid exclusive/dist sharing is unchanged. Complete inventories
   remain intact.
   The canonical shard executor admits two CI children only with at least eight
-  available CPUs and 24 GiB actual memory; otherwise it admits one. Inner project
-  parallelism stays one and each overlapping child keeps two Vitest workers.
+  available CPUs and 24 GiB actual memory; otherwise it admits one, including on
+  the measured four-CPU 16-class. Inner project parallelism stays one and each
+  overlapping child keeps two Vitest workers.
   The primary GitHub profile remains serial at 210s. Failed-job-only hybrid
   retries retain the original wider matrix on hosted Ubuntu, clamp to one child,
   and keep two workers per child; they can exceed the eight-minute normal-run
@@ -310,9 +314,9 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   execution and two-worker pins. This adds no jobs and does not promote hosted
   or hybrid tooling. The native two-CPU/8-GB tails require a larger-host timing
   comparison; capacity alone is not a measured speedup.
-- The Docker seed job requests `blacksmith-32vcpu-ubuntu-2404`; its weighted
+- The Docker seed job requests `blacksmith-16vcpu-ubuntu-2404`; its weighted
   scheduler and serial declaration compiler policy stay unchanged.
-- Eligible Control UI E2E rows request the 32-vCPU class with unchanged live
+- Eligible Control UI E2E rows request the 16-vCPU class with unchanged live
   backend/event/contributor routing and two/one-worker project limits. Targets
   with the named-project contract use six shards on non-frozen Blacksmith and
   hybrid first attempts; other fresh plans retain twelve. Historical targets without
@@ -320,8 +324,8 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   including the browser-extension row. Failed-job-only PR and hybrid push retries
   retain the six-shard width on hosted Ubuntu with the existing 25-minute timeout.
   The browser-extension row stays on 8. Twelve rows finished by 4:38 in run
-  33695337496; the reduced width needs native timing proof and does not refresh
-  stale timing weights.
+  33695337496 on the 32-class; the reduced width needs native 16-class timing
+  proof and does not refresh stale timing weights.
 - Eligible real-Gateway jobs request the existing 32-class for the private artifact
   build's two canonical SDK cache misses. Overlap requires at least two available
   CPUs and 25.5 GiB of observed remaining memory for unchanged 12-GiB heaps plus
@@ -343,16 +347,20 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   matrix. Keep the complete scenario inventory, separate Matrix run, worker
   limits, stagger, cleanup and deadlines. Measure the four-part jobs natively;
   summed build intervals are not a wall-time saving estimate.
-- GitHub/hybrid test types use three jobs: two paired core rows run the original
-  stripes 1+2 and 3+4 sequentially; the central row runs stripe 5 before the
+- GitHub/hybrid test types use three jobs on hosted Ubuntu on every attempt:
+  two paired core rows run the original stripes 1+2 and 3+4 sequentially; the
+  central row runs stripe 5 before the
   extensions/scripts/root tail. Keep every canonical core test graph, at most two compiler
   children per stripe, and one builder per child. The central fifth stripe
   retains the standalone core resource environment. A failing stripe stops its
   row; other matrix rows keep running. Pure Blacksmith and targets without
   stripe support retain the full central path. Measure the combined jobs
   natively; fewer registrations alone do not prove the eight-minute target.
-- CPU-heavy test-type, core test-type stripe, runtime-topology, and npm preflight
-  jobs request `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe
+- Hybrid `check-shard` and `check-additional-shard` rows use `ubuntu-24.04` on
+  every attempt, retaining Full Release Validation's frozen-candidate lint
+  exception. Blacksmith-profile lint, dependencies, test types, extension-package
+  boundary, and runtime-topology checks retain their 32-class labels. Npm preflight
+  also retains `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe
   [run 33538827388](https://github.com/openclaw/openclaw/actions/runs/33538827388)
   measured requested 8/16/32 labels delivering 2/4/8 CPUs respectively. Treat
   larger requests as a measured capacity workaround, never as worker counts.

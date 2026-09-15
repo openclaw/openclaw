@@ -144,7 +144,7 @@ describe("compact node prerequisite admission", () => {
         expect(jobs[0]).toMatchObject({
           planConcurrency: 2,
           predictedSeconds: profile === "hybrid" ? 261 : 300,
-          runner: "blacksmith-32vcpu-ubuntu-2404",
+          runner: "blacksmith-16vcpu-ubuntu-2404",
         });
         expect(jobs[0]?.pretestBuildMode).toBeUndefined();
       }
