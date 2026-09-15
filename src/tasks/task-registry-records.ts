@@ -313,7 +313,15 @@ export function applyTaskRecordPatch(
   if (Object.hasOwn(patch, "childSessionKey") && patch.childSessionKey === undefined) {
     delete next.childSessionKey;
   }
-  if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
+  // A terminal status reached from "lost" (a recovered lost record) must drop
+  // the short lost-window cleanupAfter: recovery restores the standard terminal
+  // retention from the recovered endedAt, otherwise a recovered record keeps
+  // lostAt + 24h and is pruned almost immediately.
+  const recoversFromLost = current.status === "lost" && isTerminalTaskStatus(next.status);
+  if (
+    isTerminalTaskStatus(next.status) &&
+    (recoversFromLost || typeof next.cleanupAfter !== "number")
+  ) {
     const createdAt = next.createdAt ?? now ?? Date.now();
     next.cleanupAfter = resolveTaskCleanupAfter({ ...next, createdAt });
   }

@@ -824,11 +824,12 @@ function projectTaskRecovered(task: TaskRecord, recovery: CronTerminalRecovery):
   if (recovery.error === undefined) {
     delete projected.error;
   }
+  // Recovery must recompute the terminal retention window: the lost record
+  // carries the short lost-window cleanupAfter, which no longer applies once
+  // the task is a recovered terminal record.
   return {
     ...projected,
-    ...(typeof projected.cleanupAfter === "number"
-      ? {}
-      : { cleanupAfter: resolveTaskCleanupAfter(projected) }),
+    cleanupAfter: resolveTaskCleanupAfter(projected),
   };
 }
 

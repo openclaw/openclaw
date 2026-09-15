@@ -1,7 +1,8 @@
-// Covers task registry store persistence, in-memory behavior, and observer notifications.
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+// Covers task registry store persistence, in-memory behavior, and observer notifications.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
@@ -81,6 +82,7 @@ import {
   parseTaskScopeKind,
   parseTaskStatus,
 } from "./task-registry.types.js";
+import { resolveTaskCleanupAfter } from "./task-retention.js";
 import {
   maybeDeliverTaskStateChangeUpdate,
   resetTaskFlowRegistryForTests,
@@ -402,6 +404,50 @@ describe("task-registry store runtime", () => {
     expect(getTaskById("task-restored")).toBeUndefined();
     expect(failedLoad).toHaveBeenCalledTimes(1);
     expect(cleanLoad).toHaveBeenCalledTimes(1);
+  });
+
+  it("recomputes the terminal retention window when a lost task is recovered", () => {
+    const lostAt = 1_000_000;
+    const recoveredEndedAt = lostAt + 1_250;
+    const lostTask: TaskRecord = {
+      ...createStoredTask(),
+      taskId: "task-lost-recovered",
+      runtime: "cron",
+      status: "lost",
+      endedAt: lostAt,
+      lastEventAt: lostAt,
+      cleanupAfter: lostAt + 24 * 60 * 60_000, // short lost-window retention
+    };
+    configureTaskRegistryRuntime({
+      store: {
+        ...createInMemoryTaskRegistryStore({
+          tasks: new Map([[lostTask.taskId, lostTask]]),
+          deliveryStates: new Map(),
+        }),
+      },
+    });
+
+    const recovered = expectDefined(
+      markTaskTerminalById({
+        taskId: lostTask.taskId,
+        status: "succeeded",
+        endedAt: recoveredEndedAt,
+        lastEventAt: recoveredEndedAt,
+      }),
+      "expected lost task recovery to succeed",
+    );
+    expect(recovered.status).toBe("succeeded");
+    // The recovered record must carry the standard terminal retention from its
+    // recovered endedAt, not the stale short lost-window value.
+    expect(recovered.cleanupAfter).toBe(
+      resolveTaskCleanupAfter({
+        status: "succeeded",
+        endedAt: recoveredEndedAt,
+        lastEventAt: recoveredEndedAt,
+        createdAt: lostTask.createdAt,
+      }),
+    );
+    expect(recovered.cleanupAfter).toBeGreaterThan(lostAt + 24 * 60 * 60_000);
   });
 
   it("uses scoped owner lookups for fresh owner task reads", async () => {
