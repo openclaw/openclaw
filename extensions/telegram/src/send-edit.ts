@@ -14,6 +14,8 @@ import {
   recordOutboundMessageForPromptContext,
   type TelegramOutboundPromptContextMessage,
 } from "./outbound-message-context.js";
+import { countInputRichBlockMedia } from "./rich-block-model.js";
+import { TELEGRAM_RICH_MEDIA_LIMIT } from "./rich-block-split.js";
 import { buildTelegramRichMarkdownPlan } from "./rich-message.js";
 import { withTelegramPlainFallback } from "./rich-plain-fallback.js";
 import { sendLogger, withTelegramApiContext, type TelegramApiContext } from "./send-context.js";
@@ -25,6 +27,9 @@ import {
   planTelegramTextDeliveryPages,
 } from "./telegram-text-delivery.js";
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
+
+// An edit replaces one message; the send chunk target is intentionally smaller.
+const TELEGRAM_TEXT_EDIT_LIMIT = 4096;
 
 type TelegramEditMessageTextParams = Parameters<TelegramApiContext["api"]["editMessageText"]>[3];
 type TelegramEditMessageCaptionParams = Parameters<
@@ -154,18 +159,37 @@ export async function editMessageTelegram(
               skipEntityDetection: !linkPreviewEnabled,
             })
           : undefined;
+        const richMediaCount =
+          richPlan?.richMessage.blocks.reduce(
+            (total, block) => total + countInputRichBlockMedia(block),
+            0,
+          ) ?? 0;
+        const richEditExceedsMediaLimit = richMediaCount > TELEGRAM_RICH_MEDIA_LIMIT;
+        if (richEditExceedsMediaLimit) {
+          sendLogger.warn(
+            `telegram editMessage degrade=plain-fallback:rich-media-too-many: ${richMediaCount} media exceeds rich edit limit of ${TELEGRAM_RICH_MEDIA_LIMIT}`,
+          );
+        }
         // An edit replaces one message. Keep the complete rich document so a
         // structural-limit rejection recovers all its text, not just the first send page.
-        const page = richPlan?.richMessage.blocks.length
-          ? { ...richPlan, sourceText: richPlan.plainText, sourceTextMode: "markdown" as const }
-          : planTelegramTextDeliveryPages({
-              text: textMode === "html" ? htmlText : text,
-              maxChars: Number.MAX_SAFE_INTEGER,
-              tableMode,
-              richMessages: useRichMessages,
-              skipEntityDetection: !linkPreviewEnabled,
-              ...(textMode === "html" ? { textMode: "html" as const } : {}),
-            })[0];
+        // Over-limit rich edits can silently truncate. Replace the whole document
+        // with one bounded plain message instead of editing separate send pages.
+        const page = richEditExceedsMediaLimit
+          ? {
+              plainText: richPlan?.plainText ?? text,
+              sourceText: richPlan?.plainText ?? text,
+              sourceTextMode: "markdown" as const,
+            }
+          : richPlan?.richMessage.blocks.length
+            ? { ...richPlan, sourceText: richPlan.plainText, sourceTextMode: "markdown" as const }
+            : planTelegramTextDeliveryPages({
+                text: textMode === "html" ? htmlText : text,
+                maxChars: Number.MAX_SAFE_INTEGER,
+                tableMode,
+                richMessages: useRichMessages,
+                skipEntityDetection: !linkPreviewEnabled,
+                ...(textMode === "html" ? { textMode: "html" as const } : {}),
+              })[0];
         if (!page) {
           throw new Error("telegram editMessage failed: empty text");
         }
@@ -178,13 +202,19 @@ export async function editMessageTelegram(
           fallbackLimit: Number.MAX_SAFE_INTEGER,
           sender: {
             sendPlain: (value, _fallback, label) =>
-              edit(
-                () =>
-                  Object.keys(commonTextParams).length
-                    ? api.editMessageText(chatId, messageId, value, commonTextParams)
-                    : api.editMessageText(chatId, messageId, value),
-                label,
-              ),
+              value.length > TELEGRAM_TEXT_EDIT_LIMIT
+                ? Promise.reject(
+                    new Error(
+                      `telegram editMessage failed: complete plain fallback is ${value.length} characters, exceeding the ${TELEGRAM_TEXT_EDIT_LIMIT}-character edit limit`,
+                    ),
+                  )
+                : edit(
+                    () =>
+                      Object.keys(commonTextParams).length
+                        ? api.editMessageText(chatId, messageId, value, commonTextParams)
+                        : api.editMessageText(chatId, messageId, value),
+                    label,
+                  ),
             sendHtml: (value) =>
               edit(() =>
                 api.editMessageText(chatId, messageId, value, {
