@@ -158,6 +158,7 @@ export function createCodexAttemptLifecycleController(
     aborted: boolean;
     timedOut: boolean;
     yielded?: boolean;
+    hasCompletedFinalAnswer?: boolean;
   }) => {
     const abortFields = input.aborted
       ? resolveAgentRunAbortLifecycleFields(runAbortController.signal)

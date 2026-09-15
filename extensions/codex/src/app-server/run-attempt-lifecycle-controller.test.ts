@@ -131,6 +131,17 @@ describe("buildCodexLifecycleTerminalMeta", () => {
       stopReason: "stop",
     });
   });
+
+  it("keeps a completed final answer stronger than a stale yield signal", () => {
+    expect(
+      buildCodexLifecycleTerminalMeta({
+        aborted: false,
+        timedOut: false,
+        yielded: true,
+        hasCompletedFinalAnswer: true,
+      }),
+    ).toBeUndefined();
+  });
 });
 
 describe("Codex terminal dynamic-tool release", () => {

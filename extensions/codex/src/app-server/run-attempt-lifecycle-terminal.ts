@@ -3,6 +3,7 @@ export function buildCodexLifecycleTerminalMeta(input: {
   timedOut: boolean;
   yielded?: boolean;
   abortStopReason?: string;
+  hasCompletedFinalAnswer?: boolean;
 }) {
   if (input.timedOut || input.abortStopReason === "timeout") {
     return {
@@ -12,6 +13,9 @@ export function buildCodexLifecycleTerminalMeta(input: {
       timeoutPhase: "provider",
       providerStarted: true,
     } as const;
+  }
+  if (input.hasCompletedFinalAnswer && !input.aborted) {
+    return undefined;
   }
   if (input.yielded && !input.aborted) {
     return {

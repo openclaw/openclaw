@@ -362,7 +362,23 @@ export async function finalizeCodexAttempt(
     };
     // Message-write hooks see the enriched native outcome. The same projection
     // runs after the bounded mirror join if Stop or the deadline arrives there.
-    projectTerminalOutcome();
+    const initialTerminalOutcome = projectTerminalOutcome();
+    let terminalAssistantText = collectTerminalAssistantText(result);
+    let hasCompletedFinalAnswer = Boolean(
+      terminalAssistantText.trim().length > 0 &&
+      initialTerminalOutcome.turnSucceeded &&
+      !initialTerminalOutcome.finalAborted &&
+      !initialTerminalOutcome.effectiveTimedOut &&
+      !initialTerminalOutcome.finalPromptError &&
+      !state.localCompletionRequested,
+    );
+    if (hasCompletedFinalAnswer) {
+      toolState.yieldDetected = false;
+      toolState.yieldMessage = undefined;
+      toolState.yieldAcknowledgment = undefined;
+      result.yieldDetected = false;
+      result.yieldAcknowledgment = undefined;
+    }
     type MirrorOutcome = Awaited<ReturnType<typeof codexTranscriptMirrorRuntime.mirrorBestEffort>>;
     const unavailableMirror: MirrorOutcome = {
       assistantTranscriptOwned: false,
@@ -641,6 +657,19 @@ export async function finalizeCodexAttempt(
         }
       }
     }
+    terminalAssistantText = collectTerminalAssistantText(result);
+    hasCompletedFinalAnswer = Boolean(
+      terminalAssistantText.trim().length > 0 &&
+      turnSucceeded &&
+      !finalAborted &&
+      !effectiveTimedOut &&
+      !finalPromptError &&
+      !state.localCompletionRequested,
+    );
+    if (hasCompletedFinalAnswer) {
+      toolState.yieldDetected = false;
+      result.yieldDetected = false;
+    }
     recordCodexTrajectoryCompletion(trajectoryRecorder, {
       attempt: params,
       result,
@@ -662,7 +691,6 @@ export async function finalizeCodexAttempt(
       promptError: normalizeCodexTrajectoryError(finalPromptError),
     });
     markTrajectoryEndRecorded();
-    const terminalAssistantText = collectTerminalAssistantText(result);
     if (
       terminalAssistantText &&
       (!streamState.eventEmitted || streamState.needsTerminalSnapshot) &&
@@ -687,6 +715,7 @@ export async function finalizeCodexAttempt(
               aborted: finalAborted,
               timedOut: effectiveTimedOut,
               yielded: toolState.yieldDetected,
+              hasCompletedFinalAnswer,
             }),
           },
     );
