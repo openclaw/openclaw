@@ -232,6 +232,10 @@ export async function prepareQaGatewayChild(
       bind: "loopback",
       gatewayPort,
       gatewayToken,
+      // This is a fresh fixture, not config previously written by the tooling
+      // runtime. Let the packaged candidate's required repair stamp its version
+      // instead of making older release candidates appear to be downgrades.
+      stampCurrentVersion: !usesPackagedCandidate,
       providerBaseUrl: params.providerBaseUrl,
       workspaceDir,
       controlUiRoot: resolveQaControlUiRoot({
