@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import type { ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -169,21 +170,39 @@ suite.define(() => {
       });
       await waitForRequests(gateway, "sessions.list", firstListCount + 1, rosterMatch);
 
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...session,
-        permissionMode: "workspace",
-        reason: "patch",
-        sessionKey: session.key,
-        updatedAt: 3,
-      });
-      await gateway.resolveDeferred(
-        "sessions.list",
-        chatSessionListResponse([{ ...session, permissionMode: "workspace", updatedAt: 3 }]),
+      // Later patch acknowledgements read canonical state, not injected wire snapshots.
+      const workspaceList = chatSessionListResponse([
+        { ...session, permissionMode: "workspace", updatedAt: 3 },
+      ]);
+      await gateway.setSessionsListResponse(workspaceList);
+      // Snapshot and emit in one browser turn so an earlier request cannot satisfy this event.
+      const workspaceEventListCount = await page.evaluate(
+        ({ session: eventSession, match }) => {
+          const mockGateway = (
+            window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway }
+          ).openclawControlUiE2eGateway;
+          if (!mockGateway) {
+            throw new Error("Mock Gateway is not installed");
+          }
+          const count = mockGateway.findRequests("sessions.list", match).length;
+          mockGateway.emit("sessions.changed", {
+            ...eventSession,
+            permissionMode: "workspace",
+            reason: "patch",
+            sessionKey: eventSession.key,
+            updatedAt: 3,
+          });
+          return count;
+        },
+        { session, match: rosterMatch },
       );
+      await gateway.resolveDeferred("sessions.list", workspaceList);
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("workspace");
       await expect.poll(() => trigger.isEnabled()).toBe(true);
       expect(await trigger.textContent()).toContain("Workspace");
 
+      // Admit this event's refresh before measuring the next mutation's own roster request.
+      await waitForRequests(gateway, "sessions.list", workspaceEventListCount + 1, rosterMatch);
       const secondListCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
       await gateway.deferNext("sessions.list", rosterMatch);
       await trigger.click();
@@ -195,6 +214,10 @@ suite.define(() => {
       });
       await waitForRequests(gateway, "sessions.list", secondListCount + 1, rosterMatch);
 
+      const defaultList = chatSessionListResponse([
+        { ...session, permissionMode: undefined, updatedAt: 4 },
+      ]);
+      await gateway.setSessionsListResponse(defaultList);
       await gateway.emitGatewayEvent("sessions.changed", {
         ...session,
         permissionMode: null,
@@ -202,10 +225,7 @@ suite.define(() => {
         sessionKey: session.key,
         updatedAt: 4,
       });
-      await gateway.resolveDeferred(
-        "sessions.list",
-        chatSessionListResponse([{ ...session, permissionMode: undefined, updatedAt: 4 }]),
-      );
+      await gateway.resolveDeferred("sessions.list", defaultList);
       await expect.poll(() => trigger.getAttribute("data-chat-select-value")).toBe("");
       expect(await trigger.textContent()).toContain("Default");
 
