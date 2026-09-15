@@ -114,6 +114,7 @@ async function writeTestConfig() {
       entries: { main: { workspace: stateDir } },
     },
     models: {
+      mode: "replace",
       providers: {
         custom: {
           api: "openai-completions",
