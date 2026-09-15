@@ -1825,6 +1825,95 @@ describe("google-meet plugin", () => {
     );
   });
 
+  it("collects every page of Meet artifact metadata", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.pathname === "/v2/conferenceRecords/rec-1") {
+        return jsonResponse({ name: "conferenceRecords/rec-1" });
+      }
+      if (url.pathname === "/v2/conferenceRecords/rec-1/participants") {
+        return jsonResponse(
+          url.searchParams.get("pageToken") === "page-2"
+            ? { participants: [{ name: "conferenceRecords/rec-1/participants/p2" }] }
+            : {
+                participants: [{ name: "conferenceRecords/rec-1/participants/p1" }],
+                nextPageToken: "page-2",
+              },
+        );
+      }
+      if (url.pathname.endsWith("/recordings")) {
+        return jsonResponse({ recordings: [] });
+      }
+      if (url.pathname.endsWith("/transcripts")) {
+        return jsonResponse({ transcripts: [] });
+      }
+      if (url.pathname.endsWith("/smartNotes")) {
+        return jsonResponse({ smartNotes: [] });
+      }
+      return new Response(`unexpected ${url.pathname}`, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchGoogleMeetArtifacts({
+      accessToken: "token",
+      conferenceRecord: "rec-1",
+      includeTranscriptEntries: false,
+    });
+
+    expect(result.artifacts[0]?.participants.map((participant) => participant.name)).toEqual([
+      "conferenceRecords/rec-1/participants/p1",
+      "conferenceRecords/rec-1/participants/p2",
+    ]);
+    expect(
+      fetchMock.mock.calls
+        .map(([input]) => requestUrl(input))
+        .filter((url) => url.pathname.endsWith("/participants"))
+        .map((url) => url.searchParams.get("pageToken")),
+    ).toEqual([null, "page-2"]);
+  });
+
+  it("rejects a repeated Meet API nextPageToken", async () => {
+    let participantPageRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.pathname === "/v2/conferenceRecords/rec-1") {
+        return jsonResponse({ name: "conferenceRecords/rec-1" });
+      }
+      if (url.pathname === "/v2/conferenceRecords/rec-1/participants") {
+        participantPageRequests += 1;
+        if (participantPageRequests > 2) {
+          throw new Error("test guard: pagination did not stop");
+        }
+        return jsonResponse({
+          participants: [
+            { name: `conferenceRecords/rec-1/participants/p${participantPageRequests}` },
+          ],
+          nextPageToken: "stuck-page",
+        });
+      }
+      if (url.pathname.endsWith("/recordings")) {
+        return jsonResponse({ recordings: [] });
+      }
+      if (url.pathname.endsWith("/transcripts")) {
+        return jsonResponse({ transcripts: [] });
+      }
+      if (url.pathname.endsWith("/smartNotes")) {
+        return jsonResponse({ smartNotes: [] });
+      }
+      return new Response(`unexpected ${url.pathname}`, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      fetchGoogleMeetArtifacts({
+        accessToken: "token",
+        conferenceRecord: "rec-1",
+        includeTranscriptEntries: false,
+      }),
+    ).rejects.toThrow("Google Meet conferenceRecords.participants.list repeated nextPageToken");
+    expect(participantPageRequests).toBe(2);
+  });
+
   it("keeps all conference records available when requested", async () => {
     const fetchMock = stubMeetArtifactsApi();
 
