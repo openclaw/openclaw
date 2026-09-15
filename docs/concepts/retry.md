@@ -39,7 +39,7 @@ Recovery continues the existing transcript with an instruction to preserve compl
 
 In the embedded runtime, a model idle timeout after tool activity also uses this recovery when every tool in the latest batch has a recorded result and all tool execution has settled. The next attempt keeps tools available to finish the task, including handling a recorded tool failure. Pending approval, asynchronous tool activity, intentional tool termination, cancellation, and the run deadline still prevent this continuation. Completed actions are not resubmitted.
 
-A Responses stream that ends before its terminal event also qualifies for transient recovery, including when a tool call is still unfinished. Partial tool arguments are never executed. A completed response with inconsistent tool-call identities does not qualify as a disconnected stream.
+A Responses stream that ends before its terminal event also qualifies for transient recovery, including when a tool call is still unfinished. Partial tool arguments are never executed. A completed response with inconsistent tool-call identities does not qualify as a disconnected stream. A Gemini or Vertex AI stream that ends partway through an event frame qualifies the same way; a complete frame containing malformed JSON does not.
 
 Exhausted subscription, daily, weekly, or monthly usage windows go directly to eligible auth-profile or model fallback. A long `Retry-After` value alone does not establish usage-window exhaustion: temporary throttles still honor the provider's minimum wait.
 

@@ -82,6 +82,18 @@ export const overflowServerMiscCases = [
     },
     expected: null,
   },
+  {
+    id: "google-sse-eof-incomplete-frame",
+    source: "extensions/google/transport-stream.ts",
+    signal: { provider: "google", message: "Google SSE stream ended with an incomplete frame" },
+    expected: reason("timeout"),
+  },
+  {
+    id: "google-sse-malformed-json-frame",
+    source: "extensions/google/transport-stream.ts",
+    signal: { provider: "google", message: "Google SSE stream returned malformed JSON" },
+    expected: null,
+  },
   ...failoverSignalRows(billingSource, reason("timeout"), [
     ["billing-deadline-exceeded", { message: "deadline exceeded" }],
     ["billing-no-stream-chunks", { message: "request ended without sending any chunks" }],
