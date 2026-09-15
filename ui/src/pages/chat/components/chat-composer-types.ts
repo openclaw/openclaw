@@ -91,6 +91,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   waitingApproval?: boolean;
   fallbackStatus?: FallbackStatus | null;
   progressCard?: ProgressCard | null;
+  progressCardInitialLoading?: boolean;
   gatewayScope?: object;
   runActive?: boolean;
   collapseTaskProgress?: boolean;

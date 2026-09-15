@@ -294,7 +294,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           },
         )}
       </div>`
-    : nothing;
+    : props.progressCardInitialLoading
+      ? html`<div
+          class="agent-chat__progress-float agent-chat__progress-float--loading"
+          aria-hidden="true"
+        ></div>`
+      : nothing;
   const queue = renderChatQueue({
     queue: props.queue,
     displayQueue: props.displayQueue,

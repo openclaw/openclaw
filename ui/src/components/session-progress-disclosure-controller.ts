@@ -2,6 +2,10 @@ import { nothing } from "lit";
 import { AsyncDirective } from "lit/async-directive.js";
 import { directive, type ElementPart } from "lit/directive.js";
 import {
+  subscribeTranscriptScroll,
+  type TranscriptScrollObservation,
+} from "../pages/chat/components/chat-transcript-scroll-events.ts";
+import {
   PROGRESS_DISCLOSURE,
   resolveProgressDisclosure,
   type ProgressDisclosureEvent,
@@ -22,12 +26,9 @@ type DisclosureInput = [
   lifecycle?: ComposerProgressRunLifecycle,
 ];
 
-type TouchScrollGesture = {
-  contactIds: Set<number>;
-  multipleContacts: boolean;
-  recognized: boolean;
-  startY: number;
-  lastY: number;
+type ScrollGesture = {
+  kind: "wheel" | "touch";
+  valid: boolean;
   distancePx: number;
 };
 
@@ -38,14 +39,15 @@ class ProgressDisclosureController {
   private sessionKey: string;
   private gatewayScope: object | undefined;
   private transcript: HTMLElement | null = null;
-  private listeners = new AbortController();
+  private unsubscribeTranscript: (() => void) | undefined;
   private disposed = false;
   private settleTimer: ReturnType<typeof setTimeout> | undefined;
   private scrollSettled = false;
   private settleFrame: number | undefined;
   private lastWheelAt: number | undefined;
-  private wheelGestureCounted = false;
-  private touchGesture: TouchScrollGesture | undefined;
+  private gesture: ScrollGesture | undefined;
+  private touching = false;
+  private scrolling = false;
 
   constructor(
     private readonly element: HTMLDetailsElement,
@@ -118,8 +120,9 @@ class ProgressDisclosureController {
     this.settleTimer = undefined;
     this.scrollSettled = false;
     this.lastWheelAt = undefined;
-    this.wheelGestureCounted = false;
-    this.touchGesture = undefined;
+    this.gesture = undefined;
+    this.touching = false;
+    this.scrolling = false;
   }
 
   private readonly scheduleCollapse = () => {
@@ -132,102 +135,81 @@ class ProgressDisclosureController {
     }, PROGRESS_DISCLOSURE.scrollSettleMs);
   };
 
-  private settleDisclosure(): void {
-    if (this.touchGesture) {
-      return;
-    }
-    this.dispatch({ type: "settle" });
-    this.element.open = this.state.open;
-  }
-
-  private readonly handleWheel = (event: WheelEvent) => {
-    if (event.ctrlKey) {
-      return;
-    }
-    // Some browsers adjust delta units when deltaMode is first read.
-    const { deltaMode, deltaY } = event;
-    this.scheduleCollapse();
-    const now = performance.now();
+  private flushGesture(): void {
+    const gesture = this.gesture;
+    this.gesture = undefined;
     if (
-      this.lastWheelAt === undefined ||
-      now - this.lastWheelAt > PROGRESS_DISCLOSURE.gesturePauseMs
-    ) {
-      this.wheelGestureCounted = false;
-    }
-    this.lastWheelAt = now;
-    if (deltaY < 0) {
-      const newGesture = !this.wheelGestureCounted;
-      this.wheelGestureCounted = true;
-      let unitPx = 1;
-      if (deltaMode === WheelEvent.DOM_DELTA_LINE && this.transcript) {
-        const style = getComputedStyle(this.transcript);
-        unitPx = Number.parseFloat(style.lineHeight) || Number.parseFloat(style.fontSize);
-      } else if (deltaMode === WheelEvent.DOM_DELTA_PAGE && this.transcript) {
-        unitPx = this.transcript.clientHeight;
-      }
-      this.dispatch({ type: "gesture", distancePx: -deltaY * unitPx, newGesture });
-    }
-  };
-
-  private readonly handleTouchStart = (event: TouchEvent) => {
-    const contact = event.changedTouches[0];
-    if (!contact) {
-      return;
-    }
-    const gesture = (this.touchGesture ??= {
-      contactIds: new Set<number>(),
-      multipleContacts: false,
-      recognized: false,
-      startY: contact.clientY,
-      lastY: contact.clientY,
-      distancePx: 0,
-    });
-    for (const touch of event.changedTouches) {
-      gesture.contactIds.add(touch.identifier);
-    }
-    gesture.multipleContacts ||= event.touches.length > 1;
-  };
-
-  private readonly handleTouchEnd = (event: TouchEvent) => {
-    const gesture = this.touchGesture;
-    if (!gesture) {
-      return;
-    }
-    for (const touch of event.changedTouches) {
-      gesture.contactIds.delete(touch.identifier);
-    }
-    if (gesture.contactIds.size > 0) {
-      return;
-    }
-    this.touchGesture = undefined;
-    if (
-      event.type === "touchend" &&
-      event.touches.length === 0 &&
-      !gesture.multipleContacts &&
-      gesture.recognized
+      gesture?.valid &&
+      gesture.distancePx > 0 &&
+      (gesture.kind === "wheel" || gesture.distancePx > PROGRESS_DISCLOSURE.touchGesturePx)
     ) {
       this.dispatch({ type: "gesture", distancePx: gesture.distancePx, newGesture: true });
     }
-    if (this.scrollSettled) {
-      this.settleDisclosure();
-    }
-  };
+  }
 
-  private readonly handleTouchMove = (event: TouchEvent) => {
-    const gesture = this.touchGesture;
-    const contact = event.touches[0];
-    if (!gesture || !contact) {
+  private settleDisclosure(): void {
+    if (this.touching || this.scrolling) {
       return;
     }
-    gesture.multipleContacts ||= event.touches.length > 1;
-    if (gesture.multipleContacts) {
+    this.flushGesture();
+    if (this.state.distancePx > 0) {
+      this.dispatch({ type: "settle" });
+      this.element.open = this.state.open;
+    }
+  }
+
+  private readonly handleTranscriptScroll = (observation: TranscriptScrollObservation) => {
+    this.touching = observation.touching;
+    if (observation.type === "offset") {
+      this.scrolling = observation.scrolling;
+      if (!this.scrolling && this.scrollSettled) {
+        this.settleDisclosure();
+      }
+      if (observation.programmatic || !this.gesture || observation.delta === 0) {
+        return;
+      }
+      this.gesture.distancePx += Math.max(0, -observation.delta);
+      this.scheduleCollapse();
       return;
     }
-    this.scheduleCollapse();
-    const y = contact.clientY;
-    gesture.distancePx += Math.max(0, y - gesture.lastY);
-    gesture.lastY = y;
-    gesture.recognized ||= y - gesture.startY > PROGRESS_DISCLOSURE.touchGesturePx;
+    const { event } = observation;
+    if (event instanceof WheelEvent) {
+      if (event.ctrlKey) {
+        return;
+      }
+      const now = performance.now();
+      if (
+        this.gesture?.kind !== "wheel" ||
+        this.lastWheelAt === undefined ||
+        now - this.lastWheelAt > PROGRESS_DISCLOSURE.gesturePauseMs
+      ) {
+        this.flushGesture();
+        this.scrollSettled = false;
+        this.gesture = { kind: "wheel", valid: true, distancePx: 0 };
+      }
+      this.lastWheelAt = now;
+    } else if (typeof TouchEvent !== "undefined" && event instanceof TouchEvent) {
+      if (event.type === "touchstart" && event.touches.length === 1) {
+        this.flushGesture();
+        this.scrollSettled = false;
+        this.gesture = { kind: "touch", valid: true, distancePx: 0 };
+      }
+      if (
+        this.gesture?.kind === "touch" &&
+        (event.touches.length > 1 ||
+          event.type === "touchcancel" ||
+          (event.type === "touchend" && event.touches.length > 0))
+      ) {
+        this.gesture.valid = false;
+      }
+      // Keep the same gesture through inertia. A stationary release may be
+      // the last notification after the native offset has already settled.
+      if (!this.touching && this.scrollSettled) {
+        this.settleDisclosure();
+      }
+    } else {
+      this.flushGesture();
+    }
   };
 
   private readonly handleClick = (event: MouseEvent) => {
@@ -253,16 +235,11 @@ class ProgressDisclosureController {
       return;
     }
     this.resetScrollInput();
-    this.listeners.abort();
-    this.listeners = new AbortController();
+    this.unsubscribeTranscript?.();
     this.transcript = transcript;
-    const options = { passive: true, signal: this.listeners.signal };
-    transcript?.addEventListener("wheel", this.handleWheel, options);
-    transcript?.addEventListener("touchstart", this.handleTouchStart, options);
-    transcript?.addEventListener("touchmove", this.handleTouchMove, options);
-    transcript?.addEventListener("touchend", this.handleTouchEnd, options);
-    transcript?.addEventListener("touchcancel", this.handleTouchEnd, options);
-    transcript?.addEventListener("scroll", this.scheduleCollapse, options);
+    this.unsubscribeTranscript = transcript
+      ? subscribeTranscriptScroll(transcript, this.handleTranscriptScroll)
+      : undefined;
   }
 
   private settleWithoutTransition(): void {
@@ -280,7 +257,8 @@ class ProgressDisclosureController {
 
   dispose(): void {
     this.disposed = true;
-    this.listeners.abort();
+    this.unsubscribeTranscript?.();
+    this.unsubscribeTranscript = undefined;
     this.element.removeEventListener("click", this.handleClick);
     this.resetScrollInput();
     if (this.settleFrame !== undefined) {

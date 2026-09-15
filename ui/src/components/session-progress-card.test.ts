@@ -4,6 +4,7 @@ import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeTranscript } from "./session-progress-card.test-support.ts";
 import { renderSessionProgressCard } from "./session-progress-card.ts";
 
 const containers: HTMLDivElement[] = [];
@@ -13,6 +14,8 @@ function createContainer() {
   containers.push(container);
   return container;
 }
+
+const transcriptCleanups: Array<() => void> = [];
 
 const NOW_MS = Date.UTC(2026, 7, 26, 13, 37);
 const RUN_STARTED_MS = NOW_MS - 3 * 60_000;
@@ -37,11 +40,15 @@ describe("renderSessionProgressCard", () => {
   });
 
   afterEach(() => {
+    for (const cleanup of transcriptCleanups.splice(0)) {
+      cleanup();
+    }
     for (const container of containers.splice(0)) {
       render(nothing, container);
       container.remove();
     }
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   it.each(["board", "composer"] as const)(
@@ -461,11 +468,10 @@ describe("renderSessionProgressCard", () => {
         );
       const wheel = (distance: number, pause = 0) => {
         vi.advanceTimersByTime(pause);
-        container
-          .querySelector(".chat-thread")!
-          .dispatchEvent(new WheelEvent("wheel", { deltaY: -distance, bubbles: true }));
+        transcript.wheel(distance);
       };
       renderRun(true);
+      const transcript = observeTranscript(container, transcriptCleanups);
       await Promise.resolve();
       const card = container.querySelector("details")!;
       expect(card.open).toBe(true);
@@ -482,7 +488,7 @@ describe("renderSessionProgressCard", () => {
       wheel(1);
       vi.advanceTimersByTime(299);
       expect(card.open).toBe(true);
-      container.querySelector(".chat-thread")!.dispatchEvent(new Event("scroll"));
+      transcript.scroll(1);
       vi.advanceTimersByTime(299);
       expect(card.open).toBe(true);
       vi.advanceTimersByTime(1);
@@ -539,14 +545,14 @@ describe("renderSessionProgressCard", () => {
         container,
       );
     renderHistory(false);
+    const transcript = observeTranscript(container, transcriptCleanups);
     await Promise.resolve();
     const card = container.querySelector("details")!;
-    const thread = container.querySelector(".chat-thread")!;
-    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -200 }));
+    transcript.wheel(200);
     renderHistory(false);
     renderHistory(true);
     vi.advanceTimersByTime(201);
-    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -120 }));
+    transcript.wheel(120);
     vi.advanceTimersByTime(300);
     expect(card.open).toBe(false);
   });
@@ -572,6 +578,7 @@ describe("renderSessionProgressCard", () => {
         container,
       );
     renderCard("run-1");
+    const transcript = observeTranscript(container, transcriptCleanups);
     await Promise.resolve();
     const card = container.querySelector("details")!;
     const root = container.querySelector(".chat-thread")!;
@@ -591,6 +598,7 @@ describe("renderSessionProgressCard", () => {
       force: 1,
     });
     const touch = (type: string, y: number, contacts = type === "touchend" ? 0 : 1) => {
+      const previousY = previousTouches[0]?.clientY ?? y;
       const touches = Array.from({ length: contacts }, (_, index) => touchPoint(index + 1, y));
       const changedTouches =
         type === "touchend"
@@ -607,10 +615,14 @@ describe("renderSessionProgressCard", () => {
       root.dispatchEvent(
         new TouchEvent(type, {
           touches,
+          targetTouches: touches,
           changedTouches,
           bubbles: true,
         }),
       );
+      if (type === "touchmove" && contacts === 1) {
+        transcript.scroll(y - previousY);
+      }
     };
     touch("touchstart", 0);
     touch("touchmove", 30);
@@ -677,6 +689,7 @@ describe("renderSessionProgressCard", () => {
     root.dispatchEvent(
       new TouchEvent("touchend", {
         touches: [touchPoint(99, 200, container)],
+        targetTouches: [],
         changedTouches: previousTouches,
         bubbles: true,
       }),
@@ -902,13 +915,18 @@ describe("renderSessionProgressCard", () => {
   });
 
   it.each([
-    ["pixels", 0, 160, false],
-    ["lines", 1, 8, false],
-    ["pages", 2, 0.8, false],
-    ["zoom", 0, 160, true],
+    ["pixels", 0, 160, false, false],
+    ["lines", 1, 8, false, false],
+    ["pages", 2, 0.8, false, false],
+    ["zoom", 0, 160, true, false],
+    ["native offset before input", 0, 200, false, true],
+    ["no TouchEvent constructor", 0, 200, false, false],
   ] as const)(
-    "normalizes wheel units and ignores zoom (%s)",
-    async (_, deltaMode, deltaY, ctrlKey) => {
+    "uses consumed offsets regardless of wheel units and ignores zoom (%s)",
+    async (scenario, deltaMode, deltaY, ctrlKey, offsetBeforeInput) => {
+      if (scenario === "no TouchEvent constructor") {
+        vi.stubGlobal("TouchEvent", undefined);
+      }
       const container = createContainer();
       render(
         html`<div class="chat-main">
@@ -917,21 +935,23 @@ describe("renderSessionProgressCard", () => {
         </div>`,
         container,
       );
+      const transcript = observeTranscript(container, transcriptCleanups);
       await Promise.resolve();
-      const thread = container.querySelector<HTMLElement>(".chat-thread")!;
-      Object.defineProperty(thread, "clientHeight", { value: 200 });
       const card = container.querySelector("details")!;
-      thread.dispatchEvent(new WheelEvent("wheel", { deltaMode, deltaY: -deltaY, ctrlKey }));
+      transcript.wheel(500, { deltaMode, deltaY: -deltaY, ctrlKey }, offsetBeforeInput);
       vi.advanceTimersByTime(300);
       expect(card.open).toBe(true);
-      thread.dispatchEvent(new WheelEvent("wheel", { deltaMode, deltaY: -deltaY, ctrlKey }));
+      if (scenario === "no TouchEvent constructor") {
+        transcript.thread.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp" }));
+      }
+      transcript.wheel(200, { deltaMode, deltaY: -deltaY, ctrlKey }, offsetBeforeInput);
       vi.advanceTimersByTime(300);
       expect(card.open).toBe(ctrlKey);
       if (ctrlKey) {
-        thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -160 }));
+        transcript.wheel(160);
         vi.advanceTimersByTime(300);
         expect(card.open).toBe(true);
-        thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -160 }));
+        transcript.wheel(160);
         vi.advanceTimersByTime(300);
         expect(card.open).toBe(false);
       }
@@ -947,16 +967,16 @@ describe("renderSessionProgressCard", () => {
       </div>`,
       container,
     );
+    const transcript = observeTranscript(container, transcriptCleanups);
     await Promise.resolve();
-    const thread = container.querySelector(".chat-thread")!;
     const card = container.querySelector("details")!;
     for (const deltaY of [40, -160, 40, 40, -160]) {
-      thread.dispatchEvent(new WheelEvent("wheel", { deltaY }));
+      transcript.wheel(-deltaY);
       vi.advanceTimersByTime(100);
     }
     vi.advanceTimersByTime(300);
     expect(card.open).toBe(true);
-    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
+    transcript.wheel(1);
     vi.advanceTimersByTime(300);
     expect(card.open).toBe(false);
   });

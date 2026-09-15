@@ -152,7 +152,17 @@ suite.define(() => {
               }),
             );
           }
-          await thread.dispatchEvent("touchstart");
+          await thread.evaluate((element) => {
+            const contact = new Touch({ identifier: 1, target: element });
+            element.dispatchEvent(
+              new TouchEvent("touchstart", {
+                touches: [contact],
+                targetTouches: [contact],
+                changedTouches: [contact],
+                bubbles: true,
+              }),
+            );
+          });
           if (momentum) {
             await thread.evaluate((element) => {
               (window as AnchorWindow).prependFrames.readerDelta += 20;
@@ -184,7 +194,14 @@ suite.define(() => {
             await thread.evaluate((element) => element.scrollTop),
             "a history prepend must not write the scroll offset during an active touch",
           ).toBe(heldOffset + (momentum ? 20 : 0));
-          await thread.dispatchEvent("touchend");
+          await thread.evaluate((element) => {
+            element.dispatchEvent(
+              new TouchEvent("touchend", {
+                changedTouches: [new Touch({ identifier: 1, target: element })],
+                bubbles: true,
+              }),
+            );
+          });
           if (momentum) {
             // Synthetic offset events protect ownership ordering, not native
             // Safari inertia. Natural reader movement is removed from samples.

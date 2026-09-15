@@ -106,7 +106,8 @@ chat confirms its current session and conversation branch before delivery
 continues automatically. Switching chats keeps queued messages tied to their
 original conversation. If history fails to load, the queued message stays
 available while you resolve the history error. Goals and other slash commands
-wait for history; `/stop` and `/approve` remain available.
+wait for history; `/stop` and `/approve` remain available. The initial task progress
+read reserves only its card slot; the transcript and composer stay available.
 
 When you open a short chat link, identity prepared during the current connection
 can make the composer ready sooner. The original link stays in place until the
@@ -406,7 +407,10 @@ The task progress card above the composer starts expanded for active work unless
 shows its initial state without a fold animation. While reading earlier messages,
 it collapses after at least two upward scroll gestures totaling 320 pixels, once
 scrolling has stopped for 300 milliseconds. Wheel bursts separated by more than
-200 milliseconds count separately; each touch drag counts as one gesture.
+200 milliseconds count separately; each touch drag counts as one gesture, including
+its inertia. Only upward movement consumed by the transcript counts. Scrolling
+inside tool output, canceled input, and programmatic position adjustments do not
+count toward collapse.
 Returning to the end resets the counts but does not reopen a collapsed card.
 Progress updates also leave it collapsed. Task completion can reopen it only if
 you are already at the end; returning there after completion does not reopen it.

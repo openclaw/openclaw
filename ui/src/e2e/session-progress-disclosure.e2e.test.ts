@@ -1,4 +1,7 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -6,11 +9,13 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
-type TouchContact = [identifier: number, clientY: number];
 
 suite.define(() => {
   it("wires settled transcript gestures, escalation, keyboard choices, and visit reset", async () => {
-    const context = await suite.newBrowserContext({ viewport: { width: 1440, height: 900 } });
+    const artifactDir = createControlUiE2eArtifactDir("session-progress-disclosure");
+    const context = await suite.newBrowserContext({
+      viewport: { width: 1440, height: 900 },
+    });
     const page = await context.newPage();
     const sessionKey = "agent:main:main";
     const gateway = await installMockGateway(page, {
@@ -38,8 +43,13 @@ suite.define(() => {
     const card = page.locator(".session-progress-card--composer");
     const thread = page.locator(".chat-thread");
     const open = () => card.evaluate((element) => (element as HTMLDetailsElement).open);
+    const gestureOffsets: Array<{ requested: number; before: number; after: number }> = [];
     const gestures = async (count: number, distance: number) => {
-      await thread.hover();
+      const point = await thread.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + 80 };
+      });
+      await page.mouse.move(point.x, point.y);
       for (let index = 0; index < count; index++) {
         if (index) {
           await page.waitForTimeout(201); // Distinct user gestures, beyond the 200 ms burst boundary.
@@ -49,6 +59,11 @@ suite.define(() => {
         await expect
           .poll(() => thread.evaluate((element) => element.scrollTop))
           .toBeLessThan(before);
+        gestureOffsets.push({
+          requested: distance,
+          before,
+          after: await thread.evaluate((element) => element.scrollTop),
+        });
       }
       await waitForChatScrollIdle(page);
     };
@@ -134,55 +149,14 @@ suite.define(() => {
       expect(await open()).toBe(true);
       await waitForChatScrollIdle(page);
       await gestures(1, 500);
-      const touch = (type: string, contacts: TouchContact[], changed: TouchContact[]) =>
-        thread.evaluate(
-          (element, input) => {
-            const contact = ([identifier, clientY]: TouchContact) =>
-              new Touch({ identifier, clientY, target: element });
-            element.dispatchEvent(
-              new TouchEvent(input.type, {
-                bubbles: true,
-                touches: input.contacts.map(contact),
-                changedTouches: input.changed.map(contact),
-              }),
-            );
-          },
-          { type, contacts, changed },
-        );
-      await touch("touchstart", [[1, 0]], [[1, 0]]);
-      await touch("touchmove", [[1, 30]], [[1, 30]]);
-      await touch(
-        "touchstart",
-        [
-          [1, 30],
-          [2, 300],
-        ],
-        [[2, 300]],
-      );
-      await touch(
-        "touchmove",
-        [
-          [1, 160],
-          [2, 250],
-        ],
-        [
-          [1, 160],
-          [2, 250],
-        ],
-      );
-      await touch("touchend", [[1, 160]], [[2, 250]]);
-      await touch("touchmove", [[1, 320]], [[1, 320]]);
-      await page.waitForTimeout(300);
-      expect(await open()).toBe(true);
-      await touch("touchend", [], [[1, 320]]);
-      expect(await open()).toBe(true);
-      await touch("touchstart", [[1, 0]], [[1, 0]]);
-      await touch("touchmove", [[1, 160]], [[1, 160]]);
-      await page.waitForTimeout(300);
-      expect(await open()).toBe(true);
-      await touch("touchend", [], [[1, 160]]);
+      await gestures(1, 200);
       await expect.poll(open).toBe(false);
     } finally {
+      await writeFile(
+        path.join(artifactDir, "wheel-offsets.json"),
+        JSON.stringify({ gestures: gestureOffsets }, null, 2),
+      );
+      await page.screenshot({ path: path.join(artifactDir, "last-disclosure-state.png") });
       await suite.closeBrowserContext(context);
     }
   });

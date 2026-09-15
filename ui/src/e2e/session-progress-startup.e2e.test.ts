@@ -1,11 +1,13 @@
+import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it.each(["card", "empty", "error"] as const)(
-    "mounts the composer in its final geometry after an initial %s response",
+    "keeps the same usable composer through initial history and %s progress",
     async (outcome) => {
       const context = await suite.newBrowserContext({
         viewport: { width: 1440, height: 900 },
@@ -27,21 +29,70 @@ suite.define(() => {
           key: sessionKey,
           kind: "direct",
           updatedAt: 1,
-          hasActiveRun: true,
-          activeRunIds: ["startup-progress-run"],
+          hasActiveRun: false,
         },
-        inFlightRun: { runId: "startup-progress-run", text: "", events: [] },
         historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
-        deferredMethods: ["progressCard.get"],
+        deferredMethods: ["chat.startup", "progressCard.get", "chat.send"],
         methodResponses: { "progressCard.get": { card } },
       });
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("progressCard.get");
+        await gateway.waitForRequest("chat.startup");
+        const artifactDir = createControlUiE2eArtifactDir(`progress-startup-${outcome}`);
         const composer = page.locator(".agent-chat__composer-combobox textarea");
-        expect(await composer.count()).toBe(0);
-        await page.locator(".lazy-view-state--loading").first().waitFor();
-
+        await composer.fill("Queue before history and progress");
+        await page.screenshot({
+          path: path.join(artifactDir, "history-pending.png"),
+          animations: "disabled",
+        });
+        const textarea = await composer.elementHandle();
+        expect(textarea).not.toBeNull();
+        await page.locator(".agent-chat__file-input").setInputFiles({
+          name: "startup-note.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("Synthetic startup attachment"),
+        });
+        await page.locator(".chat-attachment-thumb", { hasText: "startup-note.txt" }).waitFor();
+        await composer.press("Enter");
+        await page
+          .locator(".chat-queue")
+          .getByText("Queue before history and progress", { exact: true })
+          .waitFor();
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        expect(await gateway.getRequests("progressCard.get")).toHaveLength(0);
+        const draft = "Keep this draft while progress loads";
+        await composer.fill(draft);
+        await gateway.resolveDeferred("chat.startup");
+        await gateway.waitForRequest("progressCard.get");
+        await page.locator(".chat-thread").getByText("Ready.", { exact: true }).waitFor();
+        const send = await gateway.waitForRequest("chat.send");
+        expect(send.params).toMatchObject({
+          sessionKey,
+          message: "Queue before history and progress",
+          attachments: [expect.objectContaining({ fileName: "startup-note.txt" })],
+        });
+        expect(await composer.evaluate((node, original) => node === original, textarea)).toBe(true);
+        expect(await composer.inputValue()).toBe(draft);
+        expect(await composer.evaluate((node) => document.activeElement === node)).toBe(true);
+        await page.screenshot({ path: path.join(artifactDir, "progress-pending.png") });
+        if (outcome === "error") {
+          await gateway.rejectDeferred("progressCard.get", {
+            message: "Progress temporarily unavailable",
+          });
+        } else {
+          await gateway.resolveDeferred("progressCard.get", {
+            card: outcome === "card" ? card : null,
+          });
+        }
+        if (outcome === "card") {
+          await page.locator(".session-progress-card--composer").waitFor();
+        }
+        await expect
+          .poll(() => page.locator(".agent-chat__progress-float--loading").count())
+          .toBe(0);
+        expect(await composer.evaluate((node, original) => node === original, textarea)).toBe(true);
+        expect(await composer.inputValue()).toBe(draft);
+        expect(await composer.evaluate((node) => document.activeElement === node)).toBe(true);
         const geometry = page.evaluate(async () => {
           const frames: Array<{ top: number; height: number; card: boolean }> = [];
           const shifts: number[] = [];
@@ -88,17 +139,8 @@ suite.define(() => {
           observer.disconnect();
           return { frames, shifts };
         });
-        if (outcome === "error") {
-          await gateway.rejectDeferred("progressCard.get", {
-            message: "Progress temporarily unavailable",
-          });
-        } else {
-          await gateway.resolveDeferred("progressCard.get", {
-            card: outcome === "card" ? card : null,
-          });
-        }
-        await composer.waitFor();
         const { frames, shifts } = await geometry;
+        await page.screenshot({ path: path.join(artifactDir, "progress-resolved.png") });
         expect(shifts).toEqual([]);
         expect(frames.every((frame) => frame.card === (outcome === "card"))).toBe(true);
         expect(
@@ -121,6 +163,62 @@ suite.define(() => {
           message: "Refresh temporarily unavailable",
         });
         expect(await composer.inputValue()).toBe("Keep this draft while progress refreshes");
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
+
+  it.each(["history", "progress"] as const)(
+    "preserves the composer when %s settles first during a history refresh and initial progress read",
+    async (first) => {
+      const context = await suite.newBrowserContext({});
+      const page = await context.newPage();
+      const sessionKey = "agent:main:main";
+      const gateway = await installMockGateway(page, {
+        sessionInfo: { key: sessionKey, kind: "direct", updatedAt: 1 },
+        historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+        deferredMethods: ["progressCard.get"],
+      });
+      try {
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("progressCard.get");
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const draft = "Keep draft and focus through either reply order";
+        await composer.fill(draft);
+        const textarea = await composer.elementHandle();
+        expect(textarea).not.toBeNull();
+        // Initial history owns progress admission. A live message can independently
+        // refresh that history while the first progress response is still pending.
+        await gateway.deferNext("chat.history");
+        const before = (await gateway.getRequests("chat.history")).length;
+        await gateway.emitGatewayEvent("session.message", {
+          sessionKey,
+          session: { key: sessionKey, kind: "direct", updatedAt: 2 },
+          messageId: "startup-peer-message",
+          messageSeq: 3,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "A peer joined the conversation." }],
+            __openclaw: { id: "startup-peer-message", seq: 3 },
+          },
+        });
+        await gateway.waitForRequest("chat.history", { after: before });
+        for (const response of [first, first === "history" ? "progress" : "history"]) {
+          if (response === "history") {
+            await gateway.resolveDeferred("chat.history");
+          } else {
+            await gateway.resolveDeferred("progressCard.get", {
+              card: { sessionKey, revision: 1, updatedAt: 1, markdown: "Initial task progress" },
+            });
+            await page.locator(".session-progress-card--composer").waitFor();
+          }
+          expect(await composer.evaluate((node, original) => node === original, textarea)).toBe(
+            true,
+          );
+          expect(await composer.inputValue()).toBe(draft);
+          expect(await composer.evaluate((node) => document.activeElement === node)).toBe(true);
+        }
       } finally {
         await suite.closeBrowserContext(context);
       }

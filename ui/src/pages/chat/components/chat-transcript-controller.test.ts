@@ -167,9 +167,13 @@ describe("chat transcript controller", () => {
     expect(transcriptSize(container)).toBe(540);
   });
 
-  it.each([false, true])(
-    "keeps the committed rows and message lookup together while a touch holds a prepend, idle=%s",
-    async (idleBeforeRelease) => {
+  it.each([
+    { idleBeforeRelease: false, outsideContact: false },
+    { idleBeforeRelease: true, outsideContact: false },
+    { idleBeforeRelease: true, outsideContact: true },
+  ])(
+    "keeps the committed rows and message lookup together while a touch holds a prepend, idle=$idleBeforeRelease, outside contact=$outsideContact",
+    async ({ idleBeforeRelease, outsideContact }) => {
       const initial: TestContentRow[] = [
         {
           kind: "content",
@@ -195,7 +199,31 @@ describe("chat transcript controller", () => {
           new Map([["retained", "retained-row"]]),
         );
         renderRows(initial);
-        container.dispatchEvent(new Event("touchstart"));
+        const bubble = expectDefined(container.querySelector(".chat-bubble"), "retained bubble");
+        const contact = (identifier: number, target: EventTarget): Touch => ({
+          identifier,
+          target,
+          clientX: 0,
+          clientY: 100,
+          pageX: 0,
+          pageY: 100,
+          screenX: 0,
+          screenY: 100,
+          radiusX: 1,
+          radiusY: 1,
+          rotationAngle: 0,
+          force: 1,
+        });
+        const owned = contact(1, bubble);
+        const remaining = outsideContact ? [contact(2, document.body)] : [];
+        bubble.dispatchEvent(
+          new TouchEvent("touchstart", {
+            touches: [...remaining, owned],
+            targetTouches: [owned],
+            changedTouches: [owned],
+            bubbles: true,
+          }),
+        );
         if (idleBeforeRelease) {
           // The finger can remain down after native offset notifications settle.
           vi.useFakeTimers();
@@ -220,7 +248,14 @@ describe("chat transcript controller", () => {
         expect(container.textContent).not.toContain("older");
         expect(session.activeMessageId(["retained"])).toBe("retained");
         expect(session.activeMessageId(["older"])).toBeNull();
-        container.dispatchEvent(new Event("touchend"));
+        bubble.dispatchEvent(
+          new TouchEvent("touchend", {
+            touches: remaining,
+            targetTouches: [],
+            changedTouches: [owned],
+            bubbles: true,
+          }),
+        );
         renderRows(next);
         expect(transcriptRows(container).map((row) => row.dataset.virtualRowKey)).toEqual([
           "expanded-row",

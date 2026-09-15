@@ -158,7 +158,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         }
       }
     }
-    // Refreshes and reconnects must never replace an already usable composer.
+    // Only the first read reserves an empty card slot; refreshes retain the mounted card.
     this.progressPresentationReady = true;
     return false;
   }
