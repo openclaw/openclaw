@@ -4,7 +4,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   McpLoopbackToolCache,
@@ -14,6 +17,8 @@ import {
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 describe("resolveGatewayScopedTools", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
   beforeAll(() => {
     resolveGatewayScopedTools({
       cfg: { tools: { profile: "minimal" } } as OpenClawConfig,
@@ -22,6 +27,42 @@ describe("resolveGatewayScopedTools", () => {
       inboundEventKind: "room_event",
       surface: "loopback",
     });
+  });
+
+  it("reports the prepared elevated level through loopback session_status", async () => {
+    const workspaceDir = tempDirs.make("openclaw-loopback-elevated-");
+    const storePath = path.join(workspaceDir, "sessions.sqlite");
+    const sessionKey = "agent:main:main";
+    const cfg: OpenClawConfig = {
+      session: { store: storePath },
+      agents: { defaults: { workspace: workspaceDir } },
+      tools: { profile: "minimal" },
+    };
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId: "loopback-elevated", updatedAt: Date.now() },
+    );
+    setRuntimeConfigSnapshot(cfg);
+    try {
+      const { tools } = resolveGatewayScopedTools({
+        cfg,
+        sessionKey,
+        surface: "loopback",
+        bashElevated: { enabled: true, allowed: true, defaultLevel: "on" },
+      });
+      const statusTool = tools.find((tool) => tool.name === "session_status");
+      if (!statusTool) {
+        throw new Error("expected loopback session_status tool");
+      }
+      const result = await statusTool.execute("loopback-status", {});
+      expect(result.content).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "text", text: expect.stringMatching(/\belevated\b/) }),
+        ]),
+      );
+    } finally {
+      resetConfigRuntimeState();
+    }
   });
 
   it("force-allows the message tool for room-event loopback turns", () => {
