@@ -2,6 +2,43 @@
 import { describe, expect, it } from "vitest";
 import { isSafeFenceBreak, parseFenceSpans, scanFenceSpans } from "./fences.js";
 
+describe("parseFenceSpans opening-fence rules", () => {
+  it.each([
+    "```js```",
+    "```js``` is an inline code span.\n\nAfter",
+    "   ````literal ` backtick````\nAfter",
+    "```ts `metadata`\nAfter",
+  ])("does not open a backtick fence with backticks in its info string: %j", (text) => {
+    expect(parseFenceSpans(text)).toEqual([]);
+    expect(scanFenceSpans(text).state.open).toBeUndefined();
+  });
+
+  it("still opens a real fence after an inline code span", () => {
+    const prefix = "```js``` is inline.\n";
+    const code = "```ts\nconst n = 1;\n```";
+    const expected = {
+      start: prefix.length,
+      end: prefix.length + code.length,
+      openLine: "```ts",
+      marker: "```",
+      indent: "",
+    };
+
+    expect(parseFenceSpans(prefix + code)).toEqual([expected]);
+    const { state } = scanFenceSpans(prefix);
+    expect(scanFenceSpans(code, state).spans).toEqual([
+      { ...expected, start: 0, end: code.length },
+    ]);
+  });
+
+  it("allows backticks in a tilde fence's info string", () => {
+    const text = "~~~ts `metadata`\ncode\n~~~";
+    expect(parseFenceSpans(text)).toEqual([
+      { start: 0, end: text.length, openLine: "~~~ts `metadata`", marker: "~~~", indent: "" },
+    ]);
+  });
+});
+
 describe("parseFenceSpans closing-fence rules", () => {
   it("treats a marker line with trailing text as code content, not a closing fence", () => {
     // CommonMark: a closing fence may be followed only by whitespace, so "``` not a close" is code
@@ -45,7 +82,7 @@ describe("parseFenceSpans closing-fence rules", () => {
 
   it.each(["\n", "\r\n"])("preserves raw UTF-16 offsets with %j line endings", (newline) => {
     const prefix = `😀${newline}`;
-    const openLine = "  ````ts `metadata`";
+    const openLine = "  ````ts metadata";
     const text = `${prefix}${openLine}${newline}code${newline} \`\`\`\`\` \t${newline}tail`;
 
     expect(parseFenceSpans(text)).toEqual([

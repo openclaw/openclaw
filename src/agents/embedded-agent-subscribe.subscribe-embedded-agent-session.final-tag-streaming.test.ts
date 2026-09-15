@@ -8,6 +8,7 @@ import {
   emitMessageStartAndEndForAssistantText,
   extractAgentEventPayloads,
 } from "./embedded-agent-subscribe.e2e-harness.js";
+import { createMessageEndContext } from "./embedded-agent-subscribe.handlers.messages.test-helpers.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 
@@ -121,6 +122,82 @@ describe("subscribeEmbeddedAgentSession", () => {
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("Answer");
+  });
+
+  it("defers an incomplete backtick opener until a later final tag can be recognized", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedAgentSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onPartialReply,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "```js" });
+    expect(onPartialReply).not.toHaveBeenCalled();
+
+    emitAssistantTextDelta({ emit, delta: "``` is inline.\n<final>Answer</final>" });
+
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(requireFirstReplyPayload(onPartialReply).text).toBe("Answer");
+  });
+
+  it("keeps reasoning hidden when an invalid split opener is scanned incrementally", () => {
+    const ctx = createMessageEndContext();
+    const streamState = ctx.state.blockState;
+
+    const first = ctx.stripBlockTags("```js", streamState);
+    const second = ctx.stripBlockTags(
+      "``` is inline.\n<think>secret</think>\nVisible",
+      streamState,
+    );
+    const rendered = first + second;
+
+    expect(rendered).toContain("Visible");
+    expect(rendered).not.toContain("secret");
+  });
+
+  it.each([
+    {
+      name: "backtick fence",
+      first: "```xm",
+      second: "l\n<final>literal</final>\n```\n<final>Answer</final>",
+    },
+    {
+      name: "tilde fence metadata",
+      first: "~~~ts `meta",
+      second: "data`\n<final>literal</final>\n~~~\n<final>Answer</final>",
+    },
+  ])("preserves a valid split $name", ({ first, second }) => {
+    const ctx = createMessageEndContext({ enforceFinalTag: true });
+    const streamState = ctx.state.blockState;
+
+    expect(ctx.stripBlockTags(first, streamState)).toBe("");
+    expect(ctx.stripBlockTags(second, streamState)).toBe("Answer");
+  });
+
+  it("releases a pending backtick opener exactly once when the stream ends", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedAgentSession({
+      session,
+      runId: "run",
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "```js" });
+    expect(onAgentEvent).not.toHaveBeenCalled();
+
+    emitAssistantTextEnd({ emit });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads.map((payload) => payload.delta).join("")).toBe("```js");
   });
 
   it("does not keep stale fence state after a suppressed prefix closes before final text", () => {

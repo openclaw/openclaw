@@ -776,6 +776,23 @@ describe("chunkTextWithMode", () => {
 });
 
 describe("chunkMarkdownTextWithMode", () => {
+  it.each(["length", "newline"] as const)(
+    "does not repeat inline code or split following words in %s mode",
+    (mode) => {
+      for (const { limit, repetitions } of [
+        { limit: 40, repetitions: 8 },
+        { limit: 4000, repetitions: 900 },
+      ]) {
+        const text = "```js``` is an inline code span.\n\n" + "After ".repeat(repetitions);
+        const chunks = chunkMarkdownTextWithMode(text, limit, mode);
+
+        expect(chunks.length).toBeGreaterThan(1);
+        expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
+        expectNormalizedChunkJoin(chunks, text);
+      }
+    },
+  );
+
   it.each([
     {
       name: "length mode uses markdown-aware chunker",
