@@ -139,6 +139,12 @@ const stringListSchema = z
 const sessionSpawnContextSchema = z
   .object({
     completionOwnerSessionKey: normalizedRequiredStringSchema.optional(),
+    resolvedModel: z
+      .object({
+        provider: normalizedRequiredStringSchema,
+        model: normalizedRequiredStringSchema,
+      })
+      .optional(),
     inheritedToolPolicy: z.object({
       version: z.literal(1),
       allow: stringListSchema,
@@ -150,6 +156,7 @@ const sessionSpawnContextSchema = z
       ? { completionOwnerSessionKey: context.completionOwnerSessionKey }
       : {}),
     inheritedToolPolicy: context.inheritedToolPolicy,
+    ...(context.resolvedModel ? { resolvedModel: context.resolvedModel } : {}),
   }));
 const cronCreatorAuthorityGrantSchema = z
   .object({

@@ -1104,44 +1104,67 @@ describe("sessions_spawn tool", () => {
     },
   );
 
-  it("uses the target agent model for cross-agent visible sessions", async () => {
-    const callGateway = vi.fn(async () => ({
+  it.each([
+    { target: "main", requestedModel: undefined, expectedModel: "openai/gpt-5.6-sol" },
+    { target: "reviewer", requestedModel: undefined, expectedModel: "anthropic/claude-sonnet-4-6" },
+    { target: "main", requestedModel: "openai/gpt-5.6-luna", expectedModel: "openai/gpt-5.6-luna" },
+    {
+      target: "main",
+      requestedModel: undefined,
+      requesterModel: { provider: "custom", model: "custom/model" },
+      expectedModel: "custom/custom/model",
+    },
+  ])("uses $expectedModel for a visible $target session", async (scenario) => {
+    const { target, requestedModel, expectedModel } = scenario;
+    const callGateway = hoisted.inProcessCreationMock.mockResolvedValue({
       key: "agent:reviewer:dashboard:child",
       runStarted: true,
       runId: "run-reviewer",
-    }));
+    });
+    const requesterModel =
+      "requesterModel" in scenario
+        ? scenario.requesterModel
+        : { provider: "openai", model: "gpt-5.6-sol" };
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
+      requesterModel,
       config: {
         agents: {
-          defaults: { subagents: { allowAgents: ["reviewer"] } },
+          defaults: { subagents: { allowAgents: ["main", "reviewer"] } },
           list: [
             { id: "main" },
             { id: "reviewer", subagents: { model: "anthropic/claude-sonnet-4-6" } },
           ],
         },
       },
-      callGateway: callGateway as never,
       registerRun: vi.fn(),
       countActiveRuns: () => 0,
     });
 
     await tool.execute("visible-reviewer", {
       task: "review patch",
-      agentId: "reviewer",
+      agentId: target,
+      ...(requestedModel ? { model: requestedModel } : {}),
       visible: true,
     });
 
     expect(callGateway).toHaveBeenCalledWith(
       "sessions.create",
       expect.objectContaining({
-        agentId: "reviewer",
-        model: "anthropic/claude-sonnet-4-6",
+        agentId: target,
+        model: expectedModel,
         parentSessionKey: "agent:main:main",
         spawnDepth: 1,
       }),
+      expect.objectContaining({ via: "spawn", requesterSessionKey: "agent:main:main" }),
     );
     expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("fork");
+    const creation = mockCallArg(callGateway, 0, 2, "sessions.create");
+    if (target === "main" && requestedModel === undefined) {
+      expect(creation).toMatchObject({ resolvedModel: requesterModel });
+    } else {
+      expect(creation).not.toHaveProperty("resolvedModel");
+    }
   });
 
   it("rejects cross-agent visible transcript forks", async () => {

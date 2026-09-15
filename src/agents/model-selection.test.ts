@@ -3350,7 +3350,9 @@ describe("resolveSubagentSpawnModelSelection", () => {
   ])("$name", ({ config, agentId, modelOverride, expected }) => {
     const cfg = createSubagentSelectionConfig(config);
 
-    expect(resolveSubagentSpawnModelSelection({ cfg, agentId, modelOverride })).toBe(expected);
+    expect(resolveSubagentSpawnModelSelection({ cfg, agentId, modelOverride })).toEqual({
+      model: expected,
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

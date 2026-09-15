@@ -29,6 +29,7 @@ import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { resolveSubagentModelAndThinkingPlan, splitModelRef } from "./subagent-spawn-plan.js";
 import {
   readRequesterFastMode,
+  readRequesterModel,
   readRequesterThinkingLevel,
 } from "./subagent-spawn-requester-prefs.js";
 import {
@@ -270,6 +271,15 @@ export async function resolveSubagentChildPlan(params: {
     modelOverride: params.request.model,
     thinkingOverrideRaw: params.request.thinking,
     callerThinkingRaw,
+    inheritedModel:
+      params.targetAgentId === params.requesterAgentId
+        ? (params.ctx.requesterModel ??
+          readRequesterModel({
+            cfg: params.cfg,
+            requesterInternalKey: params.requesterInternalKey,
+            requesterAgentId: params.requesterAgentId,
+          }))
+        : undefined,
     fastMode: inheritedFastMode,
   });
   if (modelPlan.status === "error") {

@@ -590,6 +590,10 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             requesterTurnRunId: options?.runId,
             requesterThinkingLevel: options?.requesterThinkingLevel,
+            requesterModel:
+              options?.modelProvider && options?.modelId
+                ? { provider: options.modelProvider, model: options.modelId }
+                : options?.requesterModel,
             completionOwnerKey: options?.runSessionKey,
             agentChannel: options?.agentChannel,
             agentAccountId: options?.agentAccountId,

@@ -48,6 +48,7 @@ function resolveRequesterModel(params: RequesterPreferencesContext, entry?: Sess
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: entry.providerOverride,
     modelOverride: entry.modelOverride,
+    routeResolution: entry.modelOverrideRouteResolution,
   });
   const selectedModel = resolvePersistedSelectedModelRef({
     defaultProvider: defaultModel.provider,
@@ -55,8 +56,14 @@ function resolveRequesterModel(params: RequesterPreferencesContext, entry?: Sess
     runtimeModel: entry.model,
     overrideProvider: normalizedOverride.providerOverride,
     overrideModel: normalizedOverride.modelOverride,
+    overrideRouteResolution: entry.modelOverrideRouteResolution,
   });
   return { defaultModel, selectedModel };
+}
+
+export function readRequesterModel(params: RequesterPreferencesContext) {
+  const entry = readRequesterSession(params);
+  return entry ? (resolveRequesterModel(params, entry).selectedModel ?? undefined) : undefined;
 }
 
 export function readRequesterThinkingLevel(

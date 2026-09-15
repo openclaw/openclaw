@@ -394,6 +394,7 @@ describe("agent runtime identity token", () => {
       sessionSpawnContext: withAgentRuntimeExecutionLineage(
         {
           completionOwnerSessionKey: " agent:main:discord:direct:alice ",
+          resolvedModel: { provider: "custom", model: "custom/model" },
           inheritedToolPolicy: {
             version: 1,
             allow: [" read ", "sessions_spawn"],
@@ -427,6 +428,7 @@ describe("agent runtime identity token", () => {
       executionIdentity: parentExecutionIdentity,
       sessionSpawnContext: {
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
+        resolvedModel: { provider: "custom", model: "custom/model" },
         inheritedToolPolicy: {
           version: 1,
           allow: ["read", "sessions_spawn"],

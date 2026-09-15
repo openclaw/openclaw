@@ -597,6 +597,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         client,
         creation: sessionCreation,
         agentId: sessionAgentId,
+        model: requestedModel,
         parentSessionKey,
         fork: p.fork,
         forkFrom: p.forkFrom,

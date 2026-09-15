@@ -20,6 +20,7 @@ import {
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
+  type ModelRef,
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
@@ -110,6 +111,8 @@ type SessionPatchProjectionParams = {
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
   personalModelSelection?: UserModelAccountSelection;
+  /** Resolved spawn identity supplied only by the trusted creation owner. */
+  preparedModelSelection?: ModelRef;
 };
 
 type SessionPatchProjectionResult =
@@ -536,9 +539,7 @@ function* projectSessionPatchSteps(
       : undefined;
     delete next.modelFallback;
     const raw = patch.model;
-    let selection:
-      | { provider: string; model: string; profile?: string; isDefault: boolean }
-      | undefined;
+    let selection: (ModelRef & { profile?: string; isDefault: boolean }) | undefined;
     if (raw === null) {
       selection = { ...resolvedDefault, isDefault: true };
     } else if (raw !== undefined) {
@@ -564,6 +565,7 @@ function* projectSessionPatchSteps(
         defaultProvider: resolvedDefault.provider,
         defaultModel: resolvedDefault.model,
         subagentModelHint,
+        preparedModelSelection: params.preparedModelSelection,
       });
       if (!resolved.ok) {
         return invalid(resolved.error);

@@ -112,31 +112,44 @@ describe("trusted in-process Gateway session creation", () => {
       allow: ["read", "sessions_spawn"],
       deny: ["exec"],
     };
+    const resolvedModel = { provider: "custom", model: "middle" };
 
     mocks.callGatewayTool.mockImplementationOnce(async () => {
       expect(getGatewaySessionSpawnContext()).toEqual({
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
         inheritedToolPolicy,
+        resolvedModel,
       });
       return { key: "agent:main:dashboard:child" };
     });
 
     await callInProcessGatewayToolWithCreation(
       "sessions.create",
-      { agentId: "main", parentSessionKey: "agent:main:main", spawnDepth: 1 },
+      {
+        agentId: "main",
+        parentSessionKey: "agent:main:main",
+        spawnDepth: 1,
+        model: "custom/middle",
+      },
       {
         via: "spawn",
         actor: { type: "agent", id: "main" },
         requesterSessionKey: "agent:main:main",
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
         inheritedToolPolicy,
+        resolvedModel,
       },
     );
 
     expect(mocks.callGatewayTool).toHaveBeenCalledWith(
       "sessions.create",
       {},
-      { agentId: "main", parentSessionKey: "agent:main:main", spawnDepth: 1 },
+      {
+        agentId: "main",
+        parentSessionKey: "agent:main:main",
+        spawnDepth: 1,
+        model: "custom/middle",
+      },
       {
         scopes: ["operator.write"],
         requireAgentRuntimeIdentity: true,

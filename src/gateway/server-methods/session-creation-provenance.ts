@@ -1,3 +1,4 @@
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
@@ -14,6 +15,8 @@ export type TrustedSessionCreation = {
   requesterSessionKey?: string;
   /** Immutable completion recipient for a spawn-owned visible session. */
   completionOwnerSessionKey?: string;
+  /** Prepared parent selection; never accepted from public creation parameters. */
+  resolvedModel?: ProviderModelRef;
   /** Effective caller tool-policy snapshot for an in-process visible spawn. */
   inheritedToolPolicy?: {
     version: 1;
@@ -55,6 +58,9 @@ export function resolveOperatorSessionCreation(
           }
         : {}),
       inheritedToolPolicy: agentRuntimeIdentity.sessionSpawnContext.inheritedToolPolicy,
+      ...(agentRuntimeIdentity.sessionSpawnContext.resolvedModel
+        ? { resolvedModel: agentRuntimeIdentity.sessionSpawnContext.resolvedModel }
+        : {}),
     };
   }
   const profileId = client?.authenticatedUserProfile?.profileId;
