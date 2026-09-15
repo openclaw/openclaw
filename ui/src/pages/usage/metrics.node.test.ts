@@ -302,6 +302,41 @@ describe("usage cost windows", () => {
     expect(range?.totals.totalTokens).toBe(1_000);
   });
 
+  it.each([
+    ["1969-12-31", true],
+    ["1970-01-01", true],
+    ["0100-01-01", true],
+    ["2000-02-29", true],
+    ["0000-01-01", false],
+    ["0099-12-31", false],
+    ["1900-02-29", false],
+    ["1970-01-01\n", false],
+  ] as const)("validates UTC cost day %s", (date, valid) => {
+    const rows = [costDay(date, 2, 20)];
+    const lower = buildUsageCostWindowSummary(rows, date, "9999-12-31");
+    const upper = buildUsageCostWindowSummary(rows, "0100-01-01", date);
+    expect(lower?.totals.totalCost ?? null).toBe(valid ? 2 : null);
+    expect(upper?.totals.totalCost ?? null).toBe(valid ? 2 : null);
+    expect(buildUsageCostWindowSummary(rows, date, date)?.days ?? null).toBe(valid ? 1 : null);
+  });
+
+  it("filters invalid daily rows while spanning the Unix epoch", () => {
+    const rows = [
+      costDay("1969-12-31", 2, 20),
+      costDay("1970-01-01", 3, 30),
+      costDay("1969-12-32", 100, 1_000),
+      costDay("1970-01-01\n", 100, 1_000),
+    ];
+    const range = buildUsageCostWindowSummary(rows, "1969-12-31", "1970-01-01");
+    expect([range?.days, range?.totals.totalCost, range?.totals.totalTokens]).toEqual([2, 5, 50]);
+    expect(
+      buildUsageCostWindows(rows, "1969-12-31", "1970-01-01").map(({ startDate, totals }) => [
+        startDate,
+        totals.totalCost,
+      ]),
+    ).toEqual([["1970-01-01", 3]]);
+  });
+
   it("rejects malformed and reversed ranges", () => {
     expect(buildUsageCostWindows(daily, "bad", "2026-07-01")).toEqual([]);
     expect(buildUsageCostWindowSummary(daily, "2026-07-02", "2026-07-01")).toBeNull();

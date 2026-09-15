@@ -173,16 +173,16 @@ function getZonedWeekday(date: Date, zone: "local" | "utc"): number {
   return zone === "utc" ? date.getUTCDay() : date.getDay();
 }
 
-function getUtcQuarterHourBucketDate(dateStr: string, quarterIndex: number): Date | null {
+function parseUtcYmdDate(dateStr: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
-  if (!match || !Number.isInteger(quarterIndex) || quarterIndex < 0 || quarterIndex > 95) {
+  if (!match) {
     return null;
   }
   const [, yStr, mStr, dStr] = match;
   const y = Number(yStr);
   const m = Number(mStr);
   const d = Number(dStr);
-  const date = new Date(Date.UTC(y, m - 1, d, 0, quarterIndex * 15));
+  const date = new Date(Date.UTC(y, m - 1, d));
   if (
     Number.isNaN(date.valueOf()) ||
     date.getUTCFullYear() !== y ||
@@ -211,7 +211,7 @@ function mapUtcQuarterBucket(
   }
   if (dateStr !== state.utcDateKey) {
     state.utcDateKey = dateStr;
-    const date = getUtcQuarterHourBucketDate(dateStr, 0);
+    const date = parseUtcYmdDate(dateStr);
     state.utcWeekday = date ? date.getUTCDay() : null;
     state.utcStartMs = date ? date.getTime() : 0;
   }
@@ -538,23 +538,8 @@ function parseYmdDate(dateStr: string): Date | null {
 }
 
 function parseIsoDayIndex(dateStr: string): number | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
-  if (!match) {
-    return null;
-  }
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const timestamp = Date.UTC(year, month - 1, day);
-  const date = new Date(timestamp);
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
-    return null;
-  }
-  return timestamp / DAY_MS;
+  const date = parseUtcYmdDate(dateStr);
+  return date ? date.getTime() / DAY_MS : null;
 }
 
 function formatIsoDayIndex(dayIndex: number): string {
