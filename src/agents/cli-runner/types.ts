@@ -46,7 +46,7 @@ import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transc
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import type { AdmittedRunContext, PreparedAgentRunAdmission } from "../admitted-run-context.js";
-import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
@@ -376,6 +376,8 @@ export type PreparedCliRunContext = {
   /** Core-only original caller policy, bound to each native request's exact lifetime. */
   bindQuestionAnswerAuthority?: (assertActive: () => void) => PreparedQuestionAnswerAuthority;
   effectiveAuthProfileId?: string;
+  /** Prepared credential type; native CLI login details remain owned by the CLI. */
+  authMode?: AuthProfileCredential["type"] | "cli";
   /** Selected profile snapshot used only for terminal health settlement. */
   authProfileStore?: AuthProfileStore;
   agentDir?: string;

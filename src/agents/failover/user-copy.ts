@@ -72,6 +72,9 @@ export function formatBillingErrorMessage(
   const modelName = model?.trim();
   const providerLabel =
     providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
+  if (authMode === "cli") {
+    return `⚠️ ${providerLabel ?? "CLI provider"} returned a billing error — check the account used by this CLI for billing or usage limits, then try again.`;
+  }
   const isSubscriptionAuth = authMode === "oauth" || authMode === "token";
   if (isSubscriptionAuth) {
     return providerLabel
@@ -483,18 +486,17 @@ export function renderBillingReplyCopy(params: {
   attempts?: readonly ReplyFallbackAttempt[];
 }): string {
   const attempts = params.attempts ?? [];
+  const hasAccountBillingContext = (authMode: string | undefined) =>
+    authMode === "oauth" || authMode === "token" || authMode === "cli";
   const billingFailure =
     attempts.length > 0
       ? attempts.find(
-          (attempt) =>
-            attempt.reason === "billing" &&
-            (attempt.authMode === "oauth" || attempt.authMode === "token"),
+          (attempt) => attempt.reason === "billing" && hasAccountBillingContext(attempt.authMode),
         )
-      : params.authMode === "oauth" || params.authMode === "token"
+      : hasAccountBillingContext(params.authMode)
         ? params
         : undefined;
-  return billingFailure &&
-    (billingFailure.authMode === "oauth" || billingFailure.authMode === "token")
+  return billingFailure
     ? formatBillingErrorMessage(
         billingFailure.provider,
         billingFailure.model,

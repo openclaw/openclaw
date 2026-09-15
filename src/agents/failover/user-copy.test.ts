@@ -128,6 +128,35 @@ describe("failover user copy", () => {
     );
   });
 
+  it("keeps native CLI billing recovery independent of subscription assumptions", () => {
+    const cliBilling = {
+      provider: "claude-cli",
+      model: "claude",
+      reason: "billing" as const,
+      authMode: "cli",
+    };
+    const expected =
+      "⚠️ claude-cli (claude) returned a billing error — check the account used by this CLI for billing or usage limits, then try again.";
+    expect(renderBillingReplyCopy(cliBilling)).toBe(expected);
+    expect(
+      renderBillingReplyCopy({
+        attempts: [
+          { provider: "anthropic", model: "claude", reason: "billing", authMode: "api_key" },
+          cliBilling,
+        ],
+      }),
+    ).toBe(expected);
+    expect(
+      renderBillingReplyCopy({
+        authMode: "cli",
+        attempts: [
+          { ...cliBilling, reason: "timeout" },
+          { provider: "anthropic", model: "claude", reason: "billing", authMode: "api_key" },
+        ],
+      }),
+    ).toContain("your API key has run out of credits");
+  });
+
   it("renders provider-safe missing-key guidance", () => {
     expect(renderMissingApiKeyReplyCopy({ provider: "openai", providerGuidance: true })).toContain(
       "Missing API key for OpenAI on the gateway",
