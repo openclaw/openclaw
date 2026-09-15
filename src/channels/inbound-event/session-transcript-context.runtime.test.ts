@@ -360,7 +360,7 @@ describe("session transcript inbound context", () => {
     // the same transport id was cut in another conversation, not this one
     inactiveTransport.mockImplementation(
       async (_scope, message) =>
-        message.conversationRef === "telegram:acct-1:dm:someone-else" && message.messageId === "102",
+        message.conversationId === "someone-else" && message.messageId === "102",
     );
 
     await mergeSessionTranscriptContext({

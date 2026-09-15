@@ -106,7 +106,7 @@ function mergeableChatWindowEntries(ctx: FinalizedMsgContext) {
 async function isInactiveBranchWindowMessage(
   message: PromptMessage,
   scope: { agentId?: string; sessionKey: string; storePath: string },
-  conversationRef: string | undefined,
+  conversation: { provider?: string; accountId?: string; conversationId?: string } | undefined,
 ): Promise<boolean> {
   const transcriptId =
     typeof message.session_transcript_id === "string" ? message.session_transcript_id.trim() : "";
@@ -115,18 +115,18 @@ async function isInactiveBranchWindowMessage(
   }
   const messageId = typeof message.message_id === "string" ? message.message_id.trim() : "";
   // session: ids belong to transcript turns merged in earlier, not to the channel cache.
-  // Without the current conversation the origin of a cached id cannot be
+  // Without the current conversation the identity of a cached id cannot be
   // established, so the entry stays: transport ids repeat across conversations.
-  if (!messageId || messageId.startsWith("session:") || !conversationRef) {
+  if (!messageId || messageId.startsWith("session:") || !conversation) {
     return false;
   }
-  return isInactiveTransportMessage(scope, { conversationRef, messageId });
+  return isInactiveTransportMessage(scope, { ...conversation, messageId });
 }
 
 async function pruneInactiveBranchWindowMessages(
   params: {
     agentId?: string;
-    conversationRef?: string;
+    conversation?: { provider?: string; accountId?: string; conversationId?: string };
     sessionKey: string;
     storePath: string;
   },
@@ -149,7 +149,7 @@ async function pruneInactiveBranchWindowMessages(
       }
       if (
         // SAFETY: non-object entries are retained above, so only plain message objects reach this assertion.
-        !(await isInactiveBranchWindowMessage(message as PromptMessage, scope, params.conversationRef))
+        !(await isInactiveBranchWindowMessage(message as PromptMessage, scope, params.conversation))
       ) {
         retained.push(message);
       }
@@ -186,12 +186,20 @@ export async function mergeSessionTranscriptContext(params: {
   const windows = mergeableChatWindowEntries(params.ctx);
   // A rewind/branch switch leaves the channel cache untouched; drop window entries
   // whose transcript turn is no longer on the active path before merging. The
-  // current conversation scopes transport-id matching so a cut turn in one
-  // conversation never deletes a same-id cached message from another.
+  // probe matches the exact source-turn identity the ordinary ingress writer
+  // persisted, so a cut turn in one conversation never deletes a same-id
+  // cached message from another.
+  const conversationIdentity = conversationIdentityFromMsgContext({ ctx: params.ctx });
   await pruneInactiveBranchWindowMessages(
     {
       agentId,
-      conversationRef: conversationIdentityFromMsgContext({ ctx: params.ctx })?.conversationRef,
+      conversation: conversationIdentity
+        ? {
+            provider: conversationIdentity.channel,
+            accountId: conversationIdentity.accountId,
+            conversationId: conversationIdentity.deliveryTarget,
+          }
+        : undefined,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     },

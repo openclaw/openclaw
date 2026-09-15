@@ -11,6 +11,7 @@
 // empty branch (a rewind before the first message cuts everything); an
 // unavailable or cold projection abstains and keeps the entry for this turn.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { buildChannelSourceTurnId } from "../../auto-reply/reply/source-turn-id.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -84,23 +85,29 @@ export async function isInactiveTranscriptEntry(
 }
 
 /**
- * True when a cached transport message (channel-agnostic, keyed by the exact
- * conversation) belongs to a turn cut from the active path. An entry whose
- * provenance cannot be established returns false and is retained, because
- * transport ids repeat across conversations.
+ * True when a cached transport message belongs to a source turn cut from the
+ * active path, matched by the exact identity the ordinary ingress writer
+ * persisted for it (`channel-user:v1:<hash>` of provider, account,
+ * conversation destination and message id). An entry whose identity cannot be
+ * established returns false and is retained, because transport ids repeat
+ * across conversations.
  */
 export async function isInactiveTransportMessage(
   params: InactiveProbeScope,
-  message: { conversationRef?: string; messageId?: string },
+  message: {
+    provider?: string;
+    accountId?: string;
+    conversationId?: string;
+    messageId?: string;
+  },
 ): Promise<boolean> {
   const scope = resolveProbeScope(params);
-  const conversationRef = normalizeOptionalString(message.conversationRef);
-  const messageId = normalizeOptionalString(message.messageId);
-  if (!scope || !conversationRef || !messageId) {
+  const sourceTurnId = buildChannelSourceTurnId(message);
+  if (!scope || !sourceTurnId) {
     return false;
   }
   try {
-    return readSessionTransportMessageInactiveState(scope, { conversationRef, messageId });
+    return readSessionTransportMessageInactiveState(scope, { sourceTurnId });
   } catch (error) {
     if (
       isSessionTranscriptProjectionUnavailableError(error) ||

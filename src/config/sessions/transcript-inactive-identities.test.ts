@@ -9,6 +9,7 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
+import { buildChannelSourceTurnId } from "../../auto-reply/reply/source-turn-id.js";
 import {
   isInactiveTranscriptEntry,
   isInactiveTransportMessage,
@@ -17,6 +18,7 @@ import {
 const agentId = "main";
 const sessionKey = "agent:main:telegram:dm:chat-1";
 const conversationRef = "telegram:acct-1:dm:chat-1";
+const probeConversation = { provider: "telegram", accountId: "acct-1", conversationId: "chat-1" };
 
 describe("inactive-branch probes", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -58,7 +60,7 @@ describe("inactive-branch probes", () => {
       {
         role: "user",
         content: "retained question",
-        idempotencyKey: `conversation-inbound:${conversationRef}:101`,
+        idempotencyKey: buildChannelSourceTurnId({ provider: "telegram", accountId: "acct-1", conversationId: "chat-1", messageId: "101" }),
         __openclaw: { transport: { channel: "telegram", conversationRef, messageId: "101" } },
       },
       "2026-07-18T00:00:01.000Z",
@@ -75,7 +77,7 @@ describe("inactive-branch probes", () => {
       {
         role: "user",
         content: "discarded question",
-        idempotencyKey: `conversation-inbound:${conversationRef}:102`,
+        idempotencyKey: buildChannelSourceTurnId({ provider: "telegram", accountId: "acct-1", conversationId: "chat-1", messageId: "102" }),
         __openclaw: { transport: { channel: "telegram", conversationRef, messageId: "102" } },
       },
       "2026-07-18T00:00:03.000Z",
@@ -95,7 +97,7 @@ describe("inactive-branch probes", () => {
 
     expect(await isInactiveTranscriptEntry({ agentId, sessionKey }, "user-2")).toBe(false);
     expect(
-      await isInactiveTransportMessage({ agentId, sessionKey }, { conversationRef, messageId: "102" }),
+      await isInactiveTransportMessage({ agentId, sessionKey }, { ...probeConversation, messageId: "102" }),
     ).toBe(false);
   });
 
@@ -109,10 +111,10 @@ describe("inactive-branch probes", () => {
     expect(await isInactiveTranscriptEntry({ agentId, sessionKey }, "user-1")).toBe(false);
     expect(await isInactiveTranscriptEntry({ agentId, sessionKey }, "assistant-1")).toBe(false);
     expect(
-      await isInactiveTransportMessage({ agentId, sessionKey }, { conversationRef, messageId: "102" }),
+      await isInactiveTransportMessage({ agentId, sessionKey }, { ...probeConversation, messageId: "102" }),
     ).toBe(true);
     expect(
-      await isInactiveTransportMessage({ agentId, sessionKey }, { conversationRef, messageId: "101" }),
+      await isInactiveTransportMessage({ agentId, sessionKey }, { ...probeConversation, messageId: "101" }),
     ).toBe(false);
   });
 
@@ -123,7 +125,7 @@ describe("inactive-branch probes", () => {
     expect(
       await isInactiveTransportMessage(
         { agentId, sessionKey },
-        { conversationRef: "telegram:acct-1:dm:someone-else", messageId: "102" },
+        { provider: "telegram", accountId: "acct-1", conversationId: "someone-else", messageId: "102" },
       ),
     ).toBe(false);
     expect(await isInactiveTransportMessage({ agentId, sessionKey }, { messageId: "102" })).toBe(
@@ -147,7 +149,7 @@ describe("inactive-branch probes", () => {
 
     expect(await isInactiveTranscriptEntry({ agentId, sessionKey }, "user-legacy")).toBe(true);
     expect(
-      await isInactiveTransportMessage({ agentId, sessionKey }, { conversationRef, messageId: "109" }),
+      await isInactiveTransportMessage({ agentId, sessionKey }, { ...probeConversation, messageId: "109" }),
     ).toBe(false);
   });
 
@@ -166,7 +168,7 @@ describe("inactive-branch probes", () => {
     expect(await isInactiveTranscriptEntry({ agentId, sessionKey }, "user-1")).toBe(true);
     expect(await isInactiveTranscriptEntry({ agentId, sessionKey }, "assistant-2")).toBe(true);
     expect(
-      await isInactiveTransportMessage({ agentId, sessionKey }, { conversationRef, messageId: "101" }),
+      await isInactiveTransportMessage({ agentId, sessionKey }, { ...probeConversation, messageId: "101" }),
     ).toBe(true);
   });
 

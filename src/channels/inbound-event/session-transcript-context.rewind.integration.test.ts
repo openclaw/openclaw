@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import { buildChannelSourceTurnId } from "../../auto-reply/reply/source-turn-id.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import {
@@ -80,6 +81,19 @@ describe("prepared channel turn after a transcript rewind", () => {
     });
     const conversationRef = conversationIdentityFromMsgContext({ ctx })?.conversationRef;
     expect(conversationRef).toBeTruthy();
+    const conversationIdentity = conversationIdentityFromMsgContext({ ctx });
+    const transportTurnId = (messageId: string) => {
+      const key = buildChannelSourceTurnId({
+        provider: conversationIdentity?.channel,
+        accountId: conversationIdentity?.accountId,
+        conversationId: conversationIdentity?.deliveryTarget,
+        messageId,
+      });
+      if (!key) {
+        throw new Error("test context must resolve a source-turn id");
+      }
+      return key;
+    };
 
     const scope = { agentId, env, sessionId: "rewind-source", sessionKey };
     await upsertSessionEntryCore(scope, { sessionId: "rewind-source", updatedAt: 1_000 });
@@ -107,7 +121,7 @@ describe("prepared channel turn after a transcript rewind", () => {
       {
         role: "user",
         content: "retained question",
-        idempotencyKey: `conversation-inbound:${conversationRef}:101`,
+        idempotencyKey: transportTurnId("101"),
         __openclaw: { transport: { channel: "telegram", conversationRef, messageId: "101" } },
       },
       "2026-07-18T00:00:01.000Z",
@@ -124,7 +138,7 @@ describe("prepared channel turn after a transcript rewind", () => {
       {
         role: "user",
         content: "discarded question",
-        idempotencyKey: `conversation-inbound:${conversationRef}:102`,
+        idempotencyKey: transportTurnId("102"),
         __openclaw: { transport: { channel: "telegram", conversationRef, messageId: "102" } },
       },
       "2026-07-18T00:00:03.000Z",

@@ -200,17 +200,16 @@ export function readSessionTranscriptEntryActiveState(
 }
 
 /**
- * Point inactivity check for one cached transport message. True only when the
- * exact conversation turn is recorded and no longer on the active path. The
- * idempotency key is the join the writer already made for it
- * (`conversation-inbound:<conversationRef>:<messageId>`), so an entry whose
- * provenance cannot be established returns false and is retained.
+ * Point inactivity check for one cached transport message against the exact
+ * identity the ordinary ingress writer persisted (`channel-user:v1:<hash>`).
+ * True only when that source turn is recorded and no longer on the active
+ * path. An entry whose identity cannot be established returns false and is
+ * retained, because transport ids repeat across conversations.
  */
 export function readSessionTransportMessageInactiveState(
   scope: SessionTranscriptReadScope,
-  params: { conversationRef: string; messageId: string },
+  params: { sourceTurnId: string },
 ): boolean {
-  const idempotencyKey = `conversation-inbound:${params.conversationRef}:${params.messageId}`;
   return withCurrentProjectionSnapshot(scope, (projection) => {
     const db = getActiveTranscriptKysely(projection.database);
     const identity = executeSqliteQueryTakeFirstSync(
@@ -219,7 +218,7 @@ export function readSessionTransportMessageInactiveState(
         .selectFrom("transcript_event_identities as identity")
         .select("identity.seq")
         .where("identity.session_id", "=", projection.resolved.sessionId)
-        .where("identity.message_idempotency_key", "=", idempotencyKey),
+        .where("identity.message_idempotency_key", "=", params.sourceTurnId),
     );
     if (!identity) {
       return false;
