@@ -8,16 +8,49 @@ import {
   type ErrorShape,
   type SessionsCreateParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import { InvalidWorktreeBaseRefError, resolveWorktreeBase } from "../agents/worktrees/base-ref.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
+import { InvalidWorktreeBaseRefError } from "../agents/worktrees/base-ref.js";
 import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
+import type { WorktreeGitIsolation } from "../agents/worktrees/sandbox-git.js";
 import { managedWorktrees, WorktreeRepositoryError } from "../agents/worktrees/service.js";
 import type { CreateManagedWorktreeParams } from "../agents/worktrees/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveProjectRegistry } from "../projects/project-registry.js";
 import { prepareSessionCreateFilesystemRoot } from "./server-methods/session-create-root.js";
-import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
+import type {
+  PreparedGatewaySessionLifecycle,
+  PrepareGatewaySessionLifecycle,
+} from "./session-lifecycle-preparation.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+
+export function resolveSessionWorktreeGitIsolation(
+  cfg: OpenClawConfig,
+  sessionKey: string,
+  targetAgentId: string,
+): WorktreeGitIsolation | undefined {
+  const runtime = resolveSandboxRuntimeStatus({ cfg, sessionKey });
+  if (runtime.agentId !== targetAgentId) {
+    return undefined;
+  }
+  const sandboxConfig = resolveSandboxConfigForAgent(cfg, runtime.agentId);
+  const workspaceAccess = runtime.sandboxRequired
+    ? runtime.workspaceAccess
+    : sandboxConfig.workspaceAccess;
+  if (!runtime.sandboxed || workspaceAccess !== "rw") {
+    return undefined;
+  }
+  return { config: cfg, sessionKey, agentId: runtime.agentId };
+}
+
+export function projectPreparedSessionWorktree(
+  prepared: PreparedGatewaySessionLifecycle | undefined,
+) {
+  return prepared?.worktree
+    ? { id: prepared.worktree.id, path: prepared.sessionRoot, branch: prepared.worktree.branch }
+    : undefined;
+}
 
 export function validateSessionWorktreeSelection(
   params: SessionsCreateParams,
@@ -128,9 +161,10 @@ export async function resolveSessionWorktreeBase(
   workspace: string,
   baseRef: string,
   signal?: AbortSignal,
+  gitIsolation?: WorktreeGitIsolation,
 ): Promise<Result<string, ErrorShape>> {
   try {
-    return ok((await resolveWorktreeBase(workspace, baseRef, signal)).commit);
+    return ok(await managedWorktrees.resolveBase(workspace, baseRef, signal, gitIsolation));
   } catch (error) {
     return err(
       errorShape(
@@ -156,6 +190,7 @@ export async function prepareSessionWorktree(params: {
   signal?: AbortSignal;
   commitGuard?: () => void;
   onProgress?: CreateManagedWorktreeParams["onProgress"];
+  gitIsolation?: WorktreeGitIsolation;
 }): ReturnType<PrepareGatewaySessionLifecycle> {
   const { target, commitGuard } = params;
   try {
@@ -236,6 +271,7 @@ export async function prepareSessionWorktree(params: {
           baseRef: params.baseRef,
           checkoutCommit: params.checkoutCommit,
           runSetupScript: params.runSetupScript,
+          gitIsolation: params.gitIsolation,
         })
       : await managedWorktrees.createEmpty(createParams);
     const rollback = existingDirectory

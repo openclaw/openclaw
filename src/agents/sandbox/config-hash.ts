@@ -23,6 +23,7 @@ type SandboxHashInput = {
   mountFormatVersion: number;
   createArgsEpoch: string;
   managedMounts?: readonly string[];
+  internalMounts?: readonly string[];
 };
 
 type SandboxBrowserHashInput = {
