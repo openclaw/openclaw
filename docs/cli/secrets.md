@@ -61,7 +61,7 @@ Naming and value rules:
 - Names must match `^[A-Z][A-Z0-9_]{0,127}$`.
 - Values are limited to 64 KiB (65,536 UTF-8 bytes). An oversized value exits `2` whether it arrives from stdin, `--value`, or `--value-file`.
 - A `secret` entry may not be empty, because an empty credential cannot be diagnosed later. `get` refuses secret kinds, and listings mask them. `env` entries may be empty.
-- `--kind secret|env` overrides automatic kind detection. Otherwise names ending in a common credential suffix such as `_API_KEY`, `_TOKEN`, `_PASSWORD`, `_PRIVATE_KEY`, or `_SECRET` become `secret`, and other names become `env`.
+- `--kind secret|env` overrides automatic kind detection. Otherwise `set` and `import` keep the kind an existing entry already has, so rotating a value never changes it. That inherited kind is resolved as the write commits, so protecting an entry while a value or confirmation is still pending is never undone by the pending write. A new name ending in a common credential suffix such as `_API_KEY`, `_TOKEN`, `_PASSWORD`, `_PRIVATE_KEY`, or `_SECRET` becomes `secret`, and any other new name becomes `env`.
 
 ### Set values safely
 

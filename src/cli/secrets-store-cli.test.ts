@@ -12,6 +12,7 @@ const mocks = await vi.hoisted(async () => {
     list: vi.fn(),
     read: vi.fn(),
     write: vi.fn(),
+    writeBatch: vi.fn(),
     updateHosts: vi.fn(),
     remove: vi.fn(),
     purge: vi.fn(),
@@ -36,6 +37,7 @@ vi.mock("../secrets/store/secret-store.js", async (importOriginal) => {
     listSecretStoreEntries: (params: unknown) => mocks.list(params),
     readSecretStoreValue: (params: unknown) => mocks.read(params),
     writeSecretStoreEntry: (params: unknown) => mocks.write(params),
+    writeSecretStoreEntries: (params: unknown) => mocks.writeBatch(params),
     updateSecretStoreAllowedHosts: (params: unknown) => mocks.updateHosts(params),
     deleteSecretStoreEntry: (params: unknown) => mocks.remove(params),
     purgeExpiredSecretStoreEntries: () => mocks.purge(),
@@ -66,6 +68,7 @@ beforeEach(() => {
   mocks.list.mockReset().mockReturnValue([]);
   mocks.read.mockReset();
   mocks.write.mockReset();
+  mocks.writeBatch.mockReset();
   mocks.updateHosts.mockReset();
   mocks.remove.mockReset();
   mocks.purge.mockReset();
@@ -199,6 +202,7 @@ describe("secrets store CLI", () => {
         ).rejects.toThrow("__exit__:2");
         expect(mocks.runtimeErrors.join("\n")).toContain("Secret store value is empty");
         expect(mocks.write).not.toHaveBeenCalled();
+        expect(mocks.writeBatch).not.toHaveBeenCalled();
       } finally {
         await fs.rm(root, { recursive: true, force: true });
       }
@@ -335,22 +339,24 @@ describe("secrets store CLI", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
 
-    expect(mocks.write).toHaveBeenCalledTimes(3);
-    expect(mocks.write.mock.calls[0]?.[0]).toMatchObject({
-      name: "SERVICE_URL",
-      value: "https://service.test/path with spaces",
-      kind: "env",
-    });
-    expect(mocks.write.mock.calls[1]?.[0]).toMatchObject({
-      name: "SERVICE_PRIVATE_KEY",
-      value: "-----BEGIN PRIVATE KEY-----\nmultiline-body\n-----END PRIVATE KEY-----",
-      kind: "secret",
-    });
-    expect(mocks.write.mock.calls[2]?.[0]).toMatchObject({
-      name: "SERVICE_EMPTY",
-      value: "",
-      kind: "env",
-    });
+    expect(mocks.writeBatch).toHaveBeenCalledTimes(1);
+    expect(mocks.writeBatch.mock.calls[0]?.[0]?.entries).toEqual([
+      {
+        name: "SERVICE_URL",
+        value: "https://service.test/path with spaces",
+        kind: "env",
+      },
+      {
+        name: "SERVICE_PRIVATE_KEY",
+        value: "-----BEGIN PRIVATE KEY-----\nmultiline-body\n-----END PRIVATE KEY-----",
+        kind: "secret",
+      },
+      {
+        name: "SERVICE_EMPTY",
+        value: "",
+        kind: "env",
+      },
+    ]);
     const output = [...mocks.runtimeLogs, ...mocks.runtimeErrors].join("\n");
     expect(output).not.toContain("multiline-body");
   });
