@@ -139,7 +139,16 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
     }
   }
   if ("env" in next) {
-    next.env = normalizeCommandEnv(next.env);
+    if (next.env === undefined) {
+      // buildPayloadFromPatch may produce {env: undefined} as an own-key when
+      // the patch omits env.  structuredClone preserves own-key undefined
+      // properties, so we'd reach here during normalizeCronJobForSqlite even
+      // though JSON never persists them.  Drop instead of passing undefined to
+      // normalizeCommandEnv, which rejects non-records.
+      delete next.env;
+    } else {
+      next.env = normalizeCommandEnv(next.env);
+    }
   }
   if ("input" in next && typeof next.input !== "string") {
     delete next.input;
