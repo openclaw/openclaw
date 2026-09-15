@@ -101,4 +101,28 @@ describe("deduplicateBlockSentMedia", () => {
     const result = deduplicateBlockSentMedia(payload, sent);
     expect(result).toEqual({ text: "hey", mediaUrl: undefined, mediaUrls: ["/tmp/b.jpg"] });
   });
+
+  it("returns undefined when all media was sent and text was already delivered with block media", () => {
+    const payload = { text: "voice note caption", mediaUrls: ["/tmp/voice.mp3"] };
+    const sentMedia = new Set(["/tmp/voice.mp3"]);
+    const sentTexts = new Set(["voice note caption"]);
+    const result = deduplicateBlockSentMedia(payload, sentMedia, sentTexts);
+    expect(result).toBeUndefined();
+  });
+
+  it("returns payload with empty mediaUrls when all media was sent but text is different from block text", () => {
+    const payload = { text: "new follow up text", mediaUrls: ["/tmp/voice.mp3"] };
+    const sentMedia = new Set(["/tmp/voice.mp3"]);
+    const sentTexts = new Set(["voice note caption"]);
+    const result = deduplicateBlockSentMedia(payload, sentMedia, sentTexts);
+    expect(result).toEqual({ text: "new follow up text", mediaUrls: [] });
+  });
+
+  it("handles whitespace-padded text comparison when checking already-sent block text", () => {
+    const payload = { text: "  voice note caption  \n", mediaUrls: ["/tmp/voice.mp3"] };
+    const sentMedia = new Set(["/tmp/voice.mp3"]);
+    const sentTexts = new Set(["voice note caption"]);
+    const result = deduplicateBlockSentMedia(payload, sentMedia, sentTexts);
+    expect(result).toBeUndefined();
+  });
 });
