@@ -1,8 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
-
-const LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX =
-  "idx_skill_workshop_collection_reviews_workspace_time";
+import { LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX } from "./openclaw-state-db-schema-migration-required.js";
 const LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX_SQL =
   "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)";
 
@@ -31,15 +28,9 @@ export function withSqliteWritableSchema<T>(database: DatabaseSync, operation: (
 
 /** Detect only the known v15 review index left behind after its column was retired. */
 export function hasDanglingSkillWorkshopCollectionReviewIndex(database: DatabaseSync): boolean {
-  try {
-    return inspectSkillWorkshopCollectionReviewIndex(database);
-  } catch {
-    // A malformed legacy index prevents ordinary catalog reads. Healthy handles
-    // should not invalidate prepared statements by toggling writable_schema.
-    return withSqliteWritableSchema(database, () =>
-      inspectSkillWorkshopCollectionReviewIndex(database),
-    );
-  }
+  return withSqliteWritableSchema(database, () =>
+    inspectSkillWorkshopCollectionReviewIndex(database),
+  );
 }
 
 function inspectSkillWorkshopCollectionReviewIndex(database: DatabaseSync): boolean {
@@ -69,8 +60,8 @@ function inspectSkillWorkshopCollectionReviewIndex(database: DatabaseSync): bool
   );
 }
 
-/** Keep a read-only connection tolerant of the exact malformed legacy index. */
-export function openDanglingWorkshopIndexReadAdmission(
+/** Doctor can inspect the exact legacy defect before its repair transaction. */
+export function openDoctorStateSchemaReadAdmission(
   database: DatabaseSync,
 ): (() => void) | undefined {
   if (!hasDanglingSkillWorkshopCollectionReviewIndex(database)) {
@@ -97,19 +88,6 @@ export function openDanglingWorkshopIndexReadAdmission(
       database.enableDefensive?.(true);
     }
   };
-}
-
-/** Restore schema parsing and release a private read handle even if either cleanup fails. */
-export function closeWorkshopIndexReadDatabase(
-  database: DatabaseSync,
-  closeAdmission?: () => void,
-): void {
-  try {
-    closeAdmission?.();
-  } finally {
-    clearNodeSqliteKyselyCacheForDatabase(database);
-    database.close();
-  }
 }
 
 export { LEGACY_SKILL_WORKSHOP_COLLECTION_REVIEWS_INDEX };

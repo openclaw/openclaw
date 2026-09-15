@@ -46,7 +46,7 @@ import {
   FIRST_USE_STATE_TABLES,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
-import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-dangling-workshop-index.js";
+import { hasDanglingSkillWorkshopCollectionReviewIndex } from "./openclaw-state-db-doctor-schema.js";
 import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
@@ -1783,6 +1783,9 @@ describe("openclaw state database", () => {
     defensiveProbe.close();
 
     expect(() => openOpenClawStateDatabase(options)).toThrow(
+      /legacy-workshop-review-index.*openclaw doctor --fix/u,
+    );
+    expect(() => repairOpenClawStateDatabaseSchemaIfNeeded(options)).toThrow(
       /legacy-workshop-review-index.*openclaw doctor --fix/u,
     );
     expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toMatchObject({ rootpage });

@@ -682,7 +682,12 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
       requiredPackages.add(packageName);
     }
     const scenario = upgradeSurvivorScenarioForLane(poolLane);
-    if (!scenario || scenario === "abandoned-update" || scenario === "custom-plugin-siblings") {
+    if (
+      !scenario ||
+      scenario === "abandoned-update" ||
+      scenario === "custom-plugin-siblings" ||
+      scenario === "workshop-doctor-recovery"
+    ) {
       continue;
     }
     if (scenario === "legacy-operator-state") {

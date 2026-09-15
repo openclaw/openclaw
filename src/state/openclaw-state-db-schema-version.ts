@@ -7,6 +7,7 @@ import {
 } from "../infra/sqlite-user-version.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
+import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
 // Read-only clients need schema admission without loading updater publication policy.
@@ -111,16 +112,20 @@ export function readStateSchemaMigrationVersion(db: DatabaseSync): number {
 }
 
 export function assertSupportedStateSchemaVersion(db: DatabaseSync, pathname: string): number {
-  const userVersion = readSqliteUserVersion(db);
-  const contentVersion =
-    userVersion > OPENCLAW_STATE_SCHEMA_VERSION ? userVersion : readStateSchemaContentVersion(db);
-  if (contentVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw createNewerSqliteSchemaVersionError(
-      "OpenClaw state database",
-      pathname,
-      contentVersion,
-      OPENCLAW_STATE_SCHEMA_VERSION,
-    );
+  try {
+    const userVersion = readSqliteUserVersion(db);
+    const contentVersion =
+      userVersion > OPENCLAW_STATE_SCHEMA_VERSION ? userVersion : readStateSchemaContentVersion(db);
+    if (contentVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
+      throw createNewerSqliteSchemaVersionError(
+        "OpenClaw state database",
+        pathname,
+        contentVersion,
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+    }
+    return userVersion;
+  } catch (error) {
+    throw normalizeOpenClawStateSchemaReadError(error, pathname);
   }
-  return userVersion;
 }

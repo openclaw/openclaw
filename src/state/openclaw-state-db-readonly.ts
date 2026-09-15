@@ -16,7 +16,6 @@ import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateDatabase,
 } from "./openclaw-state-db-contract.js";
-import { openDanglingWorkshopIndexReadAdmission } from "./openclaw-state-db-dangling-workshop-index.js";
 import { openOpenClawStateReadConnection } from "./openclaw-state-db-read-connection.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -215,18 +214,13 @@ function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
     return { reused: false };
   }
   try {
-    const closeSchemaReadAdmission = openDanglingWorkshopIndexReadAdmission(opened.db);
-    try {
-      // Process-local terminal failures evict this handle. Persisted quarantine
-      // is checked on the next physical open so hot reads do not poll metadata.
-      // A newer build can migrate this file while the handle stays open, so the
-      // forward-compatibility gate still runs before any reused read.
-      assertSupportedStateSchemaVersion(opened.db, pathname);
-      observeOpenClawDatabaseMaintenanceResource(opened.db);
-      return { reused: true, value: operation(opened) };
-    } finally {
-      closeSchemaReadAdmission?.();
-    }
+    // Process-local terminal failures evict this handle. Persisted quarantine
+    // is checked on the next physical open so hot reads do not poll metadata.
+    // A newer build can migrate this file while the handle stays open, so the
+    // forward-compatibility gate still runs before any reused read.
+    assertSupportedStateSchemaVersion(opened.db, pathname);
+    observeOpenClawDatabaseMaintenanceResource(opened.db);
+    return { reused: true, value: operation(opened) };
   } catch (error) {
     openClawStateDatabaseCache.evictOpenClawStateDatabaseAfterCorruption(opened, error);
     throw error;
@@ -272,37 +266,13 @@ function openOpenClawStateReadOnlyLocation(
   source: string | PreparedSqliteReadOnlyLocation,
 ) {
   const connection = openOpenClawStateReadConnection(pathname, source);
-  const { db } = connection.database;
-  let closeSchemaReadAdmission: (() => void) | undefined;
-  const close = () => {
-    const errors: unknown[] = [];
-    let closed = false;
-    try {
-      closeSchemaReadAdmission?.();
-    } catch (error) {
-      errors.push(error);
-    }
-    try {
-      closed = connection.close();
-    } catch (error) {
-      errors.push(error);
-    }
-    if (errors.length === 1) {
-      throw errors[0];
-    }
-    if (errors.length > 1) {
-      throw new AggregateError(errors, "Shared-state reader cleanup failed.");
-    }
-    return closed;
-  };
   try {
-    closeSchemaReadAdmission = openDanglingWorkshopIndexReadAdmission(db);
-    assertSupportedStateSchemaVersion(db, pathname);
+    assertSupportedStateSchemaVersion(connection.database.db, pathname);
   } catch (error) {
-    close();
+    connection.close();
     throw error;
   }
-  return { database: connection.database, close };
+  return connection;
 }
 
 function withOpenClawStateReadOnlyLocation<T>(

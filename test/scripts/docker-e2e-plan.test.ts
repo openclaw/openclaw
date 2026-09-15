@@ -1412,6 +1412,29 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     }
   });
 
+  it("pins opt-in Workshop Doctor recovery to published 9.4 without credentials", () => {
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.9.3 2026.9.4 2026.9.5",
+      upgradeSurvivorScenarios: "workshop-doctor-recovery",
+    });
+    const name = "published-upgrade-survivor-2026.9.4-workshop-doctor-recovery";
+    expect(plan.lanes.map(summarizeLane)).toEqual([
+      publishedUpgradeSurvivorLane(name, "openclaw@2026.9.4", "workshop-doctor-recovery"),
+    ]);
+    expect(plan.requiredPrepublishPluginPackages).toEqual([]);
+    expect(plan.credentials).toEqual([]);
+    for (const alias of ["reported-issues", "far-reaching"]) {
+      expect(
+        planFor({
+          selectedLaneNames: ["published-upgrade-survivor"],
+          upgradeSurvivorBaselines: "2026.9.4",
+          upgradeSurvivorScenarios: alias,
+        }).lanes.map((lane) => lane.name),
+      ).not.toContain(name);
+    }
+  });
+
   it("runs sibling-source canaries from published 9.4 without provider or registry fixtures", () => {
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
