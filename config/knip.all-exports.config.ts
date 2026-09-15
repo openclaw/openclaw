@@ -158,6 +158,10 @@ const config = {
   ignoreIssues: {
     // The memory-state compatibility facade must retain its pre-registry-bundle type export.
     "src/plugins/memory-state.ts": ["types"],
+    // mediaLogForTest is a test-only spy target exported so the
+    // outbound-media-contract tests can intercept the sanitized warning
+    // emitted when native transcoding is skipped.
+    "extensions/whatsapp/src/outbound-media-contract.ts": ["exports"],
     "test/fixtures/ts-topology/basic/**": [
       "exports",
       "nsExports",
