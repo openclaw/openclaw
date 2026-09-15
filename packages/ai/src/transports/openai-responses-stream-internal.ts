@@ -21,7 +21,6 @@ import {
 } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout.js";
-import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { createCompactionTracker } from "./openai-responses-compaction-replay.js";
 import { OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY } from "./openai-responses-contracts.js";
 import { normalizeResponsesFailedEvent, ResponsesStreamFailure } from "./openai-responses-debug.js";
@@ -76,7 +75,7 @@ export async function processResponsesStream<TApi extends Api>(
   const outputSlots = createResponsesOutputSlotTracker<ResponsesOutputSlot>();
   const outputs = createResponsesOutputTracker();
   let terminalResponse: CompletedResponse | null | undefined;
-  let incompleteToolCall: CompletedToolCall | undefined;
+  let rejectedToolCall: { error: unknown } | undefined;
   let lastTextBlock: TextBlockReference | null = null;
   const blocks = output.content;
   const compactionTracker = createCompactionTracker(output, model, options);
@@ -325,14 +324,20 @@ export async function processResponsesStream<TApi extends Api>(
       if (
         event.type === "response.output_item.done" &&
         event.item.type === "function_call" &&
-        event.item.status === "incomplete"
+        event.item.status &&
+        event.item.status !== "completed" &&
+        !rejectedToolCall
       ) {
-        incompleteToolCall ??= event.item;
+        try {
+          resolveCompletedResponsesToolCall(event.item);
+        } catch (error) {
+          rejectedToolCall = { error };
+        }
       }
-      // An incomplete call closes output admission; only drain terminal facts.
+      // A rejected call closes output admission; only drain terminal facts.
       // Later async tool completions must not authorize side effects.
       if (
-        incompleteToolCall &&
+        rejectedToolCall &&
         event.type !== "response.completed" &&
         event.type !== "response.incomplete" &&
         event.type !== "response.failed" &&
@@ -657,45 +662,33 @@ export async function processResponsesStream<TApi extends Api>(
           ) {
             continue;
           }
-          // The output_item.done snapshot can carry stale partial arguments that
-          // disagree with the streamed buffer. Prefer the streamed buffer only
-          // when it was populated by routed argument deltas or a done event
-          // (not just the opening added snapshot), is reliable (not marked
-          // unreliable by an unrouteable delta), and parses as complete JSON;
-          // otherwise fall back to the done snapshot.
-          const streamedArguments = streamingToolCall?.block.partialJson || "";
-          const preferredArguments =
-            streamingToolCall?.argumentStreamReliable &&
-            streamingToolCall?.argumentsStreamed &&
-            streamedArguments.length > 0 &&
-            completedArguments !== undefined &&
-            streamedArguments !== completedArguments &&
-            parseJsonObjectPreservingUnsafeIntegers(streamedArguments) !== null
-              ? streamedArguments
-              : completedArguments || streamedArguments;
-          const validated = resolveCompletedResponsesToolCall(item, {
-            name: streamingToolCall?.block.name,
-            arguments: preferredArguments,
-          });
+          let validated: Pick<ToolCall, "name" | "arguments">;
+          try {
+            validated = resolveCompletedResponsesToolCall(item, {
+              name: streamingToolCall?.block.name,
+              arguments: streamingToolCall?.block.partialJson,
+              preferArguments:
+                streamingToolCall?.argumentStreamReliable && streamingToolCall?.argumentsStreamed,
+            });
+          } catch (error) {
+            // Preserve the original validation code and bounded argument diagnostics.
+            // Draining must neither repair this call nor admit a later sibling.
+            rejectedToolCall = { error };
+            continue;
+          }
 
           finalizeToolCall(item, readResponsesOutputIndex(event), streamingToolCall, validated);
         }
       } else if (event.type === "response.completed" || event.type === "response.incomplete") {
         // Preserve reported accounting before rejecting unfinished tool calls.
         terminal.finalizeResponse(event.response, event.type);
-        if (incompleteToolCall) {
-          if (output.errorMessage) {
-            throw new Error(output.errorMessage);
-          }
-          resolveCompletedResponsesToolCall(incompleteToolCall);
+        if (rejectedToolCall) {
+          throw output.errorMessage ? new Error(output.errorMessage) : rejectedToolCall.error;
         }
         if (event.type === "response.incomplete" && streamingToolCalls.hasActive()) {
-          if (output.errorMessage) {
-            throw new Error(output.errorMessage);
-          }
-          throw new IncompleteToolCallError(
-            "Responses stream completed with unresolved tool calls",
-          );
+          throw output.errorMessage
+            ? new Error(output.errorMessage)
+            : new IncompleteToolCallError("Responses stream completed with unresolved tool calls");
         }
         if (event.type === "response.completed" || output.stopReason === "length") {
           const items = event.response.output ?? [];
@@ -725,6 +718,9 @@ export async function processResponsesStream<TApi extends Api>(
     // the caller's authoritative reason before classifying terminal stream state.
     if (options?.signal?.aborted) {
       throw transportAbortError(options.signal);
+    }
+    if (rejectedToolCall) {
+      throw rejectedToolCall.error;
     }
     if (streamingToolCalls.hasActive()) {
       throw new Error("Responses stream ended with unresolved tool calls");

@@ -24,6 +24,7 @@ import type {
   Usage,
 } from "../types.js";
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import {
   OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE,
@@ -87,7 +88,7 @@ export function resolveResponsesToolCallId(
 
 export function resolveCompletedResponsesToolCall(
   item: Extract<ResponseOutputItem, { type: "function_call" }>,
-  streamed?: { name?: string; arguments?: string },
+  streamed?: { name?: string; arguments?: string; preferArguments?: boolean },
 ): Pick<ToolCall, "name" | "arguments"> {
   if (item.status && item.status !== "completed") {
     throw new IncompleteToolCallError(
@@ -105,8 +106,20 @@ export function resolveCompletedResponsesToolCall(
   if (!name) {
     throw new Error("Responses stream completed tool call without a function name");
   }
+  // A done snapshot can be stale. Prefer routed, reliable streamed arguments only
+  // when they are complete JSON; opening snapshots and partial previews cannot win.
+  const completedArguments = typeof item.arguments === "string" ? item.arguments : undefined;
+  const streamedArguments = streamed?.arguments || "";
+  const preferredArguments =
+    streamed?.preferArguments &&
+    streamedArguments.length > 0 &&
+    completedArguments !== undefined &&
+    streamedArguments !== completedArguments &&
+    parseJsonObjectPreservingUnsafeIntegers(streamedArguments) !== null
+      ? streamedArguments
+      : completedArguments || streamedArguments;
   const argumentsValue = parseTerminalToolCallArguments(
-    streamed?.arguments ?? item.arguments,
+    streamed?.arguments === undefined ? item.arguments : preferredArguments,
     "Responses stream completed tool call with invalid JSON arguments",
   );
   return { name, arguments: argumentsValue };
