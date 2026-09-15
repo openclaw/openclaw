@@ -6,7 +6,8 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../auth.js";
-import { getBearerToken, resolveHttpBrowserOriginPolicy } from "../http-auth-utils.js";
+import { resolveHttpBrowserOriginPolicy } from "../control-ui-plugin-origin-gate.js";
+import { getBearerToken } from "../http-auth-utils.js";
 import {
   prepareGatewayIngressAttribution,
   PROXY_ATTRIBUTION_REQUIRED_REASON,

@@ -10,6 +10,9 @@ import { isLocalDirectRequest } from "./net.js";
 import type { ReadinessChecker, StartupChecker, StartupResult } from "./server/readiness.js";
 
 const getHttpAuthUtilsModule = createLazyRuntimeModule(() => import("./http-auth-utils.js"));
+const getControlUiPluginOriginGateModule = createLazyRuntimeModule(
+  () => import("./control-ui-plugin-origin-gate.js"),
+);
 
 async function shouldIncludeGatewayProbeDetails(params: {
   req: IncomingMessage;
@@ -28,7 +31,8 @@ async function shouldIncludeGatewayProbeDetails(params: {
   if (params.resolvedAuth.mode === "none") {
     return false;
   }
-  const { getBearerToken, resolveHttpBrowserOriginPolicy } = await getHttpAuthUtilsModule();
+  const { getBearerToken } = await getHttpAuthUtilsModule();
+  const { resolveHttpBrowserOriginPolicy } = await getControlUiPluginOriginGateModule();
   const bearerToken = getBearerToken(params.req);
   return (
     await authorizeHttpGatewayConnect({
