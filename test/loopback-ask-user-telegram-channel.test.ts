@@ -31,6 +31,8 @@ import {
   setCliRunnerPrepareTestDeps,
 } from "../src/agents/cli-runner/prepare.test-support.js";
 import type { PreparedCliRunContext } from "../src/agents/cli-runner/types.js";
+import type { RunEmbeddedAgentParams } from "../src/agents/embedded-agent-runner/run/params.js";
+import { createEmbeddedRunProgressController } from "../src/agents/embedded-agent-runner/run/progress-controller.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../src/agents/harness/gateway-question.js";
 import { withQuestionGateway } from "../src/agents/harness/gateway-question.test-support.js";
 import { resetPendingAskUserQuestionsForTest } from "../src/agents/tools/ask-user-tool.test-support.js";
@@ -181,7 +183,7 @@ afterEach(() => {
 });
 
 describe("loopback ask_user Telegram channel transport", () => {
-  it("publishes the prompt through Bot API and completes after the answer", async () => {
+  it("resumes a callback-less requester-settle question after Telegram answers", async () => {
     const { telegramPlugin } = await import("../extensions/telegram/api.js");
     const telegram = await startTelegramAskUserLoopback();
     try {
@@ -206,6 +208,25 @@ describe("loopback ask_user Telegram channel transport", () => {
               },
             };
             setRuntimeConfigSnapshot(config);
+            const runId = "announce:requester-settle:main:yield-loopback";
+            const originatingAttempt = {
+              config,
+              runId,
+              sessionId: "requester-settle-session",
+              sessionKey,
+              workspaceDir: dir,
+              messageChannel: "telegram",
+              messageProvider: "telegram",
+              messageTo: "1",
+              currentChannelId: "wrong-chat",
+              agentAccountId: "default",
+            } as unknown as RunEmbeddedAgentParams;
+            const progress = createEmbeddedRunProgressController({
+              attempt: originatingAttempt,
+              noteLaneTaskProgress: () => {},
+              startedAtMs: Date.now(),
+            });
+            expect(progress.notifyToolResult).toBeUndefined();
             await ensureMcpLoopbackServer();
             const { getActiveMcpLoopbackRuntime } =
               await import("../src/gateway/mcp-http.loopback-runtime.js");
@@ -262,20 +283,18 @@ describe("loopback ask_user Telegram channel transport", () => {
                 const admission = prepareAgentRunAdmission({
                   cfg: config,
                   facts: {
-                    runId: "loopback-ask-user-telegram",
+                    runId,
                     agentId: "main",
                     ingress: { kind: "system", boundary: "mcp-question-test", state: "present" },
                   },
-                  operationalRunInstance: createOperationalRunInstanceRef(
-                    "loopback-ask-user-telegram",
-                  ),
+                  operationalRunInstance: createOperationalRunInstanceRef(runId),
                 });
                 admissions.push(admission);
                 const context = await cli.prepare({
                   config,
                   preparedRunAdmission: admission,
                   sessionKey,
-                  runId: "loopback-ask-user-telegram",
+                  runId,
                   timeoutMs: 60_000,
                   abortSignal: source.signal,
                   messageProvider: "telegram",
@@ -321,6 +340,7 @@ describe("loopback ask_user Telegram channel transport", () => {
                     throw new Error("ask_user completed before Telegram prompt delivery");
                   }),
                 ]);
+                expect(prompt.body).toContain('"chat_id":"1"');
                 expect(prompt.body).toContain("Which destination should be used?");
                 expect(prompt.body).toContain("Staging");
                 await expect(
@@ -333,6 +353,7 @@ describe("loopback ask_user Telegram channel transport", () => {
                   }),
                 ).resolves.toBe(true);
                 const completed = await response;
+                expect(persist).toHaveBeenCalledOnce();
                 expect(
                   telegram.requests.filter((entry) => entry.url.includes("sendMessage")),
                 ).toHaveLength(1);
@@ -343,6 +364,7 @@ describe("loopback ask_user Telegram channel transport", () => {
                     text: expect.stringContaining('"status": "answered"'),
                   }),
                 ]);
+                expect(completed.result.content?.[0]?.text).toContain("Staging");
               },
               () => {
                 requestController.abort();
