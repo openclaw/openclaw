@@ -196,6 +196,36 @@ export function registerBrowserInspectCommands(
           query,
         });
 
+        // Empty output means nothing on its own, so do not measure the text. The route
+        // marks every response that came from a capture with `captured`, whatever that
+        // capture produced - a genuinely blank page serializes to an empty string and is
+        // a perfectly good result. What must not pass silently is an empty payload from a
+        // response that never carried a capture at all: printing that as success is
+        // indistinguishable from reading an empty page, and callers act on it.
+        //
+        // A pending dialog is the one empty response that is deliberately not a capture:
+        // the route answers with blockedByDialog and the dialog details in browserState
+        // so the caller can dismiss it. That is a recovery contract - let it through.
+        //
+        // The test is `captured === false`, never a missing field. A Gateway older than
+        // this change sends neither value, and absence has to keep meaning "this Gateway
+        // does not say" - otherwise an updated CLI pointed at a published Gateway through
+        // --url would reject every blank page it captures.
+        if (
+          result.format === "ai" &&
+          !result.snapshot.trim() &&
+          result.captured === false &&
+          !result.blockedByDialog
+        ) {
+          defaultRuntime.error(
+            danger(
+              "Browser snapshot returned no capture. The browser connection may be wedged. Retry, or restart the browser with `openclaw browser start`.",
+            ),
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
+
         if (opts.out) {
           const payload =
             result.format === "ai" ? result.snapshot : JSON.stringify(result, null, 2);

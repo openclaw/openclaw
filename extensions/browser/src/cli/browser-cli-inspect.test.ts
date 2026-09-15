@@ -378,4 +378,140 @@ describe("browser cli snapshot defaults", () => {
       fsSync.rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  // runtime.error also receives the exit exception, so the guard message is not
+  // necessarily the last call. Search everything it was handed.
+  const allErrorText = () => runtime.error.mock.calls.map((call) => String(call[0])).join("\n");
+
+  const emptyAiSnapshot = (snapshot: string): SnapshotResult => ({
+    ok: true,
+    format: "ai",
+    targetId: "t1",
+    url: "https://example.com",
+    snapshot,
+  });
+
+  it("prints a captured blank page instead of failing", async () => {
+    sharedMocks.callBrowserRequest.mockResolvedValueOnce({
+      ...emptyAiSnapshot(""),
+      captured: true,
+    });
+
+    await runSnapshot([]);
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("");
+  });
+
+  it("writes a captured blank page to --out", async () => {
+    const outputPath = path.join(tempDirs.make("openclaw-blank-capture-"), "snapshot.txt");
+    sharedMocks.callBrowserRequest.mockResolvedValueOnce({
+      ...emptyAiSnapshot(""),
+      captured: true,
+    });
+
+    await runSnapshot(["--out", outputPath]);
+
+    expect(await fs.readFile(outputPath, "utf8")).toBe("");
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "empty", snapshot: "" },
+    { label: "whitespace-only", snapshot: " \n\t " },
+  ])("fails on an $label AI snapshot that carried no capture", async ({ snapshot }) => {
+    sharedMocks.callBrowserRequest.mockResolvedValueOnce({
+      ...emptyAiSnapshot(snapshot),
+      captured: false,
+    });
+
+    await expect(runSnapshot([])).rejects.toThrow("__exit__:1");
+
+    expect(allErrorText()).toContain("no capture");
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("fails on an uncaptured empty AI snapshot in JSON mode too", async () => {
+    sharedMocks.callBrowserRequest.mockResolvedValueOnce({
+      ...emptyAiSnapshot(""),
+      captured: false,
+    });
+
+    await expect(runBrowserInspect(["snapshot"], true)).rejects.toThrow("__exit__:1");
+
+    expect(allErrorText()).toContain("no capture");
+    expect(runtime.writeJson).not.toHaveBeenCalled();
+  });
+
+  it("stays quiet when the Gateway does not report capture state", async () => {
+    // A Gateway older than the captured marker sends neither value. Absence must keep
+    // meaning "this Gateway does not say", or an updated CLI pointed at a published
+    // Gateway would reject every blank page it captures.
+    sharedMocks.callBrowserRequest.mockResolvedValueOnce(emptyAiSnapshot(""));
+
+    await runSnapshot([]);
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith("");
+  });
+
+  it("does not write an empty AI snapshot over an existing file", async () => {
+    const tempDir = fsSync.mkdtempSync(path.join(tmpdir(), "openclaw-browser-snapshot-"));
+    try {
+      const outputPath = path.join(tempDir, "snapshot.txt");
+      fsSync.writeFileSync(outputPath, "previous snapshot\n");
+      const priorBytes = fsSync.readFileSync(outputPath);
+      sharedMocks.callBrowserRequest.mockResolvedValueOnce({
+        ...emptyAiSnapshot(""),
+        captured: false,
+      });
+
+      await expect(runSnapshot(["--out", outputPath])).rejects.toThrow("__exit__:1");
+
+      expect(fsSync.readFileSync(outputPath)).toEqual(priorBytes);
+    } finally {
+      fsSync.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still prints a non-empty AI snapshot", async () => {
+    sharedMocks.callBrowserRequest.mockResolvedValueOnce(emptyAiSnapshot("- generic [ref=e1]"));
+
+    await runSnapshot([]);
+
+    expect(runtime.log).toHaveBeenCalledWith("- generic [ref=e1]");
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("still reports a dialog-blocked empty snapshot instead of failing", async () => {
+    sharedMocks.callBrowserRequest.mockResolvedValueOnce({
+      ...emptyAiSnapshot(""),
+      blockedByDialog: true,
+      browserState: { dialogs: { pending: { id: "d1", message: "Leave site?" } } },
+    });
+
+    await runBrowserInspect(["snapshot"], true);
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.writeJson.mock.calls.at(-1)?.[0]).toMatchObject({
+      blockedByDialog: true,
+      browserState: { dialogs: { pending: { id: "d1" } } },
+    });
+  });
+
+  it("leaves an ARIA snapshot with no nodes alone", async () => {
+    sharedMocks.callBrowserRequest.mockResolvedValueOnce({
+      ok: true,
+      format: "aria",
+      targetId: "t1",
+      url: "https://example.com",
+      nodes: [],
+    });
+
+    await runSnapshot(["--format", "aria"]);
+
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
 });
