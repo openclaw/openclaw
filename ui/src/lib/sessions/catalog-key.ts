@@ -10,6 +10,7 @@ export type CatalogSessionKey = {
   catalogId: string;
   hostId: string;
   threadId: string;
+  sourceHomeId?: string;
 };
 
 /** Fired on `document` when a catalog session is adopted into an OpenClaw
@@ -87,6 +88,7 @@ export function catalogSessionSearch(key: CatalogSessionKey): string {
     catalog: key.catalogId,
     host: key.hostId,
     thread: key.threadId,
+    ...(key.sourceHomeId !== undefined ? { sourceHome: key.sourceHomeId } : {}),
   }).toString()}`;
 }
 
@@ -95,7 +97,11 @@ export function catalogSessionKeyFromSearch(search: string): CatalogSessionKey |
   const catalogId = params.get("catalog")?.trim() ?? "";
   const hostId = params.get("host")?.trim() ?? "";
   const threadId = params.get("thread")?.trim() ?? "";
-  return catalogId && hostId && threadId ? { catalogId, hostId, threadId } : null;
+  // Preserve supplied hints so request validation cannot silently widen the source.
+  const sourceHomeId = params.get("sourceHome");
+  return catalogId && hostId && threadId
+    ? { catalogId, hostId, threadId, ...(sourceHomeId !== null ? { sourceHomeId } : {}) }
+    : null;
 }
 
 export function parseCatalogSessionKey(value: string | null | undefined): CatalogSessionKey | null {

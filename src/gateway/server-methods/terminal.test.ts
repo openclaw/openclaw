@@ -1,21 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
-import {
-  ErrorCodes,
-  type TerminalUploadResult,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
-import { createTerminalLaunchPolicy } from "../terminal/launch.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { TerminalSessionManager } from "../terminal/session-manager.js";
 import { makeFakePty } from "../terminal/session-manager.test-helpers.js";
-import type { TerminalSessionSummary } from "../terminal/session-types.js";
 import { openTerminalSession, terminalHandlers, TERMINAL_OPEN_DEADLINE_MS } from "./terminal.js";
+import { installCatalog, makeOpts } from "./terminal.test-support.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -59,83 +52,6 @@ vi.mock("../session-utils.js", async () => ({
   ...(await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js")),
   loadGatewaySessionEntryReadOnly: sessionMocks.loadGatewaySessionEntryReadOnly,
 }));
-
-function makeOpts(
-  params: unknown,
-  terminalConfig: { enabled?: boolean } | undefined,
-  terminalPolicyConfig?: OpenClawConfig,
-  nodeRegistry: {
-    get: (nodeId: string) => unknown;
-    invoke?: (params: unknown) => Promise<unknown>;
-  } = { get: () => undefined },
-) {
-  const sessions = {
-    open: vi.fn(async (_request: unknown) => ({
-      ok: true as const,
-      sessionId: "terminal-1",
-      agentId: "main",
-      shell: "/bin/zsh",
-      cwd: "/work",
-    })),
-    write: vi.fn(() => true),
-    resize: vi.fn(() => true),
-    close: vi.fn(() => true),
-    attach: vi.fn(() => ({
-      sessionId: "terminal-1",
-      agentId: "main",
-      shell: "/bin/zsh",
-      cwd: "/work",
-      buffer: "replay",
-      seq: 6,
-      title: "codex",
-      owner: "conn" as const,
-    })),
-    snapshot: vi.fn(() => "10%\r100%"),
-    list: vi.fn((): TerminalSessionSummary[] => []),
-    upload: vi.fn(async (): Promise<TerminalUploadResult> => ({
-      path: "/tmp/upload/report.pdf",
-      size: 4,
-    })),
-  };
-  const runtimeConfig = { gateway: { terminal: terminalConfig } } as OpenClawConfig;
-  const policy = createTerminalLaunchPolicy(runtimeConfig);
-  if (terminalPolicyConfig) {
-    policy.prepareConfig(terminalPolicyConfig, { restartPending: true });
-  }
-  const respond = vi.fn();
-  const isConnectionActive = vi.fn(() => true);
-  const isTerminalEnabled = vi.fn(() => policy.isEnabled());
-  const resolveTerminalLaunchPolicy = vi.fn((agentId?: string) => policy.resolve(agentId));
-  const context = {
-    getRuntimeConfig: () => runtimeConfig,
-    resolveTerminalLaunchPolicy,
-    isTerminalEnabled,
-    terminalSessions: sessions,
-    nodeRegistry: { invoke: vi.fn(), ...nodeRegistry },
-    isConnectionActive,
-    logGateway: { info: vi.fn() },
-  } as unknown as Parameters<(typeof terminalHandlers)["terminal.input"]>[0]["context"];
-  const opts = {
-    params: params as Record<string, unknown>,
-    respond,
-    context,
-    client: { connId: "conn-1", connect: {} },
-  } as unknown as Parameters<(typeof terminalHandlers)["terminal.input"]>[0];
-  return {
-    opts,
-    sessions,
-    respond,
-    isConnectionActive,
-    isTerminalEnabled,
-    resolveTerminalLaunchPolicy,
-  };
-}
-
-function installCatalog(provider: SessionCatalogProvider) {
-  const registry = createEmptyPluginRegistry();
-  registry.sessionCatalogs.push({ pluginId: "test", provider, source: "test" });
-  setActivePluginRegistry(registry);
-}
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
@@ -342,6 +258,57 @@ describe("terminal gateway policy", () => {
         message: "terminal requires an explicit owner",
       }),
     );
+  });
+
+  it.each([
+    { label: "legacy", sourceHomeId: undefined, opens: true },
+    { label: "current", sourceHomeId: "home-current", opens: true },
+    { label: "replaced", sourceHomeId: "home-replaced", opens: false },
+  ])("honors the $label source constraint before opening a catalog terminal", async (testCase) => {
+    installCatalog({
+      id: "source-bound",
+      label: "Source bound",
+      list: async () => [],
+      read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
+      openTerminal: async ({ sourceHomeId }) => {
+        if (sourceHomeId !== undefined && sourceHomeId !== "home-current") {
+          throw new Error("selected source home is unavailable");
+        }
+        return {
+          kind: "local",
+          argv: ["codex", "resume", "thread"],
+          env: { CODEX_HOME: "/source/current" },
+        };
+      },
+    });
+    const { opts, sessions, respond } = makeOpts(
+      {
+        cols: 80,
+        rows: 24,
+        catalog: {
+          catalogId: "source-bound",
+          hostId: "gateway:local",
+          threadId: "thread",
+          ...(testCase.sourceHomeId !== undefined ? { sourceHomeId: testCase.sourceHomeId } : {}),
+        },
+      },
+      { enabled: true },
+    );
+    await expectDefined(terminalHandlers["terminal.open"], "terminal.open")(opts);
+    if (testCase.opens) {
+      expect(sessions.open).toHaveBeenCalledWith(
+        expect.objectContaining({
+          env: expect.objectContaining({ CODEX_HOME: "/source/current" }),
+        }),
+      );
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ sessionId: "terminal-1" }),
+      );
+    } else {
+      expect(sessions.open).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    }
   });
 
   it("opens a provider-built local resume plan and returns its title", async () => {

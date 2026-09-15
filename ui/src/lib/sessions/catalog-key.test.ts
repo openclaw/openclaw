@@ -23,6 +23,22 @@ describe("catalog session keys", () => {
     expect(catalogSessionKeyFromSearch(catalogSessionSearch(key))).toEqual(key);
   });
 
+  it.each(["home:A/B", ""])(
+    "preserves the source hint %j without changing durable session keys",
+    (sourceHomeId) => {
+      const key = {
+        catalogId: "codex",
+        hostId: "gateway:local",
+        threadId: "thread-1",
+        sourceHomeId,
+      };
+      expect(catalogSessionKeyFromSearch(catalogSessionSearch(key))).toEqual(key);
+      expect(buildCatalogSessionKey(key, "main")).toBe(
+        "agent:main:catalog:codex:gateway%3Alocal:thread-1",
+      );
+    },
+  );
+
   it("keeps the explicit agent owner across paginated lookup requests", async () => {
     const key = { catalogId: "codex", hostId: "gateway:local", threadId: "thread-2" };
     const request = vi

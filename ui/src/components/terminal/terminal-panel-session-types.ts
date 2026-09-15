@@ -42,6 +42,7 @@ export type TerminalPanelCatalogReference = {
   catalogId: string;
   hostId: string;
   threadId: string;
+  sourceHomeId?: string;
 };
 
 export function resolveTerminalPanelOwnerSessionKey(

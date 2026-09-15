@@ -18,11 +18,16 @@ function catalogReference(value: unknown): TerminalPanelCatalogReference | null 
   if (!isRecord(value)) {
     return null;
   }
-  return nonEmptyString(value.catalogId) &&
-    nonEmptyString(value.hostId) &&
-    nonEmptyString(value.threadId)
-    ? { catalogId: value.catalogId, hostId: value.hostId, threadId: value.threadId }
-    : null;
+  const { catalogId, hostId, threadId, sourceHomeId } = value;
+  if (
+    !nonEmptyString(catalogId) ||
+    !nonEmptyString(hostId) ||
+    !nonEmptyString(threadId) ||
+    (sourceHomeId !== undefined && !nonEmptyString(sourceHomeId))
+  ) {
+    return null;
+  }
+  return { catalogId, hostId, threadId, ...(sourceHomeId !== undefined ? { sourceHomeId } : {}) };
 }
 
 function terminalAction(value: unknown): TerminalPanelAction | null {

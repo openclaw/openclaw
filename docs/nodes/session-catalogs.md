@@ -37,6 +37,10 @@ By default, selecting a row opens the normal Chat pane and reads its persisted t
 through bounded, cursor-paginated
 `thread/turns/list` calls with full item projection. Use the row menu, the viewer header, or the **Open Codex/Claude sessions in** preference to start `codex resume <thread-id>` in the operator terminal on the computer that owns the session. The paired-node terminal path is an allowlisted PTY relay owned by the Codex plugin, not arbitrary node command execution.
 
+Terminal URLs created from local Codex sidebar rows retain their selected source
+home. Restored terminal references keep this constraint when present. If that home
+is no longer available, refresh the catalog and select the session again.
+
 The terminal relay is separate from paired-node Chat continuation. A connected
 node that advertises and permits both catalog commands plus
 `codex.cli.session.resume` can continue a stored or idle interactive thread for

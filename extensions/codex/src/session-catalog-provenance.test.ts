@@ -539,7 +539,7 @@ describe("Codex exact local eligibility", () => {
       };
       const binary = path.join(f.home, process.platform === "win32" ? "codex.exe" : "codex");
       await fs.writeFile(binary, "synthetic executable; never launched", { mode: 0o755 });
-      await withEnvAsync({ PATH: f.home }, async () => {
+      await withEnvAsync({ PATH: f.home, CODEX_HOME: f.home }, async () => {
         if (action === "transcript") {
           await expect(provider.read(request)).resolves.toMatchObject({
             threadId: f.thread.id,
@@ -550,10 +550,15 @@ describe("Codex exact local eligibility", () => {
             provider.archive!({ ...request, confirmNoOtherRunner: true }),
           ).resolves.toEqual({ ok: true });
         } else if (action === "terminal") {
+          await expect(
+            provider.openTerminal!({ ...request, sourceHomeId: "replaced-home" }),
+          ).rejects.toThrow();
+          expect(pinnedConnectionMocks.request).not.toHaveBeenCalled();
           await expect(provider.openTerminal!(request)).resolves.toMatchObject({
             kind: "local",
             cwd: f.thread.cwd,
             argv: [binary, "resume", f.thread.id],
+            env: { CODEX_HOME: f.home },
           });
         } else {
           const commandId =

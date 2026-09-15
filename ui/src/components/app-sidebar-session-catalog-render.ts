@@ -509,6 +509,7 @@ function renderCatalogSessionRow(
     catalogId: catalog.id,
     hostId: host.hostId,
     threadId: session.threadId,
+    ...(session.sourceHomeId !== undefined ? { sourceHomeId: session.sourceHomeId } : {}),
   } satisfies CatalogSessionKey;
   const identityKey = buildCatalogSessionKey(catalogKey);
   const key = session.sessionKey ?? buildCatalogSessionKey(catalogKey, params.newSessionAgentId);
