@@ -14,6 +14,42 @@ afterEach(() => {
 });
 
 describe("chat pane suspension", () => {
+  it("coalesces hidden retained-pane invalidations until the pane is shown again", async () => {
+    const { pane } = createTestChatPane({
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const lifecycle = pane as TestChatPane & {
+      performUpdate: () => void;
+      hasUpdated: boolean;
+      render: () => unknown;
+      requestUpdate: () => void;
+      visuallyPresented: boolean;
+    };
+    lifecycle.render = () => null;
+    ChatPaneBase.prototype.connectedCallback.call(lifecycle);
+    await vi.waitFor(() => expect(lifecycle.hasUpdated).toBe(true), { interval: 1, timeout: 50 });
+    await lifecycle.updateComplete;
+    const performUpdate = vi.spyOn(lifecycle, "performUpdate");
+
+    lifecycle.visuallyPresented = false;
+    lifecycle.requestUpdate();
+    lifecycle.requestUpdate();
+    await Promise.resolve();
+    expect(performUpdate).not.toHaveBeenCalled();
+
+    lifecycle.visuallyPresented = true;
+    await lifecycle.updateComplete;
+    expect(performUpdate).toHaveBeenCalledOnce();
+
+    lifecycle.visuallyPresented = false;
+    await Promise.resolve();
+    Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
+    ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
+    await lifecycle.updateComplete;
+    expect(performUpdate).toHaveBeenCalledTimes(2);
+  });
+
   it("commits the live composer draft before a hidden document can suspend", async () => {
     let visibilityState: DocumentVisibilityState = "visible";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
