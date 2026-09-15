@@ -166,7 +166,9 @@ creation has a token or password auth path.
    administrative Gateway controls, then click **Create setup code**.
 
 3. In the iOS app, open **Settings** -> **Gateway**, scan the QR code (or paste
-   the setup code), and connect.
+   the setup code), and connect. Use a mobile setup code from Control UI or
+   [`openclaw qr`](/cli/qr) — not a gateway join URL from
+   [`openclaw devices join-code`](/cli/devices#openclaw-devices-join-code).
 
    Paired Gateways remain in the **Gateways** list. The checkmark identifies
    the focused Gateway; use the bolt control on another row to keep its
