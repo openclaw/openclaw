@@ -474,6 +474,10 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
       return false;
     }
     if (!this.layout) {
+      if (areUiSessionKeysEquivalent(pane.sessionKey, trimmed)) {
+        this.syncRouteBindings();
+        return true;
+      }
       this.updateRoute(trimmed, options?.replace);
       return true;
     }
