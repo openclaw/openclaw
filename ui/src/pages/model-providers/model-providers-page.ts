@@ -17,7 +17,7 @@ import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
-import type { ModelAccountUsage } from "./account-usage.ts";
+import type { ModelAccountUsages } from "./account-usage.ts";
 import { createCatalogDiscoveryController } from "./catalog-discovery.ts";
 import {
   buildDefaultsPatch,
@@ -96,7 +96,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       this.coreCatalogGeneration = this.catalogDiscovery.generation;
       this.supplemental.beginCoreRefresh(reason === "forced");
       if (reason === "forced") {
-        this.querySelectorAll<ModelAccountUsage>("openclaw-model-account-usage").forEach(
+        this.querySelectorAll<ModelAccountUsages>("openclaw-model-account-usages").forEach(
           (account) => account.refreshUsage(),
         );
       }

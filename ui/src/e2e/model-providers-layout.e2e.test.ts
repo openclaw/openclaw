@@ -1,10 +1,49 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Models settings layout and discovery" });
 const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+const now = Date.now();
+
+function accountUsageResponses(primaryUsedPercent: number, secondaryUsedPercent: number) {
+  return {
+    cases: [
+      {
+        match: { agentId: "main", profileId: "openai:alpha" },
+        response: {
+          updatedAt: now,
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              plan: "Synthetic Alpha",
+              windows: [{ label: "5h", usedPercent: primaryUsedPercent }],
+            },
+          ],
+        },
+      },
+      {
+        match: { agentId: "main", profileId: "openai:beta" },
+        response: {
+          updatedAt: now,
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              plan: "Synthetic Beta",
+              windows: [{ label: "5h", usedPercent: secondaryUsedPercent }],
+            },
+          ],
+        },
+      },
+    ],
+  };
+}
 
 suite.define(() => {
   it.each([1440, 1100, 768, 640, 390])(
@@ -152,6 +191,124 @@ suite.define(() => {
             .waitFor({ state: "visible" });
           expect(await primary.getAttribute("aria-expanded")).toBe("true");
           expect(await primary.textContent()).toContain("GPT-5.5");
+        },
+      );
+    },
+  );
+
+  it.each([1440, 390])(
+    "stacks saved OpenAI quota cards and refreshes every account at %ipx",
+    async (width) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 1000 } },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            featureMethods: [...defaultControlUiFeatureMethods, "codex.accountUsage"],
+            methodResponses: {
+              "config.get": { config: {}, hash: "account-usage-layout", valid: true },
+              "models.list": { models: [] },
+              "models.authStatus": {
+                ts: now,
+                providers: [
+                  {
+                    provider: "openai",
+                    displayName: "OpenAI",
+                    status: "ok",
+                    profiles: [
+                      {
+                        profileId: "openai:alpha",
+                        type: "oauth",
+                        status: "ok",
+                        email: "alpha@quota.test",
+                      },
+                      {
+                        profileId: "openai:beta",
+                        type: "oauth",
+                        status: "ok",
+                        email: "betaaccountwithanextremelylongunbrokenlocalpart@quota.test",
+                      },
+                    ],
+                  },
+                ],
+              },
+              "usage.status": { updatedAt: now, providers: [] },
+              "sessions.usage": { aggregates: { byProvider: [] } },
+              "codex.accountUsage": accountUsageResponses(10, 40),
+            },
+          });
+
+          await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+          const accountUsages = page.locator(".model-providers__account-usages");
+          const cards = accountUsages.locator(".model-providers__account-usage");
+          await expect.poll(() => cards.count()).toBe(2);
+          await expect.poll(() => accountUsages.textContent()).toContain("90% left");
+          await expect.poll(() => accountUsages.textContent()).toContain("60% left");
+
+          const boxes = await cards.evaluateAll((elements) =>
+            elements.map((element) => {
+              const {
+                bottom,
+                height,
+                left,
+                right,
+                top,
+                width: cardWidth,
+              } = element.getBoundingClientRect();
+              return { bottom, height, left, right, top, width: cardWidth };
+            }),
+          );
+          expect(boxes).toHaveLength(2);
+          expect(boxes.every((box) => box.left >= 0 && box.right <= width)).toBe(true);
+          expect(boxes[1]!.top).toBeGreaterThanOrEqual(boxes[0]!.bottom);
+
+          // A long unbroken account label must wrap instead of spilling out of its card.
+          const overflows = await cards.evaluateAll((elements) =>
+            elements.map((element) => {
+              const cardRight = element.getBoundingClientRect().right;
+              return {
+                card: element.scrollWidth - element.clientWidth,
+                label: Math.max(
+                  0,
+                  ...[...element.querySelectorAll("strong")].map((node) =>
+                    Math.round(node.getBoundingClientRect().right - cardRight),
+                  ),
+                ),
+              };
+            }),
+          );
+          expect(overflows.every((entry) => entry.card <= 1)).toBe(true);
+          expect(overflows.every((entry) => entry.label <= 1)).toBe(true);
+
+          if (recordVisuals) {
+            // The settings page scrolls inside its own container, so a full-page capture would
+            // stop at the viewport and cut the quota group off. Center it instead.
+            await accountUsages.evaluate((element) => {
+              element.scrollIntoView({ block: "center", inline: "nearest" });
+            });
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(suite.artifactDir, `account-usage-${width}-before-refresh.png`),
+            });
+          }
+
+          const beforeRefresh = (await gateway.getRequests("codex.accountUsage")).length;
+          await gateway.setMethodResponse("codex.accountUsage", accountUsageResponses(90, 80));
+          await accountUsages.getByRole("button", { name: "Refresh", exact: true }).click();
+          await expect
+            .poll(async () => (await gateway.getRequests("codex.accountUsage")).length)
+            .toBe(beforeRefresh + 2);
+          await expect.poll(() => accountUsages.textContent()).toContain("10% left");
+          await expect.poll(() => accountUsages.textContent()).toContain("20% left");
+
+          if (recordVisuals) {
+            await accountUsages.evaluate((element) => {
+              element.scrollIntoView({ block: "center", inline: "nearest" });
+            });
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(suite.artifactDir, `account-usage-${width}-after-refresh.png`),
+            });
+          }
         },
       );
     },

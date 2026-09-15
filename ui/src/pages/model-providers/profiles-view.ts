@@ -10,6 +10,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { showToast } from "../../lib/toast.ts";
+import type { ModelAccountUsageProfile } from "./account-usage.ts";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
 import type {
   ModelProviderCard,
@@ -369,6 +370,16 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
     ...new Set(groups.flatMap((group) => (group.explanation ? [group.explanation] : []))),
   ];
   const additionalCredentialSource = apiKeySource(card);
+  const accountUsageProfiles: ModelAccountUsageProfile[] = groups
+    .filter((group) => group.provider === "openai")
+    .flatMap((group) =>
+      group.profiles
+        .filter((profile) => profile.type !== "api_key")
+        .map((profile) => ({
+          profileId: profile.profileId,
+          label: identities.get(profile.profileId)!,
+        })),
+    );
   return html`
     <section class="model-providers__profiles" aria-label=${t("modelProviders.profiles.title")}>
       <div class="model-providers__profiles-heading">
@@ -415,6 +426,15 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
           }
         </div>
       </div>
+      ${
+        accountUsageProfiles.length > 0
+          ? html`<openclaw-model-account-usages
+              .client=${props.usageClient ?? null}
+              .agentId=${props.usageAgentId ?? ""}
+              .profiles=${accountUsageProfiles}
+            ></openclaw-model-account-usages>`
+          : nothing
+      }
       <div class="model-providers__profile-list" role="list">
         ${repeat(
           rows,
@@ -518,15 +538,6 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
                     ${profile.expiry ? html`<span>${t("modelProviders.expiresIn", { time: profile.expiry.label })}</span>` : nothing}
                   </details>
                 </div>
-                ${
-                  provider === "openai" && profile.type !== "api_key"
-                    ? html`<openclaw-model-account-usage
-                        .client=${props.usageClient ?? null}
-                        .agentId=${props.usageAgentId ?? ""}
-                        .profileId=${profile.profileId}
-                      ></openclaw-model-account-usage>`
-                    : nothing
-                }
                 <span class="model-providers__profile-status"
                   >${profileStatus(profile, card.catalogStatus === "auth-rejected")}</span
                 >

@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import type { ModelAccountUsages } from "./account-usage.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
   advanceUsageRetries,
@@ -31,8 +32,7 @@ describe("ModelProvidersPage usage convergence", () => {
     };
     const original = request.getMockImplementation()!;
     let usedPercent = 10;
-    const accountRequests: unknown[] = [];
-    request.mockImplementation(async (method, params?: unknown) => {
+    request.mockImplementation(async (method: string) => {
       if (method === "models.authStatus") {
         return createAuthStatus([
           {
@@ -50,7 +50,6 @@ describe("ModelProvidersPage usage convergence", () => {
         ]);
       }
       if (method === "codex.accountUsage") {
-        accountRequests.push(params);
         return {
           updatedAt: 1,
           providers: [
@@ -62,16 +61,12 @@ describe("ModelProvidersPage usage convergence", () => {
     });
     const page = appendPage(context);
     await vi.waitFor(() => expect(page.textContent).toContain("90% left"));
-    expect(accountRequests).toEqual([
-      { agentId: "main", profileId: "openai:one" },
-      { agentId: "main", profileId: "openai:two" },
+    const accountUsage = page.querySelector<ModelAccountUsages>("openclaw-model-account-usages");
+    expect(accountUsage).not.toBeNull();
+    expect(accountUsage!.profiles.map(({ profileId }) => profileId)).toEqual([
+      "openai:one",
+      "openai:two",
     ]);
-    expect(
-      page.querySelector('[data-profile-id="anthropic:one"] openclaw-model-account-usage'),
-    ).toBeNull();
-    expect(
-      page.querySelector('[data-profile-id="openai:key"] openclaw-model-account-usage'),
-    ).toBeNull();
     runtimeConfig.state.configSaving = true;
     notifyRuntimeConfig();
     await page.updateComplete;
@@ -81,6 +76,30 @@ describe("ModelProvidersPage usage convergence", () => {
     usedPercent = 90;
     page.querySelector<HTMLButtonElement>(".settings-section__actions button")?.click();
     await vi.waitFor(() => expect(page.textContent).toContain("10% left"));
+  });
+
+  it("does not request or render account usage for a read-only operator", async () => {
+    const { context, request, snapshot } = createHarness("main");
+    snapshot.hello = {
+      type: "hello-ok",
+      protocol: 3,
+      features: { methods: ["config.get", "config.patch", "codex.accountUsage"] },
+      auth: { role: "operator", scopes: ["operator.read"] },
+    };
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (method: string) => {
+      if (method === "models.authStatus") {
+        return createAuthStatus([
+          { profiles: [{ profileId: "openai:one", type: "oauth", status: "ok" }] },
+        ]);
+      }
+      return original(method);
+    });
+
+    const page = appendPage(context);
+    await vi.waitFor(() => expect(page.data?.authStatus?.providers).toHaveLength(1));
+    expect(requestCount(request, "codex.accountUsage")).toBe(0);
+    expect(page.querySelector("openclaw-model-account-usages")).toBeNull();
   });
 
   it("waits for the route loader before starting provider requests, including after reconnect", async () => {
