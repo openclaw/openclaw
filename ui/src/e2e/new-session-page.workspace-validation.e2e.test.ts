@@ -71,12 +71,7 @@ async function withNewSessionPage(
   options: BrowserContextOptions,
   run: (page: Page) => Promise<void>,
 ): Promise<void> {
-  await suite.withPage(
-    options,
-    ({ page }) => run(page),
-    // Callers release held modules in finally; join their fetch/fulfill work before closing.
-    ({ page }) => page.unrouteAll({ behavior: "wait" }),
-  );
+  await suite.withPage(options, ({ page }) => run(page));
 }
 
 type MockGateway = Awaited<ReturnType<typeof installMockGateway>>;
