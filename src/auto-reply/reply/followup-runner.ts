@@ -15,9 +15,9 @@ import type { ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
+import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import {
   admitFollowupTurn,
-  settleQueuedFollowupPresentation,
   type AdmittedFollowupTurn,
   type FollowupRunnerParams,
 } from "./followup-turn-admission.js";
@@ -282,7 +282,7 @@ export function createFollowupRunner(
         }
       }
       if (queuedFollowupAdmitted) {
-        await settleQueuedFollowupPresentation(defaults);
+        await settleQueuedFollowupPresentation(defaults.opts?.onQueuedFollowupSettled);
       }
       for (const end of endDeliveryCorrelations.toReversed()) {
         try {

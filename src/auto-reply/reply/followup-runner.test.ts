@@ -34,13 +34,6 @@ vi.mock("./agent-runner-result-accounting.js", () => ({
 
 vi.mock("./followup-turn-admission.js", () => ({
   admitFollowupTurn: (...args: unknown[]) => state.admit(...args),
-  settleQueuedFollowupPresentation: async (defaults: {
-    opts?: { onQueuedFollowupSettled?: () => Promise<void> | void };
-  }) => {
-    try {
-      await defaults.opts?.onQueuedFollowupSettled?.();
-    } catch {}
-  },
 }));
 
 vi.mock("./followup-turn-execution.js", () => ({
@@ -567,6 +560,10 @@ describe("createFollowupRunner", () => {
     const sourceDelivery = vi.fn(async () => {
       order.push("completion");
     });
+    let releasePresentation: (() => void) | undefined;
+    const presentationGate = new Promise<void>((resolve) => {
+      releasePresentation = resolve;
+    });
     turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: sourceDelivery };
     const decision = {
       kind: "deliver" as const,
@@ -593,16 +590,27 @@ describe("createFollowupRunner", () => {
     );
     state.completeLifecycle.mockImplementation(() => order.push("lifecycle-complete"));
 
-    await createFollowupRunner({
+    const run = createFollowupRunner({
       typing,
       typingMode: "instant",
       defaultModel: "claude",
       opts: {
-        onQueuedFollowupSettled: () => {
+        onQueuedFollowupSettled: async () => {
+          order.push("presentation-settling");
+          await presentationGate;
           order.push("presentation-settled");
         },
       },
     })(turn.queued);
+
+    await vi.waitFor(() => {
+      expect(order).toContain("presentation-settling");
+    });
+    expect(state.completeLifecycle).not.toHaveBeenCalled();
+    expect(turn.operation.complete).not.toHaveBeenCalled();
+
+    releasePresentation?.();
+    await run;
 
     expect(order).toEqual([
       "progress-drained",
@@ -610,6 +618,7 @@ describe("createFollowupRunner", () => {
       "decision",
       "delivered",
       "completion",
+      "presentation-settling",
       "presentation-settled",
       "lifecycle-complete",
       "operation-complete",
