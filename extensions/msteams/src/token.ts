@@ -32,15 +32,23 @@ export type MSTeamsFederatedCredentials = {
 
 export type MSTeamsCredentials = MSTeamsSecretCredentials | MSTeamsFederatedCredentials;
 
+export type MSTeamsCredentialInspection = {
+  credentials?: MSTeamsFederatedCredentials;
+  status: "available" | "configured_unavailable" | "missing";
+};
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function resolveAuthType(cfg?: MSTeamsConfig): "secret" | "federated" {
+function resolveAuthType(
+  cfg?: MSTeamsConfig,
+  options?: { allowEnvFallback?: boolean },
+): "secret" | "federated" {
   const fromCfg = cfg?.authType;
   if (fromCfg === "secret" || fromCfg === "federated") {
     return fromCfg;
   }
 
-  const fromEnv = process.env.MSTEAMS_AUTH_TYPE;
+  const fromEnv = options?.allowEnvFallback === false ? undefined : process.env.MSTEAMS_AUTH_TYPE;
   if (fromEnv === "federated") {
     return "federated";
   }
@@ -58,6 +66,20 @@ function resolveFederatedPath(configValue?: string, envValue?: string): string |
     return envValue;
   }
   return undefined;
+}
+
+function resolveMSTeamsAppId(cfg: MSTeamsConfig | undefined, allowEnvFallback: boolean) {
+  return (
+    normalizeSecretInputString(cfg?.appId) ||
+    (allowEnvFallback ? normalizeSecretInputString(process.env.MSTEAMS_APP_ID) : undefined)
+  );
+}
+
+function resolveMSTeamsTenantId(cfg: MSTeamsConfig | undefined, allowEnvFallback: boolean) {
+  return (
+    normalizeSecretInputString(cfg?.tenantId) ||
+    (allowEnvFallback ? normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID) : undefined)
+  );
 }
 
 // ── hasConfiguredMSTeamsCredentials ────────────────────────────────────────
@@ -86,24 +108,25 @@ export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
 
   // "secret" (default) — original logic
   return Boolean(
-    normalizeSecretInputString(cfg?.appId) &&
-    hasConfiguredSecretInput(cfg?.appPassword) &&
-    normalizeSecretInputString(cfg?.tenantId),
+    hasAppId &&
+    hasTenantId &&
+    (hasConfiguredSecretInput(cfg?.appPassword) ||
+      normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD)),
   );
 }
 
 // ── resolveMSTeamsCredentials ─────────────────────────────────────────────
 
-export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentials | undefined {
-  const authType = resolveAuthType(cfg);
+export function resolveMSTeamsCredentials(
+  cfg?: MSTeamsConfig,
+  options?: { allowEnvFallback?: boolean; pathPrefix?: string },
+): MSTeamsCredentials | undefined {
+  const allowEnvFallback = options?.allowEnvFallback ?? true;
+  const pathPrefix = options?.pathPrefix ?? "channels.msteams";
+  const authType = resolveAuthType(cfg, { allowEnvFallback });
 
-  const appId =
-    normalizeSecretInputString(cfg?.appId) ||
-    normalizeSecretInputString(process.env.MSTEAMS_APP_ID);
-
-  const tenantId =
-    normalizeSecretInputString(cfg?.tenantId) ||
-    normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID);
+  const appId = resolveMSTeamsAppId(cfg, allowEnvFallback);
+  const tenantId = resolveMSTeamsTenantId(cfg, allowEnvFallback);
 
   if (!appId || !tenantId) {
     return undefined;
@@ -112,17 +135,22 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
   if (authType === "federated") {
     const certificatePath = resolveFederatedPath(
       cfg?.certificatePath,
-      process.env.MSTEAMS_CERTIFICATE_PATH,
+      allowEnvFallback ? process.env.MSTEAMS_CERTIFICATE_PATH : undefined,
     );
 
     const certificateThumbprint =
-      cfg?.certificateThumbprint || process.env.MSTEAMS_CERTIFICATE_THUMBPRINT || undefined;
+      cfg?.certificateThumbprint ||
+      (allowEnvFallback ? process.env.MSTEAMS_CERTIFICATE_THUMBPRINT : undefined) ||
+      undefined;
 
     const useManagedIdentity =
-      cfg?.useManagedIdentity ?? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true";
+      cfg?.useManagedIdentity ??
+      (allowEnvFallback ? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true" : false);
 
     const managedIdentityClientId =
-      cfg?.managedIdentityClientId || process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID || undefined;
+      cfg?.managedIdentityClientId ||
+      (allowEnvFallback ? process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID : undefined) ||
+      undefined;
 
     // At least one federated mechanism must be configured.
     if (!certificatePath && !useManagedIdentity) {
@@ -144,8 +172,9 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
   const appPassword =
     normalizeResolvedSecretInputString({
       value: cfg?.appPassword,
-      path: "channels.msteams.appPassword",
-    }) || normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD);
+      path: `${pathPrefix}.appPassword`,
+    }) ||
+    (allowEnvFallback ? normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD) : undefined);
 
   if (!appPassword) {
     return undefined;
@@ -154,24 +183,65 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
   return { type: "secret", appId, appPassword, tenantId };
 }
 
+/** Read credential availability for diagnostics without redeeming unresolved SecretRefs. */
+export function inspectMSTeamsCredentials(
+  cfg?: MSTeamsConfig,
+  options?: { allowEnvFallback?: boolean },
+): MSTeamsCredentialInspection {
+  const allowEnvFallback = options?.allowEnvFallback ?? true;
+  const authType = resolveAuthType(cfg, { allowEnvFallback });
+  const appId = resolveMSTeamsAppId(cfg, allowEnvFallback);
+  const tenantId = resolveMSTeamsTenantId(cfg, allowEnvFallback);
+  if (!appId || !tenantId) {
+    return { status: "missing" };
+  }
+
+  if (authType === "federated") {
+    const credentials = resolveMSTeamsCredentials(cfg, { allowEnvFallback });
+    return credentials?.type === "federated"
+      ? { credentials, status: "available" }
+      : { status: "missing" };
+  }
+
+  const configuredPassword = normalizeSecretInputString(cfg?.appPassword);
+  if (configuredPassword) {
+    return { status: "available" };
+  }
+  // A configured ref remains authoritative while unavailable. Inspection must not
+  // imply that a lower-precedence environment credential is active.
+  if (hasConfiguredSecretInput(cfg?.appPassword)) {
+    return { status: "configured_unavailable" };
+  }
+  const envPassword = allowEnvFallback
+    ? normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD)
+    : undefined;
+  return envPassword ? { status: "available" } : { status: "missing" };
+}
+
 // ---------------------------------------------------------------------------
 // Delegated token storage / resolution
 // ---------------------------------------------------------------------------
 
-export function loadDelegatedTokens(): Promise<MSTeamsDelegatedTokens | undefined> {
-  return loadMSTeamsDelegatedTokens();
+export async function loadDelegatedTokens(params?: {
+  accountId?: string | null;
+}): Promise<MSTeamsDelegatedTokens | undefined> {
+  return await loadMSTeamsDelegatedTokens(params?.accountId);
 }
 
-export function saveDelegatedTokens(tokens: MSTeamsDelegatedTokens): Promise<void> {
-  return saveMSTeamsDelegatedTokens(tokens);
+export async function saveDelegatedTokens(
+  tokens: MSTeamsDelegatedTokens,
+  params?: { accountId?: string | null },
+): Promise<void> {
+  await saveMSTeamsDelegatedTokens(tokens, params?.accountId);
 }
 
 export async function resolveDelegatedAccessToken(params: {
   tenantId: string;
   clientId: string;
   clientSecret: string;
+  accountId?: string | null;
 }): Promise<string | undefined> {
-  const tokens = await loadDelegatedTokens();
+  const tokens = await loadDelegatedTokens({ accountId: params.accountId });
   if (!tokens) {
     return undefined;
   }
@@ -190,7 +260,7 @@ export async function resolveDelegatedAccessToken(params: {
       refreshToken: tokens.refreshToken,
       scopes: tokens.scopes,
     });
-    await saveDelegatedTokens(refreshed);
+    await saveDelegatedTokens(refreshed, { accountId: params.accountId });
     return refreshed.accessToken;
   } catch {
     return undefined;

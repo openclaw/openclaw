@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMSTeamsRuntime } from "./runtime.js";
 import {
+  resolveMSTeamsAccountStateNamespace,
   resolveMSTeamsSqliteStateEnv,
   toPluginJsonValue,
   withMSTeamsSqliteMutationLock,
@@ -78,6 +79,7 @@ const MSTEAMS_POLL_VOTE_BUCKET_COUNT = 32;
 export const MSTEAMS_MAX_POLL_VOTE_BUCKET_ROWS =
   (MSTEAMS_MAX_POLLS + 1) * MSTEAMS_POLL_VOTE_BUCKET_COUNT;
 const MSTEAMS_POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const POLL_MUTATION_KEY = "polls";
 
 function normalizeChoiceValue(value: unknown): string | null {
   if (typeof value === "string") {
@@ -242,6 +244,7 @@ export function buildMSTeamsPollCard(params: {
 }
 
 type MSTeamsPollStoreStateOptions = {
+  accountId?: string;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   stateDir?: string;
@@ -250,7 +253,7 @@ type MSTeamsPollStoreStateOptions = {
 
 function createPollStateStore(params?: MSTeamsPollStoreStateOptions) {
   return getMSTeamsRuntime().state.openKeyedStore<StoredMSTeamsPoll>({
-    namespace: MSTEAMS_POLLS_NAMESPACE,
+    namespace: resolveMSTeamsAccountStateNamespace(MSTEAMS_POLLS_NAMESPACE, params?.accountId),
     maxEntries: MSTEAMS_SQLITE_MAX_POLL_ROWS,
     env: resolveMSTeamsSqliteStateEnv(params),
   });
@@ -258,7 +261,10 @@ function createPollStateStore(params?: MSTeamsPollStoreStateOptions) {
 
 function createPollVoteBucketStateStore(params?: MSTeamsPollStoreStateOptions) {
   return getMSTeamsRuntime().state.openKeyedStore<StoredMSTeamsPollVoteBucket>({
-    namespace: MSTEAMS_POLL_VOTE_BUCKETS_NAMESPACE,
+    namespace: resolveMSTeamsAccountStateNamespace(
+      MSTEAMS_POLL_VOTE_BUCKETS_NAMESPACE,
+      params?.accountId,
+    ),
     maxEntries: MSTEAMS_MAX_POLL_VOTE_BUCKET_ROWS,
     env: resolveMSTeamsSqliteStateEnv(params),
   });
@@ -332,6 +338,7 @@ export function createMSTeamsPollStoreState(
 ): MSTeamsPollStore {
   const pollStore = createPollStateStore(params);
   const voteBucketStore = createPollVoteBucketStateStore(params);
+  const mutationKey = resolveMSTeamsAccountStateNamespace(POLL_MUTATION_KEY, params?.accountId);
 
   const readPollVotes = async (pollId: string): Promise<Record<string, string[]>> => {
     const votes: Record<string, string[]> = {};
@@ -437,7 +444,7 @@ export function createMSTeamsPollStoreState(
   };
 
   const createPoll = async (poll: MSTeamsPoll) => {
-    await withMSTeamsSqliteMutationLock(params, MSTEAMS_POLLS_NAMESPACE, async () => {
+    await withMSTeamsSqliteMutationLock(params, mutationKey, async () => {
       const { metadata, votes } = splitMSTeamsPoll(poll);
       await pollStore.register(buildMSTeamsPollStateKey(poll.id), toPluginJsonValue(metadata));
       await deletePollVotes(poll.id);
@@ -458,7 +465,7 @@ export function createMSTeamsPollStoreState(
   };
 
   const recordVote = async (vote: { pollId: string; voterId: string; selections: string[] }) => {
-    return await withMSTeamsSqliteMutationLock(params, MSTEAMS_POLLS_NAMESPACE, async () => {
+    return await withMSTeamsSqliteMutationLock(params, mutationKey, async () => {
       const pollKey = buildMSTeamsPollStateKey(vote.pollId);
       const poll = await pollStore.lookup(pollKey);
       if (!poll) {

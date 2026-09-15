@@ -151,6 +151,7 @@ describe("MSTeams reflection completion", () => {
       const operation = runFeedbackReflection({
         cfg: {},
         app: {} as MSTeamsApp,
+        accountId: "default",
         conversationRef: { conversation: { id: "conversation", conversationType: "personal" } },
         sessionKey: "session",
         agentId: "main",

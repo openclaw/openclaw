@@ -1,7 +1,7 @@
 // Provider startup must preserve Teams thread identities in group-only allowlists.
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
+import { DEFAULT_ACCOUNT_ID, type OpenClawConfig, type RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsActivityHandler } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
@@ -18,8 +18,19 @@ type FakeServer = EventEmitter & {
 type MSTeamsUserResolution = { input: string; resolved: boolean; id?: string };
 type ResolveMSTeamsUserAllowlistMock = (params: {
   cfg: unknown;
+  accountId?: string | null;
   entries: string[];
 }) => Promise<MSTeamsUserResolution[]>;
+type ResolveMSTeamsTeamsConfigMock = (params: {
+  cfg: unknown;
+  accountId?: string | null;
+  teamIdMode: "bot-framework" | "graph";
+  teams: Record<string, unknown>;
+}) => Promise<{
+  teams: Record<string, unknown>;
+  mapping: string[];
+  unresolved: string[];
+}>;
 type RegisterMSTeamsHandlersMock = (
   handler: MSTeamsActivityHandler,
   deps: MSTeamsMessageHandlerDeps,
@@ -87,6 +98,13 @@ const registerMSTeamsHandlers = vi.hoisted(() =>
 const resolveMSTeamsUserAllowlist = vi.hoisted(() =>
   vi.fn<ResolveMSTeamsUserAllowlistMock>(async () => []),
 );
+const resolveMSTeamsTeamsConfig = vi.hoisted(() =>
+  vi.fn<ResolveMSTeamsTeamsConfigMock>(async ({ teams }) => ({
+    teams,
+    mapping: [],
+    unresolved: [],
+  })),
+);
 const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
   vi.fn(async (_creds?: unknown, _options?: unknown) => ({
     app: {
@@ -114,11 +132,7 @@ vi.mock("./file-consent-invoke.js", () => ({
 }));
 vi.mock("./resolve-allowlist.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./resolve-allowlist.js")>()),
-  resolveMSTeamsTeamsConfig: vi.fn(async (params: { teams: Record<string, unknown> }) => ({
-    teams: params.teams,
-    mapping: [],
-    unresolved: [],
-  })),
+  resolveMSTeamsTeamsConfig,
   resolveMSTeamsUserAllowlist,
 }));
 vi.mock("./sdk.js", () => ({
@@ -192,11 +206,12 @@ function requireRegisteredMSTeamsConfig(): OpenClawConfig {
 async function withStartedProvider(
   cfg: OpenClawConfig,
   verify: (registeredCfg: OpenClawConfig) => void,
+  runtime: RuntimeEnv = createRuntime(),
 ): Promise<void> {
   const abort = new AbortController();
   const task = monitorMSTeamsProvider({
     cfg,
-    runtime: createRuntime(),
+    runtime,
     abortSignal: abort.signal,
     conversationStore: {} as MSTeamsConversationStore,
     pollStore: {} as MSTeamsPollStore,
@@ -215,6 +230,9 @@ describe("monitorMSTeamsProvider group conversation allowlist lifecycle", () => 
     vi.clearAllMocks();
     isDangerousNameMatchingEnabled.mockReset().mockReturnValue(false);
     resolveMSTeamsUserAllowlist.mockReset().mockResolvedValue([]);
+    resolveMSTeamsTeamsConfig
+      .mockReset()
+      .mockImplementation(async ({ teams }) => ({ teams, mapping: [], unresolved: [] }));
     getMSTeamsIngressMockState().instances.length = 0;
   });
 
@@ -293,8 +311,103 @@ describe("monitorMSTeamsProvider group conversation allowlist lifecycle", () => 
       ]);
       expect(resolveMSTeamsUserAllowlist).toHaveBeenCalledExactlyOnceWith({
         cfg,
+        accountId: DEFAULT_ACCOUNT_ID,
         entries: ["Alice"],
       });
     });
+  });
+
+  it("does not resolve display names unless name matching is enabled", async () => {
+    const cfg = createConfig({
+      allowFrom: ["Alice", "user:40a1a0ed-4ff2-4164-a219-55518990c197"],
+      groupAllowFrom: ["Bob", "msteams:user:50a1a0ed-4ff2-4164-a219-55518990c198"],
+      teams: { Product: { channels: { Roadmap: {} } } },
+    });
+    resolveMSTeamsTeamsConfig.mockResolvedValueOnce({
+      teams: { "team-id": { channels: { "channel-id": {} } } },
+      mapping: ["Product/Roadmap→team-id/channel-id"],
+      unresolved: [],
+    });
+
+    await withStartedProvider(cfg, (registeredCfg) => {
+      expect(resolveMSTeamsUserAllowlist).not.toHaveBeenCalled();
+      expect(resolveMSTeamsTeamsConfig).toHaveBeenCalledWith({
+        cfg,
+        accountId: DEFAULT_ACCOUNT_ID,
+        teamIdMode: "bot-framework",
+        teams: { Product: { channels: { Roadmap: {} } } },
+      });
+      expect(registeredCfg.channels?.msteams?.allowFrom).toEqual([
+        "40a1a0ed-4ff2-4164-a219-55518990c197",
+      ]);
+      expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual([
+        "50a1a0ed-4ff2-4164-a219-55518990c198",
+      ]);
+      expect(registeredCfg.channels?.msteams?.teams).toEqual({
+        "team-id": { channels: { "channel-id": {} } },
+      });
+    });
+  });
+
+  it("resolves display-name allowlists when name matching is enabled", async () => {
+    isDangerousNameMatchingEnabled.mockReturnValue(true);
+    resolveMSTeamsUserAllowlist
+      .mockResolvedValueOnce([{ input: "Alice", resolved: true, id: "alice-aad" }])
+      .mockResolvedValueOnce([{ input: "Bob", resolved: true, id: "bob-aad" }]);
+    const cfg = createConfig({
+      dangerouslyAllowNameMatching: true,
+      allowFrom: ["Alice"],
+      groupAllowFrom: ["Bob"],
+    });
+
+    await withStartedProvider(cfg, (registeredCfg) => {
+      expect(resolveMSTeamsUserAllowlist).toHaveBeenNthCalledWith(1, {
+        cfg,
+        accountId: DEFAULT_ACCOUNT_ID,
+        entries: ["Alice"],
+      });
+      expect(resolveMSTeamsUserAllowlist).toHaveBeenNthCalledWith(2, {
+        cfg,
+        accountId: DEFAULT_ACCOUNT_ID,
+        entries: ["Bob"],
+      });
+      expect(registeredCfg.channels?.msteams?.allowFrom).toEqual(["alice-aad"]);
+      expect(registeredCfg.channels?.msteams?.groupAllowFrom).toEqual(["bob-aad"]);
+    });
+  });
+
+  it("keeps only stable allowlist entries when Graph resolution fails", async () => {
+    isDangerousNameMatchingEnabled.mockReturnValue(true);
+    resolveMSTeamsUserAllowlist.mockRejectedValueOnce(new Error("Graph unavailable"));
+    const runtime = createRuntime();
+    const cfg = createConfig({
+      dangerouslyAllowNameMatching: true,
+      allowFrom: ["Alice", "accessGroup:operators", "user:40a1a0ed-4ff2-4164-a219-55518990c197"],
+      teams: {
+        Mutable: { channels: { Roadmap: {} } },
+        "19:stable-team@thread.tacv2": {
+          channels: { "19:stable-channel@thread.tacv2": {} },
+        },
+      },
+    });
+
+    await withStartedProvider(
+      cfg,
+      (registeredCfg) => {
+        expect(registeredCfg.channels?.msteams?.allowFrom).toEqual([
+          "accessGroup:operators",
+          "40a1a0ed-4ff2-4164-a219-55518990c197",
+        ]);
+        expect(registeredCfg.channels?.msteams?.teams).toEqual({
+          "19:stable-team@thread.tacv2": {
+            channels: { "19:stable-channel@thread.tacv2": {} },
+          },
+        });
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("mutable allowlist entries are disabled"),
+        );
+      },
+      runtime,
+    );
   });
 });

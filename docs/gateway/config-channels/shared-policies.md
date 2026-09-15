@@ -106,7 +106,9 @@ Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat
 
 Run multiple accounts per channel (each with its own `accountId`):
 
-This pattern applies to channels that support `accounts`. Microsoft Teams uses only the channel-level `channels.msteams` configuration.
+This pattern applies to channels that support `accounts`, including Microsoft
+Teams. Teams bot identity and webhook ports stay account-specific; shared
+policy and delivery settings can inherit from `channels.msteams`.
 
 ```json5
 {
@@ -130,7 +132,7 @@ This pattern applies to channels that support `accounts`. Microsoft Teams uses o
 - `default` is used when `accountId` is omitted (CLI + routing).
 - Env tokens only apply to the **default** account.
 - Base channel settings apply to all accounts unless overridden per account.
-- For Discord, Google Chat, iMessage, Signal, Slack, Telegram, and WhatsApp, an omitted account `groupPolicy` or `dmPolicy` inherits the channel policy. An explicit account value wins, including `allowlist` or `pairing`. With no applicable policy configured, group access stays `allowlist` and DMs use `pairing`.
+- For Discord, Google Chat, iMessage, Microsoft Teams, Signal, Slack, Telegram, and WhatsApp, an omitted account `groupPolicy` or `dmPolicy` inherits the channel policy. An explicit account value wins, including `allowlist` or `pairing`. With no applicable policy configured, group access stays `allowlist` and DMs use `pairing`.
 - WhatsApp also inherits shared settings from `accounts.default` before falling back to the channel root; Google Chat uses shared `accounts.default` settings below root settings. See the channel pages for these exceptions and collection-merging rules.
 - Use `bindings[].match.accountId` to route each account to a different agent.
 - If you add a non-default account via `openclaw channels add` (or channel onboarding) while still on a single-account top-level channel config, OpenClaw promotes account-scoped top-level single-account values into the channel account map first so the original account keeps working. Most channels move them into `channels.<channel>.accounts.default`; Matrix can preserve an existing matching named/default target instead.

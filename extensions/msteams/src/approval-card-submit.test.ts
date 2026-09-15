@@ -199,6 +199,47 @@ describe("maybeHandleMSTeamsApprovalCardSubmit", () => {
     expect(msTeamsApprovalControls.get(token)).not.toBeNull();
   });
 
+  it("rejects a default-account card submitted through a named-account listener", async () => {
+    const token = "receiver-account-mismatch";
+    registerBinding({ token });
+    const deps = createDeps();
+    deps.accountId = "support";
+
+    await expect(
+      maybeHandleMSTeamsApprovalCardSubmit({ context: createContext({ token }), deps }),
+    ).resolves.toBe(true);
+
+    expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
+    expect(msTeamsApprovalControls.get(token)).not.toBeNull();
+  });
+
+  it("resolves a named-account card only through its issuing listener", async () => {
+    const token = "named-account";
+    registerBinding({ token, accountId: "support" });
+    const deps = createDeps();
+    deps.accountId = "support";
+    deps.cfg.channels = {
+      msteams: {
+        allowFrom: [APPROVER_ID],
+        accounts: {
+          support: {
+            appId: "support-app",
+            appPassword: "support-password",
+          },
+        },
+      },
+    };
+
+    await expect(
+      maybeHandleMSTeamsApprovalCardSubmit({ context: createContext({ token }), deps }),
+    ).resolves.toBe(true);
+
+    expect(resolveApprovalOverGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: "support" }),
+    );
+    expect(msTeamsApprovalControls.get(token)).toBeNull();
+  });
+
   it("requires an allowlisted AAD identity and preserves tokens for the authorized approver", async () => {
     const token = "authorization";
     registerBinding({ token, approvalKind: "plugin", decision: "deny" });
