@@ -24,8 +24,8 @@ import {
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
-import { hasLineCredentials } from "./account-helpers.js";
-import { resolveLineAccount } from "./accounts.js";
+import { hasUsableLineCredentials } from "./account-helpers.js";
+import { listLineAccountIds, resolveLineAccount } from "./accounts.js";
 import { messageAction, postbackAction, type Action } from "./actions.js";
 import { createActionCard } from "./flex-templates/basic-cards.js";
 import {
@@ -112,8 +112,14 @@ const lineChannelDataSchema = Type.Optional(
 
 export const lineMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: ({ cfg, accountId }) => {
-    const account = resolveLineAccount({ cfg, accountId: accountId ?? undefined });
-    return account.enabled && hasLineCredentials(account)
+    // Another channel's session discovers without an account, and core asks each plugin
+    // for its configured-account union there: any enabled account that can send counts.
+    const accounts = accountId
+      ? [resolveLineAccount({ cfg, accountId })]
+      : listLineAccountIds(cfg).map((listedAccountId) =>
+          resolveLineAccount({ cfg, accountId: listedAccountId }),
+        );
+    return accounts.some((account) => account.enabled && hasUsableLineCredentials(account))
       ? {
           actions: ["send"],
           capabilities: ["presentation"],

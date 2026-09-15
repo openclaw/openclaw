@@ -6,10 +6,20 @@ type LineCredentialAccount = {
   signingSecretStatus?: "available" | "configured_unavailable" | "missing";
 };
 
+/**
+ * Reports whether both credentials are configured. A credential whose source was named
+ * but could not be read ("configured_unavailable") still counts, so status keeps the
+ * account visible as configured but unavailable instead of calling it unconfigured.
+ */
 export function hasLineCredentials(account: LineCredentialAccount): boolean {
   if (account.tokenStatus && account.signingSecretStatus) {
     return account.tokenStatus !== "missing" && account.signingSecretStatus !== "missing";
   }
+  return hasUsableLineCredentials(account);
+}
+
+/** Running the account needs both values; a credential file that could not be read resolves to "". */
+export function hasUsableLineCredentials(account: LineCredentialAccount): boolean {
   return Boolean(account.channelAccessToken?.trim() && account.channelSecret?.trim());
 }
 
