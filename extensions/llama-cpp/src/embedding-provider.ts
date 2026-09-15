@@ -24,6 +24,7 @@ import {
   reconcileManagedLlamaServer as reconcileLocalService,
   type LlamaServerRuntimeFacts,
 } from "./managed-server.js";
+import { resolveLlamaCppMediaModels } from "./media-config.js";
 
 type LlamaCppLocalOptions = {
   modelPath?: string;
@@ -120,6 +121,7 @@ async function prepareEmbeddingServer(
   embeddingModelIsDefault: boolean,
 ): Promise<void> {
   const provider = resolveConfiguredProvider(options);
+  const mediaModels = resolveLlamaCppMediaModels(provider);
   const cacheDir = resolveLlamaCppModelCacheDir(provider);
   const embeddingModelPath = await ensureLlamaCppModel({
     source: embeddingSource,
@@ -128,7 +130,8 @@ async function prepareEmbeddingServer(
   });
   await prepareManagedLlamaServer({
     chatModel: { mode: "preserve" },
-    configuredChatModelIds: provider.models.map((model) => model.id),
+    configuredChatModelIds: mediaModels ? undefined : provider.models.map((model) => model.id),
+    ...(mediaModels ? { mediaModels: [] } : {}),
     embeddingModelIsDefault,
     embeddingModelPath,
     port: resolveProviderPort(provider),

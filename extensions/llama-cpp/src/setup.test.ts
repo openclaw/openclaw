@@ -512,6 +512,38 @@ describe("llama.cpp managed setup", () => {
     ).resolves.toBeNull();
   });
 
+  it("does not offer installed OCR or vision models as a chat setup candidate", async () => {
+    const command = path.join(tempRoot, "llama-server");
+    const preset = path.join(tempRoot, "models.ini");
+    await Promise.all([
+      fs.writeFile(command, "binary"),
+      fs.writeFile(preset, "version = 1"),
+      fs.writeFile(modelPath, "GGUF"),
+    ]);
+    const cfg = config();
+    const provider = cfg.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+    if (!provider) {
+      throw new Error("Missing fixture provider");
+    }
+    provider.localService = { command, args: ["--models-preset", preset] };
+    provider.params = {
+      ...provider.params,
+      mediaModels: { ocr: "ocr-model", vision: "vision-model" },
+    };
+    provider.models = ["ocr-model", "vision-model"].map((id) => ({
+      id,
+      name: id,
+      reasoning: false,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 2048,
+      params: { modelPath },
+    }));
+    await expect(detectLlamaCppSetup({ config: cfg, env: {} })).resolves.toBeNull();
+    expect(mocks.prepareServer).not.toHaveBeenCalled();
+  });
+
   it("does not offer the default download below the RAM floor", async () => {
     vi.mocked(os.totalmem).mockReturnValue(4 * GIB);
     const ctx = authContext(true);

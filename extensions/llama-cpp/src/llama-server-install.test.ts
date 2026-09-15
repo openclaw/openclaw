@@ -14,7 +14,10 @@ const mocks = vi.hoisted(() => ({
   resolveLlamaCppDataDir: vi.fn(),
 }));
 
-vi.mock("node:child_process", () => ({ execFile: mocks.execFile }));
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  execFile: mocks.execFile,
+}));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
@@ -32,6 +35,7 @@ import {
 import {
   downloadVerifiedFile,
   ensureLlamaServerInstalled,
+  listLlamaServerDevices,
   resolveManagedLlamaServerPaths,
   selectLlamaServerAsset,
   sha256File,
@@ -117,6 +121,126 @@ function installWriteFileThroughWrite(handle: FileHandle): void {
     }
   }) as typeof handle.writeFile;
 }
+
+describe("installed llama-server devices", () => {
+  it("reads backend ordinals and per-device memory without pooling or nvidia-smi mapping", async () => {
+    mockVersionOutput(
+      [
+        "ggml_cuda_init: found 2 CUDA devices",
+        "Available devices:",
+        "  CUDA0: Large GPU (24576 MiB, 20480 MiB free)",
+        "  CUDA1: Small GPU (4096 MiB, 1024 MiB free)",
+      ].join("\n"),
+    );
+    await expect(listLlamaServerDevices({ command: "llama-server" })).resolves.toEqual([
+      {
+        id: "CUDA0",
+        name: "Large GPU",
+        totalMemoryBytes: 24 * 1024 ** 3,
+        availableMemoryBytes: 20 * 1024 ** 3,
+      },
+      {
+        id: "CUDA1",
+        name: "Small GPU",
+        totalMemoryBytes: 4 * 1024 ** 3,
+        availableMemoryBytes: 1024 ** 3,
+      },
+    ]);
+  });
+
+  it.each([
+    "Available devices:\n  (none)",
+    "  CUDA0: Test GPU (unknown MiB, unknown MiB free)",
+    "  CUDA0: Test GPU (0 MiB, 0 MiB free)",
+    "  CUDA0: Test GPU (8192 MiB, -1 MiB free)",
+    "  CUDA0: Test GPU (9007199254740992 MiB, 1024 MiB free)",
+  ])("does not admit missing or malformed device memory: %s", async (output) => {
+    mockVersionOutput(output);
+    await expect(listLlamaServerDevices({ command: "llama-server" })).resolves.toEqual([]);
+  });
+
+  it("rejects conflicting records for the same runtime device", async () => {
+    mockVersionOutput(
+      "  CUDA0: GPU (8192 MiB, 7168 MiB free)\n  CUDA0: Other GPU (24576 MiB, 20480 MiB free)",
+    );
+    await expect(listLlamaServerDevices({ command: "llama-server" })).rejects.toThrow(
+      /duplicate device CUDA0/u,
+    );
+  });
+
+  it("probes the service environment and working directory with the caller's cancellation", async () => {
+    vi.stubEnv("CUDA_VISIBLE_DEVICES", "0,1");
+    try {
+      mockVersionOutput("Available devices:\n  (none)");
+      const controller = new AbortController();
+      await listLlamaServerDevices({
+        command: "llama-server",
+        env: { CUDA_VISIBLE_DEVICES: "" },
+        cwd: "/local-service",
+        signal: controller.signal,
+      });
+      expect(mocks.execFile).toHaveBeenCalledWith(
+        "llama-server",
+        ["--list-devices"],
+        expect.objectContaining({
+          env: expect.objectContaining({ CUDA_VISIBLE_DEVICES: "" }),
+          cwd: "/local-service",
+          signal: controller.signal,
+          timeout: 15_000,
+        }),
+        expect.any(Function),
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.runIf(process.platform === "win32")(
+    "matches the local service's case-insensitive configured environment override",
+    async () => {
+      vi.stubEnv("CUDA_VISIBLE_DEVICES", "0,1");
+      try {
+        mockVersionOutput("Available devices:\n  (none)");
+        await listLlamaServerDevices({
+          command: "llama-server",
+          env: { cuda_visible_devices: "1" },
+        });
+        const options = mocks.execFile.mock.calls[0]?.[2];
+        expect(options.env).toHaveProperty("cuda_visible_devices", "1");
+        expect(options.env).not.toHaveProperty("CUDA_VISIBLE_DEVICES");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
+  it("does not spawn an already cancelled device probe", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("device probe cancelled"));
+    await expect(
+      listLlamaServerDevices({ command: "llama-server", signal: controller.signal }),
+    ).rejects.toThrow("device probe cancelled");
+    expect(mocks.execFile).not.toHaveBeenCalled();
+  });
+
+  it("does not return prepared devices if cancellation arrives during enumeration", async () => {
+    const controller = new AbortController();
+    mocks.execFile.mockImplementation(
+      (
+        _command: string,
+        _args: string[],
+        _options: unknown,
+        callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
+      ) => {
+        controller.abort(new Error("device probe cancelled"));
+        callback(null, "  CUDA0: GPU (8192 MiB, 7168 MiB free)", "");
+      },
+    );
+    await expect(
+      listLlamaServerDevices({ command: "llama-server", signal: controller.signal }),
+    ).rejects.toThrow("device probe cancelled");
+  });
+});
 
 describe("cached file integrity", () => {
   it("reuses unchanged verified bytes but detects replacement, edits, and deletion", async () => {
@@ -207,6 +331,62 @@ describe("cached file integrity", () => {
 });
 
 describe("downloadVerifiedFile", () => {
+  it.each(["partial", "wrong-checksum", "unavailable", "cancelled"] as const)(
+    "preserves the previous artifact and removes partial bytes after %s, then permits retry",
+    async (outcome) => {
+      const { destination, root } = await createDestination();
+      const previous = "GGUFprevious";
+      const payload = Buffer.from("GGUFprojector");
+      await fs.writeFile(destination, previous);
+      const controller = new AbortController();
+      const release = mockDownload(outcome === "partial" ? payload.subarray(0, 4) : payload);
+      if (outcome === "unavailable") {
+        mocks.fetchWithSsrFGuard.mockResolvedValue({
+          response: new Response(null, { status: 503 }),
+          release,
+        });
+      }
+      const digest = createHash("sha256").update(payload).digest("hex");
+      await expect(
+        downloadVerifiedFile({
+          url: "https://downloads.example/mmproj.gguf",
+          destination,
+          expectedSize: payload.byteLength,
+          expectedSha256: outcome === "wrong-checksum" ? "0".repeat(64) : digest,
+          signal: controller.signal,
+          onProgress: () => {
+            if (outcome === "cancelled") {
+              controller.abort();
+            }
+          },
+        }),
+      ).rejects.toThrow(
+        {
+          partial: /size mismatch/u,
+          "wrong-checksum": /SHA-256 mismatch/u,
+          unavailable: /HTTP 503/u,
+          cancelled: /abort/iu,
+        }[outcome],
+      );
+      expect(await fs.readFile(destination, "utf8")).toBe(previous);
+      expect(await fs.readdir(root)).toEqual(["model.gguf"]);
+      expect(release).toHaveBeenCalledOnce();
+      expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({ signal: controller.signal }),
+      );
+
+      mockDownload(payload);
+      await downloadVerifiedFile({
+        url: "https://downloads.example/mmproj.gguf",
+        destination,
+        expectedSize: payload.byteLength,
+        expectedSha256: digest,
+      });
+      expect(await fs.readFile(destination)).toEqual(payload);
+      expect(await fs.readdir(root)).toEqual(["model.gguf"]);
+    },
+  );
+
   it.each([
     { label: "shared clock ticks", times: [1000, 1000, 1010], rates: [0, 0, 300_000_000] },
     {
@@ -402,6 +582,7 @@ describe("ensureLlamaServerInstalled", () => {
       .generateAsync({ type: "nodebuffer" });
     const asset: LlamaServerAsset = {
       ...source,
+      sizeBytes: serverBytes.length,
       sha256: createHash("sha256").update(serverBytes).digest("hex"),
     };
     mockDownload(serverBytes);
@@ -451,6 +632,7 @@ describe("ensureLlamaServerInstalled", () => {
       .generateAsync({ type: "nodebuffer" });
     const asset: LlamaServerAsset = {
       ...source,
+      sizeBytes: serverBytes.length,
       sha256: createHash("sha256").update(serverBytes).digest("hex"),
     };
     mockDownload(serverBytes);
@@ -480,7 +662,15 @@ describe("ensureLlamaServerInstalled", () => {
     expect(await fs.readdir(root)).toEqual([]);
   });
 
-  it.each(["ready", "corrupt-runtime", "missing-runtime", "no-device", "cancelled"] as const)(
+  it.each([
+    "ready",
+    "wrong-server-size",
+    "wrong-runtime-size",
+    "corrupt-runtime",
+    "missing-runtime",
+    "no-device",
+    "cancelled",
+  ] as const)(
     "publishes the complete CUDA installation only after verification: %s",
     async (outcome) => {
       const root = await fs.realpath(
@@ -506,10 +696,12 @@ describe("ensureLlamaServerInstalled", () => {
       const runtimeBytes = await runtimeZip.generateAsync({ type: "nodebuffer" });
       const asset: LlamaServerAsset = {
         ...source,
+        sizeBytes: serverBytes.length + Number(outcome === "wrong-server-size"),
         sha256: createHash("sha256").update(serverBytes).digest("hex"),
         dependencies: [
           {
             ...runtime,
+            sizeBytes: runtimeBytes.length + Number(outcome === "wrong-runtime-size"),
             sha256:
               outcome === "corrupt-runtime"
                 ? "0".repeat(64)
@@ -572,6 +764,8 @@ describe("ensureLlamaServerInstalled", () => {
         ]);
       } else {
         const expected = {
+          "wrong-server-size": /size mismatch/iu,
+          "wrong-runtime-size": /size mismatch/iu,
           "corrupt-runtime": /SHA-256 mismatch/u,
           "missing-runtime": /regular file cudart64_12\.dll/u,
           "no-device": /could not initialize an NVIDIA CUDA device/u,
@@ -606,6 +800,7 @@ describe("CUDA runtime selection", () => {
 
     expect(asset).toMatchObject({
       name: "llama-b10809-bin-win-cuda-12.4-x64.zip",
+      sizeBytes: 253_938_543,
       sha256: "c77bfcd9ed8d91e8721a2d6a290b907fddd4fa5412a47b21c6fa1709116b85f9",
       limits: {
         maxArchiveBytes: 400 * mebibyte,
@@ -615,6 +810,7 @@ describe("CUDA runtime selection", () => {
       dependencies: [
         {
           name: "cudart-llama-bin-win-cuda-12.4-x64.zip",
+          sizeBytes: 391_443_627,
           sha256: "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
           limits: { maxEntries: 3, maxEntryBytes: 521 * mebibyte },
         },

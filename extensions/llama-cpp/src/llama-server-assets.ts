@@ -13,6 +13,7 @@ export type LlamaServerArchive = {
   archiveRoot: string;
   name: string;
   sha256: string;
+  sizeBytes?: number;
   regularFileAliases: RegularFileAliases;
   limits?: ArchiveExtractLimits;
 };
@@ -67,6 +68,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-macos-arm64.tar.gz`,
     sha256: "7d692df9e1e386e62f1c12b843903218041e6cd74c9415aa39a7ed3176f9eaa2",
+    sizeBytes: 11_123_196,
     executable: "llama-server",
     regularFileAliases: MACOS_METAL_ALIASES,
   },
@@ -78,6 +80,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-macos-x64.tar.gz`,
     sha256: "13b34aa8a5d87341a21065a83f54a8167e1aaa6fe0d66065de01632a1ed64be6",
+    sizeBytes: 11_175_330,
     executable: "llama-server",
     regularFileAliases: MACOS_ALIASES,
   },
@@ -89,6 +92,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-ubuntu-arm64.tar.gz`,
     sha256: "f2b7333971e1b7b42e9268bfdbfa30f5f56e2897156084d2251385df94aec358",
+    sizeBytes: 13_380_118,
     executable: "llama-server",
     regularFileAliases: LINUX_ALIASES,
   },
@@ -100,6 +104,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-ubuntu-x64.tar.gz`,
     sha256: "5e34434ddc6d03cd1584f403201aff0d4bd1a5793a72ff7e286532dfd1e4b941",
+    sizeBytes: 16_734_586,
     executable: "llama-server",
     regularFileAliases: LINUX_ALIASES,
   },
@@ -111,6 +116,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archiveRoot: ".",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-win-cuda-12.4-x64.zip`,
     sha256: "c77bfcd9ed8d91e8721a2d6a290b907fddd4fa5412a47b21c6fa1709116b85f9",
+    sizeBytes: 253_938_543,
     executable: "llama-server.exe",
     regularFileAliases: [],
     limits: CUDA_ARCHIVE_LIMITS,
@@ -120,6 +126,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
         archiveRoot: ".",
         name: "cudart-llama-bin-win-cuda-12.4-x64.zip",
         sha256: "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6",
+        sizeBytes: 391_443_627,
         regularFileAliases: [],
         files: ["cublas64_12.dll", "cublasLt64_12.dll", "cudart64_12.dll"],
         limits: { ...CUDA_ARCHIVE_LIMITS, maxEntries: 3 },
@@ -134,6 +141,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archiveRoot: ".",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-win-cpu-arm64.zip`,
     sha256: "c1058fe5764a687275c8d20d6bbc1454e787cdbb8ebb8c37a2f959f2b144dc77",
+    sizeBytes: 11_974_499,
     executable: "llama-server.exe",
     regularFileAliases: [],
   },
@@ -145,6 +153,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archiveRoot: ".",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-win-cpu-x64.zip`,
     sha256: "9df3158ed228a641a4b127942d7f459f24c9e13f04682659d05c00c80099b6b5",
+    sizeBytes: 18_407_457,
     executable: "llama-server.exe",
     regularFileAliases: [],
   },

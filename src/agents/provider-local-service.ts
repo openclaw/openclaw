@@ -47,6 +47,7 @@ type ModelWithProviderLocalService = {
 type ManagedLocalService = {
   process?: ChildProcess;
   starting?: Promise<void>;
+  stopping?: Promise<void>;
   startupAbort?: AbortController;
   active: number;
   idleTimer?: NodeJS.Timeout;
@@ -158,6 +159,13 @@ async function acquireProviderLocalService(
   const healthHeaders = buildHealthProbeHeaders(target.headers, undefined);
   const key = localServiceKey(target.providerId, service, healthUrl);
   installExitHandler();
+  // A short-lived setup probe can acquire again while idle shutdown is still
+  // terminating the previous process tree. Never adopt that dying listener.
+  const stopping = services.get(key)?.stopping;
+  if (stopping) {
+    await waitForAbort(stopping, signal);
+    throwIfAborted(signal);
+  }
   const managed = services.get(key) ?? { active: 0 };
   services.set(key, managed);
   setManagedProviderLocalServicesActive(true);
@@ -514,7 +522,7 @@ function scheduleIdleStop(
   service: ModelProviderLocalServiceConfig,
 ) {
   const idleStopMs = clampPositiveTimerTimeoutMs(service.idleStopMs);
-  if (managed.active > 0) {
+  if (managed.active > 0 || managed.stopping) {
     return;
   }
   if (!managed.process) {
@@ -544,15 +552,21 @@ function clearIdleTimer(managed: ManagedLocalService) {
 }
 
 async function stopManagedService(key: string, managed: ManagedLocalService, reason: string) {
-  clearIdleTimer(managed);
-  managed.startupAbort?.abort(new Error(`local service stopped: ${reason}`));
-  managed.startupAbort = undefined;
-  services.delete(key);
-  setManagedProviderLocalServicesActive(services.size > 0);
-  if (managed.process && !hasLocalServiceProcessExited(managed.process)) {
-    log.info(`stopping local model service: reason=${reason}`);
-  }
-  await stopManagedProcess(managed, new AbortController().signal);
+  managed.stopping ??= (async () => {
+    clearIdleTimer(managed);
+    managed.startupAbort?.abort(new Error(`local service stopped: ${reason}`));
+    managed.startupAbort = undefined;
+    if (managed.process && !hasLocalServiceProcessExited(managed.process)) {
+      log.info(`stopping local model service: reason=${reason}`);
+    }
+    await stopManagedProcess(managed, new AbortController().signal);
+  })().finally(() => {
+    if (services.get(key) === managed) {
+      services.delete(key);
+      setManagedProviderLocalServicesActive(services.size > 0);
+    }
+  });
+  await managed.stopping;
 }
 
 async function stopManagedProcess(managed: ManagedLocalService, signal: AbortSignal) {

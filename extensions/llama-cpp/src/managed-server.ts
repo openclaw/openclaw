@@ -40,7 +40,9 @@ import {
   buildLlamaServerPreset,
   type LlamaServerPresetOptions,
   type ManagedLlamaChatModel,
+  type ManagedLlamaModel,
 } from "./llama-server-preset.js";
+import { resolveLlamaCppMediaArtifact } from "./media-catalog.js";
 import { resolveLlamaCppCatalogArtifact } from "./model-catalog.js";
 
 type ModelArtifact = {
@@ -195,7 +197,7 @@ async function resolveHuggingFaceArtifact(
 }
 
 function defaultArtifact(source: string): ModelArtifact | undefined {
-  const recipe = resolveLlamaCppCatalogArtifact(source);
+  const recipe = resolveLlamaCppCatalogArtifact(source) ?? resolveLlamaCppMediaArtifact(source);
   if (recipe) {
     return recipe;
   }
@@ -258,6 +260,7 @@ export async function ensureLlamaCppModel(params: {
   signal?: AbortSignal;
   onProgress?: LlamaDownloadProgress;
 }): Promise<string> {
+  params.signal?.throwIfAborted();
   const localSource = resolveHomePath(params.source);
   if (!/^(?:hf|huggingface|https):/iu.test(localSource)) {
     const localPath = path.isAbsolute(localSource)
@@ -282,8 +285,11 @@ export async function ensureLlamaCppModel(params: {
       if (
         exists &&
         artifact.expectedSha256 &&
+        (artifact.expectedSize === undefined ||
+          (await fsp.stat(destination)).size === artifact.expectedSize) &&
         (await sha256File(destination, params.signal)) === artifact.expectedSha256
       ) {
+        await assertGguf(destination);
         return destination;
       }
       if (exists && !artifact.expectedSha256) {
@@ -291,7 +297,10 @@ export async function ensureLlamaCppModel(params: {
         return destination;
       }
       if (!params.download) {
-        throw new Error(`Model is not cached at ${destination}`);
+        const repair = resolveLlamaCppMediaArtifact(localSource)
+          ? " Run openclaw models auth login --provider llama-cpp --method local-media to download and verify the missing or invalid artifact."
+          : "";
+        throw new Error(`Model is not cached at ${destination}.${repair}`);
       }
       await downloadVerifiedFile({
         url: artifact.url,
@@ -334,7 +343,7 @@ async function runPresetTransition(run: () => Promise<void>): Promise<void> {
 
 async function updatePreset(
   presetPath: string,
-  params: LlamaServerPresetOptions & { reconcileOrigin?: string },
+  params: LlamaServerPresetOptions & { reconcileOrigin?: string; initialContents?: string },
 ): Promise<void> {
   await runPresetTransition(async () => {
     const existing = await fsp.readFile(presetPath, "utf8").catch((error: unknown) => {
@@ -343,7 +352,7 @@ async function updatePreset(
       }
       throw error;
     });
-    const next = buildLlamaServerPreset(existing, params);
+    const next = buildLlamaServerPreset(existing ?? params.initialContents, params);
     if (next !== existing) {
       await writePreset(presetPath, next);
     }
@@ -402,6 +411,18 @@ async function findAvailableLlamaServerPort(preferred = LLAMA_CPP_DEFAULT_PORT):
   );
 }
 
+export function resolveLlamaCppPresetPath(
+  service: ModelProviderConfig["localService"],
+): string | undefined {
+  const args = service?.args ?? [];
+  const inline = args.find((arg) => arg.startsWith("--models-preset="));
+  return (
+    inline?.slice("--models-preset=".length) ??
+    args.find((_, index) => args[index - 1] === "--models-preset") ??
+    service?.env?.LLAMA_ARG_MODELS_PRESET
+  );
+}
+
 export async function prepareManagedLlamaServer(params: {
   // Runtime embedding refreshes preserve chat. Explicit embedding-only setup removes it.
   chatModel: ManagedLlamaChatModel;
@@ -416,10 +437,12 @@ export async function prepareManagedLlamaServer(params: {
   isolated?: boolean;
   signal?: AbortSignal;
   onProgress?: LlamaDownloadProgress;
+  mediaModels?: readonly ManagedLlamaModel[];
+  modelsMax?: 1;
 }): Promise<ManagedLlamaServer> {
   params.signal?.throwIfAborted();
   const command =
-    params.localService?.command ??
+    (!params.asset ? params.localService?.command : undefined) ??
     (
       await ensureLlamaServerInstalled({
         asset: params.asset,
@@ -427,6 +450,7 @@ export async function prepareManagedLlamaServer(params: {
         onProgress: params.onProgress,
       })
     ).command;
+  params.signal?.throwIfAborted();
   const port = params.port ?? (await findAvailableLlamaServerPort(params.isolated ? 0 : undefined));
   const rootUrl = `http://127.0.0.1:${port}`;
   const reconcileOrigin = params.reconcileBaseUrl
@@ -435,11 +459,10 @@ export async function prepareManagedLlamaServer(params: {
   const endpoint = {
     command,
     baseUrl: `${rootUrl}/v1`,
-    healthUrl: params.localService?.healthUrl ?? `${rootUrl}/health`,
+    healthUrl:
+      (!params.isolated ? params.localService?.healthUrl : undefined) ?? `${rootUrl}/health`,
   };
-  const configuredPreset =
-    params.localService?.args?.find((_, index, args) => args[index - 1] === "--models-preset") ??
-    params.localService?.env?.LLAMA_ARG_MODELS_PRESET;
+  const configuredPreset = resolveLlamaCppPresetPath(params.localService);
   // Existing services may own a direct --model command instead of a router preset.
   // Keep that public localService contract; only setup creates a new router.
   if (params.localService && !configuredPreset && !params.isolated) {
@@ -457,33 +480,76 @@ export async function prepareManagedLlamaServer(params: {
   const presetPath = params.isolated
     ? path.join(path.dirname(defaultPreset), `models-${randomUUID()}.ini`)
     : defaultPreset;
-  await updatePreset(presetPath, {
-    chatModel: params.chatModel,
-    configuredChatModelIds: params.configuredChatModelIds,
-    embeddingModelIsDefault: params.embeddingModelIsDefault,
-    embeddingModelPath: params.embeddingModelPath,
-    defaultEmbeddingModelPath: params.defaultEmbeddingModelPath,
-    reconcileOrigin: params.isolated ? undefined : reconcileOrigin,
-  });
+  const initialContents =
+    params.isolated && params.mediaModels
+      ? await fsp.readFile(defaultPreset, "utf8").catch((error: unknown) => {
+          if (!configuredPreset && asOptionalRecord(error)?.code === "ENOENT") {
+            return undefined;
+          }
+          throw error;
+        })
+      : undefined;
   params.signal?.throwIfAborted();
+  try {
+    await updatePreset(presetPath, {
+      chatModel: params.chatModel,
+      configuredChatModelIds: params.configuredChatModelIds,
+      embeddingModelIsDefault: params.embeddingModelIsDefault,
+      embeddingModelPath: params.embeddingModelPath,
+      defaultEmbeddingModelPath: params.defaultEmbeddingModelPath,
+      reconcileOrigin: params.isolated ? undefined : reconcileOrigin,
+      mediaModels: params.mediaModels,
+      initialContents,
+    });
+    params.signal?.throwIfAborted();
+  } catch (error) {
+    if (params.isolated) {
+      await fsp.rm(presetPath, { force: true });
+    }
+    throw error;
+  }
   return {
     ...endpoint,
     args:
       params.localService && !params.isolated
         ? (params.localService.args ?? [])
-        : [
-            "--host",
-            "127.0.0.1",
-            "--port",
-            String(port),
-            "--models-preset",
-            presetPath,
-            "--models-max",
-            "2",
-            "--metrics",
-            "--no-ui",
-          ],
+        : params.mediaModels && params.localService
+          ? buildIsolatedMediaRouterArgs(params.localService.args ?? [], port, presetPath)
+          : [
+              "--host",
+              "127.0.0.1",
+              "--port",
+              String(port),
+              "--models-preset",
+              presetPath,
+              "--models-max",
+              String(params.modelsMax ?? 2),
+              "--metrics",
+              "--no-ui",
+            ],
   };
+}
+
+function buildIsolatedMediaRouterArgs(args: readonly string[], port: number, preset: string) {
+  const values = new Map([
+    ["--host", "127.0.0.1"],
+    ["--port", String(port)],
+    ["--models-preset", preset],
+    ["--models-max", "1"],
+  ]);
+  const result: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    const key = arg.split("=", 1)[0]!;
+    if (values.has(key)) {
+      if (!arg.includes("=")) {
+        index++;
+      }
+    } else {
+      result.push(arg);
+    }
+  }
+  return [...result, ...[...values].flat()];
 }
 
 export async function ensureManagedLlamaServerForChat(params: {
@@ -494,6 +560,7 @@ export async function ensureManagedLlamaServerForChat(params: {
     contextTokens?: number;
     maxTokens?: number;
   };
+  signal?: AbortSignal;
 }): Promise<void> {
   if (!params.provider.localService || !params.provider.baseUrl) {
     return;
@@ -521,7 +588,18 @@ export async function ensureManagedLlamaServerForChat(params: {
     source: chatModelPath ?? resolveLlamaCppModelSource(params.model),
     cacheDir,
     download: false,
+    signal: params.signal,
   });
+  const projectorSource = params.model.params?.mmprojPath;
+  const projectorPath =
+    typeof projectorSource === "string"
+      ? await ensureLlamaCppModel({
+          source: projectorSource,
+          cacheDir,
+          download: false,
+          signal: params.signal,
+        })
+      : undefined;
   const configuredContext = params.model.params?.contextSize;
   const port = Number(new URL(params.provider.baseUrl).port);
   await prepareManagedLlamaServer({
@@ -534,12 +612,26 @@ export async function ensureManagedLlamaServerForChat(params: {
           ? Math.floor(configuredContext)
           : params.model.contextTokens,
       maxTokens: params.model.maxTokens,
+      ...(projectorPath ? { projectorPath } : {}),
+      ...(typeof params.model.params?.imageMaxTokens === "number"
+        ? { imageMaxTokens: params.model.params.imageMaxTokens }
+        : {}),
+      ...(typeof params.model.params?.device === "string"
+        ? { device: params.model.params.device }
+        : {}),
     },
-    configuredChatModelIds: params.provider.models.map((model) => model.id),
-    defaultEmbeddingModelPath: path.join(cacheDir, DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE),
+    configuredChatModelIds: params.provider.params?.mediaModels
+      ? undefined
+      : params.provider.models.map((model) => model.id),
+    ...(params.provider.params?.mediaModels
+      ? { mediaModels: [] }
+      : {
+          defaultEmbeddingModelPath: path.join(cacheDir, DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE),
+        }),
     port: Number.isInteger(port) && port > 0 ? port : undefined,
     reconcileBaseUrl: params.provider.baseUrl,
     localService: params.provider.localService,
+    signal: params.signal,
   });
 }
 

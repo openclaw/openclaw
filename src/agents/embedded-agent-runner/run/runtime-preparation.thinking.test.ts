@@ -24,8 +24,9 @@ import { createEmptyAgentDiscoveryStores } from "../model.js";
 import { resolveBundledStaticCatalogModel } from "../model.static-catalog.js";
 import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 
-const fixtures = vi.hoisted((): { authStore: AuthProfileStore } => ({
-  authStore: { version: 1, profiles: {} },
+const fixtures = vi.hoisted(() => ({
+  authStore: { version: 1, profiles: {} } as AuthProfileStore,
+  loadAuthProfileStoreForRuntime: vi.fn(),
 }));
 
 // Credential acquisition and native process installation are outside this network-free
@@ -47,6 +48,7 @@ vi.mock("../../model-auth.js", async (importOriginal) => ({
 }));
 vi.mock("../../auth-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../auth-profiles.js")>()),
+  loadAuthProfileStoreForRuntime: fixtures.loadAuthProfileStoreForRuntime,
   ensureAuthProfileStore: () => fixtures.authStore,
 }));
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
@@ -90,6 +92,8 @@ describe("selected route thinking metadata at runtime preparation", () => {
   let provider: ProviderPlugin;
 
   beforeEach(async () => {
+    fixtures.loadAuthProfileStoreForRuntime.mockReset();
+    fixtures.loadAuthProfileStoreForRuntime.mockImplementation(() => fixtures.authStore);
     const { buildOpenAIProvider } = await loadBundledPluginFacade<{
       buildOpenAIProvider: () => ProviderPlugin;
     }>({ pluginId: "openai", artifactBasename: "api.js" });
@@ -228,6 +232,15 @@ describe("selected route thinking metadata at runtime preparation", () => {
       preparedModelRuntime,
     });
     try {
+      expect(fixtures.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(
+        preparedModelRuntime.agentDir,
+        expect.objectContaining({
+          readOnly: true,
+          migrationProvider: "openai",
+          allowKeychainPrompt: false,
+          profileId: `openai:${route}`,
+        }),
+      );
       const { effectiveModel, activePreparedAuthPlan } = runtime.snapshot();
       expect(activePreparedAuthPlan.modelRoute?.authRequirement).toBe(
         route === "platform" ? "api-key" : "subscription",
