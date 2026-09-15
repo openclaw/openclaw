@@ -56,6 +56,10 @@ On the node machine:
 openclaw node run --host <gateway-host> --port 18789 --display-name "Build Node"
 ```
 
+An explicitly empty or whitespace-only `--host` value is rejected instead of
+silently falling back to the default host. Omit the option to connect to the
+default (`127.0.0.1`) or paired/configured Gateway host.
+
 For one-paste setup, create a **Node host** setup link from the Control UI
 Devices page, then run its copyable command on the node machine:
 
