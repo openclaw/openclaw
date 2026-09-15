@@ -110,6 +110,22 @@ work. The delivery path depends on that shape.
     - The target agent must support `session/load` (Codex and Claude Code do).
     - If the session id is not found, the spawn fails with a clear error - no silent fallback to a new session.
 
+    When reopening an existing persistent session, a generic initialization
+    failure preserves its saved conversation ID and returns an error. Repair
+    the backend or connection, then retry the same session to keep its context.
+    An initialization error alone does not mean the conversation was deleted.
+
+    If the saved conversation is genuinely unavailable, retrying initialization
+    will continue to fail. To deliberately start over, create a new session with
+    `/acp spawn` from the parent conversation; do not pass `resumeSessionId`.
+    This starts a new conversation without the previous context. Keep the old
+    session if its transcript is still useful. `/acp reset-options` only clears
+    runtime option overrides; it does not reset conversation history.
+
+    This differs from the separate structured missing-session recovery during
+    a turn and from explicitly configured backend failover; those paths retain
+    their existing behavior.
+
   </Accordion>
   <Accordion title="Post-deploy smoke test">
     After a gateway deploy, run a live end-to-end check rather than trusting

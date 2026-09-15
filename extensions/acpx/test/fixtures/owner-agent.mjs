@@ -55,6 +55,12 @@ const connection = new AgentSideConnection(
       return { sessionId, ...describe(state) };
     },
     async loadSession({ sessionId }) {
+      const failure = await fs
+        .readFile(path.join(directory, "resume-error"), "utf8")
+        .catch(() => "");
+      if (failure) {
+        throw new Error(failure);
+      }
       const state = JSON.parse(await fs.readFile(file(sessionId), "utf8"));
       sessions.set(sessionId, state);
       return describe(state);
