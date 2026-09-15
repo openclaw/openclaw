@@ -9,10 +9,14 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createMockPluginRegistry,
+  getActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -398,6 +402,94 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       await harness.completeTurn();
       await run;
       expect(openSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      owner: "explicit requester",
+      memoryPromptAgentId: "hq",
+      expectedAgentId: "hq",
+      rejectOwner: false,
+      expectedClaims: ["HQ_MEMORY_CLAIM"],
+    },
+    {
+      owner: "session owner",
+      memoryPromptAgentId: undefined,
+      expectedAgentId: "openclaw",
+      rejectOwner: false,
+      expectedClaims: ["SYSTEM_MEMORY_CLAIM"],
+    },
+    {
+      owner: "rejected requester",
+      memoryPromptAgentId: "hq",
+      expectedAgentId: "hq",
+      rejectOwner: true,
+      expectedClaims: [],
+    },
+  ])(
+    "submits scoped memory for the $owner in Codex developer instructions",
+    async ({ memoryPromptAgentId, expectedAgentId, rejectOwner, expectedClaims }) => {
+      const prepare = vi.fn(async ({ agentId }: { agentId?: string }) => {
+        if (agentId === "hq") {
+          if (rejectOwner) {
+            throw new Error("Unknown memory-wiki agentId: hq.");
+          }
+          return ["HQ_MEMORY_CLAIM"];
+        }
+        return [agentId === "openclaw" ? "SYSTEM_MEMORY_CLAIM" : "DECOY_MEMORY_CLAIM"];
+      });
+      const registry = getActivePluginRegistry();
+      if (!registry) {
+        throw new Error("expected active plugin registry");
+      }
+      registry.memoryPromptPreparations.push({ pluginId: "memory-wiki", prepare });
+      const assemble = vi.fn<ContextEngine["assemble"]>(
+        async ({ messages, sessionKey, availableTools, citationsMode }) => ({
+          messages,
+          estimatedTokens: 1,
+          systemPromptAddition: buildMemorySystemPromptAddition({
+            availableTools: availableTools ?? new Set(),
+            citationsMode,
+            agentSessionKey: sessionKey,
+          }),
+        }),
+      );
+      const harness = createStartedThreadHarness();
+      const params = createParams(
+        path.join(tempDir, "memory-owner.jsonl"),
+        path.join(tempDir, "memory-owner-workspace"),
+      );
+      params.agentId = "openclaw";
+      params.sessionKey = "agent:openclaw:conversation";
+      params.memoryPromptAgentId = memoryPromptAgentId;
+      params.contextEngine = createContextEngine({ assemble });
+
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      const developerInstructions = readStringValue(
+        requireRequestParams(harness, "thread/start").developerInstructions,
+      );
+      await harness.completeTurn();
+      await run;
+
+      expect(developerInstructions).toBeTypeOf("string");
+      expect(
+        ["HQ_MEMORY_CLAIM", "SYSTEM_MEMORY_CLAIM", "DECOY_MEMORY_CLAIM"].filter((claim) =>
+          developerInstructions?.includes(claim),
+        ),
+      ).toEqual(expectedClaims);
+      expect(prepare).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: expectedAgentId,
+          agentSessionKey: "agent:openclaw:conversation",
+        }),
+      );
+      if (!rejectOwner) {
+        expect(assemble).toHaveBeenCalledWith(
+          expect.objectContaining({ sessionKey: "agent:openclaw:conversation" }),
+        );
+      }
     },
   );
 
