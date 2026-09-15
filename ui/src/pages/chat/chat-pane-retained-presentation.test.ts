@@ -9,11 +9,6 @@ import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import {
-  getChatAttachmentDataUrl,
-  registerChatAttachmentPayload,
-  releaseChatAttachmentPayload,
-} from "./attachment-payload-store.ts";
 import { renderComposerFixture } from "./chat-composer.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
@@ -24,7 +19,6 @@ import {
 } from "./chat-pane-attachment-handoff.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import {
-  clearPaneSessionHandoffs,
   consumePaneSessionHandoff,
   focusChatComposerFromPrintableKeydown,
   preparePaneSessionHandoff,
@@ -160,63 +154,6 @@ describe("chat pane retained presentation lifecycle", () => {
     }
   });
 
-  it("expires abandoned eviction payload ownership", () => {
-    vi.useFakeTimers();
-    const id = "expired-retained-attachment";
-    try {
-      const { pane } = createTestChatPane({
-        client: {} as GatewayBrowserClient,
-        sessions: {} as SessionCapability,
-      });
-      const attachment = registerChatAttachmentPayload({
-        attachment: { id, mimeType: "image/png" },
-        dataUrl: "data:image/png;base64,ZXhwaXJlZA==",
-        file: new File(["expired"], "expired.png", { type: "image/png" }),
-      });
-      preparePaneSessionHandoff(pane.context, "p1", "agent:main:expired", {
-        attachments: [attachment],
-        draft: "",
-        restore: true,
-      });
-
-      vi.advanceTimersByTime(30_000);
-
-      expect(consumePaneSessionHandoff(pane.context, "p1", "agent:main:expired")).toBeNull();
-      expect(getChatAttachmentDataUrl(attachment)).toBeNull();
-    } finally {
-      releaseChatAttachmentPayload(id);
-      vi.useRealTimers();
-    }
-  });
-
-  it("clears every unmounted eviction handoff for a permanently discarded pane", () => {
-    const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
-    });
-    const attachment = registerChatAttachmentPayload({
-      attachment: { id: "permanently-discarded-attachment", mimeType: "image/png" },
-      dataUrl: "data:image/png;base64,ZGlzY2FyZGVk",
-      file: new File(["discarded"], "discarded.png", { type: "image/png" }),
-    });
-    preparePaneSessionHandoff(pane.context, "p1", "agent:main:evicted-a", {
-      attachments: [attachment],
-      draft: "evicted a",
-      restore: true,
-    });
-    preparePaneSessionHandoff(pane.context, "p1", "agent:main:evicted-b", {
-      attachments: [],
-      draft: "evicted b",
-      restore: true,
-    });
-
-    clearPaneSessionHandoffs(pane.context, "p1");
-
-    expect(consumePaneSessionHandoff(pane.context, "p1", "agent:main:evicted-a")).toBeNull();
-    expect(consumePaneSessionHandoff(pane.context, "p1", "agent:main:evicted-b")).toBeNull();
-    expect(getChatAttachmentDataUrl(attachment)).toBeNull();
-  });
-
   it("restores draft attachments and memory fallbacks after LRU eviction", () => {
     const source = createTestChatPane({
       client: {} as GatewayBrowserClient,
@@ -241,7 +178,7 @@ describe("chat pane retained presentation lifecycle", () => {
 
     source.pane.prepareForEviction();
     const owner = source.pane.context.gateway.snapshot.client;
-    preparePaneStagedAttachments(source.pane.context, source.pane.paneId, source.state, owner);
+    preparePaneStagedAttachments(source.pane.context, source.pane.paneId, source.state, owner, 0);
 
     const destination = createTestChatPane({
       client: {} as GatewayBrowserClient,

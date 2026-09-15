@@ -5,7 +5,11 @@ import type { RouteId } from "../app-route-paths.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { AgentCapability } from "../lib/agents/index.ts";
 import type { ChannelCapability } from "../lib/channels/index.ts";
-import type { ChatAttachment, ChatComposerMemoryFallback } from "../lib/chat/chat-types.ts";
+import type {
+  ChatAttachment,
+  ChatComposerMemoryFallback,
+  ChatGoalDraftMode,
+} from "../lib/chat/chat-types.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { LiveActivity } from "../pages/activity/live-activity.ts";
@@ -80,6 +84,8 @@ export type ApplicationChatAttachmentHandoff = {
       attachments: readonly ChatAttachment[];
       fallbacks: Readonly<Record<string, ChatComposerMemoryFallback>>;
       message?: string;
+      draftRevision?: number;
+      goalMode?: ChatGoalDraftMode | null;
       mentions?: readonly HumanMention[];
       newSessionDraft?: NewSessionDraftHandoff;
     },
@@ -88,6 +94,8 @@ export type ApplicationChatAttachmentHandoff = {
     attachments: ChatAttachment[];
     fallbacks: Record<string, ChatComposerMemoryFallback>;
     message?: string;
+    draftRevision?: number;
+    goalMode?: ChatGoalDraftMode | null;
     mentions?: readonly HumanMention[];
     newSessionDraft?: NewSessionDraftHandoff;
   } | null;

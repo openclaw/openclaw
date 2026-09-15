@@ -1,8 +1,14 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import {
+  captureUiProof,
+  chatSessionListResponse,
+  controlUiSessionUrl,
+} from "./chat-flow.test-support.ts";
 import { verifyDurableComposerFences } from "./composer-draft-fences.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI durable composer draft storage",
@@ -65,6 +71,58 @@ async function rawDraftRecords(page: Page, scopes: readonly TestDraftScope[], ex
 }
 
 suite.define(() => {
+  it("does not replace a newer saved split draft when an older pane returns after eviction", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const sessionKey = "agent:main:session-a";
+        await installMockGateway(page, {
+          sessionKey,
+          methodResponses: {
+            "sessions.list": chatSessionListResponse(
+              ["a", "b", "c", "d"].map((letter, index) => ({
+                key: `agent:main:session-${letter}`,
+                kind: "direct",
+                label: `Session ${letter.toUpperCase()}`,
+                updatedAt: 4 - index,
+              })),
+            ),
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await page.getByRole("button", { name: "Open split view", exact: true }).click();
+        const cells = page.locator(".chat-split-view__cell");
+        const left = cells.nth(0).getByRole("textbox", { name: "Chat composer" });
+        const right = cells.nth(1).getByRole("textbox", { name: "Chat composer" });
+        await expect.poll(() => left.count()).toBe(1);
+        await left.fill("OLDER LEFT DRAFT");
+        const scopeKey = `chat:v3:${sessionKey}\u0000agent:main`;
+        await waitForCommittedComposerDraft(page, scopeKey, "OLDER LEFT DRAFT", 0);
+        await right.fill("NEWER RIGHT DRAFT");
+        await waitForCommittedComposerDraft(page, scopeKey, "NEWER RIGHT DRAFT", 0);
+        await left.click();
+        for (const letter of ["b", "c", "d", "a"]) {
+          await page
+            .locator(
+              `.sidebar-recent-session[data-session-key="agent:main:session-${letter}"] a.sidebar-recent-session__link`,
+            )
+            .click();
+          await expect
+            .poll(() => new URL(page.url()).pathname)
+            .toBe(
+              new URL(controlUiSessionUrl(suite.server.baseUrl, `agent:main:session-${letter}`))
+                .pathname,
+            );
+        }
+        await expect.poll(() => left.inputValue()).toBe("NEWER RIGHT DRAFT");
+        await expect.poll(() => right.inputValue()).toBe("NEWER RIGHT DRAFT");
+        await page.reload();
+        await expect.poll(() => left.inputValue()).toBe("NEWER RIGHT DRAFT");
+        await captureUiProof(suite, page, "split-draft-eviction", "after.png");
+      },
+    );
+  });
+
   it("does not reuse a cached composer owner while reconnect authentication is unresolved", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       await installMockGateway(page);

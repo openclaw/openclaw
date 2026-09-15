@@ -293,6 +293,10 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     return this.composerPersistence.scopeForRouteSwitch();
   }
 
+  get composerDraftRevision(): number {
+    return this.composerPersistence.draftRevision;
+  }
+
   private stopChatEffects() {
     while (this.cleanups.length > 0) {
       this.cleanups.pop()?.();

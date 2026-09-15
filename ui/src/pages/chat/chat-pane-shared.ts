@@ -7,7 +7,6 @@ import type { BoardFace } from "../../lib/board/settings.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "../../lib/chat/chat-types.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
-import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 export type ChatPageContext = ApplicationContext;
@@ -18,9 +17,7 @@ export type PaneSessionHandoff = {
   composerFallbacks?: ChatPageHost["chatComposerFallbackByScope"];
   draft: string;
   mentions?: readonly HumanMention[];
-  restore?: boolean;
   send?: boolean;
-  storageFailed?: boolean;
 };
 type PendingPaneSessionHandoff = PaneSessionHandoff & { expiresAt: number; sessionKey: string };
 // A retained pane owns one session for life, so creation/fork adoption crosses
@@ -32,23 +29,13 @@ const paneSessionHandoffs = new WeakMap<
   Map<string, PendingPaneSessionHandoff[]>
 >();
 
-function discardPaneSessionHandoff(handoff: PendingPaneSessionHandoff): void {
-  if (!handoff.restore) {
-    return;
-  }
-  releaseChatAttachmentPayloads([
-    ...handoff.attachments,
-    ...Object.values(handoff.composerFallbacks ?? {}).flatMap((fallback) => fallback.attachments),
-  ]);
-}
-
 function removePaneSessionHandoffs(
   pending: PendingPaneSessionHandoff[] | undefined,
   matches: (handoff: PendingPaneSessionHandoff) => boolean,
 ): void {
   for (let index = (pending?.length ?? 0) - 1; index >= 0; index -= 1) {
     if (matches(pending![index]!)) {
-      discardPaneSessionHandoff(pending!.splice(index, 1)[0]!);
+      pending!.splice(index, 1);
     }
   }
 }
@@ -95,7 +82,7 @@ export function preparePaneSessionHandoff(
     paneHandoffs(context, paneId, false);
   }, PANE_SESSION_HANDOFF_TTL_MS);
   while (pending.length > PANE_SESSION_HANDOFF_LIMIT) {
-    discardPaneSessionHandoff(pending.shift()!);
+    pending.shift();
   }
 }
 
@@ -149,9 +136,6 @@ export function clearPaneSessionHandoffs(context: ApplicationContext, paneId: st
   const pending = byPane.get(paneId);
   if (!pending) {
     return;
-  }
-  for (const handoff of pending) {
-    discardPaneSessionHandoff(handoff);
   }
   byPane.delete(paneId);
   if (byPane.size === 0) {

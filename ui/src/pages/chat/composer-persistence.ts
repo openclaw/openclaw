@@ -693,6 +693,10 @@ export class ChatComposerPersistence {
     return this.ready;
   }
 
+  get draftRevision(): number {
+    return this.latestDraftRevision;
+  }
+
   start() {
     const state = this.getState();
     if (!state) {

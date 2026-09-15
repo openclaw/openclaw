@@ -8,7 +8,11 @@ import {
   releaseDisplacedChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
+import {
+  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
+  loadChatComposerDraftRevision,
+  storedChatOutboxScopeKey,
+} from "./composer-persistence.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { panesOf, visiblePanesOf } from "./split-layout.ts";
 
@@ -184,10 +188,18 @@ export function restorePaneStagedAttachments(
   if (!restored) {
     return;
   }
+  const current =
+    restored.draftRevision === undefined ||
+    restored.draftRevision >= loadChatComposerDraftRevision(state, state.sessionKey);
+  if (current && restored.draftRevision !== undefined) {
+    state.chatMessage = restored.message ?? "";
+    state.chatMentions = restored.mentions;
+    state.chatGoalDraftMode = restored.goalMode ?? null;
+  }
   const currentIds = new Set(state.chatAttachments.map((attachment) => attachment.id));
   state.chatAttachments = [
     ...state.chatAttachments,
-    ...restored.attachments.filter((attachment) => !currentIds.has(attachment.id)),
+    ...(current ? restored.attachments.filter((attachment) => !currentIds.has(attachment.id)) : []),
   ];
   const displaced = Object.entries(restored.fallbacks)
     .filter(([scopeKey]) => Object.hasOwn(state.chatComposerFallbackByScope, scopeKey))
@@ -196,10 +208,19 @@ export function restorePaneStagedAttachments(
     ...restored.fallbacks,
     ...state.chatComposerFallbackByScope,
   };
-  releaseDisplacedChatAttachmentPayloads(displaced, [
-    state.chatAttachments,
-    ...Object.values(state.chatComposerFallbackByScope).map((fallback) => fallback.attachments),
-  ]);
+  const currentFallback =
+    state.chatComposerFallbackByScope[handoffKey(paneId, state, owner).scopeKey];
+  if (current && currentFallback?.storageFailed) {
+    state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+    state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+  }
+  releaseDisplacedChatAttachmentPayloads(
+    [...displaced, ...(!current ? restored.attachments : [])],
+    [
+      state.chatAttachments,
+      ...Object.values(state.chatComposerFallbackByScope).map((fallback) => fallback.attachments),
+    ],
+  );
 }
 
 export function preparePaneStagedAttachments(
@@ -207,12 +228,17 @@ export function preparePaneStagedAttachments(
   paneId: string,
   state: ChatPageHost,
   owner: ChatAttachmentGatewayOwner,
+  draftRevision: number,
 ): void {
   const attachments = [...state.chatAttachments];
   context.chatAttachmentHandoff.prepare({
     ...handoffKey(paneId, state, owner),
     attachments,
     fallbacks: state.chatComposerFallbackByScope,
+    message: state.chatMessage,
+    mentions: state.chatMentions,
+    goalMode: state.chatGoalDraftMode,
+    draftRevision,
   });
 }
 
