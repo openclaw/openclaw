@@ -111,57 +111,44 @@ function respondApprovalNotFound(respond: RespondFn): void {
   );
 }
 
-function readExactApprovalId(params: unknown): string | null {
+function readApprovalRequestId(params: unknown): string | null {
   if (!isRecord(params) || typeof params.id !== "string") {
     return null;
   }
-  const id = params.id;
-  return isWellFormedApprovalId(id) ? id : null;
+  const raw = params.id;
+  if (isWellFormedApprovalId(raw)) {
+    return raw;
+  }
+  const trimmed = normalizeOptionalString(raw);
+  return trimmed && isWellFormedApprovalId(trimmed) ? raw : null;
 }
 
-function loadVisibleApproval(params: {
-  id: string;
-  client: GatewayClient | null;
-  cfg: OpenClawConfig;
-  allowApprovalRuntime?: boolean;
-  allowTransportRef?: boolean;
-  execApprovalManager: ExecApprovalManager;
-  pluginApprovalManager: ExecApprovalManager<PluginApprovalRequestPayload>;
-  systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
-  databaseOptions?: OpenClawStateDatabaseOptions;
-}): OperatorApprovalRecord | null {
-  // Reconciliation can settle a live waiter, so authorization must precede
-  // every durable read and no unauthorized lookup may reach the bridge.
-  const authorized = params.allowApprovalRuntime
-    ? canResolveOperatorApproval(params.client)
-    : canReviewOperatorApproval(params.client);
-  if (!authorized) {
-    return null;
-  }
+function loadVisibleApprovalForId(
+  params: Parameters<typeof loadVisibleApproval>[0],
+):
+  | { status: "found"; record: OperatorApprovalRecord }
+  | { status: "denied" }
+  | { status: "missing" } {
   const liveRecord =
     params.execApprovalManager.getLiveSnapshot(params.id) ??
     params.pluginApprovalManager.getLiveSnapshot(params.id) ??
     params.systemAgentApprovalManager?.getLiveSnapshot(params.id);
-  if (
-    liveRecord &&
-    !canAccessApprovalSession({
-      cfg: params.cfg,
-      client: params.client,
-      sessionKey: liveRecord.request.sessionKey,
-      agentId: liveRecord.request.agentId,
-    })
-  ) {
-    return null;
-  }
-  if (
-    liveRecord &&
-    !canAccessOperatorApproval({
-      client: params.client,
-      allowApprovalRuntime: params.allowApprovalRuntime,
-      binding: { reviewerDeviceIds: liveRecord.approvalReviewerDeviceIds },
-    })
-  ) {
-    return null;
+  if (liveRecord) {
+    if (
+      !canAccessApprovalSession({
+        cfg: params.cfg,
+        client: params.client,
+        sessionKey: liveRecord.request.sessionKey,
+        agentId: liveRecord.request.agentId,
+      }) ||
+      !canAccessOperatorApproval({
+        client: params.client,
+        allowApprovalRuntime: params.allowApprovalRuntime,
+        binding: { reviewerDeviceIds: liveRecord.approvalReviewerDeviceIds },
+      })
+    ) {
+      return { status: "denied" };
+    }
   }
   let lookup: ReturnType<typeof getOperatorApprovalDetailed>;
   try {
@@ -184,18 +171,14 @@ function loadVisibleApproval(params: {
         client: params.client,
         sessionKey: lookup.record.source.sessionKey,
         agentId: lookup.record.source.agentId,
-      })
-    ) {
-      return null;
-    }
-    if (
+      }) ||
       !canAccessOperatorApproval({
         client: params.client,
         allowApprovalRuntime: params.allowApprovalRuntime,
         binding: { reviewerDeviceIds: lookup.record.reviewerDeviceIds },
       })
     ) {
-      return null;
+      return { status: "denied" };
     }
     const manager =
       lookup.record.kind === "exec"
@@ -203,9 +186,8 @@ function loadVisibleApproval(params: {
         : lookup.record.kind === "plugin"
           ? params.pluginApprovalManager
           : params.systemAgentApprovalManager;
-    // Durable truth can advance outside this manager. Settle only an existing
-    // same-kind waiter; reconcileDurableLookup never recreates executable state.
-    return manager?.reconcileDurableLookup(lookup) ?? null;
+    const record = manager?.reconcileDurableLookup(lookup) ?? null;
+    return record ? { status: "found", record } : { status: "denied" };
   }
   const missing = {
     outcome: lookup.outcome === "corrupt" ? "corrupt" : "missing",
@@ -214,7 +196,40 @@ function loadVisibleApproval(params: {
   params.execApprovalManager.reconcileDurableLookup(missing);
   params.pluginApprovalManager.reconcileDurableLookup(missing);
   params.systemAgentApprovalManager?.reconcileDurableLookup(missing);
-  return null;
+  // Corrupt exact keys are not absence. Trim fallback would retarget a
+  // different approval, so fail closed even when no live waiter exists.
+  return liveRecord || lookup.outcome === "corrupt" ? { status: "denied" } : { status: "missing" };
+}
+
+function loadVisibleApproval(params: {
+  id: string;
+  client: GatewayClient | null;
+  cfg: OpenClawConfig;
+  allowApprovalRuntime?: boolean;
+  allowTransportRef?: boolean;
+  execApprovalManager: ExecApprovalManager;
+  pluginApprovalManager: ExecApprovalManager<PluginApprovalRequestPayload>;
+  systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
+  databaseOptions?: OpenClawStateDatabaseOptions;
+}): OperatorApprovalRecord | null {
+  // Reconciliation can settle a live waiter, so authorization must precede
+  // every durable read and no unauthorized lookup may reach the bridge.
+  const authorized = params.allowApprovalRuntime
+    ? canResolveOperatorApproval(params.client)
+    : canReviewOperatorApproval(params.client);
+  if (!authorized) {
+    return null;
+  }
+  const exact = loadVisibleApprovalForId(params);
+  if (exact.status !== "missing") {
+    return exact.status === "found" ? exact.record : null;
+  }
+  const trimmed = normalizeOptionalString(params.id);
+  if (!trimmed || trimmed === params.id || !isWellFormedApprovalId(trimmed)) {
+    return null;
+  }
+  const fallback = loadVisibleApprovalForId({ ...params, id: trimmed });
+  return fallback.status === "found" ? fallback.record : null;
 }
 
 type ApplyApprovalDecisionResult<TPayload> =
@@ -345,7 +360,7 @@ export function createApprovalHandlers(
         );
         return;
       }
-      const id = readExactApprovalId(rawParams);
+      const id = readApprovalRequestId(rawParams);
       let record: OperatorApprovalRecord | null;
       try {
         record = id
@@ -382,7 +397,7 @@ export function createApprovalHandlers(
         respondApprovalNotFound(respond);
         return;
       }
-      const id = readExactApprovalId(rawParams);
+      const id = readApprovalRequestId(rawParams);
       let record: OperatorApprovalRecord | null;
       try {
         record = id

@@ -857,6 +857,221 @@ describe("unified approval handlers", () => {
     expect(response.error).toMatchObject({ code: "INVALID_REQUEST" });
   });
 
+  it("looks up and resolves a live approval when approval.get/resolve receive a padded id", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const pending = registerExec(managers.exec, { id: "padded-approval-lookup" });
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+    const paddedId = ` ${pending.record.id} `;
+
+    // Negative control: live Map lookup is exact and misses clipboard padding.
+    expect(managers.exec.getLiveSnapshot(paddedId)).toBeNull();
+
+    const got = await invoke({
+      handlers,
+      method: "approval.get",
+      body: { id: paddedId },
+      client: createClient({ deviceId: "reviewer" }),
+    });
+    expect(got.ok).toBe(true);
+    expect(got.result).toMatchObject({
+      approval: { id: pending.record.id, status: "pending" },
+    });
+
+    const resolved = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: paddedId, kind: "exec", decision: "deny" },
+      client: createClient({ deviceId: "reviewer" }),
+    });
+    expect(resolved.ok).toBe(true);
+    expect(resolved.result).toMatchObject({
+      applied: true,
+      approval: { id: pending.record.id, status: "denied", decision: "deny" },
+    });
+    await expect(pending.decision).resolves.toBe("deny");
+  });
+
+  it("prefers an exact whitespace-bearing approval id over the trimmed spelling", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const nowMs = Date.now();
+    insertOperatorApproval({
+      approval: {
+        id: " approval-edge ",
+        kind: "exec",
+        presentation: {
+          kind: "exec",
+          commandText: "exact padded key",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        runtimeEpoch: "approval-handler-test",
+        createdAtMs: nowMs,
+        expiresAtMs: nowMs + 60_000,
+        reviewerDeviceIds: ["reviewer"],
+      },
+      databaseOptions,
+    });
+    insertOperatorApproval({
+      approval: {
+        id: "approval-edge",
+        kind: "exec",
+        presentation: {
+          kind: "exec",
+          commandText: "trimmed fallback key",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        runtimeEpoch: "approval-handler-test",
+        createdAtMs: nowMs + 1,
+        expiresAtMs: nowMs + 60_000,
+        reviewerDeviceIds: ["reviewer"],
+      },
+      databaseOptions,
+    });
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+
+    const got = await invoke({
+      handlers,
+      method: "approval.get",
+      body: { id: " approval-edge " },
+      client: createClient({ deviceId: "reviewer" }),
+    });
+    expect(got.ok).toBe(true);
+    expect(got.result).toMatchObject({
+      approval: { id: " approval-edge ", status: "pending" },
+    });
+    expect(
+      (got.result as { approval?: { presentation?: { commandText?: string } } }).approval,
+    ).toMatchObject({ presentation: { commandText: "exact padded key" } });
+  });
+
+  it("does not fall back to the trimmed approval when the exact padded id is unauthorized", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const nowMs = Date.now();
+    insertOperatorApproval({
+      approval: {
+        id: " approval-edge ",
+        kind: "exec",
+        presentation: {
+          kind: "exec",
+          commandText: "exact padded key",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        runtimeEpoch: "approval-handler-test",
+        createdAtMs: nowMs,
+        expiresAtMs: nowMs + 60_000,
+        reviewerDeviceIds: ["other-reviewer"],
+      },
+      databaseOptions,
+    });
+    insertOperatorApproval({
+      approval: {
+        id: "approval-edge",
+        kind: "exec",
+        presentation: {
+          kind: "exec",
+          commandText: "trimmed fallback key",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        runtimeEpoch: "approval-handler-test",
+        createdAtMs: nowMs + 1,
+        expiresAtMs: nowMs + 60_000,
+        reviewerDeviceIds: ["reviewer"],
+      },
+      databaseOptions,
+    });
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+
+    const got = await invoke({
+      handlers,
+      method: "approval.get",
+      body: { id: " approval-edge " },
+      client: createClient({ deviceId: "reviewer" }),
+    });
+    expect(got.ok).toBe(false);
+    expect(got.error).toMatchObject({ code: "INVALID_REQUEST" });
+  });
+
+  it("does not fall back to the trimmed approval when the exact padded id is corrupt", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const managers = createManagers(databaseOptions);
+    const nowMs = Date.now();
+    insertOperatorApproval({
+      approval: {
+        id: " approval-edge ",
+        kind: "exec",
+        presentation: {
+          kind: "exec",
+          commandText: "exact padded key",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        runtimeEpoch: "approval-handler-test",
+        createdAtMs: nowMs,
+        expiresAtMs: nowMs + 60_000,
+        reviewerDeviceIds: ["reviewer"],
+      },
+      databaseOptions,
+    });
+    corruptDurableApprovalPresentation(databaseOptions, " approval-edge ");
+    const trimmed = registerExec(managers.exec, { id: "approval-edge" });
+    const handlers = createApprovalHandlers({
+      execApprovalManager: managers.exec,
+      pluginApprovalManager: managers.plugin,
+      databaseOptions,
+    });
+    const client = createClient({ deviceId: "reviewer" });
+
+    const got = await invoke({
+      handlers,
+      method: "approval.get",
+      body: { id: " approval-edge " },
+      client,
+    });
+    expect(got.ok).toBe(false);
+    expect(got.error).toMatchObject({ code: "INVALID_REQUEST" });
+
+    const resolved = await invoke({
+      handlers,
+      method: "approval.resolve",
+      body: { id: " approval-edge ", kind: "exec", decision: "deny" },
+      client,
+    });
+    expect(resolved.ok).toBe(false);
+    expect(resolved.error).toMatchObject({ code: "INVALID_REQUEST" });
+    const neighborLive = managers.exec.getLiveSnapshot(trimmed.record.id);
+    expect(neighborLive).toMatchObject({ id: trimmed.record.id });
+    expect(neighborLive).not.toHaveProperty("terminalReason");
+    let neighborSettled = false;
+    void trimmed.decision.then(() => {
+      neighborSettled = true;
+    });
+    await Promise.resolve();
+    expect(neighborSettled).toBe(false);
+    const neighbor = await invoke({
+      handlers,
+      method: "approval.get",
+      body: { id: trimmed.record.id },
+      client,
+    });
+    expect(neighbor.ok).toBe(true);
+    expect(neighbor.result).toMatchObject({
+      approval: { id: trimmed.record.id, status: "pending" },
+    });
+  });
+
   it.for(["approval.get", "approval.resolve"] as const)(
     "returns sanitized UNAVAILABLE when %s cannot read durable state",
     async (method, testContext) => {
