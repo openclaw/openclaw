@@ -73,6 +73,7 @@ export function resolveGatewayScopedTools(
   > & {
     cfg: OpenClawConfig;
     rootedExecution?: PreparedRootedExecutionCapability;
+    messageActionTurnCapability?: string;
     authProfileStore?: AuthProfileStore;
     agentDir?: string;
     onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
@@ -296,6 +297,10 @@ export function resolveGatewayScopedTools(
   const openClawTools = createOpenClawTools({
     gatewayConfigReadAllowed,
     agentSessionKey: params.sessionKey,
+    messageToolTurnCapability:
+      surface === "loopback" && params.messageActionTurnCapability
+        ? { token: params.messageActionTurnCapability, sessionKey: runtimePolicySessionKey }
+        : undefined,
     runId: params.runId,
     ...(swarmCollectorContext
       ? {

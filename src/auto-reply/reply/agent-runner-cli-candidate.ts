@@ -331,6 +331,7 @@ export async function runCliFallbackCandidate(
               : undefined,
           runParams: {
             preparedRunAdmission: params.preparedRunAdmission,
+            messageActionTurnCapability: params.messageActionTurnCapability,
             diagnosticOwner,
             sessionId: turn.followupRun.run.sessionId,
             sessionKey,

@@ -24,9 +24,15 @@ import {
   type OpenClawConfig,
 } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  isTrustedMessageActionTurnIngress,
+  mintMessageActionTurnCapability,
+  resolveMessageActionTurnCapabilityLifetime,
+} from "../../gateway/message-action-turn-capability.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore } from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
@@ -326,6 +332,56 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
     senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
     senderE164: normalizeOptionalString(sessionCtx.SenderE164),
   };
+}
+
+/** Bind either runtime to the same trusted source turn and requester. */
+export function mintReplyMessageActionTurnCapability(
+  turn: Pick<
+    AgentTurnParams,
+    "followupRun" | "sessionCtx" | "opts" | "isHeartbeat" | "runtimePolicySessionKey"
+  >,
+  runId: string,
+): string | undefined {
+  if (turn.isHeartbeat || !isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider)) {
+    return undefined;
+  }
+  const context = buildEmbeddedContextFromTemplate({
+    run: turn.followupRun.run,
+    replyRoute: turn.followupRun,
+    sessionCtx: turn.sessionCtx,
+    hasRepliedRef: turn.opts?.hasRepliedRef,
+  });
+  const sessionKey = turn.runtimePolicySessionKey ?? context.sessionKey;
+  if (!context.agentId || !sessionKey || !context.messageProvider || !context.currentChannelId) {
+    return undefined;
+  }
+  const sender = buildTemplateSenderContext(turn.sessionCtx);
+  return mintMessageActionTurnCapability({
+    agentId: context.agentId,
+    runId,
+    sessionKey,
+    sourceReplySessionKey: context.sessionKey,
+    sessionId: context.sessionId,
+    requesterAccountId: context.agentAccountId,
+    requesterSenderId: sender.senderId,
+    requesterSenderName: sender.senderName,
+    requesterSenderUsername: sender.senderUsername,
+    requesterSenderE164: sender.senderE164,
+    toolContext: {
+      currentChannelId: context.currentChannelId,
+      currentChatType: context.chatType,
+      currentMessagingTarget: context.currentMessagingTarget,
+      currentGraphChannelId: context.currentGraphChannelId,
+      currentChannelProvider: context.currentChannelProvider,
+      currentThreadTs: context.currentThreadTs,
+      currentMessageId: context.currentMessageId,
+      currentSourceTurnId: context.currentSourceTurnId,
+      replyToMode: context.replyToMode,
+      hasRepliedRef: context.hasRepliedRef,
+      sameChannelThreadRequired: context.sameChannelThreadRequired,
+    },
+    ...resolveMessageActionTurnCapabilityLifetime(turn.followupRun.run.timeoutMs),
+  });
 }
 
 /** Builds execution-specific embedded run params for queued reply dispatch. */

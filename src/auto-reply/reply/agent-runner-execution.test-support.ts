@@ -267,9 +267,7 @@ vi.mock("./current-turn-images.js", () => ({
 }));
 
 vi.mock("./agent-runner-utils.js", async () => ({
-  resolveRunThinkingLevelForFallbackCandidate: (
-    await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js")
-  ).resolveRunThinkingLevelForFallbackCandidate,
+  ...(await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js")),
   buildEmbeddedRunExecutionParams: (
     params: Parameters<typeof buildEmbeddedRunExecutionParams>[0],
   ) =>

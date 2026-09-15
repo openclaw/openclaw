@@ -3051,8 +3051,12 @@ describe("executePreparedCliRun supervisor output capture", () => {
   it("captures non-Claude JSONL sends and fences every attempt with a unique key", async () => {
     const context = buildPreparedCliRunContext({ output: "jsonl", provider: "local-cli" });
     context.mcpDeliveryCapture = true;
-    const activateCapture = vi.fn<(captureKey: string) => void>();
-    const deactivateCapture = vi.fn<(captureKey: string) => void>();
+    const activateCapture = vi.fn<(captureKey: string, assertCurrent: () => void) => void>();
+    const deactivateCapture = vi.fn((_captureKey: string) => {
+      const assertion = activateCapture.mock.calls.at(-1)?.[1];
+      expect(assertion).toBeTypeOf("function");
+      expect(assertion).not.toThrow();
+    });
     context.preparedBackend.mcpClientGrantCapture = {
       transportToken: "capture-test-token",
       adoptProcessToken: vi.fn(),
@@ -3064,6 +3068,7 @@ describe("executePreparedCliRun supervisor output capture", () => {
     supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
       const input = args[0] as SupervisorSpawnInput;
       const captureKey = input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "";
+      expect(activateCapture.mock.calls.at(-1)?.[1]).not.toThrow();
       captureKeys.push(captureKey);
       recordMcpLoopbackToolCallResult({
         captureKey,

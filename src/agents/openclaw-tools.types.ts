@@ -51,6 +51,8 @@ export type OpenClawToolsOptions = {
   nativeChannelId?: string;
   /** Opaque host-issued capability for current-turn channel message actions. */
   messageActionTurnCapability?: string;
+  /** Message-only authority from a CLI grant; does not authorize plugin delivery. */
+  messageToolTurnCapability?: { token: string; sessionKey: string };
   sandboxRoot?: string;
   sandboxContainerWorkdir?: string;
   sandboxFsBridge?: SandboxFsBridge;

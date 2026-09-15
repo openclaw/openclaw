@@ -317,6 +317,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
 
     const requestCancel = (reason: TerminationReason) => {
       setForcedReason(reason);
+      input.onCancel?.(reason);
       cancelAdapter?.(reason);
       // Any cancel must abort construction: the relay may already be spawned
       // and waiting for ready, and a later deadline must not replace this reason.

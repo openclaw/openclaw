@@ -25,6 +25,7 @@ import type { DirectBlockDelivery } from "./reply-delivery.js";
 /** Inputs prepared once per fallback candidate and consumed by either runtime adapter. */
 export type AgentFallbackCandidateCommonParams = {
   preparedRunAdmission: PreparedAgentRunAdmission;
+  messageActionTurnCapability?: string;
   turn: AgentTurnParams;
   candidateRun: FollowupRun["run"];
   runtimeConfig: OpenClawConfig;
