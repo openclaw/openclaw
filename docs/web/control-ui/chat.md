@@ -139,6 +139,7 @@ Chat error banners, including cloud runner failures, show short messages in full
 
 <AccordionGroup>
   <Accordion title="Send and history semantics">
+    - With the composer caret at the start, ArrowUp recalls previous inputs; ArrowDown steps back toward your draft. Each new traversal refreshes the recent-input list from currently loaded history, while an active traversal keeps its order.
     - `chat.send` is **non-blocking**: it acknowledges admission with `{ runId, status: "started" }` and the response streams via `chat` events. An optional `messageSeq` identifies an already committed transcript position; it is omitted when input remains only in accepted custody. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.
     - Chat uploads accept images plus non-video files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links. Before sending, use **Remove attachment** at the corner of a staged attachment; the control supports touch and keyboard input in both Chat and New Session.
     - Opening a Markdown attachment (`.md`, `.markdown`, or a Markdown MIME type) in the side panel shows formatted headings, lists, tables, and code blocks. HTML attachments open a sandboxed page with a **Source** switch; other text attachments stay literal. Previews keep the 256 KiB UTF-8 limit and the original download link; Markdown does not execute embedded HTML or automatically load remote images.
