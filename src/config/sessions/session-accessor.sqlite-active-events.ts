@@ -202,6 +202,7 @@ export function readInactiveSessionTranscriptMessageEvents(
     );
     const inactive: SessionTranscriptInactiveMessageEvent[] = [];
     for (const row of rows) {
+      // SAFETY: transcript event_json rows serialize TranscriptEvent payloads.
       const event = JSON.parse(row.event_json) as TranscriptEvent;
       const message = asOptionalRecord(asOptionalRecord(event)?.message);
       if (message?.role !== "user" && message?.role !== "assistant") {
