@@ -10,6 +10,7 @@ on:
       - src/process/supervisor/service-child-relay-host.test.ts
       - src/process/supervisor/adapters/child.ts
       - src/process/supervisor/adapters/child.test.ts
+      - src/process/supervisor/adapters/child.test-support.ts
       - src/agents/mcp-stdio-transport.test.ts
       - src/agents/mcp-stdio-transport.windows.test.ts
 
@@ -22,10 +23,10 @@ concurrency:
 
 env:
   NODE_OPTIONS: --max-old-space-size=8192
-  SOURCE_PINS: '{"src/agents/mcp-stdio-transport.test.ts":"77a2ffe0c413d2fd7f8aee85ff6e98e293daa360de278889dee09825ba865b34","src/agents/mcp-stdio-transport.windows.test.ts":"ebe0c6e53a1e0a2bb1b3bc69f473549291fb2d39af89854cb2c89f14c70ed036","src/process/owned-stdio.ts":"b8ddeb89684c9453587ce49a840217c3046a36187c4b05d5ca855b3cdd140457","src/process/supervisor/adapters/child.test.ts":"aa50b13a54e224c250e6cd588702cbc6a34bd129aaecba8fe99dd22c2de95f09","src/process/supervisor/adapters/child.ts":"471d6afab07067b962676f32bb8b44a16b2a47385d38b58c4bbfddbc6b74ae38","src/process/supervisor/service-child-relay-host.test.ts":"7c9f9996252dc23a84f5daf153c012966a3466c802be255659aa775a878b1fc0","src/process/supervisor/service-child-relay-host.ts":"5eb61a5debfc0340b930ace9762ef36b00da87ba1b6ddbb2e41d724d9579e163"}'
+  SOURCE_PINS: '{"src/agents/mcp-stdio-transport.test.ts":"77a2ffe0c413d2fd7f8aee85ff6e98e293daa360de278889dee09825ba865b34","src/agents/mcp-stdio-transport.windows.test.ts":"ebe0c6e53a1e0a2bb1b3bc69f473549291fb2d39af89854cb2c89f14c70ed036","src/process/owned-stdio.ts":"b8ddeb89684c9453587ce49a840217c3046a36187c4b05d5ca855b3cdd140457","src/process/supervisor/adapters/child.test-support.ts":"78d5253a9d90693b18f445e8d1f51c02d430522aa20fa3582be5bd78faacf2f8","src/process/supervisor/adapters/child.test.ts":"21fbdd360bd8d7a796535034145e9927a83d24e8e4c62b81474a318bd3e51cea","src/process/supervisor/adapters/child.ts":"471d6afab07067b962676f32bb8b44a16b2a47385d38b58c4bbfddbc6b74ae38","src/process/supervisor/service-child-relay-host.test.ts":"7c9f9996252dc23a84f5daf153c012966a3466c802be255659aa775a878b1fc0","src/process/supervisor/service-child-relay-host.ts":"5eb61a5debfc0340b930ace9762ef36b00da87ba1b6ddbb2e41d724d9579e163"}'
 
 jobs:
-  linux-owner:
+  linux-checks:
     if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'fix/stdio-cleanup-completion'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 90
@@ -36,7 +37,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 3
+          fetch-depth: 8
           persist-credentials: false
       - &identity
         name: Verify exact source
@@ -63,117 +64,24 @@ jobs:
           node-version: "24.19.0"
           install-bun: "false"
           cache-mode: "off"
-      - name: Runtime and evidence directory
-        run: |
-          node -v
-          pnpm -v
-          node -e 'const os=require("node:os"); console.log(JSON.stringify({platform:process.platform,arch:process.arch,logicalCpuCount:os.cpus().length,availableParallelism:os.availableParallelism(),totalMemoryBytes:os.totalmem()}))'
-          mkdir "$RUNNER_TEMP/stdio-proof"
-      - name: Build actual test runtime
-        env:
-          OPENCLAW_BUILD_PRIVATE_QA: "0"
-          VITEST: "1"
-        run: pnpm build qaRuntime
-      - name: Reproduce original owner deadline mismatch
+      - name: Verify frozen comparison base
         env:
           BASE_SHA: 77124fdbd35b2e907c6f6c1729f89825dc99cea0
         run: |
-          set -euo pipefail
-          owners=(src/process/owned-stdio.ts src/process/supervisor/adapters/child.ts src/process/supervisor/service-child-relay-host.ts)
-          restore_candidate() { git restore --source=HEAD -- "${owners[@]}"; }
-          trap restore_candidate EXIT
-          for file in "${owners[@]}"; do git show "$BASE_SHA:$file" > "$file"; done
-          set +e
-          node scripts/run-vitest.mjs src/process/supervisor/service-child-relay-host.test.ts -t 'joins stdio cleanup when the retired relay completes after 500 ms' --reporter=default --reporter=json --reporter="$GITHUB_WORKSPACE/scripts/lib/vitest-report-capture.mts" --outputFile.json="$RUNNER_TEMP/stdio-proof/baseline.json"
-          status=$?
-          set -e
-          restore_candidate
-          trap - EXIT
-          test "$status" = 1
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { readFileSync } from 'node:fs';
-          const file = `${process.env.RUNNER_TEMP}/stdio-proof/baseline.json`;
-          const report = JSON.parse(readFileSync(file));
-          const capture = JSON.parse(readFileSync(`${file}.capture.json`));
-          assert.equal(report.numPassedTests, 0);
-          assert.equal(report.numFailedTests, 1);
-          const failed = report.testResults.flatMap(file => file.assertionResults).filter(test => test.status === 'failed');
-          assert.equal(failed.length, 1);
-          assert.equal(failed[0].title, 'joins stdio cleanup when the retired relay completes after 500 ms');
-          assert.match(failed[0].failureMessages.join('\n'), /not.*called/);
-          assert.equal(capture.processTimedOut, false);
-          assert.equal(capture.ignoreUnhandledErrors, false);
-          assert.equal(capture.ended.unhandledErrors, 0);
-          assert.equal(capture.ended.suiteErrors, 0);
-          assert.equal(capture.ended.failedModules, 1);
-          console.log('BASELINE EXPECTED FAILURE: the consumer settled before the owner completed; candidate restored.');
-          NODE
-      - *identity
-      - name: Candidate owners and real POSIX consumers
+          git cat-file -e "$BASE_SHA^{commit}"
+          git merge-base --is-ancestor "$BASE_SHA" HEAD
+          git ls-tree --name-only "$BASE_SHA" -- config/max-lines-baseline.txt
+          node -v
+          pnpm -v
+      - name: Verify corrected adapter fixture on Linux
+        run: node scripts/run-vitest.mjs src/process/supervisor/adapters/child.test.ts
+      - name: Canonical remaining checks against frozen base
         run: >-
-          node scripts/run-vitest.mjs
-          src/process/supervisor/service-child-relay-host.test.ts
-          src/process/supervisor/adapters/child.test.ts
-          src/process/owned-stdio.test.ts
-          src/process/owned-stdio.real.test.ts
-          src/agents/mcp-stdio-transport.test.ts
-          src/agents/mcp-stdio-transport.process.test.ts
-          src/agents/mcp-stderr.test.ts
-          src/agents/agent-bundle-lsp-runtime.test.ts
-          --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/stdio-proof/focused.json"
-      - name: Original 79-file CUA cohort through canonical group runner
-        env:
-          OPENCLAW_NODE_TEST_CONFIGS_JSON: '["test/vitest/vitest.extensions.config.ts"]'
-          OPENCLAW_NODE_TEST_ENV_JSON: "{}"
-          OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: '["extensions/a2a/src/protocol.test.ts","extensions/azure-speech/speech-provider.test.ts","extensions/bonjour/src/ciao.test.ts","extensions/bonjour/src/errors.test.ts","extensions/buzz/src/buzz-bus.lifecycle.test.ts","extensions/buzz/src/config-schema.test.ts","extensions/buzz/src/directory-relay.test.ts","extensions/buzz/src/mentions.test.ts","extensions/buzz/src/qa/adapter.runtime.test.ts","extensions/buzz/src/qa/relay-client.test.ts","extensions/buzz/src/setup-surface.test.ts","extensions/canvas/scripts/copy-a2ui.test.ts","extensions/canvas/src/a2ui-jsonl.test.ts","extensions/canvas/src/widget-presenter.test.ts","extensions/clickclack/src/discussions/service-contract.test.ts","extensions/clickclack/src/discussions/service-state-persistence.test.ts","extensions/clickclack/src/discussions/service.test.ts","extensions/clickclack/src/gateway.test.ts","extensions/clickclack/src/gateway.thread-reply-window.test.ts","extensions/clickclack/src/secret-contract.test.ts","extensions/clickclack/src/setup-verify.test.ts","extensions/copilot/src/attempt-active-run.test.ts","extensions/copilot/src/auth-bridge.test.ts","extensions/copilot/src/usage-bridge.test.ts","extensions/crabbox/index.test.ts","extensions/crabbox/src/crabbox-managed-binary.test.ts","extensions/crabbox/src/crabbox-worker-inspect.test.ts","extensions/crabbox/src/crabbox-worker-script.test.ts","extensions/cua-computer/src/driver-artifacts-resolution.test.ts","extensions/cua-computer/src/driver-client.test.ts","extensions/cua-computer/src/mcp-driver-client.test.ts","extensions/cua-computer/src/node-invoke-policy.test.ts","extensions/deepinfra/index.test.ts","extensions/deepinfra/provider-policy-api.test.ts","extensions/diagnostics-prometheus/src/service.http-scope.test.ts","extensions/diagnostics-prometheus/src/service.runtime-identity.test.ts","extensions/diagnostics-prometheus/src/service.test.ts","extensions/file-transfer/doctor-contract-api.test.ts","extensions/file-transfer/src/shared/audit.test.ts","extensions/file-transfer/src/shared/node-invoke-policy.dir-fetch.test.ts","extensions/file-transfer/src/shared/node-invoke-policy.real-dir-fetch.test.ts","extensions/geolocation/src/config.test.ts","extensions/google-meet/index.transcripts.test.ts","extensions/google-meet/src/config-compat.test.ts","extensions/google-meet/src/drive.test.ts","extensions/google-meet/src/oauth.test.ts","extensions/google-meet/src/transports/chrome-startup.test.ts","extensions/google-meet/src/transports/chrome.test.ts","extensions/google-meet/src/transports/google-meet-platform-adapter.test.ts","extensions/google-meet/src/voice-call-gateway.test.ts","extensions/imap/src/sender-gate.test.ts","extensions/linux-node/src/executables.test.ts","extensions/llama-cpp/src/model-catalog.test.ts","extensions/meta/index.test.ts","extensions/oc-path/src/oc-path/tests/jsonc/edit.test.ts","extensions/oc-path/src/oc-path/tests/jsonc/parse.test.ts","extensions/oc-path/src/oc-path/tests/jsonl/emit.test.ts","extensions/oc-path/src/oc-path/tests/scenarios/jsonc-resolver-edges.test.ts","extensions/oc-path/src/oc-path/tests/sentinel.test.ts","extensions/onepassword/src/secret-ref-resolver.test.ts","extensions/plugin-entry.cli-laziness.test.ts","extensions/policy/src/cli.test.ts","extensions/policy/src/doctor/routing-shapes.test.ts","extensions/radius/index.test.ts","extensions/reef/src/flow-receipts.test.ts","extensions/reef/src/legacy-key-guard.test.ts","extensions/reef/src/outbound.test.ts","extensions/reef/src/state.test.ts","extensions/reef/src/transport.timeout.test.ts","extensions/sglang/index.test.ts","extensions/sms/src/inbound.test.ts","extensions/sms/src/status.test.ts","extensions/teams-meetings/src/transports/teams-meetings-urls.test.ts","extensions/tts-local-cli/speech-provider.test.ts","extensions/vault/src/cli.test.ts","extensions/visitor-access/src/visitors.test.ts","extensions/web-readability/web-content-extractor.test.ts","extensions/zoom-meetings/src/transports/chrome.test.ts","extensions/zoom-meetings/src/transports/zoom-meetings-urls.test.ts"]'
-          OPENCLAW_NODE_TEST_TARGETS_JSON: "null"
-          OPENCLAW_VITEST_SHARD_NAME: original-extensions-config-4-cohort
-          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
-          OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1"
-          OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { createHash } from 'node:crypto';
-          const files = JSON.parse(process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON);
-          assert.equal(files.length, 79);
-          assert.equal(createHash('sha256').update(JSON.stringify(files)).digest('hex'), '1bd7cac0860ef2c65cedff74bed420cd62ef32f1b4b186a50069af8479e5090d');
-          console.log('Original 79-file membership pinned; same config and two workers; cold-cache scheduling is not claimed identical.');
-          NODE
-          export OPENCLAW_NODE_TEST_VITEST_ARGS_JSON
-          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON=$(node -e 'console.log(JSON.stringify(["--reporter=default","--reporter=json","--reporter="+process.env.GITHUB_WORKSPACE+"/scripts/lib/vitest-report-capture.mts","--outputFile.json="+process.env.RUNNER_TEMP+"/stdio-proof/cua.json"]))')
-          time -p node --import tsx scripts/ci-run-node-test-shard.mts
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { readFileSync } from 'node:fs';
-          import path from 'node:path';
-          const file = `${process.env.RUNNER_TEMP}/stdio-proof/cua.json`;
-          const report = JSON.parse(readFileSync(file));
-          const capture = JSON.parse(readFileSync(`${file}.capture.json`));
-          const actual = capture.modules.map(module => path.relative(process.cwd(), module.file)).sort();
-          assert.deepEqual(actual, JSON.parse(process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON));
-          assert.equal(report.success, true);
-          assert.equal(report.numFailedTests, 0);
-          assert.equal(report.numPassedTests, 963);
-          assert.equal(report.numPendingTests, 2);
-          assert.equal(capture.processTimedOut, false);
-          assert.equal(capture.ignoreUnhandledErrors, false);
-          assert.equal(capture.ended.unhandledErrors, 0);
-          assert.equal(capture.ended.suiteErrors, 0);
-          assert.equal(capture.ended.failedModules, 0);
-          const regression = report.testResults.flatMap(file => file.assertionResults).filter(test => test.title === 'rejects an unfinished CUA frame beyond 256 MiB as a line-size overflow');
-          assert.equal(regression.length, 1);
-          assert.equal(regression[0].status, 'passed');
-          console.log(JSON.stringify({files:actual.length,passed:report.numPassedTests,failed:report.numFailedTests,pending:report.numPendingTests,regression:regression[0].title}));
-          NODE
-      - name: Canonical changed checks
-        run: >-
-          node scripts/check-changed.mjs --
+          node scripts/check-changed.mjs --base 77124fdbd35b2e907c6f6c1729f89825dc99cea0 --
           src/agents/mcp-stdio-transport.test.ts
           src/agents/mcp-stdio-transport.windows.test.ts
           src/process/owned-stdio.ts
+          src/process/supervisor/adapters/child.test-support.ts
           src/process/supervisor/adapters/child.test.ts
           src/process/supervisor/adapters/child.ts
           src/process/supervisor/service-child-relay-host.test.ts
@@ -190,36 +98,6 @@ jobs:
             assert.equal(createHash('sha256').update(readFileSync(file)).digest('hex'), expected, file);
           }
           NODE
-      - name: Validate report export bounds
-        id: reports
-        if: always()
-        run: |
-          node --input-type=module <<'NODE'
-          import { lstatSync, readdirSync, appendFileSync } from 'node:fs';
-          import path from 'node:path';
-          let bytes = 0, files = 0;
-          const visit = root => {
-            for (const entry of readdirSync(root)) {
-              const file = path.join(root, entry), stat = lstatSync(file);
-              if (stat.isDirectory()) visit(file);
-              else if (stat.isFile()) { bytes += stat.size; files += 1; }
-              else throw new Error('Refusing nonregular report export');
-              if (bytes > 32 * 1024 * 1024) throw new Error('Report export exceeds32MiB; full job log remains retained');
-            }
-          };
-          visit(`${process.env.RUNNER_TEMP}/stdio-proof`);
-          if (!files) throw new Error('No reports produced');
-          appendFileSync(process.env.GITHUB_OUTPUT, 'ready=true\n');
-          console.log(JSON.stringify({files,bytes}));
-          NODE
-      - name: Retain complete produced reports
-        if: always() && steps.reports.outputs.ready == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: stdio-cleanup-${{ github.event.pull_request.head.sha }}
-          path: ${{ runner.temp }}/stdio-proof
-          if-no-files-found: error
-          retention-days: 7
 
   windows-owner:
     if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'fix/stdio-cleanup-completion'

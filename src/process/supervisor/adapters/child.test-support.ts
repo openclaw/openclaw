@@ -5,6 +5,10 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { vi, type Mock } from "vitest";
 
+export function setPlatform(platform: NodeJS.Platform) {
+  Object.defineProperty(process, "platform", { configurable: true, value: platform });
+}
+
 export function createStubChild(pid = 1234) {
   const child = new EventEmitter() as ChildProcess;
   child.stdin = new PassThrough() as ChildProcess["stdin"];
@@ -48,6 +52,29 @@ export function createStubChild(pid = 1234) {
     child.emit("exit", code, signal);
   };
   return { child, disconnectMock, killMock, sendMock, emitClose, emitExit };
+}
+
+export async function createChildAdapterHarness(
+  createAdapter: ReturnType<typeof readyChildAdapter>,
+  spawnMock: Pick<Mock, "mockResolvedValue">,
+  params?: {
+    pid?: number;
+    argv?: string[];
+    env?: NodeJS.ProcessEnv;
+    stdinMode?: Parameters<typeof createAdapter>[0]["stdinMode"];
+  },
+) {
+  const stub = createStubChild(params?.pid);
+  spawnMock.mockResolvedValue({
+    child: stub.child,
+    usedFallback: false,
+  });
+  const adapter = await createAdapter({
+    argv: params?.argv ?? ["node", "-e", "setTimeout(() => {}, 1000)"],
+    env: params?.env,
+    stdinMode: params?.stdinMode ?? "pipe-open",
+  });
+  return { ...stub, adapter };
 }
 
 type SpawnWithFallbackParams = {
