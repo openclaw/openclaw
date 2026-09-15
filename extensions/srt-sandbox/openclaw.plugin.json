@@ -1,0 +1,58 @@
+{
+  "id": "srt-sandbox",
+  "categories": ["security"],
+  "activation": {
+    "onStartup": true
+  },
+  "name": "SRT Sandbox",
+  "description": "Docker-free local sandbox backend for OpenClaw built on the Anthropic Sandbox Runtime (macOS Seatbelt).",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "binShell": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^\\/"
+      },
+      "network": {
+        "type": "string",
+        "enum": ["deny", "allow"]
+      },
+      "writablePaths": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^\\/"
+        }
+      },
+      "commandTimeoutSeconds": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 2147000
+      }
+    }
+  },
+  "uiHints": {
+    "binShell": {
+      "label": "Shell",
+      "help": "Absolute path to the POSIX shell used to run sandboxed commands. Defaults to /bin/bash.",
+      "advanced": true
+    },
+    "network": {
+      "label": "Network",
+      "help": "Network posture for sandboxed commands. 'deny' blocks all outbound network (default); 'allow' leaves it open."
+    },
+    "writablePaths": {
+      "label": "Extra Writable Paths",
+      "help": "Additional absolute paths added to the sandbox writable allowlist beyond the scope workspace directories.",
+      "advanced": true
+    },
+    "commandTimeoutSeconds": {
+      "label": "Command Timeout Seconds",
+      "help": "Timeout for buffered backend commands.",
+      "advanced": true
+    }
+  }
+}
