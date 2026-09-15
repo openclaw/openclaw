@@ -10522,6 +10522,7 @@ public struct PluginSearchResultEntry: Codable, Sendable {
 
 public struct PluginsCatalogBrowseParams: Codable, Sendable {
     public let query: String?
+    public let searchsource: String?
     public let intent: AnyCodable?
     public let category: String?
     public let cursor: String?
@@ -10529,12 +10530,14 @@ public struct PluginsCatalogBrowseParams: Codable, Sendable {
 
     public init(
         query: String? = nil,
+        searchsource: String? = nil,
         intent: AnyCodable? = nil,
         category: String? = nil,
         cursor: String? = nil,
         pagesize: Int? = nil)
     {
         self.query = query
+        self.searchsource = searchsource
         self.intent = intent
         self.category = category
         self.cursor = cursor
@@ -10543,6 +10546,7 @@ public struct PluginsCatalogBrowseParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case query
+        case searchsource = "searchSource"
         case intent
         case category
         case cursor

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { jsonResponse, requestUrl } from "../test-helpers/http.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   fetchClawHubPluginCatalog,
   fetchClawHubPluginCategories,
@@ -24,6 +25,59 @@ const remotePlugin = {
 };
 
 describe("ClawHub plugin catalog client", () => {
+  it.each([false, true])(
+    "attributes manual search unless telemetry is disabled: %s",
+    async (disabled) => {
+      await withEnvAsync({ CLAWHUB_DISABLE_TELEMETRY: String(disabled) }, async () => {
+        const fetchImpl = vi.fn(async (_input: string | URL | Request) =>
+          jsonResponse({ results: [{ score: 9, package: remotePlugin }] }),
+        );
+        const result = await fetchClawHubPluginCatalog({
+          baseUrl: "https://example.com",
+          query: "memory",
+          searchSource: "openclaw-control-ui",
+          category: "memory",
+          limit: 5,
+          fetchImpl,
+        });
+        expect(fetchImpl).toHaveBeenCalledOnce();
+        const url = new URL(requestUrl(fetchImpl.mock.calls[0]![0]));
+        expect(url.pathname).toBe("/api/v1/plugins/search");
+        expect(Object.fromEntries(url.searchParams)).toEqual({
+          q: "memory",
+          category: "memory",
+          limit: "5",
+          ...(disabled ? {} : { searchSource: "openclaw-control-ui" }),
+        });
+        expect(result.items.map((item) => item.packageName)).toEqual(["memory-plus"]);
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "replays transient failures only when search cannot record an observation: %s",
+    async (disabled) => {
+      await withEnvAsync({ CLAWHUB_DISABLE_TELEMETRY: String(disabled) }, async () => {
+        const fetchImpl = vi
+          .fn(async () => jsonResponse({ results: [{ score: 9, package: remotePlugin }] }))
+          .mockRejectedValueOnce(new TypeError("fetch failed"));
+        const result = fetchClawHubPluginCatalog({
+          baseUrl: "https://example.com",
+          query: "memory",
+          searchSource: "openclaw-control-ui",
+          fetchImpl,
+        });
+        if (disabled) {
+          await expect(result).resolves.toMatchObject({ items: [{ packageName: "memory-plus" }] });
+          expect(fetchImpl).toHaveBeenCalledTimes(2);
+        } else {
+          await expect(result).rejects.toThrow("fetch failed");
+          expect(fetchImpl).toHaveBeenCalledOnce();
+        }
+      });
+    },
+  );
+
   it("reads the bounded plugin overview in one request", async () => {
     let requestedUrl = "";
     const fetchImpl = vi.fn(async (input: string | URL | Request) => {

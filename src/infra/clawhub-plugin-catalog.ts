@@ -5,6 +5,7 @@ import {
   createClawHubError,
   decodeClawHubResponseBody,
   fetchClawHubJson,
+  isClawHubTelemetryDisabled,
   readClawHubBytes,
   readClawHubStringArrayField,
   readClawHubStringField,
@@ -490,6 +491,7 @@ async function fetchOptionalReadme(
 export async function fetchClawHubPluginCatalog(
   params: ClawHubReadOptions & {
     query?: string;
+    searchSource?: "openclaw-control-ui";
     intent?: "all" | "trending" | "official" | "featured";
     category?: string;
     cursor?: string;
@@ -504,11 +506,15 @@ export async function fetchClawHubPluginCatalog(
     fetchImpl: params.fetchImpl,
   };
   if (query) {
+    const searchSource = isClawHubTelemetryDisabled() ? undefined : params.searchSource;
     const value = await fetchClawHubJson<unknown>({
       ...shared,
       path: "/api/v1/plugins/search",
+      // Marked searches record demand; replay could duplicate a committed observation.
+      retryTransientReads: searchSource === undefined,
       search: {
         q: query,
+        searchSource,
         category: params.category,
         isOfficial: params.intent === "official" ? "true" : undefined,
         limit: params.limit ? String(params.limit) : undefined,

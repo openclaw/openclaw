@@ -198,6 +198,7 @@ export const pluginsHandlers: GatewayRequestHandlers = {
             ? { items: [] }
             : await fetchClawHubPluginCatalog({
                 query,
+                ...(params.searchSource ? { searchSource: params.searchSource } : {}),
                 intent,
                 category: params.category,
                 cursor: params.cursor,

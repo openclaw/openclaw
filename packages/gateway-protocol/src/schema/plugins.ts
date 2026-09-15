@@ -455,6 +455,7 @@ export const PluginDiscoveryEntrySchema = closedObject({
 
 export const PluginsCatalogBrowseParamsSchema = closedObject({
   query: Type.Optional(Type.String({ maxLength: 200 })),
+  searchSource: Type.Optional(Type.Literal("openclaw-control-ui")),
   intent: Type.Optional(PluginDiscoveryIntentSchema),
   category: Type.Optional(
     Type.String({ minLength: 1, maxLength: 64, pattern: "^[a-z][a-z0-9-]*$" }),
