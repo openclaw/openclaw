@@ -455,6 +455,12 @@ export function createExecTool(
           ...preparedRunEnvironment,
           warnings,
         });
+        const turnSource = {
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentMessagingTarget ?? defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
+        };
 
         if (host === "node") {
           return executeNodeHostCommand({
@@ -472,10 +478,7 @@ export function createExecTool(
             approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
             nonInteractiveApproval: defaults?.nonInteractiveApproval,
             approvalFollowupMode: defaults?.approvalFollowupMode,
-            turnSourceChannel: defaults?.messageProvider,
-            turnSourceTo: defaults?.currentChannelId,
-            turnSourceAccountId: defaults?.accountId,
-            turnSourceThreadId: defaults?.currentThreadTs,
+            ...turnSource,
             agentId,
             security,
             ask,
@@ -540,10 +543,7 @@ export function createExecTool(
             bashElevated: elevatedDefaults,
             approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
             nonInteractiveApproval: defaults?.nonInteractiveApproval,
-            turnSourceChannel: defaults?.messageProvider,
-            turnSourceTo: defaults?.currentChannelId,
-            turnSourceAccountId: defaults?.accountId,
-            turnSourceThreadId: defaults?.currentThreadTs,
+            ...turnSource,
             scopeKey: defaults?.scopeKey,
             approvalFollowupText: defaults?.approvalFollowupText,
             approvalFollowup: defaults?.approvalFollowup,
