@@ -1,4 +1,5 @@
 /** Builds installed-index records from normalized plugin manifest registry entries. */
+import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString as normalizeStringField } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -185,9 +186,29 @@ function readRecordFile(params: {
   diagnostics: PluginDiagnostic[];
 }) {
   const rootDir = params.boundaryRoot ?? params.record.rootDir;
+  let relativePath = path.relative(rootDir, params.filePath);
+  if (relativePath.startsWith("..") && !path.isAbsolute(relativePath)) {
+    // The registry records the canonical plugin root while the manifest cache
+    // can retain the lexical path through a symlinked parent directory, so the
+    // lexical relative escapes the root even though the real file sits inside
+    // it (#148595). Resolve both sides against the filesystem once; a manifest
+    // genuinely outside the root keeps its escaping relative path and is
+    // rejected exactly as before.
+    try {
+      const realRelative = path.relative(
+        fs.realpathSync(rootDir),
+        fs.realpathSync(params.filePath),
+      );
+      if (!realRelative.startsWith("..") && !path.isAbsolute(realRelative)) {
+        relativePath = realRelative;
+      }
+    } catch {
+      // realpath failure leaves the lexical path; the reader reports it.
+    }
+  }
   const file = readPluginCacheFile({
     rootDir,
-    relativePath: path.relative(rootDir, params.filePath),
+    relativePath,
     rejectHardlinks: params.rejectHardlinks,
     ...(params.required && path.extname(params.filePath) === ".json"
       ? { maxBytes: 256 * 1024 }
