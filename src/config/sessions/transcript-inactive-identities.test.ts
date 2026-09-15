@@ -10,10 +10,14 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
-import { readInactiveSessionContextIdentities } from "./transcript-inactive-identities.js";
+import {
+  inactiveTransportMessageKey,
+  readInactiveSessionContextIdentities,
+} from "./transcript-inactive-identities.js";
 
 const agentId = "main";
 const sessionKey = "agent:main:telegram:dm:chat-1";
+const conversationRef = "telegram:acct-1:dm:chat-1";
 
 describe("readInactiveSessionContextIdentities", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -55,7 +59,7 @@ describe("readInactiveSessionContextIdentities", () => {
       {
         role: "user",
         content: "retained question",
-        __openclaw: { transport: { channel: "telegram", messageId: "101" } },
+        __openclaw: { transport: { channel: "telegram", conversationRef, messageId: "101" } },
       },
       "2026-07-18T00:00:01.000Z",
     );
@@ -71,7 +75,7 @@ describe("readInactiveSessionContextIdentities", () => {
       {
         role: "user",
         content: "discarded question",
-        __openclaw: { transport: { channel: "telegram", messageId: "102" } },
+        __openclaw: { transport: { channel: "telegram", conversationRef, messageId: "102" } },
       },
       "2026-07-18T00:00:03.000Z",
     );
@@ -82,7 +86,7 @@ describe("readInactiveSessionContextIdentities", () => {
       "2026-07-18T00:00:04.000Z",
     );
     await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
-    return { env, scope, appendTurn };
+    return { env, scope, stateDir, appendTurn };
   }
 
   it("returns empty identities while no branch was ever cut", async () => {
@@ -91,18 +95,20 @@ describe("readInactiveSessionContextIdentities", () => {
     const identities = await readInactiveSessionContextIdentities({ agentId, sessionKey });
 
     expect(identities.transcriptEntryIds.size).toBe(0);
-    expect(identities.channelMessageIds.size).toBe(0);
+    expect(identities.transportMessageKeys.size).toBe(0);
   });
 
-  it("collects entry and channel identities cut by a rewind", async () => {
+  it("collects entry and transport identities cut by a rewind", async () => {
     const { env } = await createSession();
     const result = await rewindSessionToMessage({ agentId, env, entryId: "user-2", sessionKey });
     expect(result.status).toBe("created");
 
     const identities = await readInactiveSessionContextIdentities({ agentId, sessionKey });
 
-    expect([...identities.transcriptEntryIds].sort()).toEqual(["assistant-2", "user-2"]);
-    expect(identities.channelMessageIds.get("telegram")).toEqual(new Set(["102"]));
+    expect([...identities.transcriptEntryIds].toSorted()).toEqual(["assistant-2", "user-2"]);
+    expect([...identities.transportMessageKeys]).toEqual([
+      inactiveTransportMessageKey({ channel: "telegram", conversationRef, messageId: "102" }),
+    ]);
   });
 
   it("keeps collecting identities across repeated rewinds", async () => {
@@ -116,7 +122,7 @@ describe("readInactiveSessionContextIdentities", () => {
       {
         role: "user",
         content: "second discarded question",
-        __openclaw: { transport: { channel: "telegram", messageId: "103" } },
+        __openclaw: { transport: { channel: "telegram", conversationRef, messageId: "103" } },
       },
       "2026-07-18T00:00:05.000Z",
       branchScope,
@@ -133,12 +139,74 @@ describe("readInactiveSessionContextIdentities", () => {
 
     const identities = await readInactiveSessionContextIdentities({ agentId, sessionKey });
 
-    expect([...identities.transcriptEntryIds].sort()).toEqual([
+    expect([...identities.transcriptEntryIds].toSorted()).toEqual([
       "assistant-2",
       "assistant-3",
       "user-2",
       "user-3",
     ]);
-    expect(identities.channelMessageIds.get("telegram")).toEqual(new Set(["102", "103"]));
+    expect([...identities.transportMessageKeys].toSorted()).toEqual(
+      [
+        inactiveTransportMessageKey({ channel: "telegram", conversationRef, messageId: "102" }),
+        inactiveTransportMessageKey({ channel: "telegram", conversationRef, messageId: "103" }),
+      ].toSorted(),
+    );
+  });
+
+  it("retains cut turns whose conversation cannot be established", async () => {
+    const { env, appendTurn } = await createSession();
+    await appendTurn(
+      "user-legacy",
+      "assistant-2",
+      {
+        role: "user",
+        content: "discarded question without a recorded conversation",
+        __openclaw: { transport: { channel: "telegram", messageId: "109" } },
+      },
+      "2026-07-18T00:00:05.000Z",
+    );
+    const result = await rewindSessionToMessage({ agentId, env, entryId: "user-2", sessionKey });
+    expect(result.status).toBe("created");
+
+    const identities = await readInactiveSessionContextIdentities({ agentId, sessionKey });
+
+    expect([...identities.transcriptEntryIds].toSorted()).toEqual([
+      "assistant-2",
+      "user-2",
+      "user-legacy",
+    ]);
+    // No transport key for the legacy turn: an unverifiable origin is retained
+    // rather than matched against an unrelated conversation.
+    expect([...identities.transportMessageKeys]).toEqual([
+      inactiveTransportMessageKey({ channel: "telegram", conversationRef, messageId: "102" }),
+    ]);
+  });
+
+  it("treats a rewind before the first message as a valid empty branch", async () => {
+    const { scope, stateDir } = await createSession();
+    await appendTranscriptEvent(scope, {
+      type: "leaf",
+      id: "leaf-ctl-empty-root",
+      parentId: "assistant-2",
+      targetId: null,
+      appendParentId: null,
+      timestamp: "2026-07-18T00:00:05.000Z",
+    });
+    await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+
+    const identities = await readInactiveSessionContextIdentities({ agentId, sessionKey });
+
+    expect([...identities.transcriptEntryIds].toSorted()).toEqual([
+      "assistant-1",
+      "assistant-2",
+      "user-1",
+      "user-2",
+    ]);
+    expect([...identities.transportMessageKeys].toSorted()).toEqual(
+      [
+        inactiveTransportMessageKey({ channel: "telegram", conversationRef, messageId: "101" }),
+        inactiveTransportMessageKey({ channel: "telegram", conversationRef, messageId: "102" }),
+      ].toSorted(),
+    );
   });
 });

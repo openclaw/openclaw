@@ -1,7 +1,9 @@
 import { isSessionBoundaryCommandText } from "../../auto-reply/command-detection.js";
 import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import {
+  inactiveTransportMessageKey,
   readInactiveSessionContextIdentities,
   type SessionInactiveContextIdentities,
 } from "../../config/sessions/transcript-inactive-identities.js";
@@ -106,6 +108,7 @@ function isInactiveBranchWindowMessage(
   message: PromptMessage,
   identities: SessionInactiveContextIdentities,
   channel: string | undefined,
+  conversationRef: string | undefined,
 ): boolean {
   const transcriptId =
     typeof message.session_transcript_id === "string" ? message.session_transcript_id.trim() : "";
@@ -114,14 +117,23 @@ function isInactiveBranchWindowMessage(
   }
   const messageId = typeof message.message_id === "string" ? message.message_id.trim() : "";
   // session: ids belong to transcript turns merged in earlier, not to the channel cache.
-  if (!messageId || messageId.startsWith("session:") || !channel) {
+  // Without the current conversation the origin of a cached id cannot be
+  // established, so the entry stays: transport ids repeat across conversations.
+  if (!messageId || messageId.startsWith("session:") || !channel || !conversationRef) {
     return false;
   }
-  return identities.channelMessageIds.get(channel)?.has(messageId) === true;
+  return identities.transportMessageKeys.has(
+    inactiveTransportMessageKey({ channel, conversationRef, messageId }),
+  );
 }
 
 async function pruneInactiveBranchWindowMessages(
-  params: { agentId?: string; sessionKey: string; storePath: string },
+  params: {
+    agentId?: string;
+    conversationRef?: string;
+    sessionKey: string;
+    storePath: string;
+  },
   windows: ReturnType<typeof mergeableChatWindowEntries>,
 ): Promise<void> {
   if (
@@ -136,7 +148,7 @@ async function pruneInactiveBranchWindowMessages(
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   });
-  if (identities.transcriptEntryIds.size === 0 && identities.channelMessageIds.size === 0) {
+  if (identities.transcriptEntryIds.size === 0 && identities.transportMessageKeys.size === 0) {
     return;
   }
   for (const window of windows) {
@@ -149,10 +161,17 @@ async function pruneInactiveBranchWindowMessages(
         : undefined;
     const retained = window.payload.messages.filter(
       (message) =>
-        !Boolean(message) ||
+        !message ||
         typeof message !== "object" ||
         Array.isArray(message) ||
-        !isInactiveBranchWindowMessage(message as PromptMessage, identities, channel),
+        // SAFETY: non-object entries are retained above, so only plain message
+        // objects reach this assertion.
+        !isInactiveBranchWindowMessage(
+          message as PromptMessage,
+          identities,
+          channel,
+          params.conversationRef,
+        ),
     );
     if (retained.length !== window.payload.messages.length) {
       window.payload = { ...window.payload, messages: retained };
@@ -185,9 +204,16 @@ export async function mergeSessionTranscriptContext(params: {
   }
   const windows = mergeableChatWindowEntries(params.ctx);
   // A rewind/branch switch leaves the channel cache untouched; drop window entries
-  // whose transcript turn is no longer on the active path before merging.
+  // whose transcript turn is no longer on the active path before merging. The
+  // current conversation scopes transport-id matching so a cut turn in one
+  // conversation never deletes a same-id cached message from another.
   await pruneInactiveBranchWindowMessages(
-    { agentId, sessionKey: params.sessionKey, storePath: params.storePath },
+    {
+      agentId,
+      conversationRef: conversationIdentityFromMsgContext({ ctx: params.ctx })?.conversationRef,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
     windows,
   );
   const turns = await readRecentUserAssistantTextForSession({

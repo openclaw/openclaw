@@ -1,4 +1,5 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
@@ -160,6 +161,55 @@ export function readSessionTranscriptActivePathEntryRelation(
         .limit(1),
     );
     return row ? "ancestor" : "off-path";
+  });
+}
+
+export type SessionTranscriptInactiveMessageEvent = {
+  eventId: string;
+  event: TranscriptEvent;
+};
+
+/**
+ * Reads user/assistant message events cut from the active branch, decoding only
+ * their payloads. The anti-join against the active projection runs on indexed
+ * identity columns, so a session that never rewound pays an index scan with no
+ * JSON materialization; only events the projection confirms as inactive have
+ * their payloads decoded here.
+ */
+export function readInactiveSessionTranscriptMessageEvents(
+  scope: SessionTranscriptReadScope,
+): SessionTranscriptInactiveMessageEvent[] {
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const db = getActiveTranscriptKysely(projection.database);
+    const rows = iterateSqliteQuerySync(
+      projection.database.db,
+      db
+        .selectFrom("transcript_event_identities as identity")
+        .innerJoin("transcript_events as event", (join) =>
+          join
+            .onRef("event.session_id", "=", "identity.session_id")
+            .onRef("event.seq", "=", "identity.seq"),
+        )
+        .leftJoin("session_transcript_active_events as active", (join) =>
+          join
+            .onRef("active.session_id", "=", "identity.session_id")
+            .onRef("active.event_seq", "=", "identity.seq"),
+        )
+        .select(["identity.event_id", "event.event_json"])
+        .where("identity.session_id", "=", projection.resolved.sessionId)
+        .where("active.event_seq", "is", null)
+        .orderBy("identity.seq", "asc"),
+    );
+    const inactive: SessionTranscriptInactiveMessageEvent[] = [];
+    for (const row of rows) {
+      const event = JSON.parse(row.event_json) as TranscriptEvent;
+      const message = asOptionalRecord(asOptionalRecord(event)?.message);
+      if (message?.role !== "user" && message?.role !== "assistant") {
+        continue;
+      }
+      inactive.push({ eventId: row.event_id, event });
+    }
+    return inactive;
   });
 }
 

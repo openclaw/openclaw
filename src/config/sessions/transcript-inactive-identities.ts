@@ -3,6 +3,13 @@
 // key on chat identity and keep serving the cut turns. These identities let the
 // inbound context merge drop cached window entries whose transcript turn is no
 // longer on the active path, without touching the cache itself.
+//
+// Membership comes from the session's active-path projection, not from decoding
+// the transcript: the store anti-join only surfaces events the projection has
+// confirmed as cut, so a session that never rewound costs an index scan and no
+// payload decoding. A healthy projection with zero active events is a valid
+// empty branch (a rewind before the first message discards everything); an
+// unavailable or cold projection abstains and keeps the cache for this turn.
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -12,24 +19,33 @@ import {
   scopeLegacySessionKeyToAgent,
 } from "../../routing/session-key.js";
 import { resolveDefaultSessionStorePath } from "./paths.js";
-import { loadSessionEntryReadOnly, loadTranscriptEvents } from "./session-accessor.js";
 import {
-  isSessionTranscriptLeafControl,
-  scanSessionTranscriptTree,
-  selectSessionTranscriptTreePathNodes,
-} from "./transcript-tree.js";
+  isSessionTranscriptProjectionUnavailableError,
+  loadSessionEntryReadOnly,
+  readInactiveSessionTranscriptMessageEvents,
+} from "./session-accessor.js";
+import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 
 export type SessionInactiveContextIdentities = {
   /** Entry ids of user/assistant turns cut from the active path. */
   transcriptEntryIds: ReadonlySet<string>;
-  /** Lowercased channel id -> transport message ids of cut user turns. */
-  channelMessageIds: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Keys built by inactiveTransportMessageKey for cut user/assistant turns. */
+  transportMessageKeys: ReadonlySet<string>;
 };
 
 const EMPTY_IDENTITIES: SessionInactiveContextIdentities = {
   transcriptEntryIds: new Set<string>(),
-  channelMessageIds: new Map<string, ReadonlySet<string>>(),
+  transportMessageKeys: new Set<string>(),
 };
+
+/** Conversation-scoped identity of one cached transport message. */
+export function inactiveTransportMessageKey(params: {
+  channel: string;
+  conversationRef: string;
+  messageId: string;
+}): string {
+  return `${params.channel.toLowerCase()}${params.conversationRef}${params.messageId}`;
+}
 
 export async function readInactiveSessionContextIdentities(params: {
   agentId?: string;
@@ -58,46 +74,43 @@ export async function readInactiveSessionContextIdentities(params: {
   if (!entry?.sessionId) {
     return EMPTY_IDENTITIES;
   }
-  const events = await loadTranscriptEvents({
-    agentId,
-    sessionId: entry.sessionId,
-    sessionKey: scopedSessionKey,
-    storePath,
-  });
-  const tree = scanSessionTranscriptTree(events);
-  // No leaf control means no rewind/switch ever happened, so every event is on
-  // the only branch; an invalid tree gives no trustworthy membership either way.
-  if (!tree.hasLeafControl || tree.hasInvalidLeafControl) {
-    return EMPTY_IDENTITIES;
+  let inactive;
+  try {
+    inactive = readInactiveSessionTranscriptMessageEvents({
+      agentId,
+      sessionId: entry.sessionId,
+      sessionKey: scopedSessionKey,
+      storePath,
+    });
+  } catch (error) {
+    // The projection rebuild is already scheduled; the next turn prunes. A cold
+    // transcript is not restored just to filter a chat window.
+    if (
+      isSessionTranscriptProjectionUnavailableError(error) ||
+      error instanceof SessionTranscriptColdError
+    ) {
+      return EMPTY_IDENTITIES;
+    }
+    throw error;
   }
-  const activePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
-  if (activePath.length === 0 && tree.nodes.length > 0) {
-    return EMPTY_IDENTITIES;
-  }
-  const activeIds = new Set(activePath.map((node) => node.id));
   const transcriptEntryIds = new Set<string>();
-  const channelMessageIds = new Map<string, Set<string>>();
-  for (const node of tree.nodes) {
-    if (activeIds.has(node.id) || isSessionTranscriptLeafControl(node.entry)) {
-      continue;
-    }
-    const message = asRecord(asRecord(node.entry)?.message);
-    if (message?.role !== "user" && message?.role !== "assistant") {
-      continue;
-    }
-    transcriptEntryIds.add(node.id);
-    const transport = asRecord(asRecord(message.__openclaw)?.transport);
+  const transportMessageKeys = new Set<string>();
+  for (const { eventId, event } of inactive) {
+    transcriptEntryIds.add(eventId);
+    const message = asRecord(asRecord(event)?.message);
+    const transport = asRecord(asRecord(message?.["__openclaw"])?.transport);
     const channel = normalizeOptionalString(transport?.channel)?.toLowerCase();
+    const conversationRef = normalizeOptionalString(transport?.conversationRef);
     const messageId = normalizeOptionalString(transport?.messageId);
-    if (!channel || !messageId) {
+    // A turn whose conversation cannot be established is retained rather than
+    // matched against an unrelated conversation sharing the session.
+    if (!channel || !conversationRef || !messageId) {
       continue;
     }
-    const ids = channelMessageIds.get(channel) ?? new Set<string>();
-    ids.add(messageId);
-    channelMessageIds.set(channel, ids);
+    transportMessageKeys.add(inactiveTransportMessageKey({ channel, conversationRef, messageId }));
   }
-  if (transcriptEntryIds.size === 0 && channelMessageIds.size === 0) {
+  if (transcriptEntryIds.size === 0 && transportMessageKeys.size === 0) {
     return EMPTY_IDENTITIES;
   }
-  return { transcriptEntryIds, channelMessageIds };
+  return { transcriptEntryIds, transportMessageKeys };
 }

@@ -295,6 +295,7 @@ export { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-trans
 export { validateSessionTranscriptContextAdmission } from "./session-accessor.sqlite-model-context.js";
 export {
   isSessionTranscriptProjectionUnavailableError,
+  readInactiveSessionTranscriptMessageEvents,
   readLatestSessionTranscriptMessageEvent,
   readRecentSessionTranscriptActiveEvents,
   readSessionTranscriptActiveStats,
@@ -307,6 +308,7 @@ export {
   SessionTranscriptProjectionUnavailableError,
   waitForSessionTranscriptProjection,
   withRecentSessionTranscriptActiveEvents,
+  type SessionTranscriptInactiveMessageEvent,
 } from "./session-accessor.sqlite-active-events.js";
 export {
   readSessionTranscriptTitleProbeBatch,
