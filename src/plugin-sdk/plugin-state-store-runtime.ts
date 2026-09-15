@@ -7,4 +7,7 @@
  * write state take that cost.
  */
 
-export { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
+export {
+  createPluginStateSyncKeyedStore,
+  MAX_PLUGIN_STATE_VALUE_BYTES,
+} from "../plugin-state/plugin-state-store.js";
