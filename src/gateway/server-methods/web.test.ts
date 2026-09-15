@@ -61,6 +61,14 @@ function createHandlerOptions(params: {
   };
 }
 
+async function startWebLogin(options: GatewayRequestHandlerOptions): Promise<void> {
+  const handler = webHandlers["web.login.start"];
+  if (!handler) {
+    throw new Error("web.login.start handler is not registered");
+  }
+  await handler(options);
+}
+
 describe("webHandlers", () => {
   beforeEach(() => {
     hoisted.listChannelPlugins.mockReset().mockReturnValue([]);
@@ -84,7 +92,7 @@ describe("webHandlers", () => {
       }),
     ]);
 
-    await webHandlers["web.login.start"](
+    await startWebLogin(
       createHandlerOptions({
         respond,
         stopChannel,
@@ -124,7 +132,7 @@ describe("webHandlers", () => {
       }),
     ]);
 
-    await webHandlers["web.login.start"](
+    await startWebLogin(
       createHandlerOptions({
         respond,
         stopChannel,
@@ -160,7 +168,7 @@ describe("webHandlers", () => {
       }),
     ]);
 
-    await webHandlers["web.login.start"](
+    await startWebLogin(
       createHandlerOptions({
         respond,
         stopChannel,

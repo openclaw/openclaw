@@ -335,6 +335,14 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             timeoutMs,
             verbose,
           }),
+        loginWithQrStartExisting: async ({ accountId, force }) =>
+          await (
+            await loadWhatsAppChannelRuntime()
+          ).readExistingWebLoginWithQrResult({ accountId, force }),
+        loginWithQrStartPreflight: async ({ accountId, force, timeoutMs, verbose }) =>
+          await (
+            await loadWhatsAppChannelRuntime()
+          ).preflightWebLoginWithQrStart({ accountId, force, timeoutMs, verbose }),
         loginWithQrWait: async ({ accountId, timeoutMs, currentQrDataUrl }) =>
           await (
             await loadWhatsAppChannelRuntime()

@@ -1,5 +1,10 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Whatsapp plugin module implements login qr runtime behavior.
+type ReadExistingWebLoginWithQrResult =
+  typeof import("./src/login-qr.js").readExistingWebLoginWithQrResult;
+type PreflightWebLoginWithQrStart = typeof import("./src/login-qr.js").preflightWebLoginWithQrStart;
+type StartWebLoginWithQrAfterPreflight =
+  typeof import("./src/login-qr.js").startWebLoginWithQrAfterPreflight;
 type StartWebLoginWithQr = typeof import("./src/login-qr.js").startWebLoginWithQr;
 type WaitForWebLogin = typeof import("./src/login-qr.js").waitForWebLogin;
 

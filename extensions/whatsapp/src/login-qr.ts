@@ -71,6 +71,7 @@ type WebLoginStartParams = {
   force?: boolean;
   accountId?: string;
   runtime?: RuntimeEnv;
+  beforeCredentialPersistence?: () => Promise<void>;
 };
 const ACTIVE_LOGIN_TTL_MS = 3 * 60_000;
 const MAX_QR_RENDER_CHASES = 10;
@@ -91,6 +92,28 @@ async function resetActiveLogin(accountId: string, reason?: string) {
 
 function isLoginFresh(login: ActiveLogin) {
   return Date.now() - login.startedAt < ACTIVE_LOGIN_TTL_MS;
+}
+
+function readActiveQrResult(accountId: string): StartWebLoginWithQrResult | null {
+  const existing = activeLogins.get(accountId);
+  if (!existing || !isLoginFresh(existing) || !existing.qrDataUrl) {
+    return null;
+  }
+  return {
+    qrDataUrl: existing.qrDataUrl,
+    message: "QR already active. Scan it in WhatsApp → Linked Devices.",
+  };
+}
+
+export function readExistingWebLoginWithQrResult(
+  opts: Pick<WebLoginStartParams, "accountId" | "force"> = {},
+): StartWebLoginWithQrResult | null {
+  if (opts.force) {
+    return null;
+  }
+  const cfg = getRuntimeConfig();
+  const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
+  return readActiveQrResult(account.accountId);
 }
 
 function resetQrUpdateSignal(login: ActiveLogin) {
@@ -300,10 +323,6 @@ export async function startWebLoginWithQr(
   const activeQr = readExistingWebLoginWithQrResult(opts);
   if (activeQr) {
     return activeQr;
-  }
-  const preflight = await preflightWebLoginWithQrStart(opts);
-  if (preflight) {
-    return preflight;
   }
   return await startWebLoginWithQrAfterPreflight(opts);
 }
@@ -520,7 +539,7 @@ export async function startWebLoginWithQrAfterPreflight(
 export async function preflightWebLoginWithQrStart(
   opts: WebLoginStartParams = {},
 ): Promise<StartWebLoginWithQrResult | null> {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
   const authState = await readWebAuthExistsForDecision(account.authDir);
   if (authState.outcome === "unstable") {
@@ -529,7 +548,7 @@ export async function preflightWebLoginWithQrStart(
       message: "WhatsApp auth state is still stabilizing. Retry login in a moment.",
     };
   }
-  if (authState.exists && !opts.force) {
+  if (authState.exists && !opts.force && getActiveWebListener(account.accountId)) {
     const selfId = readWebSelfId(account.authDir);
     const who = selfId.e164 ?? selfId.jid ?? "unknown";
     return {

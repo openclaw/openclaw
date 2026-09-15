@@ -61,6 +61,7 @@ export function collectWhatsAppStatusIssues(
       const lastDisconnect = readLastDisconnect(account.lastDisconnect);
       const lastError = normalizeOptionalString(account.lastError) ?? lastDisconnect?.error;
       const healthState = normalizeOptionalString(account.healthState);
+      const linkedRuntimePrefix = linked ? "Linked but " : "";
 
       if (statusState === "unstable") {
         issues.push({
@@ -125,7 +126,7 @@ export function collectWhatsAppStatusIssues(
           channel: "whatsapp",
           accountId,
           kind: "runtime",
-          message: `${sessionRuntimePrefix}${stateLabel}${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
+          message: `${linkedRuntimePrefix}${stateLabel}${reconnectAttempts != null ? ` (reconnectAttempts=${reconnectAttempts})` : ""}${lastError ? `: ${lastError}` : "."}`,
           fix: `Run: ${formatCliCommand("openclaw doctor")} (or restart the gateway). If it persists, relink via channels login and check logs.`,
         });
         return;
