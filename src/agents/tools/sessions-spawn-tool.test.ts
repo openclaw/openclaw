@@ -1346,7 +1346,10 @@ describe("sessions_spawn tool", () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       config: {
-        agents: { list: [{ id: "main", identity: { name: "Roboclaw" } }] },
+        agents: {
+          defaults: { model: "mock-provider/primary" },
+          list: [{ id: "main", identity: { name: "Roboclaw" } }],
+        },
         gateway: { publicOrigin: "https://openclaw.example", controlUi: { basePath: "/control" } },
       },
       inheritedToolAllowlist: ["read", "sessions_spawn"],
@@ -1381,6 +1384,7 @@ describe("sessions_spawn tool", () => {
         actor: { type: "agent", id: "main" },
         requesterSessionKey: "agent:main:main",
         completionOwnerSessionKey: "agent:main:main",
+        spawnModelAutoSelection: { model: "mock-provider/primary", hasFallbackOrigin: false },
         inheritedToolPolicy: {
           version: 1,
           allow: ["read", "sessions_spawn"],

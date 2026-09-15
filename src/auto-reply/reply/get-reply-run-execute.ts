@@ -487,6 +487,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       hasSessionModelOverride: runHasSessionModelOverride,
       modelOverrideSource: runModelOverrideSource,
       hasAutoFallbackProvenance: runHasAutoFallbackProvenance || undefined,
+      // Visible spawn children keep dashboard keys; declared spawn lineage routes
+      // them to the subagent fallback ladder like hidden subagent sessions.
+      subagentSpawnLineage: (preparedSessionState.sessionEntry?.spawnDepth ?? 0) > 0,
       autoFallbackPrimaryProbe: params.autoFallbackPrimaryProbe,
       authProfileId,
       authProfileIdSource,

@@ -235,6 +235,8 @@ export type FollowupRun = {
     hasSessionModelOverride?: boolean;
     modelOverrideSource?: "auto" | "user";
     hasAutoFallbackProvenance?: boolean;
+    /** Session belongs to a spawn-owned child; applies the subagent fallback ladder. */
+    subagentSpawnLineage?: boolean;
     autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";

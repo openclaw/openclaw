@@ -93,6 +93,7 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { isUserModelAuthProfileOwner } from "../state/user-model-accounts.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import type { AgentRuntimeSpawnModelAutoSelection } from "./agent-runtime-session-spawn-context.js";
 import type {
   ModelAccountConnectAction,
   UserModelAccountSelection,
@@ -385,6 +386,8 @@ export async function createGatewaySession(params: {
     actor?: SessionCreatedActor;
     sandbox?: "required";
     skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
+    /** Trusted config-resolved spawn model provenance for the `model` field. */
+    spawnModelAutoSelection?: AgentRuntimeSpawnModelAutoSelection;
   };
   /** Exact harness namespace authorized by the scoped plugin runtime. */
   authorizedAgentHarnessId?: string;
@@ -1304,6 +1307,11 @@ export async function createGatewaySession(params: {
         if (!patched.ok) {
           return patched;
         }
+        // Bind automatic intent before using the patch owner's canonical selection.
+        const spawnModelAutoSelection =
+          params.creation?.spawnModelAutoSelection?.model === requestedModel
+            ? params.creation?.spawnModelAutoSelection
+            : undefined;
         if (
           requestedToolOverrides &&
           existingEntry !== undefined &&
@@ -1358,6 +1366,17 @@ export async function createGatewaySession(params: {
           ...patched.entry,
           ...inheritedWorkspace,
           ...(createdNewEntry && displayName ? { displayName } : {}),
+          ...(createdNewEntry && spawnModelAutoSelection
+            ? {
+                modelOverrideSource: "auto" as const,
+                ...(spawnModelAutoSelection.hasFallbackOrigin
+                  ? {
+                      modelOverrideFallbackOriginProvider: patched.entry.providerOverride,
+                      modelOverrideFallbackOriginModel: patched.entry.modelOverride,
+                    }
+                  : {}),
+              }
+            : {}),
           // New rows must expose the same canonical delivery shape to callbacks
           // that the SQLite writer persists, or guarded finalization sees its own write as drift.
           ...(existingEntry === undefined && patched.entry.delivery === undefined

@@ -21,7 +21,6 @@ import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js
 import { listAgentIds, resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveAgentIdentity } from "../identity.js";
-import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnedWorkspaceInheritance, type SpawnedToolContext } from "../spawned-context.js";
 import {
@@ -31,7 +30,10 @@ import {
 import { deleteSubagentSessionForCleanup } from "../subagents/registry/subagent-session-cleanup.js";
 import { getSubagentDepthFromSessionStore } from "../subagents/spawn/subagent-depth.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
-import { resolveConfiguredSubagentRunTimeoutSeconds } from "../subagents/spawn/subagent-spawn-plan.js";
+import {
+  resolveConfiguredSubagentRunTimeoutSeconds,
+  resolveSubagentModelAndThinkingPlan,
+} from "../subagents/spawn/subagent-spawn-plan.js";
 import { buildSubagentTaskMessage } from "../subagents/spawn/subagent-system-prompt.js";
 import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
@@ -252,8 +254,27 @@ export async function maybeSpawnVisibleSession(params: {
   if (!targetPolicy.ok) {
     return { status: "forbidden", error: targetPolicy.error };
   }
-  const resolvedModel =
-    modelOverride ?? resolveSubagentSpawnModelSelection({ cfg, agentId: targetAgentId });
+  const modelPlan = resolveSubagentModelAndThinkingPlan({
+    cfg,
+    targetAgentId,
+    modelOverride,
+  });
+  if (modelPlan.status === "error") {
+    return { status: "error", error: modelPlan.error };
+  }
+  const { resolvedModel, initialSessionPatch } = modelPlan;
+  const { authProfileOverride } = initialSessionPatch;
+  // Creation validates the complete profile-qualified selection.
+  const resolvedModelRef = authProfileOverride
+    ? `${resolvedModel}@${authProfileOverride}`
+    : resolvedModel;
+  const spawnModelAutoSelection =
+    initialSessionPatch.modelOverrideSource === "auto"
+      ? {
+          model: resolvedModelRef,
+          hasFallbackOrigin: initialSessionPatch.modelOverrideFallbackOriginModel !== undefined,
+        }
+      : undefined;
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
@@ -329,6 +350,7 @@ export async function maybeSpawnVisibleSession(params: {
           actor: { type: "agent", id: requesterAgentId },
           requesterSessionKey: requesterKey,
           completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+          ...(spawnModelAutoSelection ? { spawnModelAutoSelection } : {}),
           inheritedToolPolicy: {
             version: 1,
             allow: [...(params.options?.inheritedToolAllowlist ?? [])],
@@ -349,7 +371,7 @@ export async function maybeSpawnVisibleSession(params: {
         ...(params.label ? { label: params.label } : {}),
         // sessions.create persists the group under the legacy wire field `category`.
         ...(group ? { category: group } : {}),
-        model: resolvedModel,
+        model: resolvedModelRef,
         task: buildSubagentTaskMessage({
           task: params.task,
           spawnMode: "session",

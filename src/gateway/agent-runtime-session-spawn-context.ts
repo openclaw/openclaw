@@ -1,3 +1,10 @@
+/** Automatic intent bound to the complete request before creation resolves aliases. */
+export type AgentRuntimeSpawnModelAutoSelection = {
+  model: string;
+  /** Self-origin distinguishes configured selection from legacy fallback residue. */
+  hasFallbackOrigin: boolean;
+};
+
 export type AgentRuntimeSessionSpawnContext = {
   completionOwnerSessionKey?: string;
   inheritedToolPolicy: {
@@ -5,4 +12,5 @@ export type AgentRuntimeSessionSpawnContext = {
     allow: string[];
     deny: string[];
   };
+  spawnModelAutoSelection?: AgentRuntimeSpawnModelAutoSelection;
 };

@@ -136,6 +136,10 @@ const delegatedAuthoritySchema = z.discriminatedUnion("kind", [
 const stringListSchema = z
   .array(z.string())
   .transform((entries) => entries.map((entry) => entry.trim()).filter(Boolean));
+const spawnModelAutoSelectionSchema = z.object({
+  model: normalizedRequiredStringSchema,
+  hasFallbackOrigin: z.boolean(),
+});
 const sessionSpawnContextSchema = z
   .object({
     completionOwnerSessionKey: normalizedRequiredStringSchema.optional(),
@@ -144,12 +148,16 @@ const sessionSpawnContextSchema = z
       allow: stringListSchema,
       deny: stringListSchema,
     }),
+    spawnModelAutoSelection: spawnModelAutoSelectionSchema.optional(),
   })
   .transform((context): AgentRuntimeSessionSpawnContext => ({
     ...(context.completionOwnerSessionKey
       ? { completionOwnerSessionKey: context.completionOwnerSessionKey }
       : {}),
     inheritedToolPolicy: context.inheritedToolPolicy,
+    ...(context.spawnModelAutoSelection
+      ? { spawnModelAutoSelection: context.spawnModelAutoSelection }
+      : {}),
   }));
 const cronCreatorAuthorityGrantSchema = z
   .object({
