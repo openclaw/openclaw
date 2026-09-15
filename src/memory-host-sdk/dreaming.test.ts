@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   formatMemoryDreamingDay,
@@ -273,6 +274,45 @@ describe("memory dreaming host helpers", () => {
         agentIds: ["beta"],
       },
     ]);
+  });
+
+  it("retains configured owners when the primary workspace is already known", async () => {
+    const root = tempDirs.make("dreaming-known-primary-");
+    const alpha = path.join(root, "alpha");
+    const beta = path.join(root, "beta");
+    const alias = path.join(root, "alpha-alias");
+    await fs.mkdir(alpha);
+    await fs.mkdir(beta);
+    await fs.symlink(alpha, alias, process.platform === "win32" ? "junction" : "dir");
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: {
+          alpha: { workspace: alpha },
+          beta: { workspace: beta },
+        },
+      },
+    };
+    const expected = [
+      { workspaceDir: alpha, agentIds: ["alpha"] },
+      { workspaceDir: beta, agentIds: ["beta"] },
+    ];
+    for (const primaryWorkspaceDir of [alpha, alias]) {
+      for (const primaryAgentId of [undefined, null, "", " \t "]) {
+        expect(
+          resolveMemoryDreamingWorkspaces(cfg, { primaryWorkspaceDir, primaryAgentId }),
+        ).toEqual(expected);
+      }
+    }
+    expect(
+      resolveMemoryDreamingWorkspaces(cfg, { primaryWorkspaceDir: alpha, primaryAgentId: "beta" }),
+    ).toEqual([
+      { workspaceDir: alpha, agentIds: ["alpha", "beta"] },
+      { workspaceDir: beta, agentIds: ["beta"] },
+    ]);
+    expect(() =>
+      resolveMemoryDreamingWorkspaces(cfg, { primaryWorkspaceDir: path.join(root, "unowned") }),
+    ).toThrow(AgentSelectionRequiredError);
   });
 
   it("dedupes configured workspace symlink aliases across agents", async () => {
