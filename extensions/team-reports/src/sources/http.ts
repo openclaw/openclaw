@@ -1,4 +1,22 @@
+import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import type { z } from "zod";
+
+export class SourceResponseTooLargeError extends Error {}
+
+export function readSourceResponseText(
+  response: Response,
+  source: string,
+  signal: AbortSignal,
+): Promise<string> {
+  // The SDK reader owns the byte/idle bounds and cancels overflow before guarded release.
+  return readProviderTextResponse(response, `Team Reports ${source} API`, {
+    signal,
+    onOverflow: ({ maxBytes }) =>
+      new SourceResponseTooLargeError(
+        `${source} API response exceeded the ${maxBytes / 1024 / 1024} MiB safety limit; check API compatibility and retry.`,
+      ),
+  });
+}
 
 export function createResponseParser(createError: () => Error) {
   return <T>(schema: z.ZodType<T>, data: unknown): T => {

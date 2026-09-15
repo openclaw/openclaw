@@ -2,7 +2,14 @@ import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime"
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
 import type { GithubSourceConfig, SourceRuntime, SourceStatus } from "../../types.js";
-import { checkAbort, createResponseParser, parseApiBase, wait } from "../http.js";
+import {
+  checkAbort,
+  createResponseParser,
+  parseApiBase,
+  readSourceResponseText,
+  SourceResponseTooLargeError,
+  wait,
+} from "../http.js";
 
 export const ABORT_LABEL = "GitHub collection aborted";
 
@@ -116,7 +123,7 @@ export class GithubClient {
           response = result.response;
         }
         // Error payloads can echo credentials; neither parse errors nor API bodies escape this client.
-        const body = await response.text();
+        const body = await readSourceResponseText(response, "GitHub", signal);
         checkAbort(this.runtime.signal, ABORT_LABEL);
         if (response.ok) {
           try {
@@ -135,6 +142,9 @@ export class GithubClient {
         checkAbort(this.runtime.signal, ABORT_LABEL);
         if (error instanceof GithubSourceError) {
           throw error;
+        }
+        if (error instanceof SourceResponseTooLargeError) {
+          throw new GithubSourceError(error.message);
         }
         throw new GithubSourceError(
           controller.signal.aborted
