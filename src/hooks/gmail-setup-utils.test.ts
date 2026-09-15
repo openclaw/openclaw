@@ -359,6 +359,25 @@ describe("ensureTailscaleEndpoint", () => {
       },
     );
   });
+
+  it("percent-encodes the push token in the public endpoint", async () => {
+    const { ensureTailscaleEndpoint } = await loadGmailSetupUtils();
+    runCommandWithTimeoutMock
+      .mockResolvedValueOnce({
+        ...success,
+        stdout: JSON.stringify({ Self: { DNSName: "host.tailnet.ts.net." } }),
+      })
+      .mockResolvedValueOnce(success);
+
+    const endpoint = await ensureTailscaleEndpoint({
+      mode: "funnel",
+      path: "/gmail-pubsub",
+      port: 8788,
+      token: "part+two/&=",
+    });
+
+    expect(endpoint).toBe("https://host.tailnet.ts.net/gmail-pubsub?token=part%2Btwo%2F%26%3D");
+  });
 });
 
 describe("Gmail setup diagnostics and decisions", () => {

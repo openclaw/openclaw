@@ -294,7 +294,7 @@ export async function ensureTailscaleEndpoint(params: {
 
   const baseUrl = `https://${dnsName}${pathArg}`;
   // Funnel/serve strips pathArg before proxying; keep it only in the public URL.
-  return params.token ? `${baseUrl}?token=${params.token}` : baseUrl;
+  return params.token ? `${baseUrl}?token=${encodeURIComponent(params.token)}` : baseUrl;
 }
 
 export async function resolveProjectIdFromGogCredentials(): Promise<string | null> {
