@@ -5,6 +5,7 @@ import { emitModelTransportDebug, formatModelTransportDebugUrl } from "@openclaw
  * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
  */
 import { parseRetryAfterHeadersSeconds as parseRetryAfterSeconds } from "@openclaw/ai/internal/retry-after";
+import { inspectTlsCertificateError } from "@openclaw/ai/internal/shared";
 import {
   isCloudMetadataIpAddress,
   isLinkLocalIpAddress,
@@ -16,12 +17,14 @@ import {
   clampTimerTimeoutMs,
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
+import { isAbortError } from "../infra/abort-signal.js";
 import {
-  fetchWithSsrFGuard,
+  fetchWithSsrFGuardWithTransportOptions,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
+import type { GuardedFetchSendTracker } from "../infra/net/runtime-fetch.js";
 import {
   mergeSsrFPolicies,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
@@ -29,6 +32,7 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
+import { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
@@ -586,18 +590,47 @@ export function resolveModelRequestTimeoutMs(
     : undefined;
 }
 
-function buildModelRequestSignal(
-  baseSignal: AbortSignal | undefined,
-  timeoutMs: number | undefined,
-): AbortSignal | undefined {
+/**
+ * Builds the request signal with a startup deadline. The fixed timeout bounds
+ * connection and request-header work only: callers settle it once response
+ * headers arrive so a healthy streaming body stays bounded by the guard's
+ * refreshable idle timer and the caller's base cancellation, never by the
+ * original one-shot deadline.
+ */
+function buildModelRequestSignal(params: {
+  baseSignal: AbortSignal | undefined;
+  timeoutMs: number | undefined;
+}): { signal: AbortSignal | undefined; settleStartupDeadline: () => void } {
+  const { baseSignal, timeoutMs } = params;
   if (timeoutMs === undefined) {
-    return baseSignal;
+    return { signal: baseSignal, settleStartupDeadline: () => {} };
   }
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  if (!baseSignal) {
-    return timeoutSignal;
-  }
-  return AbortSignal.any([baseSignal, timeoutSignal]);
+  const startupController = new AbortController();
+  const timer = setTimeout(
+    () =>
+      startupController.abort(
+        new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+      ),
+    timeoutMs,
+  );
+  const settleStartupDeadline = () => clearTimeout(timer);
+  const signal = baseSignal
+    ? AbortSignal.any([baseSignal, startupController.signal])
+    : startupController.signal;
+  return { signal, settleStartupDeadline };
+}
+
+function isReplayableAnthropicMessagesRequest(params: {
+  model: Model;
+  request: Request | undefined;
+  init: RequestInit | undefined;
+}): boolean {
+  const body = params.init?.body;
+  return (
+    params.model.api === "anthropic-messages" &&
+    !params.request &&
+    (body == null || typeof body === "string")
+  );
 }
 
 function resolveHttpOrigin(value: unknown): string | undefined {
@@ -845,7 +878,10 @@ export function buildGuardedModelFetch(
       requestInit ??
       (swappedEgress.headers && init ? { ...init, headers: swappedEgress.headers } : init);
     const baseSignal = baseInit?.signal ?? undefined;
-    const localServiceSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
+    const { signal: requestSignal, settleStartupDeadline } = buildModelRequestSignal({
+      baseSignal,
+      timeoutMs: requestTimeoutMs,
+    });
     const guardedFetchOptions = {
       url,
       init: baseInit,
@@ -859,13 +895,13 @@ export function buildGuardedModelFetch(
       dispatcherPolicy,
       dispatcherPool: getProviderTransportDispatcherPool(),
       timeoutMs: requestTimeoutMs,
-      ...(baseSignal ? { signal: baseSignal } : {}),
+      ...(requestSignal ? { signal: requestSignal } : {}),
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
       ...(policy ? { policy } : {}),
     };
-    let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    let result: Awaited<ReturnType<typeof fetchWithSsrFGuardWithTransportOptions>>;
     const fetchStartedAt = Date.now();
     const useEnvProxy = !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url);
     emitModelTransportDebug(
@@ -877,16 +913,43 @@ export function buildGuardedModelFetch(
         `policy=${policy ? "custom" : "default"}`,
     );
     try {
-      localServiceLease = await ensureModelProviderLocalService(
+      localServiceLease = await ensureModelProviderLocalService(model, rawHeaders, requestSignal);
+      const guardedFetchParams = useEnvProxy
+        ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
+        : guardedFetchOptions;
+      const shouldTrackRequestSend = isReplayableAnthropicMessagesRequest({
         model,
-        rawHeaders,
-        localServiceSignal,
-      );
-      result = await fetchWithSsrFGuard(
-        useEnvProxy
-          ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
-          : guardedFetchOptions,
-      );
+        request,
+        init: baseInit,
+      });
+      const sendTracker: GuardedFetchSendTracker = { state: "unknown" };
+      const maxAttempts = shouldTrackRequestSend ? 2 : 1;
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          result = await fetchWithSsrFGuardWithTransportOptions({
+            ...guardedFetchParams,
+            ...(shouldTrackRequestSend ? { sendTracker } : {}),
+          });
+          break;
+        } catch (error) {
+          if (
+            attempt === maxAttempts ||
+            requestSignal?.aborted ||
+            sendTracker.state !== "not-sent" ||
+            isAbortError(error) ||
+            inspectTlsCertificateError(error) ||
+            !isTransientNetworkError(error)
+          ) {
+            throw error;
+          }
+          // The Messages transport serializes one JSON string. Retry only before
+          // Undici reports that the complete body reached its local socket.
+          log.warn(
+            `[model-fetch] retry provider=${model.provider} api=${model.api} model=${model.id} ` +
+              `attempt=${attempt + 1}/${maxAttempts} elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(error)}`,
+          );
+        }
+      }
     } catch (error) {
       const remediatedError = withModelProviderNetworkRemediation(error, {
         baseUrl: model.baseUrl,
@@ -897,9 +960,14 @@ export function buildGuardedModelFetch(
         `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +
           `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(remediatedError)}`,
       );
+      settleStartupDeadline();
       localServiceLease?.release();
       throw remediatedError;
     }
+    // Response headers arrived: release the startup deadline so the streaming
+    // body is bounded only by the guard's refreshable idle timer and the
+    // caller's base cancellation, not by the original one-shot timeout.
+    settleStartupDeadline();
     let response = result.response;
     emitModelTransportDebug(
       log,

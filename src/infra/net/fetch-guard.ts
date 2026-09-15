@@ -22,6 +22,8 @@ import {
   fetchWithRuntimeDispatcher,
   isMockedFetch,
   type DispatcherAwareRequestInit,
+  resolveGuardedFetchSendDispatcher,
+  type GuardedFetchSendTracker,
 } from "./runtime-fetch.js";
 import {
   assertHostnameAllowedWithPolicy,
@@ -42,12 +44,6 @@ import {
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
 } from "./undici-runtime.js";
-
-function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | undefined {
-  // Fall back to module-level bridge set by ensureGlobalUndiciStreamTimeouts
-  // (avoids reading Undici's non-public `.options` field)
-  return fromParams !== undefined ? fromParams : globalUndiciStreamTimeoutMs;
-}
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -125,6 +121,12 @@ type GuardedFetchInternalOptions = GuardedFetchOptions & {
   managedProxyBypass?: ConfiguredLocalOriginManagedProxyBypass;
   /** Preserve ambient Undici env-proxy routing for each eligible URL while keeping strict checks otherwise. */
   useEnvProxyForEligibleUrls?: boolean;
+  /**
+   * Internal request-body send observation for replay-safe transport recovery.
+   * Deliberately kept off the exported options type so it never becomes a
+   * plugin-facing contract; carried only through the transport seam below.
+   */
+  sendTracker?: GuardedFetchSendTracker;
 };
 
 type GuardedFetchConfiguredLocalOriginOptions = GuardedFetchOptions & {
@@ -299,10 +301,7 @@ async function prepareGuardedFetchCapture(params: GuardedFetchOptions, fetchImpl
   }
   const { prepareHttpCapture, resolveDebugProxyFetchTransport } =
     await import("../../proxy-capture/runtime.js");
-  return {
-    fetchImpl: resolveDebugProxyFetchTransport(fetchImpl),
-    capture: prepareHttpCapture(),
-  };
+  return { fetchImpl: resolveDebugProxyFetchTransport(fetchImpl), capture: prepareHttpCapture() };
 }
 
 function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestInit | undefined {
@@ -414,11 +413,28 @@ function rewriteRedirectInitForCrossOrigin(params: {
 export { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
 
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
-  const { managedProxyBypass: _ignoredManagedProxyBypass, ...publicParams } =
-    params as GuardedFetchOptions & {
-      managedProxyBypass?: unknown;
-    };
+  const {
+    managedProxyBypass: _ignoredManagedProxyBypass,
+    // Runtime callers cannot smuggle the internal transport seam through the
+    // public options object; it would silently widen the plugin contract.
+    sendTracker: _ignoredSendTracker,
+    ...publicParams
+  } = params as GuardedFetchOptions & {
+    managedProxyBypass?: unknown;
+    sendTracker?: unknown;
+  };
   return await fetchWithSsrFGuardInternal(publicParams);
+}
+
+/**
+ * Transport-owned entry that accepts internal-only options (send observation)
+ * alongside the public ones. Not part of the plugin SDK surface: replay-safe
+ * transport recovery is an internal provider-transport concern.
+ */
+export async function fetchWithSsrFGuardWithTransportOptions(
+  params: GuardedFetchInternalOptions,
+): Promise<GuardedFetchResult> {
+  return await fetchWithSsrFGuardInternal(params);
 }
 
 export async function fetchConfiguredLocalOriginWithSsrFGuard({
@@ -437,19 +453,14 @@ export async function fetchConfiguredLocalOriginWithSsrFGuard({
 async function fetchWithSsrFGuardInternal(
   params: GuardedFetchInternalOptions,
 ): Promise<GuardedFetchResult> {
-  const globalFetch = globalThis.fetch;
-  const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalFetch;
+  if (params.sendTracker) {
+    params.sendTracker.state = "not-sent";
+  }
+  const defaultFetch: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
   if (!defaultFetch) {
     throw new Error("fetch is not available");
   }
   const isUsingMockedFetch = isMockedFetch(defaultFetch);
-  const supportsDispatcherInit =
-    (params.fetchImpl !== undefined &&
-      !isAmbientGlobalFetch({ fetchImpl: params.fetchImpl, globalFetch })) ||
-    isUsingMockedFetch;
-  // Admission precedes DNS and transport awaits. Capture must not resolve a new
-  // session after a delayed request outlives its original capture generation.
-  // Bypass only our exact global wrapper so its owner cannot also record.
   const captureAdmission = await prepareGuardedFetchCapture(params, defaultFetch);
 
   const maxRedirects =
@@ -558,7 +569,7 @@ async function fetchWithSsrFGuardInternal(
         !canUseManagedProxy &&
         !usesTrustedExplicitProxyMode &&
         params.pinDns !== false;
-      const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
+      const timeoutMs = params.timeoutMs ?? globalUndiciStreamTimeoutMs;
 
       // Trusted env-proxy, managed proxy, and pinDns=false can skip local DNS
       // pinning, so keep the pre-DNS hostname/IP policy checks from the pinned path.
@@ -638,15 +649,13 @@ async function fetchWithSsrFGuardInternal(
         }
       }
 
-      const init: DispatcherAwareRequestInit = {
-        ...(currentInit ? { ...currentInit } : {}),
-        redirect: "manual",
-        ...(dispatcher ? { dispatcher } : {}),
-        signal: signal
-          ? AbortSignal.any([signal, requestController.signal])
-          : requestController.signal,
-      };
-
+      const supportsDispatcherInit =
+        (params.fetchImpl !== undefined &&
+          !isAmbientGlobalFetch({
+            fetchImpl: params.fetchImpl,
+            globalFetch: globalThis.fetch,
+          })) ||
+        isUsingMockedFetch;
       // Explicit caller stubs and test-installed fetch mocks should win.
       // Otherwise, fall back to undici's fetch whenever we attach a dispatcher,
       // because the default global fetch path will not honor per-request
@@ -657,6 +666,20 @@ async function fetchWithSsrFGuardInternal(
         void Promise.resolve(beforeRequestResult).catch(() => undefined);
         throw new TypeError("beforeRequest must be synchronous.");
       }
+      const requestDispatcher = resolveGuardedFetchSendDispatcher({
+        dispatcher,
+        sendTracker: params.sendTracker,
+        useRuntimeFetch: shouldUseRuntimeFetch,
+      });
+      const init: DispatcherAwareRequestInit = {
+        ...(currentInit ? { ...currentInit } : {}),
+        redirect: "manual",
+        ...(requestDispatcher ? { dispatcher: requestDispatcher } : {}),
+        signal: signal
+          ? AbortSignal.any([signal, requestController.signal])
+          : requestController.signal,
+      };
+
       const captureParams = {
         url: parsedUrl.toString(),
         method: currentInit?.method ?? "GET",
@@ -675,7 +698,6 @@ async function fetchWithSsrFGuardInternal(
             : {}),
         },
       };
-      // Only transport rejection belongs here, not policy or capture failures.
       try {
         response = shouldUseRuntimeFetch
           ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
