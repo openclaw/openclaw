@@ -25,6 +25,7 @@ import {
 import {
   isOpenAIDualRouteModelId,
   isOpenAIPlatformOnlyRouteModelId,
+  isOpenAIProviderModernModelId,
   isOpenAISubscriptionOnlyRouteModelId,
   normalizeOpenAIModelRouteId,
   OPENAI_GPT_56_MODEL_ID,
@@ -461,6 +462,13 @@ function resolveSingleObservedModelRoute(
   }
 
   if (!configuredRoute && !hasObservedRoute) {
+    // A first-party id without a static contract (gpt-5.4-nano) is still served
+    // by the Platform API. Leaving it indeterminate makes the auth layer reject
+    // every credential until the operator authors a base URL; observation or
+    // explicit config above still widens or redirects the route.
+    if (isOpenAIProviderModernModelId(modelId)) {
+      return route(platformRoute, sourceBaseUrl);
+    }
     return {
       kind: "indeterminate",
       defaultRuntimeId:

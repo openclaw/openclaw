@@ -48,7 +48,9 @@ import {
   OPENAI_GPT_56_TERRA_MODEL_ID,
   OPENAI_GPT_6_ASTRA_MODEL_ID,
   OPENAI_PROVIDER_MODERN_MODEL_IDS,
+  isOpenAIChatGPTModernModelId,
   isOpenAIPlatformOnlyRouteModelId,
+  isOpenAIProviderModernModelId,
   isOpenAISubscriptionOnlyRouteModelId,
   normalizeOpenAIModelRouteId,
   resolveOpenAICodexReasoningEfforts,
@@ -547,7 +549,11 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
     auth: "oauth",
     models: OPENAI_MANIFEST_PROVIDER.models.flatMap((model) => {
       const modelId = normalizeLowercaseStringOrEmpty(model.id);
-      if (isOpenAIPlatformOnlyRouteModelId(modelId)) {
+      // Offline hints may only name ids with a subscription contract. A modern id
+      // outside the ChatGPT catalog (gpt-5.4-nano) that slips in here becomes the
+      // model's only observed route once the codex runtime is enabled, and an
+      // API-key credential is then rejected as incompatible with that route.
+      if (!isOpenAIChatGPTModernModelId(modelId)) {
         return [];
       }
       // Offline hints cover established subscription routes. Astra's phased
@@ -797,6 +803,12 @@ function shouldResolveDynamicModelThroughCodex(ctx: ProviderResolveDynamicModelC
   }
   if (isOpenAISubscriptionOnlyRouteModelId(ctx.modelId)) {
     return true;
+  }
+  // A first-party id the ChatGPT catalog does not list (gpt-5.4-nano) has no
+  // subscription route to project onto; under the codex runtime it would
+  // otherwise become ChatGPT-only and reject the operator's API key.
+  if (isOpenAIProviderModernModelId(ctx.modelId) && !isOpenAIChatGPTModernModelId(ctx.modelId)) {
+    return false;
   }
   return ctx.agentRuntimeId === "codex";
 }
