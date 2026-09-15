@@ -1,7 +1,42 @@
 import type { ChildProcess } from "node:child_process";
+import fs from "node:fs/promises";
 import { vi } from "vitest";
 import { waitForChildClose } from "../../test/helpers/process-wait.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+
+export async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Start the stable parent process shared by the native service boundary fixtures. */
+export function createManagedServiceBoundaryParent(
+  spawn: typeof import("node:child_process").spawn,
+) {
+  const parent = spawn(resolveTestNodeExecPath(), ["-e", "process.stdin.resume()"], {
+    stdio: ["pipe", "ignore", "ignore"],
+  });
+  const closed = new Promise<void>((resolve) => {
+    parent.once("close", () => resolve());
+  });
+  const pid = parent.pid;
+  const startIdentity = pid ? getFileLockProcessStartTime(pid) : null;
+  if (!pid || startIdentity === null) {
+    parent.kill("SIGKILL");
+    throw new Error("expected the managed Gateway parent to have a stable process identity");
+  }
+  return {
+    parent,
+    parentClosed: closed,
+    parentPid: pid,
+    parentStartIdentity: startIdentity,
+  };
+}
 
 /** Reap only descendants of the fixture's still-live child handles, including detached workers. */
 export function createManagedServiceBoundaryCleanup(

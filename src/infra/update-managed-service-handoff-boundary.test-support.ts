@@ -6,7 +6,6 @@ import { expect, vi, type Mock } from "vitest";
 import { waitForFile } from "../../test/helpers/process-wait.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeouts.js";
 import { writeTriageUpdateFailure } from "../commands/triage-update.js";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -27,7 +26,11 @@ import {
   type ManagedServiceCommandTiming,
   type ManagedServiceManagerBoundaryResult,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
-import { createManagedServiceBoundaryCleanup } from "./update-managed-service-handoff-process.test-support.js";
+import {
+  createManagedServiceBoundaryCleanup,
+  createManagedServiceBoundaryParent,
+  pathExists,
+} from "./update-managed-service-handoff-process.test-support.js";
 import {
   managedRepairUpdaterScript,
   readManagedRepairEffects,
@@ -48,14 +51,7 @@ import {
 } from "./update-managed-service-native.test-support.js";
 import { createUpdateRun, getUpdateRun } from "./update-run-ledger.js";
 
-export async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
+export { pathExists };
 
 export function createManagedServiceManagerBoundary({
   spawnMock,
@@ -133,18 +129,8 @@ export function createManagedServiceManagerBoundary({
       await fs.mkdir(invocationCwd);
       await fs.writeFile(path.join(invocationCwd, "update-input.txt"), "selected target");
     }
-    const parent = spawn(resolveTestNodeExecPath(), ["-e", "process.stdin.resume()"], {
-      stdio: ["pipe", "ignore", "ignore"],
-    });
-    const parentClosed = new Promise<void>((resolve) => {
-      parent.once("close", () => resolve());
-    });
-    const parentPid = parent.pid;
-    const parentStartIdentity = parentPid ? getFileLockProcessStartTime(parentPid) : null;
-    if (!parentPid || parentStartIdentity === null) {
-      parent.kill("SIGKILL");
-      throw new Error("expected the managed Gateway parent to have a stable process identity");
-    }
+    const { parent, parentClosed, parentPid, parentStartIdentity } =
+      createManagedServiceBoundaryParent(spawn);
     await fs.writeFile(
       path.join(root, kind === "systemd" ? "systemctl" : "launchctl"),
       createManagedServiceManagerFixtureScript({
