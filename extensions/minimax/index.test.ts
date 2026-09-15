@@ -849,6 +849,7 @@ describe("minimax provider hooks", () => {
       throw new Error("expected minimax portal oauth auth method");
     }
 
+    const assertCurrent = vi.fn();
     const result = await oauthMethod.run({
       prompter: {
         progress() {
@@ -857,7 +858,13 @@ describe("minimax provider hooks", () => {
         note: vi.fn(async () => undefined),
       },
       openUrl: vi.fn(async () => undefined),
+      assertCurrent,
     } as never);
+
+    const { loginMiniMaxPortalOAuth } = await import("./oauth.runtime.js");
+    expect(vi.mocked(loginMiniMaxPortalOAuth)).toHaveBeenCalledWith(
+      expect.objectContaining({ assertCurrent }),
+    );
 
     expect(result?.configPatch?.models?.providers?.["minimax-portal"]).toEqual({
       baseUrl: "https://api.minimax.io/anthropic",

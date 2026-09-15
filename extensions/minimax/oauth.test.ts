@@ -499,6 +499,78 @@ describe("loginMiniMaxPortalOAuth", () => {
     await rejection;
   });
 
+  it("does not poll after authority is revoked while presenting the device code", async () => {
+    let current = true;
+    const fetchMock = stubOAuthFetch(
+      (_input, init) => authorizationResponse(init),
+      tokenResponse(),
+    );
+
+    await expect(
+      loginMiniMax({
+        deviceCode: async () => {
+          current = false;
+        },
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Login revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("Login revoked");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not swallow an authority error raised while opening the browser", async () => {
+    let current = true;
+    const fetchMock = stubOAuthFetch(
+      (_input, init) => authorizationResponse(init),
+      tokenResponse(),
+    );
+
+    await expect(
+      loginMiniMax({
+        openUrl: async () => {
+          current = false;
+          throw new Error("Login revoked");
+        },
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Login revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("Login revoked");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not issue another poll after a pending response loses authority", async () => {
+    vi.useFakeTimers();
+    let current = true;
+    const fetchMock = stubOAuthFetch(
+      (_input, init) => authorizationResponse(init, { interval: 0 }),
+      () => {
+        current = false;
+        return jsonResponse({ status: "pending" });
+      },
+      tokenResponse(),
+    );
+
+    const rejection = expect(
+      loginMiniMax({
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Login revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("Login revoked");
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await rejection;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps the default poll delay for zero authorization intervals", async () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
