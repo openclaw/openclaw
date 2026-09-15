@@ -10,11 +10,7 @@ import { loadChatBranches, retireChatBranchRequests } from "./chat-history-branc
 import { getChatHistoryLoadState, isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
-import {
-  consumePaneSessionHandoff,
-  type PaneSessionHandoff,
-  preparePaneSessionHandoff,
-} from "./chat-pane-shared.ts";
+import { consumePaneSessionHandoff, type PaneSessionHandoff } from "./chat-pane-shared.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
@@ -28,7 +24,6 @@ import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import { resetTranscriptSession } from "./components/chat-thread-interactions.ts";
-import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 600;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
@@ -251,16 +246,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         });
       }
     }
-    preparePaneSessionHandoff(this.context, this.paneId, state.sessionKey, {
-      // The gateway-scoped disconnect handoff owns attachments and memory
-      // fallbacks. This transfer carries only composer metadata and the draft.
-      attachments: [],
-      draft: state.chatMessage,
-      ...(state.chatMentions?.length ? { mentions: state.chatMentions } : {}),
-      ...(state.chatGoalDraftMode ? { goalMode: state.chatGoalDraftMode } : {}),
-      restore: true,
-      storageFailed: persistResult.status === "storage-failed",
-    });
+    // Disconnect transfers the complete composer under its existing revision;
+    // a separate unversioned draft would supersede newer edits on remount.
   }
 
   protected takeSessionHandoff(sessionKey: string): PaneSessionHandoff | null {
@@ -273,36 +260,21 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     const handoff = this.takeSessionHandoff(sessionKey);
     if (handoff) {
-      this.applySessionHandoff(sessionKey, handoff, !handoff.restore);
+      this.applySessionHandoff(sessionKey, handoff);
     }
   }
 
-  protected applySessionHandoff(
-    sessionKey: string,
-    handoff: PaneSessionHandoff,
-    notifyDraftChange: boolean,
-  ): void {
+  protected applySessionHandoff(sessionKey: string, handoff: PaneSessionHandoff): void {
     const state = this.state;
     if (!state) {
       return;
     }
-    if (!handoff.restore) {
-      if (handoff.composerFallbacks) {
-        state.chatComposerFallbackByScope = handoff.composerFallbacks;
-      }
-      state.chatAttachments = [...handoff.attachments];
+    if (handoff.composerFallbacks) {
+      state.chatComposerFallbackByScope = handoff.composerFallbacks;
     }
+    state.chatAttachments = [...handoff.attachments];
     state.chatGoalDraftMode = handoff.goalMode ?? null;
-    if (notifyDraftChange) {
-      state.handleChatDraftChange(handoff.draft, handoff.mentions ?? []);
-    } else {
-      state.chatMessage = handoff.draft;
-      state.chatMentions = handoff.mentions;
-    }
-    if (handoff.storageFailed) {
-      state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-      state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-    }
+    state.handleChatDraftChange(handoff.draft, handoff.mentions ?? []);
     state.requestUpdate?.();
     if (handoff.send) {
       const composer = getChatComposerState(this.presentationId);

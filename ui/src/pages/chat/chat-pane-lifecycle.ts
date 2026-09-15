@@ -407,13 +407,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
     );
     chatState.restoreComposer({ preserveCurrent: true });
     const sessionHandoff = this.takeSessionHandoff(pageState.sessionKey);
-    if (sessionHandoff?.restore) {
-      this.applySessionHandoff(pageState.sessionKey, sessionHandoff, false);
-    }
     restorePaneStagedAttachments(this.context, this.paneId, pageState, mountGatewayOwner);
     chatState.startComposerPersistence();
-    if (sessionHandoff && !sessionHandoff.restore) {
-      this.applySessionHandoff(pageState.sessionKey, sessionHandoff, true);
+    if (sessionHandoff) {
+      this.applySessionHandoff(pageState.sessionKey, sessionHandoff);
     }
     if (this.draft !== undefined) {
       this.state.handleChatDraftChange(this.draft, []);
@@ -611,7 +608,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
       if (nextSessionKey) {
         const handoff = this.takeSessionHandoff(nextSessionKey);
         if (handoff) {
-          this.applySessionHandoff(nextSessionKey, handoff, true);
+          this.applySessionHandoff(nextSessionKey, handoff);
         }
       }
     }
@@ -688,6 +685,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
           this.paneId,
           this.state,
           this.stagedAttachmentGatewayOwner,
+          this.chatState.composerDraftRevision,
         );
       }
     }

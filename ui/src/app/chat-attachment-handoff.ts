@@ -1,6 +1,7 @@
 import type {
   ChatAttachment,
   ChatComposerMemoryFallback,
+  ChatGoalDraftMode,
   HumanMention,
 } from "../lib/chat/chat-types.ts";
 import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-store.ts";
@@ -18,6 +19,8 @@ type PendingChatAttachmentHandoff = {
   attachments: ChatAttachment[];
   fallbacks: Record<string, ChatComposerMemoryFallback>;
   message: string;
+  draftRevision?: number;
+  goalMode?: ChatGoalDraftMode | null;
   mentions?: readonly HumanMention[];
   newSessionDraft?: NewSessionDraftHandoff;
   preparedAt: number;
@@ -64,13 +67,15 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
       attachments,
       fallbacks,
       message = "",
+      draftRevision,
+      goalMode,
       mentions,
       newSessionDraft,
     }) => {
       const key = entryKey(paneId, scopeKey);
       const previous = take(key);
       const fallbackEntries = Object.entries(fallbacks);
-      if (!message && attachments.length === 0 && fallbackEntries.length === 0) {
+      if (!message && !goalMode && attachments.length === 0 && fallbackEntries.length === 0) {
         releaseHandoff(previous);
         return;
       }
@@ -96,6 +101,8 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
         attachments: [...attachments],
         ...(newSessionDraft ? { newSessionDraft } : {}),
         message,
+        ...(draftRevision !== undefined ? { draftRevision } : {}),
+        ...(goalMode ? { goalMode } : {}),
         ...(mentions?.length ? { mentions: mentions.map((mention) => ({ ...mention })) } : {}),
         fallbacks: Object.fromEntries(
           fallbackEntries.map(([fallbackKey, fallback]) => [
@@ -123,6 +130,8 @@ export function createChatAttachmentHandoff(): ApplicationChatAttachmentHandoff 
           fallbacks: match.fallbacks,
           ...(match.newSessionDraft ? { newSessionDraft: match.newSessionDraft } : {}),
           ...(match.message ? { message: match.message } : {}),
+          ...(match.draftRevision !== undefined ? { draftRevision: match.draftRevision } : {}),
+          ...(match.goalMode ? { goalMode: match.goalMode } : {}),
           ...(match.mentions ? { mentions: match.mentions } : {}),
         };
       }

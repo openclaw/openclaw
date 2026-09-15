@@ -13,6 +13,7 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
+import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import {
   closeStagedPane,
   ChatPaneComposerHandoff,
@@ -26,6 +27,7 @@ import { enqueueChatMessage, subscribeChatOutboxProjection } from "./chat-queue.
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   ChatComposerPersistence,
+  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   loadChatComposerSnapshot,
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
@@ -400,14 +402,14 @@ describe("staged chat attachment pane handoff", () => {
     const pastedText = storedAttachment("pasted-text", "text/plain");
     const mixed = [image, file, pastedText];
 
-    preparePaneStagedAttachments(context, "p1", state(mixed), owner);
+    preparePaneStagedAttachments(context, "p1", state(mixed), owner, 0);
     const mismatched = state([]);
     restorePaneStagedAttachments(context, "p1", mismatched, otherOwner);
     expect(mismatched.chatAttachments).toEqual([]);
     expect(mixed.every((attachment) => getChatAttachmentDataUrl(attachment) === null)).toBe(true);
 
     const second = [storedAttachment("second-image"), storedAttachment("second-file")];
-    preparePaneStagedAttachments(context, "p2", state(second), owner);
+    preparePaneStagedAttachments(context, "p2", state(second), owner, 0);
     const remount = state([]);
     restorePaneStagedAttachments(context, "p2", remount, owner);
     expect(remount.chatAttachments).toEqual(second);
@@ -415,6 +417,111 @@ describe("staged chat attachment pane handoff", () => {
       true,
     );
     discardStateStagedAttachments(remount);
+  });
+
+  it("rejects every part of an evicted composer after a newer split edit", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const owner = {} as GatewayBrowserClient;
+    const handoff = createChatAttachmentHandoff();
+    const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
+    const older = state([]);
+    older.chatMessage = "";
+    older.chatQueue = [];
+    const olderPersistence = new ChatComposerPersistence(() => older);
+    const newer = state([]);
+    newer.chatMessage = "";
+    newer.chatQueue = [];
+    const newerPersistence = new ChatComposerPersistence(() => newer);
+    const obsolete = storedAttachment("evicted-old-image");
+    try {
+      olderPersistence.start();
+      older.chatMessage = "@Old goal";
+      older.chatMentions = [{ profileId: "old", start: 0, end: 4 }];
+      older.chatGoalDraftMode = { action: "start", sessionId: "old-session" };
+      older.chatAttachments = [obsolete];
+      olderPersistence.schedule();
+      olderPersistence.persistNow();
+      preparePaneStagedAttachments(context, "p1", older, owner, olderPersistence.draftRevision);
+      newerPersistence.restore();
+      newerPersistence.start();
+      newer.chatMessage = "@New draft";
+      newer.chatMentions = [{ profileId: "new", start: 0, end: 4 }];
+      newer.chatGoalDraftMode = null;
+      newerPersistence.schedule();
+      newerPersistence.persistNow();
+      const remount = state([]);
+      remount.chatMessage = "";
+      remount.chatQueue = [];
+      const restoredPersistence = new ChatComposerPersistence(() => remount);
+      restoredPersistence.restore();
+      restorePaneStagedAttachments(context, "p1", remount, owner);
+      expect(remount.chatMessage).toBe("@New draft");
+      expect(remount.chatMentions).toEqual(newer.chatMentions);
+      expect(remount.chatGoalDraftMode).toBeNull();
+      expect(remount.chatAttachments).toEqual([]);
+      expect(getChatAttachmentDataUrl(obsolete)).toBeNull();
+    } finally {
+      olderPersistence.stop();
+      newerPersistence.stop();
+      handoff.dispose();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps an unsaved composer and its recovery warning across eviction", () => {
+    const storage = createStorageMock();
+    vi.stubGlobal("sessionStorage", storage);
+    const owner = {} as GatewayBrowserClient;
+    const handoff = createChatAttachmentHandoff();
+    const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
+    const source = state([]);
+    source.chatMessage = "";
+    source.chatQueue = [];
+    const persistence = new ChatComposerPersistence(() => source);
+    const image = storedAttachment("unsaved-image");
+    try {
+      persistence.start();
+      source.chatMessage = "@Alex unsaved goal";
+      source.chatMentions = [{ profileId: "alex", start: 0, end: 5 }];
+      source.chatGoalDraftMode = { action: "start", sessionId: "unsaved-session" };
+      source.chatAttachments = [image];
+      vi.spyOn(storage, "setItem").mockImplementation(() => {
+        throw new Error("quota");
+      });
+      persistence.schedule();
+      const result = persistence.persistForRouteSwitchResult();
+      expect(result.status).toBe("storage-failed");
+      if (result.status !== "storage-failed") {
+        throw new Error("Expected failed storage");
+      }
+      storeChatComposerMemoryFallback(
+        source,
+        resolveUiConversationIdentity(source, source.sessionKey),
+        {
+          message: source.chatMessage,
+          mentions: source.chatMentions,
+          goalMode: source.chatGoalDraftMode,
+          attachments: source.chatAttachments,
+          draftRetry: result,
+        },
+      );
+      preparePaneStagedAttachments(context, "p1", source, owner, persistence.draftRevision);
+      const remount = state([]);
+      restorePaneStagedAttachments(context, "p1", remount, owner);
+      expect(remount.chatMessage).toBe(source.chatMessage);
+      expect(remount.chatMentions).toEqual(source.chatMentions);
+      expect(remount.chatGoalDraftMode).toEqual(source.chatGoalDraftMode);
+      expect(remount.chatAttachments).toEqual([image]);
+      expect(remount.chatError).toBe(CHAT_COMPOSER_DRAFT_STORAGE_ERROR);
+      expect(remount.chatComposerFallbackByScope).toEqual(source.chatComposerFallbackByScope);
+      expect(getChatAttachmentDataUrl(image)).not.toBeNull();
+      discardStateStagedAttachments(remount);
+    } finally {
+      persistence.stop();
+      handoff.dispose();
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("releases a restored fallback displaced by mounted state", () => {

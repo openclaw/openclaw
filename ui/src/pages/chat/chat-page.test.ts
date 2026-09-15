@@ -609,6 +609,7 @@ describe("chat page split layout host", () => {
 
   it("renders keyed panes and a divider for a two-column split", async () => {
     const page = new ChatPage();
+    const navigation = setNavigationContext(page);
     page.data = { sessionKey: "main" };
     document.body.append(page);
     setLayout(page, createSplitLayout("main"));
@@ -650,6 +651,9 @@ describe("chat page split layout host", () => {
         cell.getAttribute("aria-current"),
       ),
     ).toEqual(["true", null]);
+    expect(navigation.replace).toHaveBeenCalledOnce();
+    itemAt(cells, 0, "split cell").dispatchEvent(new Event("focusin"));
+    expect(navigation.replace).toHaveBeenCalledOnce();
   });
 
   it("declares split panes, session switches, pane closes, and page disposal", async () => {
