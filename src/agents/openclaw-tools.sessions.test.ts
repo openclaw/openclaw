@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { Value } from "typebox/value";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   configureExecutionDecisionWorkSink,
@@ -33,6 +34,11 @@ import {
 import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-admission.test-helpers.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+
+const agentCommandFromIngress = vi.hoisted(() =>
+  vi.fn<typeof import("../commands/agent.js").agentCommandFromIngress>(),
+);
+vi.mock("../commands/agent.js", () => ({ agentCommandFromIngress }));
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
@@ -77,14 +83,16 @@ import {
 import { SessionManager } from "./sessions/session-manager.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { compactToolOutputHint, toolSchemaDeclaration } from "./tool-schema-hints.js";
-import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
+import { observeSessionSendContinuations } from "./tools/agent-step.test-support.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
+import * as sessionsSendA2A from "./tools/sessions-send-tool.a2a.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const continuations = observeSessionSendContinuations();
 
 const TEST_CONFIG = {
   session: {
@@ -304,15 +312,24 @@ describe("sessions tools", () => {
     loadSessionEntryByKeyMock.mockReset();
     loadSessionEntryByKeyMock.mockReturnValue(undefined);
     installMessagingTestRegistry();
-    agentStepTesting.setDepsForTest({
-      agentCommandFromIngress: async () => ({
-        payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
-        meta: { durationMs: 1 },
-      }),
+    agentCommandFromIngress.mockReset().mockResolvedValue({
+      payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
+      meta: { durationMs: 1 },
     });
   });
-  afterEach(resetGatewayWorkAdmission);
-  afterEach(resetSystemEventsForTest);
+  afterEach(() =>
+    runQaGatewayFixture(
+      () => continuations.settle(),
+      resetGatewayWorkAdmission,
+      resetSystemEventsForTest,
+    ),
+  );
+  afterAll(() =>
+    runQaGatewayFixture(
+      () => continuations.settle(),
+      () => continuations.restore(),
+    ),
+  );
 
   it("sessions_send notify queues next-turn context without starting or steering work", async () => {
     const targetKey = "agent:main:dashboard:notification-target";
@@ -1577,6 +1594,11 @@ describe("sessions tools", () => {
 
   it("sessions_send returns pending agent error diagnostics on timeout", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
+    let waitCount = 0;
+    let completePendingRun = () => {};
+    const pendingRunCompleted = new Promise<void>((resolve) => {
+      completePendingRun = resolve;
+    });
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
@@ -1588,6 +1610,16 @@ describe("sessions tools", () => {
         };
       }
       if (request.method === "agent.wait") {
+        waitCount += 1;
+        if (waitCount > 1) {
+          // Cleanup completes the fake run without making its initial pending error terminal.
+          await pendingRunCompleted;
+          return {
+            runId: "run-pending-model-error",
+            status: "ok",
+            terminalReply: { disposition: "silent" },
+          };
+        }
         return {
           runId: "run-pending-model-error",
           status: "timeout",
@@ -1603,21 +1635,29 @@ describe("sessions tools", () => {
       agentChannel: "discord",
     });
 
-    const result = await tool.execute("call-pending-error", {
-      sessionKey: "main",
-      message: "check status",
-      timeoutSeconds: 1,
-    });
+    await runQaGatewayFixture(
+      async () => {
+        const result = await tool.execute("call-pending-error", {
+          sessionKey: "main",
+          message: "check status",
+          timeoutSeconds: 1,
+        });
 
-    const details = sessionsSendDetails(result.details);
-    expect(details.status).toBe("timeout");
-    expect(details.error).toBe("429 RESOURCE_EXHAUSTED");
-    expect(details.runId).toBe("run-pending-model-error");
-    expect(details.sentBeforeError).toBe(true);
-    expect(details.delivery?.status).toBe("pending");
-    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
-    await vi.waitFor(() =>
-      expect(calls.filter((call) => call.method === "agent.wait").length).toBeGreaterThanOrEqual(2),
+        const details = sessionsSendDetails(result.details);
+        expect(details.status).toBe("timeout");
+        expect(details.error).toBe("429 RESOURCE_EXHAUSTED");
+        expect(details.runId).toBe("run-pending-model-error");
+        expect(details.sentBeforeError).toBe(true);
+        expect(details.delivery?.status).toBe("pending");
+        expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+        await vi.waitFor(() =>
+          expect(
+            calls.filter((call) => call.method === "agent.wait").length,
+          ).toBeGreaterThanOrEqual(2),
+        );
+      },
+      completePendingRun,
+      () => continuations.settle(),
     );
   });
 
@@ -1716,11 +1756,9 @@ describe("sessions tools", () => {
       }
       return {};
     });
-    agentStepTesting.setDepsForTest({
-      agentCommandFromIngress: async () => ({
-        payloads: [{ text: "announce now", mediaUrl: null }],
-        meta: { durationMs: 1 },
-      }),
+    agentCommandFromIngress.mockResolvedValue({
+      payloads: [{ text: "announce now", mediaUrl: null }],
+      meta: { durationMs: 1 },
     });
 
     const tool = getSessionTool("sessions_send", {
@@ -1830,18 +1868,16 @@ describe("sessions tools", () => {
         }
         return {};
       });
-      agentStepTesting.setDepsForTest({
-        agentCommandFromIngress: async () => {
-          finalAnnounceAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
-          if (finalAnnounceAdmissionClosed) {
-            throw new GatewayDrainingError();
-          }
-          finalAnnounceProviderStarts += 1;
-          return {
-            payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
-            meta: { durationMs: 1 },
-          };
-        },
+      agentCommandFromIngress.mockImplementation(async () => {
+        finalAnnounceAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+        if (finalAnnounceAdmissionClosed) {
+          throw new GatewayDrainingError();
+        }
+        finalAnnounceProviderStarts += 1;
+        return {
+          payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
+          meta: { durationMs: 1 },
+        };
       });
 
       const tool = getSessionTool("sessions_send", {
@@ -1850,55 +1886,84 @@ describe("sessions tools", () => {
         config: cloneTestConfig(),
       });
 
-      const result = await runWithGatewayRootWorkAdmissionForTest(() =>
-        tool.execute("call-delayed", {
-          sessionKey: targetKey,
-          message: "ping",
-          timeoutSeconds: 1,
-        }),
-      );
-      const details = sessionsSendDetails(result.details);
-      expect(details.status).toBe("accepted");
-      expect(details.sessionKey).toBe(targetKey);
-      expect(details.targetDisposition).toBe("queued");
-      expect(details.delivery?.status).toBe("pending");
-      expect(details.delivery?.mode).toBe("announce");
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
-      expect(requesterProviderStarts).toBe(0);
-      releaseDelayedWait();
+      const flowSpy = vi.spyOn(sessionsSendA2A, "runSessionsSendA2AFlow");
+      let settleCompletion: Promise<void> | undefined;
+      await runQaGatewayFixture(
+        async () => {
+          const result = await runWithGatewayRootWorkAdmissionForTest(() =>
+            tool.execute("call-delayed", {
+              sessionKey: targetKey,
+              message: "ping",
+              timeoutSeconds: 1,
+            }),
+          );
+          const details = sessionsSendDetails(result.details);
+          expect(details.status).toBe("accepted");
+          expect(details.sessionKey).toBe(targetKey);
+          expect(details.targetDisposition).toBe("queued");
+          expect(details.delivery?.status).toBe("pending");
+          expect(details.delivery?.mode).toBe("announce");
+          expect(getActiveGatewayRootWorkCount()).toBe(1);
+          expect(requesterProviderStarts).toBe(0);
+          settleCompletion = continuations.settle();
+          let observerFinished = false;
+          const recordSettlement = () => {
+            observerFinished = true;
+          };
+          // Observe settlement without replacing its promise; cleanup still retains any rejection.
+          void settleCompletion.then(recordSettlement, recordSettlement);
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(observerFinished, "cleanup must wait for the admitted A2A callback").toBe(false);
+          releaseDelayedWait();
 
-      await vi.waitFor(
-        () => {
-          expect(requesterAdmissionClosed).toBe(false);
+          await vi.waitFor(
+            () => {
+              expect(requesterAdmissionClosed).toBe(false);
+            },
+            { timeout: 2_000, interval: 5 },
+          );
+          expect(requesterProviderStarts).toBe(3);
+
+          const requesterReplyCall = calls.find(
+            (call) =>
+              call.method === "agent" &&
+              (call.params as { sessionKey?: string } | undefined)?.sessionKey === requesterKey,
+          );
+          const replyParams = requesterReplyCall?.params as
+            | {
+                extraSystemPrompt?: string;
+                inputProvenance?: { sourceSessionKey?: string };
+                message?: string;
+                sessionKey?: string;
+              }
+            | undefined;
+          expect(replyParams?.sessionKey).toBe(requesterKey);
+          expect(replyParams?.inputProvenance?.sourceSessionKey).toBe(targetKey);
+          expect(replyParams?.message).toContain("late director reply");
+          expect(replyParams?.extraSystemPrompt).toContain("Agent-to-agent reply step");
+          expect(replyParams?.extraSystemPrompt).toContain("Current agent: Agent 1 (requester)");
+          expect(calls.find((call) => call.method === "send")).toBeUndefined();
+          await vi.waitFor(() => {
+            expect(finalAnnounceAdmissionClosed).toBe(false);
+            expect(finalAnnounceProviderStarts).toBe(1);
+            expect(getActiveGatewayRootWorkCount()).toBe(0);
+          });
         },
-        { timeout: 2_000, interval: 5 },
+        releaseDelayedWait,
+        // A stale observer must not strand the real callback when this assertion fails.
+        () =>
+          runQaGatewayFixture(
+            async () => undefined,
+            ...flowSpy.mock.results
+              .filter((result) => result.type === "return")
+              .map((result) => () => result.value),
+          ),
+        () => settleCompletion,
+        () => continuations.settle(),
+        () => flowSpy.mockRestore(),
       );
-      expect(requesterProviderStarts).toBe(3);
-
-      const requesterReplyCall = calls.find(
-        (call) =>
-          call.method === "agent" &&
-          (call.params as { sessionKey?: string } | undefined)?.sessionKey === requesterKey,
-      );
-      const replyParams = requesterReplyCall?.params as
-        | {
-            extraSystemPrompt?: string;
-            inputProvenance?: { sourceSessionKey?: string };
-            message?: string;
-            sessionKey?: string;
-          }
-        | undefined;
-      expect(replyParams?.sessionKey).toBe(requesterKey);
-      expect(replyParams?.inputProvenance?.sourceSessionKey).toBe(targetKey);
-      expect(replyParams?.message).toContain("late director reply");
-      expect(replyParams?.extraSystemPrompt).toContain("Agent-to-agent reply step");
-      expect(replyParams?.extraSystemPrompt).toContain("Current agent: Agent 1 (requester)");
-      expect(calls.find((call) => call.method === "send")).toBeUndefined();
-      await vi.waitFor(() => {
-        expect(finalAnnounceAdmissionClosed).toBe(false);
-        expect(finalAnnounceProviderStarts).toBe(1);
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-      });
     },
   );
 
@@ -2697,11 +2762,9 @@ describe("sessions tools", () => {
       }
       return {};
     });
-    agentStepTesting.setDepsForTest({
-      agentCommandFromIngress: async () => ({
-        payloads: [{ text: "announce now", mediaUrl: null }],
-        meta: { durationMs: 1 },
-      }),
+    agentCommandFromIngress.mockResolvedValue({
+      payloads: [{ text: "announce now", mediaUrl: null }],
+      meta: { durationMs: 1 },
     });
 
     const tool = getSessionTool("sessions_send", {

@@ -3,7 +3,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { runAgentStep } from "./agent-step.js";
-import { testing } from "./agent-step.test-support.js";
+
+const agentCommandFromIngress = vi.hoisted(() =>
+  vi.fn<typeof import("../../commands/agent.js").agentCommandFromIngress>(),
+);
+vi.mock("../../commands/agent.js", () => ({ agentCommandFromIngress }));
 
 const recordParticipant = vi.hoisted(() => vi.fn());
 vi.mock("../../sessions/session-participant-recording.js", () => ({
@@ -22,7 +26,7 @@ vi.mock("../agent-bundle-mcp-tools.js", () => ({
 
 describe("runAgentStep", () => {
   afterEach(() => {
-    testing.setDepsForTest();
+    agentCommandFromIngress.mockReset();
     agentWaitMock.mockReset();
     vi.clearAllMocks();
   });
@@ -83,6 +87,7 @@ describe("runAgentStep", () => {
         promptedAt: expect.any(Number),
       }),
     );
+    expect(agentCommandFromIngress).not.toHaveBeenCalled();
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
   });
 
@@ -107,16 +112,14 @@ describe("runAgentStep", () => {
       }),
     ).resolves.toBe("late reply");
 
+    expect(agentCommandFromIngress).not.toHaveBeenCalled();
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
   });
 
   it("forwards explicit transcript bodies for nested bookkeeping turns", async () => {
-    const agentCommandFromIngress = vi.fn(async () => ({
+    agentCommandFromIngress.mockResolvedValue({
       payloads: [{ text: "done", mediaUrl: null }],
       meta: { durationMs: 1 },
-    }));
-    testing.setDepsForTest({
-      agentCommandFromIngress,
     });
     await runAgentStep({
       sessionKey: "agent:main:subagent:child",
@@ -127,17 +130,17 @@ describe("runAgentStep", () => {
     });
 
     expect(agentCommandFromIngress).toHaveBeenCalledTimes(1);
-    const ingressCalls = agentCommandFromIngress.mock.calls as unknown as Array<
-      [{ message?: string; sourceReplyDeliveryMode?: string; transcriptMessage?: string }]
-    >;
-    const ingress = ingressCalls[0]?.[0];
+    const ingress = agentCommandFromIngress.mock.calls[0]?.[0];
     expect(ingress?.message).toContain("internal announce step");
     expect(ingress?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(ingress?.transcriptMessage).toBe("");
+    expect(ingress?.allowModelOverride).toBe(false);
+    expect(ingress?.sessionKey).toBe("agent:main:subagent:child");
+    expect(ingress?.runId).toBeTypeOf("string");
   });
 
   it("does not return failed transcript-mode output as an announce reply", async () => {
-    const agentCommandFromIngress = vi.fn(async () => ({
+    agentCommandFromIngress.mockResolvedValue({
       payloads: [
         {
           text: "⚠️ Agent couldn't generate a response. Please try again.",
@@ -154,9 +157,6 @@ describe("runAgentStep", () => {
           terminalPresentation: false,
         },
       },
-    }));
-    testing.setDepsForTest({
-      agentCommandFromIngress,
     });
 
     await expect(
@@ -175,7 +175,7 @@ describe("runAgentStep", () => {
   it("returns trusted terminal presentations from incomplete transcript turns", async () => {
     const presentation =
       "The read-only lookup completed successfully.\n\n⚠️ Agent couldn't generate a response. Please try again.";
-    const agentCommandFromIngress = vi.fn(async () => ({
+    agentCommandFromIngress.mockResolvedValue({
       payloads: [{ text: presentation, mediaUrl: null, isError: true }],
       meta: {
         durationMs: 1,
@@ -186,9 +186,6 @@ describe("runAgentStep", () => {
           terminalPresentation: true,
         },
       },
-    }));
-    testing.setDepsForTest({
-      agentCommandFromIngress,
     });
 
     await expect(

@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, vi } from "vitest";
-import { testing as agentStepTesting } from "../agents/tools/agent-step.test-support.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { setTestPluginRegistry, testState, writeSessionStore } from "./test-helpers.js";
@@ -12,6 +11,8 @@ export async function runDirectSessionAnnounceScenario(params: {
   expectedAccountId: string | undefined;
 }): Promise<void> {
   const { sessionKey, expectedAccountId } = params;
+  const ingress = vi.mocked((await import("../commands/agent.js")).agentCommandFromIngress);
+  const previousIngress = ingress.getMockImplementation();
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-direct-announce-"));
   const sendCalls: Array<{
     to?: string;
@@ -63,11 +64,9 @@ export async function runDirectSessionAnnounceScenario(params: {
         },
       },
     });
-    agentStepTesting.setDepsForTest({
-      agentCommandFromIngress: async () => ({
-        payloads: [{ text: "direct announcement delivered", mediaUrl: null }],
-        meta: { durationMs: 1 },
-      }),
+    ingress.mockResolvedValue({
+      payloads: [{ text: "direct announcement delivered", mediaUrl: null }],
+      meta: { durationMs: 1 },
     });
 
     await runSessionsSendA2AFlow({
@@ -92,7 +91,11 @@ export async function runDirectSessionAnnounceScenario(params: {
       { timeout: 5_000 },
     );
   } finally {
-    agentStepTesting.setDepsForTest();
+    if (previousIngress) {
+      ingress.mockImplementation(previousIngress);
+    } else {
+      ingress.mockReset();
+    }
     testState.sessionStorePath = undefined;
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
