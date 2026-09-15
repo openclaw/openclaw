@@ -42,6 +42,8 @@ export const SESSION_INGESTION_MIN_MESSAGES_PER_FILE = 12;
 const SESSION_INGESTION_MIN_SNIPPET_CHARS = 12;
 const SESSION_INGESTION_MAX_SNIPPET_CHARS = 280;
 const SESSION_INGESTION_MAX_TRACKED_SCOPES = 2048;
+const ASSISTANT_PROCESS_CHATTER_BODY_RE =
+  /^(?:(?:Need(?: to)?|Now) (?:commit|inspect|merge|poll|push)(?: PR)?\.?|Oops worktree maybe not created yet due first command still running\. poll\.?|(?:Commit|Inspect|Merge|Poll|Push)\.?)$/i;
 type BuildSessionEntryOptions = NonNullable<Parameters<typeof buildSessionEntry>[1]>;
 
 export type SessionEntryOrigin = {
@@ -93,6 +95,13 @@ type SessionIngestionScan = {
 };
 
 type DayDisposition = "include" | "skip" | "block";
+
+function isAssistantProcessChatter(value: string): boolean {
+  if (!value.startsWith("Assistant:")) {
+    return false;
+  }
+  return ASSISTANT_PROCESS_CHATTER_BODY_RE.test(value.slice("Assistant:".length).trimStart());
+}
 
 function buildSessionScope(agentId: string, sessionId: string): string {
   return `${agentId}:${sessionId}`;
@@ -350,6 +359,9 @@ export async function scanSessionIngestionSource(params: {
     scannedEndIndex = index + 1;
     const snippet = normalizeSessionCorpusSnippet(lines[index] ?? "");
     if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
+      continue;
+    }
+    if (isAssistantProcessChatter(snippet)) {
       continue;
     }
     const lineNumber = entry.lineMap[index] ?? index + 1;
