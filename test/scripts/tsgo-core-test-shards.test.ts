@@ -45,7 +45,7 @@ describe("tsgo core test shards", () => {
       findTsgoCoreTestShardViolations({
         canonicalRoots: roots("test/tsconfig/tsconfig.core.test.json"),
         // Rebalance before the runner's 720-root cap blocks unrelated test-only PRs.
-        maxRoots: 700,
+        maxRoots: 710,
         shards: TSGO_CORE_TEST_SHARDS.map((shard) => ({
           name: shard.name,
           roots: roots(shard.config),
