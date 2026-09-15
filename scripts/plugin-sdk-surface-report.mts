@@ -204,7 +204,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: typed feature contracts, backend registration, and native Control UI hosting.
       // +1: public provider-owned asynchronous embedding batch contract.
       // +1: runtime-neutral WebSocket client/server adapter for bundled and external plugins.
-      154,
+      // +1: generic live-visual provider discovery and timed browser-source sessions.
+      155,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -375,7 +376,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved shared widget CDN policy for core and channel presenters.
       // +13: runtime-neutral WebSocket client/server, stream, data, and option contracts.
       // +2: approved process-diagnostics predicate and lightweight subsystem logger.
-      4481,
+      // +10: generic live-visual provider resolver and timed media/session contracts.
+      4491,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -514,7 +516,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared per-connection webhook request ordering for channel listeners.
       // +4: runtime-neutral WebSocket client/server and stream constructors.
       // +2: approved process-diagnostics predicate and lightweight subsystem logger.
-      2645,
+      // +1: generic live-visual provider resolver.
+      2646,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

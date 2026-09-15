@@ -55,6 +55,7 @@ export type {
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 export type { PluginLogger } from "./logger-types.js";
+export type * from "./live-visual-provider.types.js";
 export type { PluginConfigUiHint } from "./manifest-types.js";
 export type { PluginOrigin } from "./plugin-origin.types.js";
 export type {
