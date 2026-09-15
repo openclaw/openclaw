@@ -11,6 +11,7 @@ const MANIFEST_CONTRACT_KEYS = [
   "realtimeVoiceProviders",
   "mediaUnderstandingProviders",
   "transcriptSourceProviders",
+  "liveVisualProviders",
   "documentExtractors",
   "imageGenerationProviders",
   "videoGenerationProviders",

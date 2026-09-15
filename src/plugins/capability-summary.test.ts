@@ -135,6 +135,7 @@ describe("plugin capability summaries", () => {
       realtimeVoiceProviders: ["voice"],
       mediaUnderstandingProviders: ["media"],
       transcriptSourceProviders: ["transcript"],
+      liveVisualProviders: ["visual"],
       documentExtractors: ["document"],
       imageGenerationProviders: ["image"],
       videoGenerationProviders: ["video"],

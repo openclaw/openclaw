@@ -55,6 +55,7 @@ Each list is optional. For `speechProviders` and `realtimeVoiceProviders`, list 
 | `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                                                        |
 | `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                                                   |
 | `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                                                     |
+| `liveVisualProviders`            | `string[]` | Live visual provider ids this plugin owns.                                                                                           |
 | `documentExtractors`             | `string[]` | Document (for example PDF) extractor provider ids this plugin owns.                                                                  |
 | `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                                                      |
 | `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                                                      |
