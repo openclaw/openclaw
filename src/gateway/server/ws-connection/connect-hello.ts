@@ -74,6 +74,7 @@ export async function sendGatewayHello(
     frame,
     connectParams,
     sendFrame,
+    onHelloDelivered,
     pendingNodePairingCleanup,
     releasePendingNodePairingCleanup,
   } = context;
@@ -261,6 +262,7 @@ export async function sendGatewayHello(
     }
     snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
+    onHelloDelivered();
   } catch (err) {
     if (bootstrapHandoff) {
       if (bootstrapHandoff.completion) {

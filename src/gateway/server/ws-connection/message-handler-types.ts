@@ -114,6 +114,8 @@ export type GatewayConnectPhaseContext = {
     options?: Parameters<typeof errorShape>[2],
   ) => void;
   sendFrame: (obj: unknown) => Promise<void>;
+  /** Retire pre-auth ingress limits once hello-ok is accepted by the transport. */
+  onHelloDelivered: () => void;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   runDetachedConnectWork: (run: () => Promise<void>, onError: (error: unknown) => void) => void;
   pendingNodePairingCleanup: {
