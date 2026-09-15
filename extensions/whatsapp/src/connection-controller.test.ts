@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DisconnectReason } from "baileys";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareWebAuthForLogin } from "./auth-store.js";
 import {
   closeWaSocket,
   waitForWhatsAppLoginResult,
@@ -12,9 +13,9 @@ import {
 } from "./connection-controller.js";
 import { enqueueCredsSave, writeCredsJsonAtomically } from "./creds-persistence.js";
 import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
+import { createCompletedPhoneCodeCreds } from "./phone-code.test-helpers.js";
 import {
   createWaSocket,
-  logoutWeb,
   readWebAuthExistsForDecision,
   waitForCredsSaveQueueWithTimeout,
   waitForWaConnection,
@@ -27,9 +28,16 @@ vi.mock("./session.js", async () => {
     ...actual,
     createWaSocket: vi.fn(),
     waitForWaConnection: vi.fn(),
-    logoutWeb: vi.fn(async () => true),
     readWebAuthExistsForDecision: vi.fn(async () => ({ outcome: "stable" as const, exists: true })),
     waitForCredsSaveQueueWithTimeout: vi.fn(async () => "drained" as const),
+  };
+});
+
+vi.mock("./auth-store.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
+  return {
+    ...actual,
+    prepareWebAuthForLogin: vi.fn(async () => "cleared" as const),
   };
 });
 
@@ -60,7 +68,7 @@ vi.mock("./connection-owner.js", () => ({
 
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
-const logoutWebMock = vi.mocked(logoutWeb);
+const prepareWebAuthForLoginMock = vi.mocked(prepareWebAuthForLogin);
 const readWebAuthExistsForDecisionMock = vi.mocked(readWebAuthExistsForDecision);
 const waitForCredsSaveQueueWithTimeoutMock = vi.mocked(waitForCredsSaveQueueWithTimeout);
 const registerChannelRuntimeContextMock = runtimeContextMocks.register;
@@ -135,15 +143,11 @@ function createLoginResultHarness() {
 }
 
 async function runLoggedOutRecovery(opts: {
-  cleanupCleared?: boolean;
-  authDecisions?: Array<{ outcome: "stable"; exists: boolean }>;
+  preparation?: Awaited<ReturnType<typeof prepareWebAuthForLogin>>;
   secondWait?: "resolve" | "logged-out";
 }) {
-  if (opts.cleanupCleared === false) {
-    logoutWebMock.mockResolvedValueOnce(false);
-  }
-  for (const decision of opts.authDecisions ?? []) {
-    readWebAuthExistsForDecisionMock.mockResolvedValueOnce(decision);
+  if (opts.preparation) {
+    prepareWebAuthForLoginMock.mockResolvedValueOnce(opts.preparation);
   }
   const harness = createLoginResultHarness();
   const error = loggedOutError();
@@ -166,7 +170,7 @@ describe("WhatsAppConnectionController", () => {
     registerChannelRuntimeContextMock.mockReturnValue({ dispose: vi.fn() });
     connectionOwnerMocks.acquire.mockResolvedValue({ release: connectionOwnerMocks.release });
     connectionOwnerMocks.release.mockResolvedValue(undefined);
-    logoutWebMock.mockResolvedValue(true);
+    prepareWebAuthForLoginMock.mockReset().mockResolvedValue("cleared");
     readWebAuthExistsForDecisionMock
       .mockReset()
       .mockResolvedValue({ outcome: "stable", exists: true });
@@ -373,9 +377,10 @@ describe("WhatsAppConnectionController", () => {
       restarted: true,
       sock: harness.replacementSock,
     });
-    expect(logoutWebMock).toHaveBeenCalledWith({
+    expect(prepareWebAuthForLoginMock).toHaveBeenCalledWith({
       authDir: loginAuthDir,
       isLegacyAuthDir: false,
+      mode: "clear-existing",
       runtime: harness.runtime,
     });
     expect(harness.initialSock.end).toHaveBeenCalledOnce();
@@ -393,10 +398,9 @@ describe("WhatsAppConnectionController", () => {
     });
   });
 
-  it("does not retry logged-out login when stale auth cleanup is skipped", async () => {
+  it("does not retry logged-out login when existing auth cannot be cleared", async () => {
     const { createSocket, error, harness, result, waitForConnection } = await runLoggedOutRecovery({
-      cleanupCleared: false,
-      authDecisions: [{ outcome: "stable", exists: true }],
+      preparation: "not-cleared",
     });
 
     expect(result).toEqual({
@@ -405,9 +409,10 @@ describe("WhatsAppConnectionController", () => {
         "existing auth could not be cleared. Remove or fix the configured WhatsApp auth directory, then retry login.",
       error,
     });
-    expect(logoutWebMock).toHaveBeenCalledWith({
+    expect(prepareWebAuthForLoginMock).toHaveBeenCalledWith({
       authDir: loginAuthDir,
       isLegacyAuthDir: false,
+      mode: "clear-existing",
       runtime: harness.runtime,
     });
     expect(harness.initialSock.end).toHaveBeenCalledOnce();
@@ -415,13 +420,23 @@ describe("WhatsAppConnectionController", () => {
     expect(waitForConnection).toHaveBeenCalledOnce();
   });
 
+  it("does not retry logged-out login while auth cleanup is unstable", async () => {
+    const { createSocket, result, waitForConnection } = await runLoggedOutRecovery({
+      preparation: "unstable",
+    });
+
+    expect(result.outcome).toBe("failed");
+    if (result.outcome === "failed") {
+      expect(result.message).toMatch(/saving the linked credentials has not settled/i);
+      expect((result.error as { code?: string })?.code).toBe("whatsapp-auth-unstable");
+    }
+    expect(createSocket).not.toHaveBeenCalled();
+    expect(waitForConnection).toHaveBeenCalledOnce();
+  });
+
   it("retries logged-out login when cleanup is a no-op because no auth exists", async () => {
     const { createSocket, harness, result, waitForConnection } = await runLoggedOutRecovery({
-      cleanupCleared: false,
-      authDecisions: [
-        { outcome: "stable", exists: false },
-        { outcome: "stable", exists: true },
-      ],
+      preparation: "not-needed",
       secondWait: "resolve",
     });
 
@@ -446,7 +461,7 @@ describe("WhatsAppConnectionController", () => {
       statusCode: DisconnectReason.loggedOut,
       error,
     });
-    expect(logoutWebMock).toHaveBeenCalledOnce();
+    expect(prepareWebAuthForLoginMock).toHaveBeenCalledOnce();
     expect(createSocket).toHaveBeenCalledOnce();
     expect(waitForConnection).toHaveBeenCalledTimes(2);
   });
@@ -593,13 +608,12 @@ describe("WhatsAppConnectionController", () => {
   });
 
   it("waits for queued creds persistence so linked auth survives an auth-dir reuse", async () => {
-    const actualSession = await vi.importActual<typeof import("./session.js")>("./session.js");
     const actualAuthStore =
       await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
     const authDir = await fs.mkdtemp(path.join(os.tmpdir(), "wa-auth-durability-"));
     try {
       readWebAuthExistsForDecisionMock.mockImplementation(
-        actualSession.readWebAuthExistsForDecision,
+        actualAuthStore.readWebAuthExistsForDecision,
       );
       let credsSaved = false;
       enqueueCredsSave(
@@ -608,7 +622,10 @@ describe("WhatsAppConnectionController", () => {
           await new Promise((resolve) => {
             setTimeout(resolve, 50);
           });
-          await writeCredsJsonAtomically(authDir, { me: { id: "123@s.whatsapp.net" } });
+          await writeCredsJsonAtomically(
+            authDir,
+            createCompletedPhoneCodeCreds({ registered: true }),
+          );
           credsSaved = true;
         },
         () => {},
@@ -624,7 +641,7 @@ describe("WhatsAppConnectionController", () => {
       });
 
       expect(credsSaved).toBe(true);
-      expect(result.outcome).toBe("connected");
+      expect(result).toEqual({ outcome: "connected", restarted: false, sock: expect.anything() });
       // A fresh read of the same auth dir is what a restarted/rebuilt container does.
       await expect(actualAuthStore.webAuthExists(authDir)).resolves.toBe(true);
     } finally {

@@ -6,7 +6,7 @@ import { startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
 import { renderQrPngDataUrl } from "./qr-image.js";
 import {
   createWaSocket,
-  logoutWeb,
+  prepareWebAuthForLogin,
   readWebAuthExistsForDecision,
   readWebSelfId,
   WHATSAPP_AUTH_UNSTABLE_CODE,
@@ -29,7 +29,7 @@ vi.mock("./session.js", async () => {
     exists: false,
   }));
   const readWebSelfIdLocal = vi.fn(() => ({ e164: null, jid: null, lid: null }));
-  const logoutWebLocal = vi.fn(async () => true);
+  const prepareWebAuthForLoginLocal = vi.fn(async () => "not-needed" as const);
   return {
     ...actual,
     createWaSocket: createWaSocketLocal,
@@ -38,7 +38,7 @@ vi.mock("./session.js", async () => {
     getStatusCode,
     readWebAuthExistsForDecision: readWebAuthExistsForDecisionLocal,
     readWebSelfId: readWebSelfIdLocal,
-    logoutWeb: logoutWebLocal,
+    prepareWebAuthForLogin: prepareWebAuthForLoginLocal,
   };
 });
 
@@ -55,7 +55,7 @@ const getActiveWebListenerMock = vi.mocked(getActiveWebListener);
 const readWebAuthExistsForDecisionMock = vi.mocked(readWebAuthExistsForDecision);
 const readWebSelfIdMock = vi.mocked(readWebSelfId);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
-const logoutWebMock = vi.mocked(logoutWeb);
+const prepareWebAuthForLoginMock = vi.mocked(prepareWebAuthForLogin);
 const renderQrPngDataUrlMock = vi.mocked(renderQrPngDataUrl);
 const scanQrMessage = "Scan this QR in WhatsApp → Linked Devices.";
 const refreshedQrMessage = "QR refreshed. Scan the latest code in WhatsApp → Linked Devices.";
@@ -171,7 +171,7 @@ describe("login-qr", () => {
     });
     getActiveWebListenerMock.mockReset().mockReturnValue(null);
     readWebSelfIdMock.mockReset().mockReturnValue({ e164: null, jid: null, lid: null });
-    logoutWebMock.mockReset().mockResolvedValue(true);
+    prepareWebAuthForLoginMock.mockReset().mockResolvedValue("not-needed");
     renderQrPngDataUrlMock
       .mockReset()
       .mockImplementation(async (input) => `data:image/png;base64,encoded:${input}`);
@@ -217,7 +217,6 @@ describe("login-qr", () => {
 
     expect(result.connected).toBe(true);
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
-    expect(logoutWebMock).not.toHaveBeenCalled();
   });
 
   it("returns a replacement QR when status 408 happens before the first QR", async () => {
@@ -236,6 +235,40 @@ describe("login-qr", () => {
     expectScanQrResult(start, "qr-after-timeout");
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
   });
+
+  it("clears partial phone-code auth before creating a QR socket", async () => {
+    const accountId = "partial-phone-code-qr";
+    prepareWebAuthForLoginMock.mockResolvedValueOnce("cleared");
+
+    const result = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
+
+    expectScanQrResult(result);
+    expect(prepareWebAuthForLoginMock).toHaveBeenCalledWith({
+      authDir: expect.stringContaining(accountId),
+      isLegacyAuthDir: false,
+      mode: "preserve-linked",
+      runtime: expect.anything(),
+    });
+    expect(prepareWebAuthForLoginMock.mock.invocationCallOrder[0]).toBeLessThan(
+      createWaSocketMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it.each([false, true])(
+    "does not create a QR socket when partial auth cleanup is refused (force=%s)",
+    async (force) => {
+      prepareWebAuthForLoginMock.mockResolvedValueOnce("not-cleared");
+
+      await expect(startWebLoginWithQr({ timeoutMs: 5000, force })).resolves.toEqual({
+        message: cleanupFailureMessage,
+      });
+      expect(prepareWebAuthForLoginMock).toHaveBeenCalledWith(
+        expect.objectContaining({ mode: force ? "clear-existing" : "preserve-linked" }),
+      );
+      expect(readWebAuthExistsForDecisionMock).not.toHaveBeenCalled();
+      expect(createWaSocketMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("clears auth and returns a replacement QR when WhatsApp is logged out", async () => {
     const accountId = "logged-out-replacement-qr";
@@ -266,10 +299,13 @@ describe("login-qr", () => {
       message: refreshedQrMessage,
       qrDataUrl: encodedQr("qr-after-logout"),
     });
-    expect(logoutWebMock).toHaveBeenCalledOnce();
-    expect(logoutWebMock).toHaveBeenCalledWith(
-      expect.objectContaining({ beforeCredentialPersistence: expect.any(Function) }),
-    );
+    expect(prepareWebAuthForLoginMock).toHaveBeenLastCalledWith({
+      authDir: expect.stringContaining(accountId),
+      isLegacyAuthDir: false,
+      mode: "clear-existing",
+      runtime: expect.anything(),
+      beforeCredentialPersistence: expect.any(Function),
+    });
   });
 
   it("keeps the linked shortcut when existing auth has an active listener", async () => {
@@ -284,7 +320,6 @@ describe("login-qr", () => {
       message: "WhatsApp is already linked (+15551234567). Say “relink” if you want a fresh QR.",
     });
     expect(createWaSocketMock).not.toHaveBeenCalled();
-    expect(logoutWebMock).not.toHaveBeenCalled();
   });
 
   it("clears saved auth for an explicit fresh QR relink", async () => {
@@ -305,9 +340,10 @@ describe("login-qr", () => {
     });
 
     expectScanQrResult(result);
-    expect(logoutWebMock).toHaveBeenCalledWith({
+    expect(prepareWebAuthForLoginMock).toHaveBeenCalledWith({
       authDir: expect.stringContaining(accountId),
       isLegacyAuthDir: false,
+      mode: "clear-existing",
       runtime: expect.anything(),
       beforeCredentialPersistence,
     });
@@ -351,39 +387,36 @@ describe("login-qr", () => {
     await expect(operationGuard?.()).rejects.toThrow("WhatsApp login is no longer active");
   });
 
-  it("revalidates authority after auth inspection and before forced credential cleanup", async () => {
+  it("revalidates authority before forced credential cleanup", async () => {
     const accountId = "revoked-force-fresh-qr";
-    let resolveAuthState: ((value: { outcome: "stable"; exists: true }) => void) | undefined;
-    const authState = new Promise<{ outcome: "stable"; exists: true }>((resolve) => {
-      resolveAuthState = resolve;
-    });
-    let active = true;
     const beforeCredentialPersistence = vi.fn(async () => {
-      if (!active) {
-        throw new Error("plugin tool host authority is no longer active");
-      }
+      throw new Error("plugin tool host authority is no longer active");
     });
-    readWebAuthExistsForDecisionMock.mockReturnValueOnce(authState);
-    logoutWebMock.mockImplementationOnce(async (options) => {
+    prepareWebAuthForLoginMock.mockImplementationOnce(async (options) => {
       await options.beforeCredentialPersistence?.();
-      return true;
+      return "cleared";
     });
 
-    const resultPromise = startWebLoginWithQr({
-      timeoutMs: 5000,
-      accountId,
-      force: true,
-      beforeCredentialPersistence,
-    });
-    await vi.waitFor(() => expect(readWebAuthExistsForDecisionMock).toHaveBeenCalledOnce());
-    active = false;
-    resolveAuthState?.({ outcome: "stable", exists: true });
-
-    await expect(resultPromise).resolves.toEqual({
+    await expect(
+      startWebLoginWithQr({
+        timeoutMs: 5000,
+        accountId,
+        force: true,
+        beforeCredentialPersistence,
+      }),
+    ).resolves.toEqual({
       message:
         "WhatsApp login failed: formatted:Error: plugin tool host authority is no longer active",
     });
+    expect(prepareWebAuthForLoginMock).toHaveBeenCalledWith({
+      authDir: expect.stringContaining(accountId),
+      isLegacyAuthDir: false,
+      mode: "clear-existing",
+      runtime: expect.anything(),
+      beforeCredentialPersistence,
+    });
     expect(beforeCredentialPersistence).toHaveBeenCalledOnce();
+    expect(readWebAuthExistsForDecisionMock).not.toHaveBeenCalled();
     expect(createWaSocketMock).not.toHaveBeenCalled();
   });
 
@@ -446,14 +479,13 @@ describe("login-qr", () => {
     const result = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
 
     expectScanQrResult(result, "qr-after-restart-logout");
-    expect(logoutWebMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authDir: expect.stringContaining(accountId),
-        isLegacyAuthDir: false,
-        runtime: expect.anything(),
-        beforeCredentialPersistence: expect.any(Function),
-      }),
-    );
+    expect(prepareWebAuthForLoginMock).toHaveBeenLastCalledWith({
+      authDir: expect.stringContaining(accountId),
+      isLegacyAuthDir: false,
+      mode: "clear-existing",
+      runtime: expect.anything(),
+      beforeCredentialPersistence: expect.any(Function),
+    });
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
   });
 
@@ -463,10 +495,13 @@ describe("login-qr", () => {
     waitForWaConnectionMock.mockRejectedValueOnce({
       output: { statusCode: 401 },
     });
-    logoutWebMock.mockResolvedValueOnce(false);
-    readWebAuthExistsForDecisionMock
-      .mockResolvedValueOnce({ outcome: "stable", exists: true })
-      .mockResolvedValueOnce({ outcome: "stable", exists: true });
+    prepareWebAuthForLoginMock
+      .mockResolvedValueOnce("not-needed")
+      .mockResolvedValueOnce("not-cleared");
+    readWebAuthExistsForDecisionMock.mockResolvedValueOnce({
+      outcome: "stable",
+      exists: true,
+    });
 
     const result = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
 
@@ -479,10 +514,13 @@ describe("login-qr", () => {
     waitForWaConnectionMock.mockRejectedValueOnce({
       output: { statusCode: 401 },
     });
-    readWebAuthExistsForDecisionMock
-      .mockResolvedValueOnce({ outcome: "stable", exists: false })
-      .mockResolvedValueOnce({ outcome: "stable", exists: true });
-    logoutWebMock.mockResolvedValueOnce(false);
+    readWebAuthExistsForDecisionMock.mockResolvedValueOnce({
+      outcome: "stable",
+      exists: false,
+    });
+    prepareWebAuthForLoginMock
+      .mockResolvedValueOnce("not-needed")
+      .mockResolvedValueOnce("not-cleared");
 
     const start = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
     expect(start.qrDataUrl).toBe(encodedQr("qr-data"));
@@ -529,12 +567,10 @@ describe("login-qr", () => {
       message: "✅ Linked! WhatsApp is ready.",
     });
 
-    logoutWebMock.mockClear();
     getActiveWebListenerMock.mockReturnValue({} as never);
     await expect(startWebLoginWithQr({ timeoutMs: 5000, accountId })).resolves.toEqual({
       message: "WhatsApp is already linked (+15551234567). Say “relink” if you want a fresh QR.",
     });
-    expect(logoutWebMock).not.toHaveBeenCalled();
   });
 
   it("caps oversized wait timeouts to a timer-safe delay", async () => {
@@ -562,7 +598,9 @@ describe("login-qr", () => {
     waitForWaConnectionMock.mockRejectedValueOnce({
       output: { statusCode: 401 },
     });
-    logoutWebMock.mockRejectedValueOnce(new Error("cleanup failed"));
+    prepareWebAuthForLoginMock
+      .mockResolvedValueOnce("not-needed")
+      .mockRejectedValueOnce(new Error("cleanup failed"));
 
     const start = await startWebLoginWithQr({ timeoutMs: 5000 });
     expect(start.qrDataUrl).toBe(encodedQr("qr-data"));
@@ -578,8 +616,8 @@ describe("login-qr", () => {
     });
   });
 
-  it("returns an unstable-auth result when creds flush does not settle", async () => {
-    readWebAuthExistsForDecisionMock.mockResolvedValueOnce({ outcome: "unstable" });
+  it("returns an unstable-auth result when login preparation does not settle", async () => {
+    prepareWebAuthForLoginMock.mockResolvedValueOnce("unstable");
 
     const result = await startWebLoginWithQr({ timeoutMs: 5000 });
 
@@ -588,6 +626,7 @@ describe("login-qr", () => {
       message: "WhatsApp auth state is still stabilizing. Retry login in a moment.",
     });
     expect(createWaSocketMock).not.toHaveBeenCalled();
+    expect(readWebAuthExistsForDecisionMock).not.toHaveBeenCalled();
   });
 
   it("does not report linked success when the socket opens before creds persistence stabilizes", async () => {

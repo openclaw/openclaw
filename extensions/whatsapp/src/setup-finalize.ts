@@ -13,7 +13,7 @@ import {
   resolveWhatsAppAccount,
   resolveWhatsAppAuthDir,
 } from "./accounts.js";
-import { hasWebCredsSync } from "./creds-files.js";
+import { readWebAuthState } from "./auth-store.js";
 import {
   normalizeWhatsAppAllowFromEntries,
   normalizeWhatsAppAllowFromEntry,
@@ -159,7 +159,7 @@ function setWhatsAppSelfChatMode(
 
 async function detectWhatsAppLinked(cfg: OpenClawConfig, accountId: string): Promise<boolean> {
   const { authDir } = resolveWhatsAppAuthDir({ cfg, accountId });
-  return hasWebCredsSync(authDir);
+  return (await readWebAuthState(authDir)) === "linked";
 }
 
 async function promptWhatsAppOwnerAllowFrom(params: {

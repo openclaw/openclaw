@@ -147,7 +147,7 @@ export function createWhatsAppPluginBase() {
     id: WHATSAPP_CHANNEL,
     meta: {
       label: "WhatsApp",
-      selectionLabel: "WhatsApp (QR link)",
+      selectionLabel: "WhatsApp Web",
       detailLabel: "WhatsApp Web",
       docsPath: "/channels/whatsapp",
       docsLabel: "whatsapp",
