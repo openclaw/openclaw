@@ -1,5 +1,6 @@
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import {
   repairCanonicalSqliteIndexes,
   verifyAndRepairCanonicalSqliteIndexes,
@@ -69,11 +70,12 @@ export function repairStateSchema(
   warnings: string[];
 } {
   ensureOpenClawStatePermissions(pathname, env);
-  const db = openNodeSqliteDatabase(pathname);
+  // This private handle rebuilds referenced tables and is closed after repair.
+  const db = openNodeSqliteDatabase(pathname, { enableForeignKeyConstraints: false });
   const rebuiltIndexNames = new Set<string>();
   let ownershipRefused = false;
   try {
-    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
     let repairAdmittedSchema: (() => string[]) | undefined;
     if (scope === "automatic") {
       assertSupportedStateSchemaVersion(db, pathname);
@@ -90,7 +92,6 @@ export function repairStateSchema(
         };
       }
     }
-    db.exec("PRAGMA foreign_keys = OFF;");
     const changes = runStateSchemaMigrationTransaction(
       db,
       pathname,
@@ -233,7 +234,6 @@ export function repairStateSchema(
     };
   } finally {
     if (db.isOpen) {
-      db.exec("PRAGMA foreign_keys = ON;");
       clearNodeSqliteKyselyCacheForDatabase(db);
       // Rollback cleanup may have closed the handle after an unrecoverable
       // transaction failure; double-close throws ERR_INVALID_STATE and would
