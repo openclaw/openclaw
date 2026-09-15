@@ -10,6 +10,7 @@ import {
   useAutoCleanupTempDirTracker,
 } from "../../../test/helpers/temp-dir.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   getOpenClawAgentDatabaseIfOpen,
@@ -38,6 +39,7 @@ import {
   replaceSessionEntrySync,
   resolveTranscriptSessionKeyBySessionId,
   upsertSessionEntryCore,
+  withSessionEntryReadOnlyScope,
 } from "./session-accessor.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import * as sqliteTargets from "./session-sqlite-target.js";
@@ -63,6 +65,98 @@ afterEach(() => {
 });
 
 describe("session accessor readonly listing", () => {
+  it.each([false, true])(
+    "closes a shared-store reader and revokes inherited async reuse (throws: %s)",
+    async (throws) => {
+      const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-session-reader-scope-") };
+      const storePath = path.join(env.OPENCLAW_STATE_DIR, "shared.sqlite");
+      const options = { agentId: "main", env, path: storePath };
+      const scope = { agentId: "worker-1", env, storePath, projection: "list" as const };
+      const sessionKey = "agent:worker-1:visible";
+      openOpenClawAgentDatabase(options);
+      replaceSessionEntrySync({ ...scope, sessionKey }, { sessionId: "visible", updatedAt: 1 });
+      closeOpenClawAgentDatabasesForTest();
+      const handles = new Set<DatabaseSync>();
+      const captureDatabase = () => {
+        const result = withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
+        if (!result.found) {
+          throw new Error("Expected existing shared database");
+        }
+        handles.add(result.value);
+        return result.value;
+      };
+      const descendants: Promise<DatabaseSync>[] = [];
+      let retained: DatabaseSync | undefined;
+      const failure = new Error("entry callback failed");
+      const run = () =>
+        withSessionEntryReadOnlyScope(scope, () => {
+          expect(listSessionEntriesReadOnly(scope).map((entry) => entry.sessionKey)).toEqual([
+            sessionKey,
+          ]);
+          retained = captureDatabase();
+          expect(retained.isOpen).toBe(true);
+          expect(captureDatabase()).toBe(retained);
+          descendants.push(Promise.resolve().then(captureDatabase));
+          if (throws) {
+            throw failure;
+          }
+          return "complete";
+        });
+      try {
+        if (throws) {
+          expect(run).toThrow(failure);
+        } else {
+          expect(run()).toBe("complete");
+        }
+        expect(retained?.isOpen).toBe(false);
+        const [descendant] = await Promise.all(descendants);
+        expect(descendant).not.toBe(retained);
+        expect(descendant?.isOpen).toBe(false);
+        expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
+      } finally {
+        await Promise.allSettled(descendants);
+        for (const database of handles) {
+          if (database.isOpen) {
+            clearNodeSqliteKyselyCacheForDatabase(database);
+            database.close();
+          }
+        }
+      }
+    },
+  );
+
+  it("reads a committed visibility change through the retained shared-store reader", () => {
+    const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-session-reader-freshness-") };
+    const storePath = path.join(env.OPENCLAW_STATE_DIR, "shared.sqlite");
+    const options = { agentId: "main", env, path: storePath };
+    const scope = { agentId: "worker-1", env, storePath, projection: "list" as const };
+    const sessionKey = "agent:worker-1:visible";
+    const entry = { sessionId: "visible", updatedAt: 1, visibility: "shared" as const };
+    openOpenClawAgentDatabase(options);
+    replaceSessionEntrySync({ ...scope, sessionKey }, entry);
+    closeOpenClawAgentDatabasesForTest();
+
+    withSessionEntryReadOnlyScope(scope, () => {
+      expect(listSessionEntriesReadOnly(scope)[0]?.entry.visibility).toBe("shared");
+      const retained = withOpenClawAgentDatabaseReadOnly(({ db }) => db, options);
+      if (!retained.found) {
+        throw new Error("Expected existing shared database");
+      }
+      expect(retained.value.isOpen).toBe(true);
+      expect(loadExactSessionEntryReadOnly({ ...scope, sessionKey })?.entry.visibility).toBe(
+        "shared",
+      );
+      replaceSessionEntrySync({ ...scope, sessionKey }, { ...entry, visibility: "draft" });
+      closeOpenClawAgentDatabasesForTest();
+      expect(loadExactSessionEntryReadOnly({ ...scope, sessionKey })?.entry.visibility).toBe(
+        "draft",
+      );
+      expect(listSessionEntriesReadOnly(scope)[0]?.entry.visibility).toBe("draft");
+      withOpenClawAgentDatabaseReadOnly(({ db }) => expect(db).toBe(retained.value), options);
+    });
+    expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
+  });
+
   it("resolves a registered exact store once per batch and observes its next owner", () => {
     const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-exact-read-target-") };
     const storePath = path.join(env.OPENCLAW_STATE_DIR, "registered.sqlite");

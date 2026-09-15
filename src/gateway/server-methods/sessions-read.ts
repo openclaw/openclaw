@@ -22,6 +22,7 @@ import {
 import {
   listSessionEntriesReadOnly,
   loadExactSessionEntryCandidatesReadOnlyBatch,
+  withSessionEntryReadOnlyScope,
 } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptColdError } from "../../config/sessions/session-cold-storage-state.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
@@ -154,21 +155,23 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         const targetSessionKeys =
           scopedSessionKeys ??
           (restrictVisibility
-            ? listSessionEntriesReadOnly({
-                agentId: target.agentId,
-                storePath: target.storePath,
-                projection: "list",
-                clone: false,
-              })
-                .map((entry) => entry.sessionKey)
-                .filter((sessionKey) => {
-                  // A shared physical store can include rows owned by another agent.
-                  const parsed = parseAgentSessionKey(sessionKey);
-                  if (parsed && normalizeAgentId(parsed.agentId) !== agentId) {
-                    return false;
-                  }
-                  return canSearchSessionKey(sessionKey);
+            ? withSessionEntryReadOnlyScope(target, () =>
+                listSessionEntriesReadOnly({
+                  agentId: target.agentId,
+                  storePath: target.storePath,
+                  projection: "list",
+                  clone: false,
                 })
+                  .map((entry) => entry.sessionKey)
+                  .filter((sessionKey) => {
+                    // A shared physical store can include rows owned by another agent.
+                    const parsed = parseAgentSessionKey(sessionKey);
+                    if (parsed && normalizeAgentId(parsed.agentId) !== agentId) {
+                      return false;
+                    }
+                    return canSearchSessionKey(sessionKey);
+                  }),
+              )
             : undefined);
         if (targetSessionKeys?.length === 0) {
           return [];

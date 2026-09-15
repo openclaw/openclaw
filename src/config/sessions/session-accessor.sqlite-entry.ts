@@ -10,7 +10,10 @@ import {
   createOpenClawAgentDatabaseClaim,
   type OpenClawAgentDatabaseClaim,
 } from "../../state/openclaw-agent-db-identity.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import {
+  OpenClawAgentDatabaseReadOnlyScope,
+  withOpenClawAgentDatabaseReadOnly,
+} from "../../state/openclaw-agent-db-readonly.js";
 import {
   borrowOpenClawAgentDatabase,
   getOpenClawAgentDatabaseIfOpen,
@@ -244,6 +247,23 @@ export function listSessionEntriesReadOnly(
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : [];
+}
+
+/** Reuse one reader during synchronous entry work; each read keeps its current admission. */
+export function withSessionEntryReadOnlyScope<T>(
+  scope: Pick<SessionEntryListScope, "agentId" | "defaultAgentId" | "env" | "storePath">,
+  operation: () => T,
+): T {
+  const options = toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey: "" }));
+  const reader = new OpenClawAgentDatabaseReadOnlyScope();
+  try {
+    return reader.run(
+      { agentId: options.agentId, path: resolveOpenClawAgentSqlitePath(options) },
+      operation,
+    );
+  } finally {
+    reader.close();
+  }
 }
 
 /** Counts durable session rows without materializing entry JSON or warming the entry cache. */

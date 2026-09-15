@@ -33,6 +33,7 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
+  withSessionEntryReadOnlyScope,
 } from "./session-accessor.sqlite-entry.js";
 import { resolveSessionEntry } from "./session-accessor.sqlite-exact-read.js";
 import { readSessionStoreSummaryReadOnly } from "./session-accessor.sqlite-summary.js";
@@ -92,6 +93,7 @@ export {
   resolveSessionEntryFromStore,
   readSessionStoreSummaryReadOnly,
   upsertSessionEntryCore,
+  withSessionEntryReadOnlyScope,
 };
 
 /** Resolves a session directly through canonical SQLite row and alias ownership. */

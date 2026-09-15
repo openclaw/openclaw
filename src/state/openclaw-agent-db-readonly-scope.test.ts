@@ -56,7 +56,7 @@ it("keeps one connection while nested reads retain independent committed snapsho
       });
     } finally {
       writer.close();
-      scope.run({ ...target, path: `${path}.unused` }, () => undefined);
+      scope.close();
     }
     expect(retained?.isOpen).toBe(false);
   });
@@ -98,7 +98,7 @@ it.each([
       }
       expect(read).toThrow(error);
     } finally {
-      scope.run({ ...target, path: `${path}.unused` }, () => undefined);
+      scope.close();
     }
   });
 });
