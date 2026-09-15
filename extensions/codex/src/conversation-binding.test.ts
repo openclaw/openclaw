@@ -263,6 +263,39 @@ function boundConversationClaim(sessionFile: string, sessionKey?: string) {
   };
 }
 
+function mockCompletingBoundTurnClient() {
+  let notificationHandler: ((notification: unknown) => void) | undefined;
+  const turnStartParams: Record<string, unknown>[] = [];
+  sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+    request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+      if (method !== "turn/start") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      turnStartParams.push(requestParams);
+      setImmediate(() =>
+        notificationHandler?.({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+            },
+          },
+        }),
+      );
+      return { turn: { id: "turn-1" } };
+    }),
+    addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+      notificationHandler = handler;
+      return () => undefined;
+    }),
+    addRequestHandler: vi.fn(() => () => undefined),
+  });
+  return turnStartParams;
+}
+
 async function createSameThreadClientMigrationFixture(
   sessionFile: string,
   options: { rejectOldRelease: boolean },
@@ -4542,6 +4575,137 @@ describe("codex conversation binding", () => {
     expect(turnStartParams[0]?.sandboxPolicy).toEqual({
       type: "dangerFullAccess",
     });
+  });
+
+  it("transcribes a voice-only bound message before starting the turn", async () => {
+    const sessionFile = path.join(tempDir, "voice-session.jsonl");
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+    });
+    const turnStartParams = mockCompletingBoundTurnClient();
+    const runMediaUnderstandingFile = vi.fn(async () => ({ text: "ship the fix" }));
+    const { event, ctx } = boundConversationClaim(
+      sessionFile,
+      "agent:main:telegram:group:codex-bind",
+    );
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        ...event,
+        content: "",
+        bodyForAgent: "",
+        isGroup: true,
+        media: [
+          {
+            path: "/tmp/voice.ogg",
+            contentType: "audio/ogg",
+            kind: "audio",
+            workspaceDir: tempDir,
+          },
+        ],
+      },
+      ctx,
+      {
+        config: { tools: { media: { audio: { enabled: true } } } },
+        runMediaUnderstandingFile,
+        timeoutMs: 50,
+      },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    expect(runMediaUnderstandingFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: "audio",
+        filePath: "/tmp/voice.ogg",
+        workspaceDir: tempDir,
+        mime: "audio/ogg",
+        scopeContext: {
+          sessionKey: "agent:main:telegram:group:codex-bind",
+          channel: "telegram",
+          chatType: "group",
+        },
+      }),
+    );
+    expect(turnStartParams[0]?.input).toEqual([
+      {
+        type: "text",
+        text: '[Audio transcript (machine-generated, untrusted)]: "ship the fix"',
+        text_elements: [],
+      },
+    ]);
+  });
+
+  it("keeps an explicit audio fallback in the bound turn when configured STT rejects", async () => {
+    const sessionFile = path.join(tempDir, "voice-stt-failure.jsonl");
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+    });
+    const turnStartParams = mockCompletingBoundTurnClient();
+    const { event, ctx } = boundConversationClaim(sessionFile);
+
+    await expect(
+      handleCodexConversationInboundClaim(
+        {
+          ...event,
+          content: "",
+          bodyForAgent: "",
+          media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg", kind: "audio" }],
+        },
+        ctx,
+        {
+          config: { tools: { media: { audio: { enabled: true } } } },
+          runMediaUnderstandingFile: async () => {
+            throw new Error("transcriber unavailable");
+          },
+          timeoutMs: 50,
+        },
+      ),
+    ).resolves.toEqual({ handled: true, reply: { text: "done" } });
+    expect(turnStartParams[0]?.input).toEqual([
+      {
+        type: "text",
+        text: "[Audio transcription failed; the original attachment is included when supported.]",
+        text_elements: [],
+      },
+      { type: "localAudio", path: "/tmp/voice.ogg" },
+    ]);
+  });
+
+  it("keeps an explicit audio fallback in the bound turn when STT produces no text", async () => {
+    const sessionFile = path.join(tempDir, "voice-empty-stt.jsonl");
+    await writeTestConversationBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+    });
+    const turnStartParams = mockCompletingBoundTurnClient();
+    const { event, ctx } = boundConversationClaim(sessionFile);
+
+    await expect(
+      handleCodexConversationInboundClaim(
+        {
+          ...event,
+          content: "",
+          bodyForAgent: "",
+          media: [{ path: "/tmp/silence.ogg", contentType: "audio/ogg", kind: "audio" }],
+        },
+        ctx,
+        {
+          config: { tools: { media: { audio: { enabled: true } } } },
+          runMediaUnderstandingFile: async () => ({ text: undefined }),
+          timeoutMs: 50,
+        },
+      ),
+    ).resolves.toEqual({ handled: true, reply: { text: "done" } });
+    expect(turnStartParams[0]?.input).toEqual([
+      {
+        type: "text",
+        text: "[Audio transcription produced no text; the original attachment is included when supported.]",
+        text_elements: [],
+      },
+      { type: "localAudio", path: "/tmp/silence.ogg" },
+    ]);
   });
 
   it("keeps network-proxy bound app-server turns on their thread permissions profile", async () => {

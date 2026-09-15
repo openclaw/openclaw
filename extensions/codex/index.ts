@@ -365,6 +365,7 @@ export default definePluginEntry({
         bindingStore,
         pluginConfig: resolveCurrentPluginConfig(),
         config: resolveCurrentConfig(),
+        runMediaUnderstandingFile: api.runtime.mediaUnderstanding?.runFile,
         resumeCodexCliSessionOnNode: (params) =>
           resumeCodexCliSessionOnNode({ runtime: api.runtime, ...params }),
       }),
