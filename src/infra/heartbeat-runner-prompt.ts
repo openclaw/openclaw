@@ -7,6 +7,11 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readHeartbeatMonitorScratch } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
+import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
+import {
+  hasDeliveryTargetFields,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import { formatErrorMessage } from "./errors.js";
 import type { HeartbeatConfig } from "./heartbeat-config.js";
 import {
@@ -49,6 +54,8 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   session: ReturnType<typeof resolveHeartbeatSessionSelection>;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
+  hasRoutedExecCompletion: boolean;
+  deferredExecEventEntries: SystemEvent[];
   hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
   authoritativeScheduledTick: boolean;
@@ -57,6 +64,38 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   scratchRevision?: number;
   heartbeatScratchContent?: string;
 };
+
+function partitionExecEventEntries(
+  events: readonly SystemEvent[],
+  deferRoutedEntries: boolean,
+): {
+  selected: SystemEvent[];
+  deferred: SystemEvent[];
+} {
+  const selected: SystemEvent[] = [];
+  const deferred: SystemEvent[] = [];
+  const routeless: SystemEvent[] = [];
+  let selectedRouteKey: string | undefined;
+  for (const event of events) {
+    if (!isExecCompletionEvent(event.text) || !event.contextKey?.startsWith("exec:")) {
+      continue;
+    }
+    const context = normalizeDeliveryContext(event.deliveryContext);
+    if (!hasDeliveryTargetFields(context)) {
+      routeless.push(event);
+      continue;
+    }
+    const routeKey = channelRouteDedupeKey(context);
+    if (deferRoutedEntries) {
+      deferred.push(event);
+      continue;
+    }
+    selectedRouteKey ??= routeKey;
+    (routeKey === selectedRouteKey ? selected : deferred).push(event);
+  }
+  (deferRoutedEntries || selected.length > 0 ? deferred : selected).push(...routeless);
+  return { selected, deferred };
+}
 
 /**
  * Terminal no-op preflight (empty scratch, consumed exec events) must resolve
@@ -99,11 +138,28 @@ export async function resolveHeartbeatPreflight(params: {
     params.heartbeat,
     params.sessionKey,
   );
-  const pendingEventEntries = selectAgentSystemEvents(
+  const queuedEventEntries = selectAgentSystemEvents(
     peekSystemEventEntries(session.sessionKey),
     params.agentId,
   ).filter((event) => !isHeartbeatDeliveryAwarenessEvent(event));
-  const turnSourceDeliveryContext = resolveSystemEventDeliveryContext(pendingEventEntries);
+  const execPartition = partitionExecEventEntries(
+    queuedEventEntries,
+    (params.scheduledTasks?.length ?? 0) > 0,
+  );
+  const selectedExecEntries = new Set(execPartition.selected);
+  const pendingEventEntries = queuedEventEntries.filter(
+    (event) =>
+      !isExecCompletionEvent(event.text) ||
+      !event.contextKey?.startsWith("exec:") ||
+      selectedExecEntries.has(event),
+  );
+  const turnSourceDeliveryContext =
+    execPartition.selected.length > 0
+      ? resolveSystemEventDeliveryContext(execPartition.selected)
+      : resolveSystemEventDeliveryContext(pendingEventEntries);
+  const hasRoutedExecCompletion = execPartition.selected.some((event) =>
+    hasDeliveryTargetFields(normalizeDeliveryContext(event.deliveryContext)),
+  );
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
@@ -134,6 +190,8 @@ export async function resolveHeartbeatPreflight(params: {
     session,
     pendingEventEntries,
     turnSourceDeliveryContext,
+    hasRoutedExecCompletion,
+    deferredExecEventEntries: execPartition.deferred,
     hasTaggedCronEvents,
     shouldInspectPendingEvents,
     authoritativeScheduledTick:

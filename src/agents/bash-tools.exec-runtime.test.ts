@@ -742,7 +742,11 @@ describe("terminal execution-context release", () => {
         scopeKey: "process-scope",
         sessionKey: path === "unrouted" ? undefined : "agent:main:main",
         agentId: "main",
-        eventRouting: { mainKey: "main", sessionScope: "per-sender" },
+        eventRouting: {
+          mainKey: "main",
+          sessionScope: "per-sender",
+          ...(path === "notify" ? { isolateCompletionRun: true } : {}),
+        },
         notifyDeliveryContext: deliveryContext,
         notifyOnExit: true,
         notifyOnExitEmptySuccess: false,
@@ -777,6 +781,11 @@ describe("terminal execution-context release", () => {
       }
       expect(retained?.notifyOnExitRemoval).toBe(trace.includes("wake") ? removal : undefined);
       expect(removal).not.toHaveBeenCalled();
+      if (path === "notify") {
+        expect(requestHeartbeatMock).toHaveBeenCalledWith(
+          expect.objectContaining({ heartbeat: { isolatedSession: true } }),
+        );
+      }
     },
   );
 });

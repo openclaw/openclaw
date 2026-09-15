@@ -96,6 +96,13 @@ export type RunCliAgentParams = {
   sessionManager?: SessionManager;
   sessionId: string;
   sessionKey?: string;
+  /** Session whose isolated heartbeat owns detached exec completion turns. */
+  execCompletionSessionKey?: string;
+  /** Lifecycle of execCompletionSessionKey captured when the cron run was admitted. */
+  execCompletionSessionGeneration?: {
+    sessionId: string;
+    lifecycleRevision?: string;
+  };
   chatType?: ChatType;
   sessionTarget?: SessionTranscriptRuntimeTarget;
   /** Session identity used only for sandbox and tool-policy resolution. */

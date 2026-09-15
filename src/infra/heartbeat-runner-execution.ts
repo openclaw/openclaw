@@ -58,6 +58,7 @@ import {
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   type HeartbeatScheduledTask,
   type HeartbeatWakeIntent,
+  type HeartbeatWakeRequest,
   type HeartbeatWakeSource,
 } from "./heartbeat-wake.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
@@ -76,6 +77,7 @@ export type HeartbeatDeps = OutboundSendDeps &
     isReplyRunActive?: (sessionKey: string) => boolean;
     listActiveReplyRunSessionKeys?: () => readonly string[];
     listActiveEmbeddedRunSessionKeys?: () => readonly string[];
+    requestHeartbeat?: (wake: HeartbeatWakeRequest) => void;
     nowMs?: () => number;
   };
 
@@ -346,9 +348,10 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     currentSessionKey: sessionKey,
     // A base queue's route stays excluded; events on the actual isolated queue
     // own their route, including exec completion after the base route moves.
-    turnSource: preflight.session.inspectsRunQueue
-      ? preflight.turnSourceDeliveryContext
-      : undefined,
+    turnSource:
+      preflight.session.inspectsRunQueue || preflight.hasRoutedExecCompletion
+        ? preflight.turnSourceDeliveryContext
+        : undefined,
   });
   // Routeless ambient polls are pure model burn, but only they may skip:
   // triggered wakes (hook/manual/cron/exec), polls with queued events, and

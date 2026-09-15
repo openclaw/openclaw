@@ -227,6 +227,13 @@ type OpenClawCodingToolsOptions = {
    * sandbox/policy session key used to construct the tool set.
    */
   runSessionKey?: string;
+  /** Session whose isolated heartbeat owns detached exec completion turns. */
+  execCompletionSessionKey?: string;
+  /** Lifecycle of execCompletionSessionKey captured when the cron run was admitted. */
+  execCompletionSessionGeneration?: {
+    sessionId: string;
+    lifecycleRevision?: string;
+  };
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   /**
@@ -704,15 +711,27 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       runId: options?.runId,
       operationalRunInstance: options?.operationalRunInstance,
       // Detached completions return to the live session, not the sandbox policy scope.
-      notifySessionKey: options?.runSessionKey ?? options?.sessionKey,
+      notifySessionKey:
+        options?.execCompletionSessionKey ?? options?.runSessionKey ?? options?.sessionKey,
       sessionId: options?.sessionId,
       sessionStore: options?.config?.session?.store,
-      eventRouting: resolveEventSessionRoutingPolicy({
-        cfg: options?.config,
-        sessionKey: options?.runSessionKey ?? options?.sessionKey,
-        channel: options?.messageProvider,
-        accountId: options?.agentAccountId,
-      }),
+      eventRouting: {
+        ...resolveEventSessionRoutingPolicy({
+          cfg: options?.config,
+          sessionKey:
+            options?.execCompletionSessionKey ?? options?.runSessionKey ?? options?.sessionKey,
+          channel: options?.messageProvider,
+          accountId: options?.agentAccountId,
+        }),
+        ...(options?.execCompletionSessionKey &&
+        options.execCompletionSessionKey !== (options.runSessionKey ?? options.sessionKey)
+          ? {
+              isolateCompletionRun: true,
+              expectedSessionGeneration: options.execCompletionSessionGeneration,
+              sessionStore: options.config?.session?.store,
+            }
+          : {}),
+      },
       messageProvider: options?.messageProvider,
       currentChannelId: options?.currentChannelId,
       currentThreadTs: options?.currentThreadTs,

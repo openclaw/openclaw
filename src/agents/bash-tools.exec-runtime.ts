@@ -2,6 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { emitDiagnosticEventWithTrustedTraceContext } from "../infra/diagnostic-events.js";
 import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -26,6 +28,7 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput, TerminationReason } from "../process/supervisor/types.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 /**
  * Bash exec runtime.
@@ -353,6 +356,33 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     return;
   }
   session.exitNotified = true;
+  const expectedGeneration = session.eventRouting?.expectedSessionGeneration;
+  if (expectedGeneration) {
+    try {
+      const agentId = session.agentId ?? resolveAgentIdFromSessionKey(sessionKey);
+      const storePath = resolveSessionStorePathCore(session.eventRouting?.sessionStore, {
+        agentId,
+      });
+      const current = loadExactSessionEntryReadOnly({
+        agentId,
+        storePath,
+        sessionKey,
+        clone: false,
+      })?.entry;
+      if (
+        current?.sessionId !== expectedGeneration.sessionId ||
+        current.lifecycleRevision !== expectedGeneration.lifecycleRevision
+      ) {
+        logWarn(`exec completion route became stale for ${sessionKey}; suppressing delivery`);
+        return;
+      }
+    } catch (error) {
+      logWarn(
+        `exec completion route validation failed for ${sessionKey}; suppressing stale delivery: ${formatErrorMessage(error)}`,
+      );
+      return;
+    }
+  }
   const exitLabel = renderExecExitLabel(session);
   const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
@@ -399,6 +429,9 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
         intent: "event" as const,
         reason: "exec-event",
         coalesceMs: 0,
+        ...(eventRouting.isolateCompletionRun === true
+          ? { heartbeat: { isolatedSession: true } }
+          : {}),
       },
       eventRouting,
     );

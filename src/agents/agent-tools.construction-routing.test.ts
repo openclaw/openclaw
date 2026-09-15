@@ -219,6 +219,64 @@ describe("createOpenClawCodingTools exec notification routing", () => {
       expect.objectContaining({ scopeKey: "explicit-process-owner" }),
     );
   });
+
+  it("routes detached completion inference through an isolated source session", () => {
+    const runSessionKey = "agent:main:cron:job:run:one";
+    const completionSessionKey = "agent:main:telegram:group:-1001:topic:47";
+    const completionSessionGeneration = {
+      sessionId: "source-session",
+      lifecycleRevision: "source-revision",
+    };
+
+    createOpenClawCodingTools({
+      sessionKey: runSessionKey,
+      runSessionKey,
+      execCompletionSessionKey: completionSessionKey,
+      execCompletionSessionGeneration: completionSessionGeneration,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: true,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
+      },
+    });
+
+    expect(createLazyExecToolMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        scopeKey: runSessionKey,
+        notifySessionKey: completionSessionKey,
+        eventRouting: expect.objectContaining({
+          isolateCompletionRun: true,
+          expectedSessionGeneration: completionSessionGeneration,
+        }),
+      }),
+    );
+  });
+
+  it("does not isolate completion inference when the completion session is the live session", () => {
+    const runSessionKey = "agent:main:main";
+
+    createOpenClawCodingTools({
+      sessionKey: runSessionKey,
+      runSessionKey,
+      execCompletionSessionKey: runSessionKey,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: true,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
+      },
+    });
+
+    expect(createLazyExecToolMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        notifySessionKey: runSessionKey,
+        eventRouting: expect.not.objectContaining({ isolateCompletionRun: true }),
+      }),
+    );
+  });
 });
 
 describe("createOpenClawCodingTools sandbox filesystem ownership", () => {

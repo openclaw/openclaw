@@ -241,6 +241,7 @@ describe("runHeartbeatOnce ack handling", () => {
     enqueueSystemEvent("Exec completed (heartbeat-test, code 0) :: uploaded report.txt", {
       sessionKey,
       contextKey: "exec:heartbeat-test",
+      deliveryContext: { channel: "whatsapp", to: WHATSAPP_GROUP },
     });
     params.replySpy.mockResolvedValue(params.reply as never);
     const sendWhatsApp = createMessageSendSpy();

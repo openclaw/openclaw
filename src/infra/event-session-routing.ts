@@ -29,6 +29,15 @@ export type EventSessionRoutingPolicy = {
   channel?: string | null;
   accountId?: string | null;
   preserveSessionKey?: boolean;
+  /** Run detached completion inference outside the source conversation transcript. */
+  isolateCompletionRun?: boolean;
+  /** Source lifecycle captured when a detached completion route was admitted. */
+  expectedSessionGeneration?: {
+    sessionId: string;
+    lifecycleRevision?: string;
+  };
+  /** Session-store template used to revalidate expectedSessionGeneration at completion. */
+  sessionStore?: string;
 };
 
 type DirectSessionTarget = {

@@ -1,6 +1,9 @@
 /** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
 import { createHash } from "node:crypto";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -63,6 +66,7 @@ import {
   resolveCronChannelOutputPolicy,
   resolveCurrentChannelTarget,
 } from "./channel-output-policy.js";
+import { resolveCronExecCompletionSessionKey } from "./completion-session-key.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import { appendCronDeliveryInstruction } from "./run-delivery-trace.js";
 import {
@@ -247,6 +251,8 @@ type CronRunExecutionParams = {
   agentDir: string;
   agentSessionKey: string;
   runSessionKey: string;
+  completionSessionKey?: string;
+  completionSessionGeneration?: { sessionId: string; lifecycleRevision?: string };
   usesDetachedRunSession?: boolean;
   workspaceDir: string;
   executionRoot?: string;
@@ -637,6 +643,14 @@ function createCronPromptExecutor(
         );
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+        // Both runners get the same resolved route: this channel-native id
+        // carries the originating thread/topic that detached tool completions
+        // (exec notify-on-exit) inherit; without it they land in the owner DM.
+        const currentChannelId = await resolveCurrentChannelTarget({
+          channel: messageChannel,
+          to: params.resolvedDelivery.to,
+          threadId: params.resolvedDelivery.threadId,
+        });
         // CLI providers can resume provider-native sessions; embedded providers
         // use OpenClaw's transcript/session file plus prompt-cache affinity.
         const fastModeState = resolveFastModeState({
@@ -690,6 +704,8 @@ function createCronPromptExecutor(
                 preparedRunAdmission,
                 sessionId: params.cronSession.sessionEntry.sessionId,
                 sessionKey: params.runSessionKey,
+                execCompletionSessionKey: params.completionSessionKey,
+                execCompletionSessionGeneration: params.completionSessionGeneration,
                 sessionTarget,
                 sessionEntry: params.cronSession.sessionEntry,
                 contextWindow: params.cronSession.sessionEntry.contextWindow,
@@ -724,6 +740,10 @@ function createCronPromptExecutor(
                 skillsSnapshot: params.skillsSnapshot,
                 messageChannel,
                 agentAccountId: params.resolvedDelivery.accountId,
+                currentChannelId,
+                // The CLI runner has no messageThreadId; currentThreadTs is the
+                // thread half of the same resolved route.
+                currentThreadTs: normalizeOptionalStringifiedId(params.resolvedDelivery.threadId),
                 sourceReplyDeliveryMode,
                 requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
                 cliSessionBindingFacts: {
@@ -795,17 +815,14 @@ function createCronPromptExecutor(
           provider: providerOverride,
           model: modelOverride,
         });
-        const currentChannelId = await resolveCurrentChannelTarget({
-          channel: messageChannel,
-          to: params.resolvedDelivery.to,
-          threadId: params.resolvedDelivery.threadId,
-        });
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.
         const result = await runEmbeddedAgent({
           preparedRunAdmission,
           sessionId: params.cronSession.sessionEntry.sessionId,
           sessionKey: params.runSessionKey,
+          execCompletionSessionKey: params.completionSessionKey,
+          execCompletionSessionGeneration: params.completionSessionGeneration,
           sessionTarget,
           promptCacheKey,
           agentId: params.agentId,
@@ -955,6 +972,14 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     sessionId: params.cronSession.sessionEntry.sessionId,
     verboseLevel: resolvedVerboseLevel,
   });
+  const completionSessionKey = resolveCronExecCompletionSessionKey({
+    usesDetachedRunSession: params.usesDetachedRunSession === true,
+    runSessionKey: params.runSessionKey,
+    completionSessionKey: params.completionSessionKey,
+  });
+  const completionSessionGeneration = completionSessionKey
+    ? params.completionSessionGeneration
+    : undefined;
   const executor = createCronPromptExecutor({
     cfg: params.cfg,
     cfgWithAgentDefaults: params.cfgWithAgentDefaults,
@@ -963,6 +988,8 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
     agentDir: params.agentDir,
     agentSessionKey: params.agentSessionKey,
     runSessionKey: params.runSessionKey,
+    completionSessionKey,
+    completionSessionGeneration,
     usesDetachedRunSession: params.usesDetachedRunSession,
     workspaceDir: params.workspaceDir,
     executionRoot: params.executionRoot,

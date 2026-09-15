@@ -260,12 +260,16 @@ async function prepareHeartbeatDispatchReply(
     });
     if (consume && preflight.shouldInspectPendingEvents) {
       consumeSelectedSystemEventEntries(sessionKey, prepared.inspectedSystemEventsToConsume);
-      if (prepared.hasExecCompletion && prepared.hasCronEvents) {
+      if (
+        preflight.deferredExecEventEntries.length > 0 ||
+        (prepared.hasExecCompletion && prepared.hasCronEvents)
+      ) {
+        const hasDeferredExec = preflight.deferredExecEventEntries.length > 0;
         // Coalesced waiters share this turn, but exec and cron retain separate prompt/delivery policy.
-        requestHeartbeat({
-          source: "cron",
-          intent: "immediate",
-          reason: "cron:pending",
+        (opts.deps?.requestHeartbeat ?? requestHeartbeat)({
+          source: hasDeferredExec ? "exec-event" : "cron",
+          intent: hasDeferredExec ? "event" : "immediate",
+          reason: hasDeferredExec ? "exec-event" : "cron:pending",
           agentId,
           sessionKey,
           heartbeat: wake.heartbeat && {
@@ -273,6 +277,9 @@ async function prepareHeartbeatDispatchReply(
             ...(wake.heartbeat.to !== undefined ? { to: wake.heartbeat.to } : {}),
             ...(wake.heartbeat.accountId !== undefined
               ? { accountId: wake.heartbeat.accountId }
+              : {}),
+            ...(wake.heartbeat.isolatedSession !== undefined
+              ? { isolatedSession: wake.heartbeat.isolatedSession }
               : {}),
           },
         });
@@ -405,6 +412,7 @@ async function prepareHeartbeatDispatchReply(
   } else {
     const previousAt = stateEntry?.lastHeartbeatSentAt;
     if (
+      !prepared.hasExecCompletion &&
       !outcome.mediaUrls.length &&
       !outcome.hasStructuredReplyContent &&
       stateEntry?.lastHeartbeatText?.trim() &&
