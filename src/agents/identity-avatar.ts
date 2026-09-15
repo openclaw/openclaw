@@ -5,6 +5,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { isAvatarImageDataUrl, isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import {
   hasAvatarUriScheme,
   isAvatarDataUrl,
@@ -97,7 +98,13 @@ export function resolveAgentAvatar(cfg: OpenClawConfig, agentId: string): AgentA
     return { kind: "remote", url: source, source };
   }
   if (isAvatarDataUrl(source)) {
-    return { kind: "data", url: source, source };
+    // Only the size bound belongs here. Generic data URIs are intentionally
+    // preserved, but an oversized image payload cannot render, so projections
+    // must not hand it to the Control UI as `data`.
+    if (isRenderableAvatarImageDataUrl(source) || !isAvatarImageDataUrl(source)) {
+      return { kind: "data", url: source, source };
+    }
+    return { kind: "none", reason: "unsupported_data_url", source };
   }
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const resolved = resolveLocalAgentAvatarPath({ raw: source, workspaceDir });
