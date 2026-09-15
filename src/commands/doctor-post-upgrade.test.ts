@@ -2,8 +2,9 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { fetchClawHubPackageDetail } from "../infra/clawhub-packages.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { resolveInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store.js";
@@ -13,6 +14,16 @@ import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cac
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
 import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
+
+vi.mock("../version.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../version.js")>()),
+  VERSION: "2026.9.4",
+}));
+
+vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-packages.js")>()),
+  fetchClawHubPackageDetail: vi.fn(),
+}));
 
 async function makeFixtureRoot(prefix: string): Promise<string> {
   return await fs.mkdtemp(path.join(os.tmpdir(), `doctor-post-upgrade-${prefix}-`));
@@ -621,6 +632,74 @@ describe("runPostUpgradeProbes — plugin.manifest_drift", () => {
 });
 
 describe("runPostUpgradeProbes — plugin.version_drift", () => {
+  beforeEach(() => {
+    vi.mocked(fetchClawHubPackageDetail).mockReset();
+    vi.mocked(fetchClawHubPackageDetail).mockResolvedValue({
+      package: {
+        name: "@openclaw/whatsapp",
+        displayName: "WhatsApp",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        createdAt: 0,
+        updatedAt: 0,
+        latestVersion: "2026.9.3",
+        compatibility: { pluginApiRange: ">=2026.9.3", minGatewayVersion: ">=2026.9.3" },
+      },
+    });
+  });
+
+  it.each([
+    // A stable host reaches the registry, finds nothing newer, and says so
+    // instead of dropping the plugin from the report.
+    {
+      channel: "stable",
+      enabled: true,
+      expected: "The registry already serves 2026.9.3",
+      lookup: true,
+    },
+    { channel: "beta", enabled: true, expected: "No confirmed repair target", lookup: false },
+    {
+      channel: "extended-stable",
+      enabled: true,
+      expected: "No confirmed repair target",
+      lookup: false,
+    },
+    { channel: "beta", enabled: false, expected: undefined, lookup: false },
+  ] as const)(
+    "preserves $channel intent and persisted enablement=$enabled on a stable host",
+    async ({ channel, enabled, expected, lookup }) => {
+      await withFixtureRoot("clawhub-version-drift", async (root) => {
+        await writePluginFixture(root, {
+          id: "whatsapp",
+          enabled,
+          installRecord: {
+            source: "clawhub",
+            spec: "clawhub:@openclaw/whatsapp",
+            clawhubPackage: "@openclaw/whatsapp",
+            resolvedVersion: "2026.9.3",
+          },
+        });
+
+        const report = await runPostUpgradeProbes({ stateDir: root, updateChannel: channel });
+
+        expect(report.findings).toEqual(
+          expected
+            ? [
+                expect.objectContaining({
+                  code: "plugin.version_drift",
+                  level: "warn",
+                  plugin: "whatsapp",
+                  message: expect.stringContaining(expected),
+                }),
+              ]
+            : [],
+        );
+        expect(fetchClawHubPackageDetail).toHaveBeenCalledTimes(lookup ? 1 : 0);
+      });
+    },
+  );
+
   it.each([
     {
       label: "outdated official install",

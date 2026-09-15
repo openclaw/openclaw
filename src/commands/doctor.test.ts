@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   detectBrowserOpenSupport: vi.fn(),
   openUrl: vi.fn(),
   promptYesNo: vi.fn(),
+  readSourceConfigBestEffort: vi.fn(),
   reconcileGithubIssue: vi.fn(),
   runPostUpgradeProbes: vi.fn(),
   runDoctorStateSqliteCompact: vi.fn(),
@@ -16,6 +17,11 @@ const mocks = vi.hoisted(() => ({
   submitGithubIssue: vi.fn(),
   withDoctorSqliteMaintenanceLock: vi.fn(),
   resolveInstalledPluginIndexStorePath: vi.fn(() => "/tmp/openclaw-installed-plugins.json"),
+}));
+
+vi.mock("../config/io.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.runtime.js")>()),
+  readSourceConfigBestEffort: mocks.readSourceConfigBestEffort,
 }));
 
 vi.mock("./doctor-post-upgrade.js", () => ({
@@ -117,6 +123,7 @@ describe("doctorCommand", () => {
     );
     mocks.clearSessionSqliteMigrationGithubIssueClaim.mockReturnValue(true);
     mocks.detectBrowserOpenSupport.mockResolvedValue({ command: "open", ok: true });
+    mocks.readSourceConfigBestEffort.mockResolvedValue({});
     mocks.reconcileGithubIssue.mockResolvedValue({ status: "not-found" });
     mocks.withDoctorSqliteMaintenanceLock.mockImplementation(
       async (params: { run: (authority: { assertCurrent(): void }) => unknown }) =>
@@ -146,6 +153,24 @@ describe("doctorCommand", () => {
     expect(runtime.log).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
+
+  it.each(["stable", "beta", "extended-stable", undefined])(
+    "passes only configured update channel %s to post-upgrade probes",
+    async (channel) => {
+      mocks.readSourceConfigBestEffort.mockResolvedValueOnce({
+        update: { channel },
+        plugins: { enabled: false, deny: ["whatsapp"] },
+      });
+      mocks.runPostUpgradeProbes.mockResolvedValueOnce({ probesRun: [], findings: [] });
+      const runtime = createDoctorRuntime();
+
+      await expect(doctorCommand(runtime, { postUpgrade: true })).rejects.toThrow("exit:0");
+
+      expect(mocks.readSourceConfigBestEffort).toHaveBeenCalledOnce();
+      expect(mocks.runPostUpgradeProbes).toHaveBeenCalledWith({ updateChannel: channel });
+      expect(runtime.log).toHaveBeenCalledWith("post-upgrade: no findings");
+    },
+  );
 
   it("writes session sqlite JSON through the runtime before exiting cleanly", async () => {
     const report = {

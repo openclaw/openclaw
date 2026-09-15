@@ -1194,7 +1194,7 @@ describe("printDaemonStatus", () => {
     expect(runtime.log.mock.calls.map(([line]) => line).join("\n")).not.toContain("whatsapp:");
   });
 
-  it("prints detailed plugin drift entries in deep mode", () => {
+  it("prints the confirmed ClawHub target instead of the host version in deep mode", () => {
     printDaemonStatus(
       {
         service: {
@@ -1205,13 +1205,19 @@ describe("printDaemonStatus", () => {
           runtime: { status: "running", pid: 8000 },
         },
         pluginVersionDrift: {
-          gatewayVersion: "2026.5.4",
+          gatewayVersion: "2026.9.4",
           drifts: [
             {
               pluginId: "whatsapp",
-              installedVersion: "2026.5.3",
-              gatewayVersion: "2026.5.4",
+              installedVersion: "2026.9.2",
+              gatewayVersion: "2026.9.4",
               source: "clawhub",
+              targetResolution: {
+                status: "resolved",
+                packageName: "@openclaw/whatsapp",
+                requestedTarget: "latest",
+                version: "2026.9.3",
+              },
             },
           ],
         },
@@ -1220,9 +1226,61 @@ describe("printDaemonStatus", () => {
       { json: false, deep: true },
     );
 
-    expectMockLineContains(runtime.log, "- whatsapp: 2026.5.3 (clawhub)");
-    expectMockLineContains(runtime.log, "openclaw plugins update whatsapp");
-    expectMockLineContains(runtime.log, "openclaw gateway restart");
+    expectMockLineContains(runtime.log, "- whatsapp: 2026.9.2 (clawhub)");
+    expectMockLineContains(
+      runtime.log,
+      "expected 2026.9.3; clawhub target @openclaw/whatsapp@2026.9.3",
+    );
+    expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("expected 2026.9.4");
+    expectMockLineContains(
+      runtime.log,
+      `Fix: ${formatCliCommand("openclaw plugins update whatsapp")} && ${formatCliCommand("openclaw gateway restart")}.`,
+    );
+  });
+
+  it("explains a registry-current ClawHub target without a repair command in deep mode", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loadState: { status: "loaded" },
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        pluginVersionDrift: {
+          gatewayVersion: "2026.9.4",
+          drifts: [
+            {
+              pluginId: "whatsapp",
+              installedVersion: "2026.9.3",
+              gatewayVersion: "2026.9.4",
+              source: "clawhub",
+              targetResolution: {
+                status: "registry-current",
+                packageName: "@openclaw/whatsapp",
+                requestedTarget: "2026.9.4",
+                version: "2026.9.3",
+              },
+            },
+          ],
+        },
+        extraServices: [],
+      },
+      { json: false, deep: true },
+    );
+
+    expectMockLineContains(runtime.log, "- whatsapp: 2026.9.3 (clawhub) → expected 2026.9.4");
+    expectMockLineContains(
+      runtime.log,
+      "registry version 2026.9.3 is already installed; no release reaches 2026.9.4 yet",
+    );
+    const logged = runtime.log.mock.calls.flat().join("\n");
+    expect(logged).not.toContain("openclaw plugins update");
+    // Registry lag is not a resolution failure, so it must not reach the error surface.
+    expect(runtime.error.mock.calls.flat().join("\n")).not.toContain(
+      "Plugin repair target resolution failed",
+    );
   });
 
   it("prints exact package update commands for pinned npm plugin drift in deep mode", () => {
