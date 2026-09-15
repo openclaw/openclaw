@@ -621,7 +621,7 @@ export function buildCliRunResult(params: {
         provider: runParams.provider,
         model: context.modelId,
         ...preparedContextAgentMeta,
-        usage: output.usage,
+        usage: output.diagnosticUsage ?? output.usage,
         ...(output.usage ? { lastCallUsage: output.usage } : {}),
         ...(output.diagnosticUsage ? { diagnosticUsage: output.diagnosticUsage } : {}),
         ...(persistedCliSessionId

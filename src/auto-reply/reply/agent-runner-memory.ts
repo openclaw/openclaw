@@ -373,7 +373,11 @@ function deriveTranscriptUsageSnapshot(
     return undefined;
   }
   const promptTokens = deriveContextPromptTokens({ lastCallUsage: usage });
-  const outputRaw = usage.output;
+  // Counters can cover a whole multi-call turn; the context marker keeps the latest call.
+  const outputRaw =
+    usage.contextUsage?.state === "available"
+      ? usage.contextUsage.totalTokens - usage.contextUsage.promptTokens
+      : usage.output;
   const outputTokens =
     typeof outputRaw === "number" && Number.isFinite(outputRaw) && outputRaw > 0
       ? outputRaw
