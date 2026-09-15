@@ -29,6 +29,7 @@ import { resolvePluginVersionDriftUpdateCommand } from "../../plugins/plugin-ver
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
+import { quoteCliArg } from "../quote-cli-arg.js";
 import {
   createCliStatusTextStyles,
   formatRuntimeStatus,
@@ -113,7 +114,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     );
   }
   if (service.command?.reloadPending) {
-    defaultRuntime.log(warnText("Systemd reload: pending (run systemctl --user daemon-reload)"));
+    const systemctl =
+      service.runtime?.systemd?.scope === "system" ? "sudo systemctl --system" : "systemctl --user";
+    defaultRuntime.log(warnText(`Systemd reload: pending (run ${systemctl} daemon-reload)`));
   }
   if (service.command?.workingDirectory) {
     defaultRuntime.log(
@@ -436,6 +439,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       restartCommand: formatCliCommand("openclaw gateway restart", env),
       env,
       logFile: status.logFile,
+      systemd: service.runtime?.systemd,
     })) {
       defaultRuntime.error(errorText(hint));
     }
@@ -542,9 +546,12 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
     }
     if (process.platform === "linux") {
-      const unit = resolveGatewaySystemdServiceName(serviceEnv.OPENCLAW_PROFILE);
+      const unit =
+        service.runtime?.systemd?.unit ??
+        `${resolveGatewaySystemdServiceName(serviceEnv.OPENCLAW_PROFILE)}.service`;
+      const scope = service.runtime?.systemd?.scope === "system" ? "--system" : "--user";
       defaultRuntime.error(
-        errorText(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`),
+        errorText(`Logs: journalctl ${scope} -u ${quoteCliArg(unit)} -n 200 --no-pager`),
       );
     } else if (process.platform === "darwin") {
       const logs = resolveGatewaySupervisorLogPaths(serviceEnv, { platform: "darwin" });
@@ -565,8 +572,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     for (const svc of extraServices) {
       defaultRuntime.log(`- ${warnText(svc.label)} (${svc.scope}, ${svc.detail})`);
     }
-    for (const hint of renderGatewayServiceCleanupHints(extraServices)) {
-      defaultRuntime.log(`${infoText("Cleanup hint:")} ${hint}`);
+    for (const svc of extraServices) {
+      const hintLabel = svc.platform === "linux" ? "Inspection hint:" : "Cleanup hint:";
+      for (const hint of renderGatewayServiceCleanupHints([svc])) {
+        defaultRuntime.log(`${infoText(hintLabel)} ${hint}`);
+      }
     }
     spacer();
   }

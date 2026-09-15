@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecResult } from "./exec-file.js";
 
 const busctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execBusctlUser>());
+const systemBusctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execBusctlSystem>());
 const systemctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execSystemctlUser>());
 vi.mock("./systemd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./systemd-exec.js")>()),
   execBusctlUser: busctl,
+  execBusctlSystem: systemBusctl,
   execSystemctlUser: systemctl,
   assertSystemdAvailable: async () => {},
 }));
@@ -67,12 +69,48 @@ function managerReply(args: string[], overrides: Record<string, unknown> = {}): 
 
 beforeEach(() => {
   busctl.mockReset().mockImplementation(async (_env, args) => managerReply(args));
+  systemBusctl
+    .mockReset()
+    .mockImplementation(async (args) =>
+      args.includes("GetConnectionUnixUser")
+        ? success(JSON.stringify({ type: "u", data: [0] }))
+        : managerReply(args),
+    );
   systemctl
     .mockReset()
     .mockResolvedValue(success("Id=openclaw-owned.service\nLoadState=loaded\nActiveState=active"));
 });
 
 describe("loaded-only systemd runtime", () => {
+  it.each([0, 2001])("authenticates the selected system manager UID %s", async (uid) => {
+    systemBusctl.mockImplementation(async (args) =>
+      args.includes("GetConnectionUnixUser")
+        ? success(JSON.stringify({ type: "u", data: [uid] }))
+        : managerReply(args),
+    );
+    const runtime = await readSystemdServiceRuntime(env, {
+      requireLoaded: true,
+      systemdReadTarget: { scope: "system", unitName, unitPath: `/etc/systemd/system/${unitName}` },
+    });
+    if (uid === 0) {
+      expect(runtime).toMatchObject({
+        status: "running",
+        systemd: { scope: "system", unit: unitName, managerUid: 0 },
+      });
+      expect(runtime.systemd?.transport).toBeUndefined();
+    } else {
+      expect(runtime).toMatchObject({ status: "unknown", inspectionFailure: expect.anything() });
+      expect(runtime.systemd?.scope).toBeUndefined();
+    }
+    expect(busctl).not.toHaveBeenCalled();
+    expect(systemctl).not.toHaveBeenCalled();
+    expect(
+      systemBusctl.mock.calls.every(
+        ([args]) => args.includes("--auto-start=no") && !args.includes("LoadUnit"),
+      ),
+    ).toBe(true);
+  });
+
   it("reads the owned loaded unit without systemctl show or unit activation", async () => {
     const runtime = await readSystemdServiceRuntime(env, { requireLoaded: true, timeoutMs: 1000 });
     expect(runtime).toMatchObject({

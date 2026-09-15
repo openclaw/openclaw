@@ -1048,7 +1048,10 @@ export async function maybeScanExtraGatewayServices(
     extraServices.filter((service) => service.legacy !== true),
   );
   if (cleanupHints.length > 0) {
-    note(cleanupHints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
+    note(
+      cleanupHints.map((hint) => `- ${hint}`).join("\n"),
+      process.platform === "linux" ? "Inspection hints" : "Cleanup hints",
+    );
   }
 
   note(

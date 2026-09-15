@@ -2086,7 +2086,15 @@ describe("maybeScanExtraGatewayServices", () => {
       if (reported) {
         expectNoteContaining("custom-gateway.service", "Other gateway-like services detected");
         expect(mocks.renderGatewayServiceCleanupHints).toHaveBeenCalledWith([service]);
-        expectNoteContaining(`${scope === "system" ? "sudo " : ""}rm ${unitPath}`, "Cleanup hints");
+        expectNoteContaining(
+          `systemctl --${scope} status -- custom-gateway.service`,
+          "Inspection hints",
+        );
+        expectNoteContaining(
+          `systemctl --${scope} cat -- custom-gateway.service`,
+          "Inspection hints",
+        );
+        expectNoNoteContaining(`rm ${unitPath}`, "Cleanup hints");
       } else {
         expectNoNoteContaining("custom-gateway.service", "Other gateway-like services detected");
       }

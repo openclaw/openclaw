@@ -64,17 +64,10 @@ export function renderGatewayServiceCleanupHints(
         break;
       }
       case "linux": {
-        const systemctlCommand = service.scope === "user" ? "systemctl --user" : "sudo systemctl";
-        hints.push(
-          `${systemctlCommand} disable --now -- ${quotePosixCleanupArgument(service.label)}`,
-        );
-        if (service.detail.startsWith("unit:")) {
-          const unitPath = service.detail.slice("unit:".length).trim();
-          if (unitPath) {
-            const removeCommand = service.scope === "system" ? "sudo rm" : "rm";
-            hints.push(`${removeCommand} ${quotePosixCleanupArgument(unitPath)}`);
-          }
-        }
+        const systemctlCommand = `systemctl --${service.scope}`;
+        const unit = quotePosixCleanupArgument(service.label);
+        // A discovered unit may be the only running Gateway; inspect before removal.
+        hints.push(`${systemctlCommand} status -- ${unit}`, `${systemctlCommand} cat -- ${unit}`);
         break;
       }
       case "win32":

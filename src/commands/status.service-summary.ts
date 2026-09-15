@@ -2,6 +2,7 @@
 // Converts gateway/node launchd/systemd state into a compact summary shape.
 
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
+import { formatServiceLabel } from "../daemon/runtime-format.js";
 import {
   summarizeGatewayServiceLayout,
   type GatewayServiceLayoutSummary,
@@ -56,7 +57,7 @@ export async function readServiceStatusSummary(
           ? service.notLoadedText
           : "unknown";
     return {
-      label: service.label,
+      label: formatServiceLabel(service.label, state.runtime),
       installed,
       loadState: state.loadState,
       managedByOpenClaw,
