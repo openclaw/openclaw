@@ -55,12 +55,11 @@ const AUDIO_ONLY_CAPABILITY_ORDER: MediaUnderstandingCapability[] = ["audio"];
 const EMPTY_VOICE_NOTE_PLACEHOLDER =
   "[Voice note could not be transcribed because the audio attachment was too small]";
 
-function appendFileBlocks(body: string | undefined, blocks: string[]): string {
-  if (!blocks || blocks.length === 0) {
+function appendFileBlocks(body: string | undefined, suffix: string | undefined): string {
+  if (suffix === undefined) {
     return body ?? "";
   }
   const base = typeof body === "string" ? body.trim() : "";
-  const suffix = blocks.join("\n\n").trim();
   if (!base) {
     return suffix;
   }
@@ -151,10 +150,9 @@ export async function applyMediaUnderstanding(params: {
 }): Promise<ApplyMediaUnderstandingResult> {
   const { ctx, cfg } = params;
   const commandCandidates = [ctx.CommandBody, ctx.RawBody, ctx.Body];
-  const originalUserText =
-    commandCandidates
-      .map((value) => normalizeOptionalString(value))
-      .find((value) => value && value.trim()) ?? undefined;
+  const originalUserText = commandCandidates
+    .map((value) => normalizeOptionalString(value))
+    .find(Boolean);
 
   const attachments = normalizeMediaAttachments(ctx);
   const providerRegistry = buildProviderRegistry(params.providers, cfg);
@@ -287,8 +285,9 @@ export async function applyMediaUnderstanding(params: {
     });
     const contextBlocks = applyAttachmentMarkerBudget([...fileContext.blocks, ...mediaMarkers]);
     if (outputs.length > 0 || contextBlocks.length > 0) {
+      const fileSuffix = contextBlocks.length > 0 ? contextBlocks.join("\n\n").trim() : undefined;
       const enrich = (body?: string) =>
-        appendFileBlocks(formatMediaUnderstandingBody({ body, outputs }), contextBlocks);
+        appendFileBlocks(formatMediaUnderstandingBody({ body, outputs }), fileSuffix);
       // Channels may carry preflight transcripts only in prepared agent text.
       // Enrich that base before changing the separate transport envelope.
       ctx.agentText = enrich(ctx.agentText ?? ctx.BodyForAgent ?? ctx.Body);
