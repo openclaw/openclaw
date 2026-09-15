@@ -44,13 +44,7 @@ function classifyJsonValue(value: unknown): ToolCallShapedTextDetection | null {
 
   const toolCalls = record.tool_calls ?? record.toolCalls;
   if (Array.isArray(toolCalls)) {
-    for (const toolCall of toolCalls) {
-      const detection = classifyJsonValue(toolCall);
-      if (detection) {
-        return detection;
-      }
-    }
-    return { kind: "json_tool_call" };
+    return classifyJsonValue(toolCalls) ?? { kind: "json_tool_call" };
   }
 
   const functionRecord = asOptionalRecord(record.function);

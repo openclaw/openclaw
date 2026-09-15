@@ -22,6 +22,31 @@ describe("detectToolCallShapedText", () => {
     },
   );
 
+  it.each([
+    { text: '{"tool_calls":[]}', expected: { kind: "json_tool_call" } },
+    { text: '{"tool_calls":[false,{},[]]}', expected: { kind: "json_tool_call" } },
+    {
+      text: '{"toolCalls":[{"name":" read ","arguments":{}}]}',
+      expected: { kind: "json_tool_call", toolName: "read" },
+    },
+    {
+      text: '{"tool_calls":[[],[{"name":"first","args":{}}],{"name":"second","input":{}}]}',
+      expected: { kind: "json_tool_call", toolName: "first" },
+    },
+    {
+      text: '{"tool_calls":[{"tool_calls":[]},{"name":"later","arguments":{}}]}',
+      expected: { kind: "json_tool_call" },
+    },
+    {
+      text: '{"tool_calls":[],"toolCalls":[{"name":"later","arguments":{}}]}',
+      expected: { kind: "json_tool_call" },
+    },
+    { text: '{"tool_calls":"read"}', expected: null },
+    { text: '["tool_calls",{},[]]', expected: null },
+  ])("preserves array-wrapper classification for $text", ({ text, expected }) => {
+    expect(detectToolCallShapedText(text)).toEqual(expected);
+  });
+
   it("detects XML and ReAct-style tool text", () => {
     expect(
       detectToolCallShapedText(
