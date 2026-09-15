@@ -55,8 +55,23 @@ import {
   rememberLegacyVoiceBinding,
 } from "./talk-client-legacy-voice-bindings.js";
 import { resolveOwnedActiveTalkRunTarget } from "./talk-client-run-ownership.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+type TalkClientSessionMutationRequest = Omit<GatewayRequestHandlerOptions, "context"> & {
+  context: Pick<GatewayRequestHandlerOptions["context"], "getRuntimeConfig">;
+};
+
+function assertTalkMutationAllowed(
+  request: Pick<
+    GatewayRequestHandlerOptions,
+    "signal" | "sessionMutationCommitGuard" | "sessionMutationAuthorization"
+  >,
+): void {
+  request.signal?.throwIfAborted();
+  request.sessionMutationCommitGuard?.();
+  request.sessionMutationAuthorization?.assertCurrent();
+}
 
 /**
  * Gateway methods for browser-owned realtime Talk sessions.
@@ -64,7 +79,7 @@ import { assertValidParams } from "./validation.js";
  * These handlers create provider browser sessions and bridge client-owned tool
  * calls back into OpenClaw agent consult runs.
  */
-export const talkClientHandlers: GatewayRequestHandlers = {
+export const talkClientHandlers = {
   "talk.client.create": createTalkClient,
   "talk.client.toolCall": async (request) => {
     const { params, respond } = request;
@@ -190,7 +205,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
-  "talk.client.transcript": async ({ params, respond, context, sessionMutationAuthorization }) => {
+  "talk.client.transcript": async (request: TalkClientSessionMutationRequest) => {
+    const { params, respond, context, sessionMutationAuthorization } = request;
     if (
       !assertValidParams(
         params,
@@ -206,7 +222,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       const target =
         sessionMutationAuthorization?.talkSessionTarget ??
         prepareTalkSessionTarget(config, params.sessionKey);
-      sessionMutationAuthorization?.assertCurrent();
+      const assertCommitAllowed = () => assertTalkMutationAllowed(request);
+      assertCommitAllowed();
       await appendClientVoiceTranscript({
         agentId: target.agentId,
         sessionKey: target.sessionKey,
@@ -217,19 +234,15 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         text: params.text,
         ...(params.timestamp !== undefined ? { timestamp: params.timestamp } : {}),
         config,
+        assertCommitAllowed,
       });
       respond(true, { ok: true }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
     }
   },
-  "talk.client.close": async ({
-    params,
-    respond,
-    context,
-    client,
-    sessionMutationAuthorization,
-  }) => {
+  "talk.client.close": async (request: TalkClientSessionMutationRequest) => {
+    const { params, respond, context, client, sessionMutationAuthorization } = request;
     if (!assertValidParams(params, validateTalkClientCloseParams, "talk.client.close", respond)) {
       return;
     }
@@ -248,7 +261,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       const { agentId } =
         sessionMutationAuthorization?.talkSessionTarget ??
         prepareTalkSessionTarget(config, params.sessionKey);
-      sessionMutationAuthorization?.assertCurrent();
+      const assertCommitAllowed = () => assertTalkMutationAllowed(request);
+      assertCommitAllowed();
       const origin = resolveClientVoiceSessionOrigin({
         agentId,
         sessionKey: params.sessionKey,
@@ -262,6 +276,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         sessionKey: params.sessionKey,
         voiceSessionId: params.voiceSessionId,
         config,
+        assertCommitAllowed,
       });
       const connId = normalizeOptionalString(client?.connId);
       if (connId) {
@@ -336,4 +351,4 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       );
     }
   },
-};
+} satisfies GatewayRequestHandlers;

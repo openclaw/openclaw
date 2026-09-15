@@ -269,6 +269,28 @@ in the shared-state worker, preserving the 200-row limit and leaving absent
 databases absent. Freshness reads still execute synchronous SQLite internally
 and remain non-creating.
 
+Talk transcript reservations, completion bookkeeping, logical close, and successful
+mutation-digest markers use agent write admission and asynchronous cold database
+opening. Each operation retains its original physical store across queue and
+transport waits. Digest retry intents retain that store separately from refreshed
+configuration, including retries after a consult finishes. Their existing identity
+byte budget includes the physical store and state-root locators; captured
+environments retain only the resolved state root and supervision mode. Voice
+operation queues include the physical store in their ownership key, and stale
+recovery keeps its scanned store through every close in the batch. Recovery
+rechecks its existing idle cutoff inside write admission and seals transcript
+admission only when it can close the current call. Calls resumed or accepting
+new transcript work while recovery waits remain open. An explicit close seals
+admission immediately, joins recovery and all accepted speech, and closes the
+same incarnation if recovery skips it; a skipped recovery cannot acknowledge a
+hangup.
+Fresh transcript writes recheck the request, voice record, and
+chat session immediately before insertion; accepted Gateway-controlled final
+speech still drains when transport close fences new actions. Successful digest
+delivery is recorded even if the transport aborts afterward. Voice-record reads
+leave missing databases absent. Creation/resume, consult registration, and trusted
+diagnostic tool-effect capture retain their synchronous transaction contracts.
+
 Explicit session deletion, lifecycle-artifact cleanup, and history disk-budget
 eviction prepare their plans inside the session writer queue. When the parent database handle is cold, its
 existing asynchronous admission owner runs the full integrity and foreign-key

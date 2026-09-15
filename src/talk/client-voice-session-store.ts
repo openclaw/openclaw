@@ -1,11 +1,19 @@
 import { z } from "zod";
+import { resolveStateDir } from "../config/state-dir.js";
+import type { TrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
+import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 /** SQLite-backed persistence for durable per-agent Talk voice-call records. */
 import { compileSqliteQueryBindings, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
-  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+  withOpenClawAgentDatabaseAsync,
   type OpenClawAgentDatabase,
+  type OpenClawAgentDatabaseOptions,
 } from "../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { VOICE_TRANSCRIPT_MAX_UNRESOLVED } from "./voice-transcript.js";
 
 const VOICE_SESSION_CACHE_SCOPE = "talk-client-voice-sessions";
@@ -20,6 +28,21 @@ export type ClientVoiceToolEffect = {
   finishedAt?: number;
   status: "started" | "succeeded" | "failed" | "cancelled" | "blocked";
 };
+
+function resolveClientVoiceToolEffectStatus(
+  event: TrustedToolExecutionEvent,
+): ClientVoiceToolEffect["status"] {
+  if (event.type === "tool.execution.started") {
+    return "started";
+  }
+  if (event.type === "tool.execution.completed") {
+    return "succeeded";
+  }
+  if (event.type === "tool.execution.blocked") {
+    return "blocked";
+  }
+  return event.terminalReason === "cancelled" ? "cancelled" : "failed";
+}
 
 export type ClientVoiceSessionRecord = {
   version: typeof VOICE_SESSION_RECORD_VERSION;
@@ -124,14 +147,58 @@ export function parseStoredVoiceSessionRecord(
 export function readVoiceSessionRecord(
   agentId: string,
   voiceSessionId: string,
+  options: OpenClawAgentDatabaseOptions = { agentId },
 ): ClientVoiceSessionRecord | undefined {
-  return readVoiceSessionRecordInTransaction(
-    openOpenClawAgentDatabase({ agentId }),
-    voiceSessionId,
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readVoiceSessionRecordInTransaction(database, voiceSessionId),
+    options,
+  );
+  return result.found ? result.value : undefined;
+}
+
+export type ClientVoiceSessionStore = {
+  agentId: string;
+  path: string;
+  env: { OPENCLAW_STATE_DIR: string; OPENCLAW_SUPERVISOR_MODE?: "external" };
+};
+
+/** Capture the physical owner before waiting in the voice queue or sending a digest. */
+export function captureClientVoiceSessionStore(agentId: string): ClientVoiceSessionStore {
+  const options = {
+    agentId,
+    env: {
+      OPENCLAW_STATE_DIR: resolveStateDir(process.env),
+      ...(isGatewayExternallySupervised(process.env)
+        ? { OPENCLAW_SUPERVISOR_MODE: "external" as const }
+        : {}),
+    },
+  };
+  return { ...options, path: resolveOpenClawAgentSqlitePath(options) };
+}
+
+/** Transcript and delivery I/O stay outside the metadata writer. */
+export function runClientVoiceSessionWrite<T>(
+  options: OpenClawAgentDatabaseOptions,
+  operation: (database: OpenClawAgentDatabase) => T,
+  assertCurrent?: () => void,
+): Promise<T> {
+  return runOpenClawAgentWriteAdmission(
+    options,
+    () =>
+      withOpenClawAgentDatabaseAsync(
+        options,
+        () =>
+          runOpenClawAgentWriteTransaction((database) => {
+            assertCurrent?.();
+            return operation(database);
+          }, options),
+        assertCurrent,
+      ),
+    true,
   );
 }
 
-function voiceSessionRowsQuery(database: OpenClawAgentDatabase) {
+function voiceSessionRowsQuery(database: Pick<OpenClawAgentDatabase, "db">) {
   return getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "cache_entries">>(database.db)
     .selectFrom("cache_entries")
     .select("value_json")
@@ -139,7 +206,7 @@ function voiceSessionRowsQuery(database: OpenClawAgentDatabase) {
 }
 
 export function readVoiceSessionRecordInTransaction(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   voiceSessionId: string,
 ): ClientVoiceSessionRecord | undefined {
   const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
@@ -151,17 +218,67 @@ export function readVoiceSessionRecordInTransaction(
   return parseStoredVoiceSessionRecord(row?.value_json);
 }
 
-export function readVoiceSessionRecordRows(agentId: string, updatedBefore?: number) {
-  const database = openOpenClawAgentDatabase({ agentId });
-  const query = voiceSessionRowsQuery(database);
-  const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
-    updatedBefore === undefined
-      ? query.orderBy("updated_at", "desc")
-      : query.where("updated_at", "<=", updatedBefore),
-  );
-  return /* sqlite-allow-raw: Compiled SQL snapshots recovery candidates before awaits. */ database.db
-    .prepare(compiled.sql)
-    .all(...bind());
+export function readVoiceSessionRecordRows(
+  agentId: string,
+  updatedBefore?: number,
+  options: OpenClawAgentDatabaseOptions = { agentId },
+) {
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    const query = voiceSessionRowsQuery(database);
+    const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
+      updatedBefore === undefined
+        ? query.orderBy("updated_at", "desc")
+        : query.where("updated_at", "<=", updatedBefore),
+    );
+    return /* sqlite-allow-raw: Compiled SQL snapshots recovery candidates before awaits. */ database.db
+      .prepare(compiled.sql)
+      .all(...bind());
+  }, options);
+  return result.found ? result.value : [];
+}
+
+export function recordClientVoiceToolEffectInStore(
+  event: TrustedToolExecutionEvent,
+  binding: ClientVoiceRunBinding,
+  store: ClientVoiceSessionStore,
+): void {
+  const runId = event.runId;
+  if (!runId) {
+    return;
+  }
+  runOpenClawAgentWriteTransaction((database) => {
+    const record = readVoiceSessionRecordInTransaction(database, binding.voiceSessionId);
+    if (!record) {
+      return;
+    }
+    const existing = event.toolCallId
+      ? record.effects.find(
+          (effect) => effect.runId === runId && effect.toolCallId === event.toolCallId,
+        )
+      : record.effects.findLast(
+          (effect) =>
+            effect.runId === runId &&
+            effect.toolName === event.toolName &&
+            effect.status === "started",
+        );
+    if (event.type !== "tool.execution.started" && !existing) {
+      return;
+    }
+    if (event.type !== "tool.execution.started" && existing) {
+      existing.status = resolveClientVoiceToolEffectStatus(event);
+      existing.finishedAt = event.ts;
+    } else if (event.mutatingAction === true && (!event.toolCallId || !existing)) {
+      record.effects.push({
+        runId,
+        ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+        toolName: event.toolName,
+        startedAt: event.ts,
+        status: "started",
+      });
+    }
+    record.updatedAt = Date.now();
+    writeVoiceSessionRecordInTransaction(database, record);
+  }, store);
 }
 
 export function writeVoiceSessionRecordInTransaction(
@@ -199,6 +316,6 @@ export function assertVoiceSessionOwnership(
   }
 }
 
-export function operationKey(agentId: string, voiceSessionId: string): string {
-  return `${agentId}\0${voiceSessionId}`;
+export function operationKey(store: ClientVoiceSessionStore, voiceSessionId: string): string {
+  return `${store.path}\0${store.agentId}\0${voiceSessionId}`;
 }

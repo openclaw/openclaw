@@ -11,6 +11,7 @@ import {
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { runExclusiveSqliteSessionWrite } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { enqueueCommandInLane, resetCommandLane } from "../../process/command-queue.js";
 import {
   beginGatewayRestartSignalAdmission,
@@ -22,7 +23,10 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
 import { getActiveSessionWorkAdmissionCount } from "../../sessions/session-lifecycle-admission.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   authorizeClientVoiceConfirmation,
@@ -462,6 +466,55 @@ describe("talk.client.transcript", () => {
         now: 201,
       }),
     ).toThrow("explicit spoken confirmation");
+  });
+
+  it("drains accepted final provider transcripts after Gateway control close aborts transport", async () => {
+    const createBrowserSession = vi.fn(async (_request: BrowserRequest) => browserSession);
+    const fixture = configureDelegatedBrowserProvider(createBrowserSession);
+    const respond = vi.fn();
+    await invokeCreate({
+      params: { sessionKey, provider: "openai", model: "gpt-live-test" },
+      respond,
+      context: fixture.context,
+      client: fixture.client,
+    } as never);
+    const result = respond.mock.calls[0]?.[1] as { voiceSessionId: string };
+    ownedVoiceSessionId = result.voiceSessionId;
+    const control = createBrowserSession.mock.calls[0]?.[0].gatewayControl;
+    expect(control).toBeDefined();
+    const gate = createDeferred();
+    const entered = createDeferred();
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const held = runExclusiveSqliteSessionWrite(
+      { agentId: "main", path: database.path },
+      () => {
+        entered.resolve();
+        return gate.promise;
+      },
+      "session.transcript.locked-write",
+    );
+    await entered.promise;
+    control?.onTranscript?.("user", "Synthetic accepted final speech", true);
+    const closing = invokeClose({ sessionKey, voiceSessionId: result.voiceSessionId });
+    void closing.catch(() => {});
+    try {
+      await vi.waitFor(() => expect(fixture.cancelBrowserSession).toHaveBeenCalledOnce());
+      expect(clientVoiceSessionTesting.readRecord("main", result.voiceSessionId)?.status).toBe(
+        "open",
+      );
+    } finally {
+      gate.resolve();
+      await Promise.all([held, closing]);
+    }
+    expect(await closing).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(clientVoiceSessionTesting.readRecord("main", result.voiceSessionId)).toMatchObject({
+      status: "closed",
+      hasUserTranscript: true,
+      transcriptFailureKeys: [],
+    });
+    expect(
+      readSessionTranscriptMessageEvents({ agentId: "main", sessionKey, sessionId }),
+    ).toHaveLength(1);
   });
 
   it("accepts an idempotent close retry after the first response is lost", async () => {

@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  readSessionTranscriptMessageEvents,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -194,6 +197,70 @@ describe("voice confirmation transcript admission", () => {
         expect(
           readClientVoiceConfirmationReadiness(scope.agentId, scope.voiceSessionId),
         ).toBeUndefined();
+      }
+    },
+  );
+  it.each([false, true])(
+    "retains failed bookkeeping for a retry without approving a newer challenge (superseded=%s)",
+    async (superseded) => {
+      const sessionKey = "agent:main:main";
+      await seedSession(sessionKey);
+      const voiceSessionId = createOrResumeClientVoiceSession({
+        agentId: "main",
+        sessionKey,
+        origin: "client",
+      });
+      const scope = { agentId: "main", voiceSessionId };
+      const input = {
+        ...scope,
+        sessionKey,
+        sessionTarget: { sessionKey },
+        entryId: "bookkeeping-retry",
+        role: "user" as const,
+        text: "yes",
+      };
+      const challenge = (runId: string) =>
+        checkClientVoiceToolConfirmationPolicy({
+          ...scope,
+          runId,
+          toolName: "message",
+          toolParams: { action: "send", message: runId },
+          now: Date.now() - 1,
+        });
+      challenge("A");
+      const readMessages = () =>
+        readSessionTranscriptMessageEvents({
+          agentId: "main",
+          sessionKey,
+          sessionId: "confirmation-transcript",
+        });
+      await expect(
+        appendClientVoiceTranscript({
+          ...input,
+          assertCommitAllowed: () => {
+            if (readMessages().length > 0) {
+              throw new Error("bookkeeping authority ended");
+            }
+          },
+        }),
+      ).rejects.toThrow("bookkeeping authority ended");
+      expect(readMessages()).toHaveLength(1);
+      expect(
+        clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.transcriptFailureKeys,
+      ).toHaveLength(1);
+      expect(authorizeObservedClientVoiceConfirmation(scope)).toBeUndefined();
+      if (superseded) {
+        challenge("B");
+      }
+      await appendClientVoiceTranscript(input);
+      expect(readMessages()).toHaveLength(1);
+      expect(
+        clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.transcriptFailureKeys,
+      ).toEqual([]);
+      if (superseded) {
+        expect(authorizeObservedClientVoiceConfirmation(scope)).toBeUndefined();
+      } else {
+        expect(authorizeObservedClientVoiceConfirmation(scope)).toBeDefined();
       }
     },
   );

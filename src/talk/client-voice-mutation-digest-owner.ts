@@ -2,11 +2,13 @@ import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveSessionDeliveryTarget } from "../infra/outbound/targets-session.js";
-import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
+  assertVoiceSessionOwnership,
+  type ClientVoiceSessionStore,
   type ClientVoiceSessionRecord,
   type ClientVoiceToolEffect,
   readVoiceSessionRecordInTransaction,
+  runClientVoiceSessionWrite,
   writeVoiceSessionRecordInTransaction,
 } from "./client-voice-session-store.js";
 
@@ -39,6 +41,7 @@ export async function deliverClientVoiceMutationDigest(
   record: ClientVoiceSessionRecord,
   config: OpenClawConfig,
   signal: AbortSignal,
+  store: ClientVoiceSessionStore,
 ): Promise<void> {
   if (record.digestDeliveredAt) {
     return;
@@ -48,6 +51,8 @@ export async function deliverClientVoiceMutationDigest(
     return;
   }
   const entry = loadSessionEntryReadOnly({
+    env: store.env,
+    storePath: store.path,
     agentId: record.agentId,
     sessionKey: record.sessionKey,
   });
@@ -77,24 +82,27 @@ export async function deliverClientVoiceMutationDigest(
     throw send.error;
   }
   const deliveredAt = Date.now();
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      const current = readVoiceSessionRecordInTransaction(database, record.voiceSessionId);
-      if (!current || current.digestDeliveredAt) {
-        return;
-      }
-      current.digestDeliveredAt = deliveredAt;
-      current.updatedAt = deliveredAt;
-      writeVoiceSessionRecordInTransaction(database, current);
-    },
-    { agentId: record.agentId },
-  );
+  // Successful delivery remains a fact even if its transport aborts before bookkeeping.
+  await runClientVoiceSessionWrite(store, (database) => {
+    const current = readVoiceSessionRecordInTransaction(database, record.voiceSessionId);
+    if (!current || current.digestDeliveredAt) {
+      return;
+    }
+    assertVoiceSessionOwnership(current, record);
+    if (current.createdAt !== record.createdAt || current.origin !== record.origin) {
+      throw new Error("voice session changed during digest delivery");
+    }
+    current.digestDeliveredAt = deliveredAt;
+    current.updatedAt = deliveredAt;
+    writeVoiceSessionRecordInTransaction(database, current);
+  });
 }
 
 type MutationDigestIntent<TContext> = {
   agentId: string;
   voiceSessionId: string;
   context: TContext;
+  store: ClientVoiceSessionStore;
   identityBytes: number;
   failedAttempts: number;
   failureExpiry?: ReturnType<typeof setTimeout>;
@@ -130,6 +138,7 @@ export class ClientVoiceMutationDigestOwner<TContext> {
         agentId: string;
         voiceSessionId: string;
         context: TContext;
+        store: ClientVoiceSessionStore;
         signal: AbortSignal;
       }) => Promise<boolean>;
       warn: (message: string) => void;
@@ -141,7 +150,12 @@ export class ClientVoiceMutationDigestOwner<TContext> {
     return this.options.policy ?? CLIENT_VOICE_MUTATION_DIGEST_POLICY;
   }
 
-  record(params: { agentId: string; voiceSessionId: string; context: TContext }): void {
+  record(params: {
+    agentId: string;
+    voiceSessionId: string;
+    context: TContext;
+    store: ClientVoiceSessionStore;
+  }): void {
     const key = this.key(params);
     const existing = this.intents.get(key);
     if (existing) {
@@ -154,10 +168,7 @@ export class ClientVoiceMutationDigestOwner<TContext> {
       this.pump();
       return;
     }
-    const identityBytes =
-      Buffer.byteLength(params.agentId, "utf8") +
-      Buffer.byteLength(params.voiceSessionId, "utf8") +
-      1;
+    const identityBytes = Buffer.byteLength(key, "utf8");
     if (identityBytes > this.policy.maxRetainedIdentityBytes) {
       this.options.warn("voice mutation digest identity exceeds the retry owner byte limit");
       return;
@@ -176,7 +187,7 @@ export class ClientVoiceMutationDigestOwner<TContext> {
     this.pump();
   }
 
-  retry(params: { agentId: string; voiceSessionId: string }): void {
+  retry(params: { agentId: string; voiceSessionId: string; store: ClientVoiceSessionStore }): void {
     const key = this.key(params);
     if (!this.intents.has(key)) {
       return;
@@ -189,9 +200,9 @@ export class ClientVoiceMutationDigestOwner<TContext> {
     this.pump();
   }
 
-  retryAgent(agentId: string, context: TContext): void {
+  retryAgent(store: ClientVoiceSessionStore, context: TContext): void {
     for (const [key, intent] of this.intents) {
-      if (intent.agentId !== agentId) {
+      if (intent.agentId !== store.agentId || intent.store.path !== store.path) {
         continue;
       }
       intent.context = context;
@@ -235,8 +246,13 @@ export class ClientVoiceMutationDigestOwner<TContext> {
     this.retainedIdentityBytes = 0;
   }
 
-  private key(params: { agentId: string; voiceSessionId: string }): string {
-    return `${params.agentId}\0${params.voiceSessionId}`;
+  private key(params: {
+    agentId: string;
+    voiceSessionId: string;
+    store: ClientVoiceSessionStore;
+  }): string {
+    const { store } = params;
+    return `${store.path}\0${store.env.OPENCLAW_STATE_DIR}\0${store.env.OPENCLAW_SUPERVISOR_MODE ?? ""}\0${params.agentId}\0${params.voiceSessionId}`;
   }
 
   private deleteIntent(key: string, expected?: MutationDigestIntent<TContext>): void {

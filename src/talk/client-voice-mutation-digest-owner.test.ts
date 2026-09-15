@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { ClientVoiceMutationDigestOwner } from "./client-voice-mutation-digest-owner.js";
 
+const store = { agentId: "a", path: "/a", env: { OPENCLAW_STATE_DIR: "/r" } };
+
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -50,14 +52,14 @@ describe("client voice mutation digest owner", () => {
     });
 
     for (let index = 1; index <= 6; index += 1) {
-      owner.record({ agentId: "a", voiceSessionId: `v${index}`, context: index });
+      owner.record({ store, agentId: "a", voiceSessionId: `v${index}`, context: index });
     }
-    owner.record({ agentId: "a", voiceSessionId: "v1", context: 99 });
+    owner.record({ store, agentId: "a", voiceSessionId: "v1", context: 99 });
     expect(owner.snapshot()).toEqual({
       active: 2,
       pending: 2,
       retained: 4,
-      retainedIdentityBytes: 16,
+      retainedIdentityBytes: 44,
     });
 
     let resolved = 0;
@@ -105,8 +107,8 @@ describe("client voice mutation digest owner", () => {
       },
     });
 
-    owner.record({ agentId: "a", voiceSessionId: "v1", context: 1 });
-    owner.record({ agentId: "a", voiceSessionId: "v1", context: 2 });
+    owner.record({ store, agentId: "a", voiceSessionId: "v1", context: 1 });
+    owner.record({ store, agentId: "a", voiceSessionId: "v1", context: 2 });
     attempts[0]?.reject(new Error("offline"));
     await vi.waitFor(() => expect(attempts).toHaveLength(2));
     attempts[1]?.resolve(true);
@@ -137,8 +139,8 @@ describe("client voice mutation digest owner", () => {
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      owner.record({ agentId: "a", voiceSessionId: "v1", context: 1 });
-      owner.record({ agentId: "a", voiceSessionId: "v2", context: 2 });
+      owner.record({ store, agentId: "a", voiceSessionId: "v1", context: 1 });
+      owner.record({ store, agentId: "a", voiceSessionId: "v2", context: 2 });
       await vi.advanceTimersByTimeAsync(10);
       expect(attempts).toHaveLength(1);
       expect(attempts[0]?.signal.aborted).toBe(true);
@@ -175,7 +177,7 @@ describe("client voice mutation digest owner", () => {
       attempt,
     });
 
-    owner.record({ agentId: "agent", voiceSessionId: "voice", context: 1 });
+    owner.record({ store, agentId: "agent", voiceSessionId: "voice", context: 1 });
     await flushMicrotasks();
 
     expect(owner.snapshot()).toEqual({
@@ -196,7 +198,7 @@ describe("client voice mutation digest owner", () => {
     const owner = new ClientVoiceMutationDigestOwner<number>({
       policy: {
         maxRetainedIntents: 4,
-        maxRetainedIdentityBytes: 10,
+        maxRetainedIdentityBytes: 25,
         maxConcurrentAttempts: 1,
         maxAttemptFailures: 3,
         attemptAbortAfterMs: 60_000,
@@ -210,15 +212,15 @@ describe("client voice mutation digest owner", () => {
       },
     });
 
-    owner.record({ agentId: "a", voiceSessionId: "v1", context: 1 });
-    owner.record({ agentId: "a", voiceSessionId: "v2", context: 2 });
-    owner.record({ agentId: "a", voiceSessionId: "v3", context: 3 });
+    owner.record({ store, agentId: "a", voiceSessionId: "v1", context: 1 });
+    owner.record({ store, agentId: "a", voiceSessionId: "v2", context: 2 });
+    owner.record({ store, agentId: "a", voiceSessionId: "v3", context: 3 });
 
     expect(owner.snapshot()).toEqual({
       active: 1,
       pending: 1,
       retained: 2,
-      retainedIdentityBytes: 8,
+      retainedIdentityBytes: 22,
     });
     expect(warn).toHaveBeenCalledOnce();
 
@@ -251,14 +253,14 @@ describe("client voice mutation digest owner", () => {
       },
     });
 
-    owner.record({ agentId: "first", voiceSessionId: "v1", context: 1 });
+    owner.record({ store, agentId: "first", voiceSessionId: "v1", context: 1 });
     await vi.waitFor(() =>
       expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 }),
     );
-    owner.retry({ agentId: "first", voiceSessionId: "v1" });
+    owner.retry({ store, agentId: "first", voiceSessionId: "v1" });
     await vi.waitFor(() => expect(owner.snapshot().retained).toBe(0));
 
-    owner.record({ agentId: "second", voiceSessionId: "v2", context: 2 });
+    owner.record({ store, agentId: "second", voiceSessionId: "v2", context: 2 });
     await vi.waitFor(() => expect(owner.snapshot().retained).toBe(0));
     expect(attempts).toEqual(["first", "first", "second"]);
     expect(warn).toHaveBeenLastCalledWith(
@@ -286,7 +288,7 @@ describe("client voice mutation digest owner", () => {
         attempt,
       });
 
-      owner.record({ agentId: "a", voiceSessionId: "v1", context: 1 });
+      owner.record({ store, agentId: "a", voiceSessionId: "v1", context: 1 });
       await vi.advanceTimersByTimeAsync(0);
       expect(attempt).toHaveBeenCalledOnce();
       expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
@@ -327,18 +329,18 @@ describe("client voice mutation digest owner", () => {
         attempt,
       });
 
-      owner.record({ agentId: "a", voiceSessionId: "v1", context: 1 });
+      owner.record({ store, agentId: "a", voiceSessionId: "v1", context: 1 });
       await vi.advanceTimersByTimeAsync(0);
       expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
 
       outcome = "defer";
-      owner.retry({ agentId: "a", voiceSessionId: "v1" });
+      owner.retry({ store, agentId: "a", voiceSessionId: "v1" });
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(101);
       expect(owner.snapshot()).toMatchObject({ active: 0, pending: 0, retained: 1 });
 
       outcome = "succeed";
-      owner.retry({ agentId: "a", voiceSessionId: "v1" });
+      owner.retry({ store, agentId: "a", voiceSessionId: "v1" });
       await vi.advanceTimersByTimeAsync(0);
       expect(owner.snapshot().retained).toBe(0);
       expect(attempt).toHaveBeenCalledTimes(3);
@@ -369,10 +371,10 @@ describe("client voice mutation digest owner", () => {
       },
     });
 
-    owner.record({ agentId: "a", voiceSessionId: "v1", context: 1 });
+    owner.record({ store, agentId: "a", voiceSessionId: "v1", context: 1 });
     owner.clear();
-    owner.record({ agentId: "a", voiceSessionId: "v1", context: 2 });
-    owner.record({ agentId: "a", voiceSessionId: "v1", context: 3 });
+    owner.record({ store, agentId: "a", voiceSessionId: "v1", context: 2 });
+    owner.record({ store, agentId: "a", voiceSessionId: "v1", context: 3 });
 
     attempts[0]?.completion.reject(new Error("old generation"));
     attempts[1]?.completion.resolve(false);
@@ -380,5 +382,34 @@ describe("client voice mutation digest owner", () => {
     expect(attempts[2]?.context).toBe(3);
     attempts[2]?.completion.resolve(true);
     await vi.waitFor(() => expect(owner.snapshot().retained).toBe(0));
+  });
+  it("keeps identical voice IDs in separate stores and refreshes only the selected retry context", async () => {
+    const second = { ...store, path: "/b", env: { OPENCLAW_STATE_DIR: "/s" } };
+    const attempts: Array<{ path: string; context: number }> = [];
+    let complete = false;
+    const owner = new ClientVoiceMutationDigestOwner<number>({
+      warn: vi.fn(),
+      attempt: async ({ store: captured, context }) => {
+        attempts.push({ path: captured.path, context });
+        return complete;
+      },
+    });
+    try {
+      owner.record({ store, agentId: "a", voiceSessionId: "same", context: 1 });
+      owner.record({ store: second, agentId: "a", voiceSessionId: "same", context: 2 });
+      await vi.waitFor(() => expect(owner.snapshot()).toMatchObject({ active: 0, retained: 2 }));
+      owner.retryAgent(second, 20);
+      await vi.waitFor(() => expect(attempts).toHaveLength(3));
+      expect(attempts[2]).toEqual({ path: "/b", context: 20 });
+      owner.retry({ store, agentId: "a", voiceSessionId: "same" });
+      await vi.waitFor(() => expect(attempts).toHaveLength(4));
+      expect(attempts[3]).toEqual({ path: "/a", context: 1 });
+      complete = true;
+      owner.retry({ store, agentId: "a", voiceSessionId: "same" });
+      owner.retry({ store: second, agentId: "a", voiceSessionId: "same" });
+      await vi.waitFor(() => expect(owner.snapshot()).toMatchObject({ active: 0, retained: 0 }));
+    } finally {
+      owner.clear();
+    }
   });
 });
