@@ -209,6 +209,7 @@ function sanitizeRedactedValue(params: {
   const originalFormRecord = isRecord(params.originalFormValue) ? params.originalFormValue : null;
   const originalRawRecord = isRecord(params.originalRawValue) ? params.originalRawValue : null;
   const next: Record<string, unknown> = {};
+  let omittedChild = false;
   for (const [key, item] of Object.entries(params.value)) {
     const originalFormValue =
       originalFormRecord != null && Object.hasOwn(originalFormRecord, key)
@@ -223,12 +224,20 @@ function sanitizeRedactedValue(params: {
       originalRawPathExists,
       canOmit: true,
     });
-    if (!sanitized.omitted) {
+    if (sanitized.omitted) {
+      omittedChild = true;
+    } else {
       next[key] = sanitized.value;
     }
   }
 
-  if (params.canOmit && Object.keys(next).length === 0 && !params.originalRawPathExists) {
+  // Only prune containers emptied by redaction, not deliberately authored empty entries.
+  if (
+    params.canOmit &&
+    omittedChild &&
+    Object.keys(next).length === 0 &&
+    !params.originalRawPathExists
+  ) {
     return OMIT_VALUE;
   }
   return keepValue(next);
