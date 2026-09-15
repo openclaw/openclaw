@@ -348,12 +348,21 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         return;
       }
       // Only accepted runtime state may own monitor writes and emitted events.
-      if (
-        plan.reconcileSystemJobs &&
-        (await nextState.cronState.reconcileSystemJobs().catch(failConfigCommit)) ===
-          "retry-scheduled"
-      ) {
-        failConfigCommit(new GatewayHotReloadRecoveryError("cron monitor"));
+      if (plan.reconcileSystemJobs) {
+        const reconciliation = await nextState.cronState
+          .reconcileSystemJobs()
+          .catch(failConfigCommit);
+        if (reconciliation === "retry-scheduled") {
+          // The reconciler already scheduled its own retry (~30s), so the
+          // reload must not escalate a still-converging cron into a full
+          // gateway restart: a restart cannot fix the underlying cause
+          // (e.g. an unavailable agent) and only trades a self-healing
+          // delay for a process-wide outage.
+          params.logReload.warn(
+            "cron system-job reconciliation still pending; continuing hot reload " +
+              "and relying on the scheduled retry instead of restarting the gateway",
+          );
+        }
       }
       if (plan.restartCron && ownsCron()) {
         startGatewayCronWithLogging({

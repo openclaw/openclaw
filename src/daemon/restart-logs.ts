@@ -8,7 +8,7 @@ import type { GatewayLifecycleMutationMode, GatewayServiceEnv } from "./service-
 
 const GATEWAY_RESTART_LOG_FILENAME = "gateway-restart.log";
 
-export type GatewayLifecycleAuditSource = "cli" | "safe-rpc" | "supervisor" | "handoff";
+export type GatewayLifecycleAuditSource = "cli" | "safe-rpc" | "supervisor" | "handoff" | "self";
 
 type GatewayLifecycleAuditEntry = {
   action: "start" | "stop" | "restart";

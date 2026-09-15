@@ -7,6 +7,7 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
+import { appendGatewayLifecycleAuditLog } from "../daemon/restart-logs.js";
 import { abortPendingChannelReloads } from "../gateway/server-reload-generation.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -217,11 +218,17 @@ function emitGatewayRestart(reasonOverride?: string, intent?: GatewayRestartInte
   emittedRestartReason = reasonOverride ?? intent?.reason ?? pendingRestartReason;
   emittedRestartIntent = intent;
   authorizeGatewaySigusr1Restart();
+  // The audit record must name the mechanism actually used: on Windows
+  // without a SIGUSR1 listener the handoff goes through the task
+  // scheduler, and logging it as sigusr1 would mislead supervisor
+  // recovery investigations.
+  let restartMode: "sigusr1" | "schtasks-restart";
   try {
     if (process.listenerCount("SIGUSR1") > 0) {
       // Signal path: let the run-loop's SIGUSR1 handler drive restart.
       // Works on all platforms including Windows when a listener is registered.
       process.emit("SIGUSR1");
+      restartMode = "sigusr1";
     } else if (process.platform === "win32") {
       // On Windows with no SIGUSR1 listener, fall back to task-scheduler handoff.
       // triggerOpenClawRestart() uses schtasks to restart the gateway.
@@ -234,15 +241,27 @@ function emitGatewayRestart(reasonOverride?: string, intent?: GatewayRestartInte
       }
       consumeGatewaySigusr1RestartAuthorization();
       markGatewaySigusr1RestartHandled();
+      restartMode = "schtasks-restart";
     } else {
       // Unix without listener: send signal directly.
       process.kill(process.pid, "SIGUSR1");
+      restartMode = "sigusr1";
     }
   } catch {
     // Roll back the cycle marker so future restart requests can still proceed.
     rollBackGatewayRestartEmission();
     return false;
   }
+  // Self-emitted restarts (deferred reload recovery, scheduled restarts) never
+  // pass through the CLI, so without this they stay invisible in
+  // gateway-restart.log and outages cannot be attributed to an actor.
+  appendGatewayLifecycleAuditLog(process.env, {
+    action: "restart",
+    source: "self",
+    mode: restartMode,
+    pid: process.pid,
+    interactive: false,
+  });
   lastRestartEmittedAt = monotonicNow();
   return true;
 }
