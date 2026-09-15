@@ -196,7 +196,6 @@ describe("plugin contract registry", () => {
         credentialOnly: true,
         channelLogin: {},
         appGuidedSecret: true,
-        channelLogin: {},
         choiceId: "github-copilot",
         choiceLabel: "GitHub Copilot",
         choiceHint: "Device login with your GitHub account",
@@ -208,7 +207,6 @@ describe("plugin contract registry", () => {
         cliFlag: "--github-copilot-token",
         cliOption: "--github-copilot-token <token>",
         cliDescription: "GitHub Copilot OAuth token",
-        credentialOnly: true,
       },
       {
         provider: "github-copilot",
@@ -222,7 +220,6 @@ describe("plugin contract registry", () => {
         groupId: "copilot",
         groupLabel: "Copilot",
         groupHint: "GitHub, GitHub Enterprise + Local Proxy",
-        credentialOnly: true,
       },
     ]);
   });
