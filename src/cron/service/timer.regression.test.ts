@@ -2641,6 +2641,7 @@ describe("cron service timer regressions", () => {
       await timerRun;
       await vi.waitFor(() => {
         expect(secondScheduledStarted).toHaveBeenCalledWith(secondScheduledJob.id);
+        expect(requireJob(state, secondScheduledJob.id).state.lastStatus).toBe("ok");
       });
 
       const second = requireJob(state, secondScheduledJob.id);
