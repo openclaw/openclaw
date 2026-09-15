@@ -1,4 +1,6 @@
+import ConcurrencyExtras
 import Foundation
+import Observation
 import OpenClawProtocol
 import Testing
 @testable import OpenClaw
@@ -137,6 +139,59 @@ struct WorkActivityStoreTests {
 
         #expect(store.current?.label == "read: ~/secret.txt")
         #expect(store.iconState == .workingMain(.tool(.read)))
+    }
+
+    @Test func `controller observations follow activity and main-key transitions`() async throws {
+        let store = WorkActivityStore()
+
+        func observe(
+            sessionKey: String?,
+            mainSessionKey: String = "main",
+            iconState: IconState,
+            mutation: () -> Void) async throws
+        {
+            let callback = LockIsolated<Task<Bool, Never>?>(nil)
+            // Match the controller's tracked properties and its deferred MainActor projection.
+            withObservationTracking {
+                _ = store.current
+                _ = store.mainSessionKey
+            } onChange: {
+                callback.setValue(Task { @MainActor in
+                    store.current?.sessionKey == sessionKey &&
+                        store.mainSessionKey == mainSessionKey &&
+                        store.iconState == iconState
+                })
+            }
+            mutation()
+            try #require(await self.eventually { callback.value != nil })
+            let task = try #require(callback.value)
+            #expect(await task.value)
+        }
+
+        try await observe(sessionKey: "other", iconState: .workingOther(.job)) {
+            store.handleJob(sessionKey: "other", state: "started")
+        }
+        try await observe(sessionKey: "main", iconState: .workingMain(.tool(.read))) {
+            store.handleTool(sessionKey: "main", phase: "start", name: "read", meta: nil, args: nil)
+        }
+        try await observe(sessionKey: "main", iconState: .workingMain(.tool(.write))) {
+            store.handleTool(sessionKey: "main", phase: "start", name: "write", meta: nil, args: nil)
+        }
+        try await observe(sessionKey: "other", iconState: .workingOther(.job)) {
+            store.handleJob(sessionKey: "main", state: "finished")
+        }
+        try await observe(sessionKey: nil, iconState: .idle) {
+            store.reset()
+        }
+        try await observe(sessionKey: nil, mainSessionKey: "new-main", iconState: .idle) {
+            store.setMainSessionKey("new-main")
+        }
+        try await observe(sessionKey: "new-main", mainSessionKey: "new-main", iconState: .workingMain(.job)) {
+            store.handleJob(sessionKey: "new-main", state: "started")
+        }
+        try await observe(sessionKey: nil, mainSessionKey: "new-main", iconState: .idle) {
+            store.handleJob(sessionKey: "new-main", state: "finished")
+        }
     }
 
     @Test func `resolve icon state honors override selection`() {
