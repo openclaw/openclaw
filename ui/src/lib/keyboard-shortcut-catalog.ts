@@ -25,6 +25,7 @@ function keyboardShortcutSection(id: string, entries: readonly KeyboardShortcutE
 const KEYBOARD_SHORTCUT_SECTIONS = [
   keyboardShortcutSection("general", [
     keyboardShortcutEntry("commandPalette", KEYBOARD_SHORTCUT_COMBOS.commandPalette),
+    keyboardShortcutEntry("newSession", KEYBOARD_SHORTCUT_COMBOS.newSession),
     keyboardShortcutEntry("keyboardShortcuts", KEYBOARD_SHORTCUT_COMBOS.keyboardShortcuts),
     keyboardShortcutEntry("toggleSidebar", KEYBOARD_SHORTCUT_COMBOS.toggleSidebar),
     keyboardShortcutEntry("debugOverlay", KEYBOARD_SHORTCUT_COMBOS.debugOverlay),
