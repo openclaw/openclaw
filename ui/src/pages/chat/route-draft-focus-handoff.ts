@@ -19,6 +19,7 @@ export type ChatPaneElement = HTMLElement & {
   discardStagedAttachments?: () => void;
   paneId?: string;
   prepareForEviction?: () => void;
+  hasQueuedMessageEdit?: boolean;
   presented?: boolean;
   routeFace?: BoardFace;
   sessionKey?: string;

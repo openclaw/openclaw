@@ -86,6 +86,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     context: () => this.context,
     presented: () => this.presented,
     layout: () => this.layout ?? this.classicLayout(),
+    narrow: () => this.narrow,
     selectReplacement: (paneId, sourceSessionKey, sessionKey) => {
       this.handlePaneSessionChange(paneId, sourceSessionKey, sessionKey);
     },
@@ -191,7 +192,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
       });
       this.syncRouteToActivePane();
       this.syncRouteBindings();
-      this.retainedSessions.settleRoute(data.sessionKey);
+      this.retainedSessions.settleRoute();
     }
     if (data && routeHandoffRendered) {
       queueMicrotask(() => {
@@ -449,9 +450,13 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     this.updateRoute(trimmed, true);
   }
 
-  private readonly handleFocusPane = (paneId: string) => {
+  private readonly handleFocusPane = (paneId: string, intent?: "review-edit") => {
     const layout = this.layout;
-    if (!this.presented || !layout || layout.activePaneId === paneId) {
+    if (
+      (!this.presented && intent !== "review-edit") ||
+      !layout ||
+      layout.activePaneId === paneId
+    ) {
       return;
     }
     const pane = findPane(layout, paneId)?.pane;

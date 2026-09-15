@@ -28,7 +28,7 @@ type ChatPagePaneRenderOptions = {
   onboarding: boolean;
   onClosePane?: (paneId: string) => void;
   onFaceChange: (paneId: string, sessionKey: string, face: BoardFace) => void;
-  onFocusPane: (paneId: string) => void;
+  onFocusPane: (paneId: string, intent?: "review-edit") => void;
   onOpenSplitView?: () => void;
   onPaneSessionChange: (
     paneId: string,

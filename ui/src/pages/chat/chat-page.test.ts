@@ -52,6 +52,7 @@ type RenderedPane = HTMLElement & {
   narrow: boolean;
   mergedChrome: boolean;
   onOpenSplitView?: () => void;
+  onFocusPane?: (paneId: string) => void;
   onClosePane?: (paneId: string) => void;
   onFaceChange?: (paneId: string, sessionKey: string, face: "chat" | "dashboard") => void;
 };
@@ -317,6 +318,27 @@ describe("chat page split layout host", () => {
     );
     expect(survivingPane).toBe(classicPane);
     expect(survivingPane.classList.contains("chat-split-view__pane")).toBe(false);
+  });
+
+  it("ignores ordinary pane focus while Chat is retained behind another page", async () => {
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    page.data = { sessionKey: "main" };
+    document.body.append(page);
+    await page.updateComplete;
+    const first = itemAt(page.querySelectorAll<RenderedPane>("openclaw-chat-pane"), 0, "pane");
+    first.onOpenSplitView?.();
+    await page.updateComplete;
+    const activePaneId = getLayout(page)?.activePaneId;
+    expect(activePaneId).not.toBe(first.paneId);
+    page.presented = false;
+    await page.updateComplete;
+    navigation.replace.mockClear();
+
+    first.onFocusPane?.(first.paneId);
+
+    expect(getLayout(page)?.activePaneId).toBe(activePaneId);
+    expect(navigation.replace).not.toHaveBeenCalled();
   });
 
   it("applies mounted UI split, focus, and close commands", () => {

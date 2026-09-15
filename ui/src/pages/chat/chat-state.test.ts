@@ -8,6 +8,7 @@ import * as assistantIdentity from "../../app/assistant-identity.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { revalidateChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
@@ -33,7 +34,7 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { removeQueuedMessage } from "./chat-queue.ts";
+import { enqueueChatMessage, removeQueuedMessage } from "./chat-queue.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -51,6 +52,7 @@ import { buildChatItems } from "./chat-thread-build.ts";
 import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
+import { beginQueuedMessageEdit } from "./queued-message-edit.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { activatePanel, openSlot } from "./sidebar-layout.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
@@ -3829,6 +3831,24 @@ describe("ChatStateController render lifecycle", () => {
     await completion;
 
     expect(effect).not.toHaveBeenCalled();
+  });
+
+  it("releases a queued correction reload hold when its pane is disposed", () => {
+    const controller = new ChatStateController<ChatPageHost>(createControllerHost());
+    controller.hostConnected();
+    const state = createPageState(createPageContext(), controller.createRenderLifecycle(), {
+      dispatchEvent: () => true,
+      querySelector: () => null,
+    });
+    controller.attach(state);
+    try {
+      const queued = enqueueChatMessage(state, "queued original")!;
+      expect(beginQueuedMessageEdit(state, queued.id)).toBe("started");
+      expect(canReloadControlUiDocument()).toBe(false);
+    } finally {
+      controller.hostDisconnected();
+    }
+    expect(canReloadControlUiDocument()).toBe(true);
   });
 
   it("fully tears down realtime Talk when its state owner disconnects", () => {

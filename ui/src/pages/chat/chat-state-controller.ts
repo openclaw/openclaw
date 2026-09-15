@@ -1,5 +1,8 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
+import { t } from "../../i18n/index.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+import { showToast } from "../../lib/toast.ts";
 import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { subscribeChatOutboxProjection } from "./chat-queue.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
@@ -11,6 +14,7 @@ import { releaseChatMediaResourceSubscriber } from "./components/chat-message-me
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import { clearSessionWorkspaceTimers } from "./components/chat-session-workspace.ts";
 import { ChatComposerPersistence, type ChatComposerPersistResult } from "./composer-persistence.ts";
+import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
 import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
 
@@ -87,6 +91,31 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     const renderLifecycle = state.renderLifecycle;
     state.requestUpdate = () => renderLifecycle.invalidate();
     this.cleanups.push(subscribeChatOutboxProjection(state));
+    // Retained and hidden panes still own corrections; transport availability
+    // must not release their reload protection before Save or Cancel does.
+    this.cleanups.push(
+      registerControlUiReloadGuard(
+        () => this.stateValue !== state || !state.chatQueuedEdit,
+        () => {
+          const edit = state.chatQueuedEdit;
+          const client = state.client;
+          showToast({
+            message: t("chat.queue.reloadBlocked"),
+            actionLabel: state.reviewQueuedMessageEdit ? t("chat.queue.reviewEdit") : undefined,
+            onAction: () => {
+              if (
+                this.stateValue === state &&
+                state.client === client &&
+                edit &&
+                activeQueuedMessageEdit(state) === edit
+              ) {
+                state.reviewQueuedMessageEdit?.();
+              }
+            },
+          });
+        },
+      ),
+    );
     const sendChat = state.handleSendChat;
     state.handleSendChat = async (messageOverride, options, submissionAction) => {
       const pending = sendChat(messageOverride, options, submissionAction);

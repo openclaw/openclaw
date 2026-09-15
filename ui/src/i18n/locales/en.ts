@@ -4405,6 +4405,8 @@ export const en: TranslationMap & {
       sendMessage: "Send message",
     },
     queue: {
+      reviewEdit: "Review edit",
+      reloadBlocked: "Save or cancel your queued message edit before reloading.",
       connectionPending: "Finishing connection recovery. Try sending again when it is ready.",
       editSourceChanged:
         "This queued message changed while you were editing. Your edit is still here. Copy it, cancel the edit, and review the queue before trying again.",
