@@ -12,8 +12,12 @@ Computer Use is a Codex-native MCP plugin for local desktop control. OpenClaw
 does not vendor the desktop app, execute desktop actions itself, or bypass
 Codex permissions. The bundled `codex` plugin only prepares Codex app-server:
 it enables Codex plugin support, finds or installs the configured Computer Use
-plugin, checks that the `computer-use` MCP server is available, and then lets
-Codex own the native MCP tool calls during Codex-mode turns.
+plugin, checks that the configured MCP server is available, and then lets Codex
+own the native MCP tool calls during Codex-mode turns. Readiness uses
+`list_apps` when the server exposes the legacy Computer Use surface. A newer
+server that exposes `js` instead is probed with one `await cua.getState();`
+call. An MCP response with `isError: true` fails readiness instead of counting
+as a successful response.
 
 Use this page when OpenClaw is already using the native Codex harness. For the
 runtime setup itself, see [Codex harness](/plugins/codex-harness).
@@ -295,7 +299,7 @@ install plugins or modify Codex configuration.
 | `autoInstall`                   | false          | Provision the native client and install or re-enable the plugin at turn start. |
 | `marketplaceDiscoveryTimeoutMs` | 60000          | How long install waits for Codex app-server marketplace discovery.             |
 | `liveTestTimeoutMs`             | 60000          | Timeout for the temporary readiness thread and its cleanup requests.           |
-| `toolCallTimeoutMs`             | 60000          | Timeout for the Computer Use `list_apps` readiness tool call.                  |
+| `toolCallTimeoutMs`             | 60000          | Timeout for the capability-matched Computer Use readiness tool call.           |
 | `healthCheckEnabled`            | false          | Run periodic readiness probes while the owning app-server client is active.    |
 | `healthCheckIntervalMinutes`    | 60             | Probe cadence; accepted values are 30, 60, 120, or 240 minutes.                |
 | `pluginCacheMode`               | `independent`  | Use `shared` to refresh the Codex-home cache from the bundled desktop plugin.  |
@@ -392,8 +396,8 @@ install`. Add a new `marketplaceSource` only through explicit install; turn-star
 servers reload. If it remains unavailable, fix the Codex Computer Use app,
 Codex app-server MCP status, or macOS permissions.
 
-**Status or a probe times out on `computer-use.list_apps`.** The plugin and
-MCP server are present, but the local Computer Use bridge did not answer.
+**Status or a probe times out on `computer-use.list_apps` or `cua_repl.js`.**
+The plugin and MCP server are present, but the local Computer Use bridge did not answer.
 Quit or restart Codex Computer Use, relaunch Codex Desktop if needed, then
 retry in a fresh OpenClaw session. If the host previously ran Computer Use
 through an older managed Codex app-server, refresh the installed plugin from

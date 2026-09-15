@@ -25,6 +25,7 @@ const getComputerUseHealthMonitorState = defineCodexBuildState(
 export function startCodexComputerUseHealthMonitor(params: {
   client: CodexAppServerClient;
   config: ResolvedCodexComputerUseConfig;
+  tools?: readonly string[];
 }): { started: boolean; intervalMs?: number; reason?: string } {
   const state = getComputerUseHealthMonitorState();
   const existing = state.monitors.get(params.client);
@@ -37,7 +38,7 @@ export function startCodexComputerUseHealthMonitor(params: {
       reason: params.config.enabled ? "health_disabled" : "disabled",
     };
   }
-  const fingerprint = buildComputerUseHealthMonitorFingerprint(params.config);
+  const fingerprint = buildComputerUseHealthMonitorFingerprint(params.config, params.tools);
   const intervalMs = params.config.healthCheckIntervalMinutes * 60_000;
   if (existing?.fingerprint === fingerprint) {
     return { started: false, intervalMs, reason: "already_started" };
@@ -49,7 +50,7 @@ export function startCodexComputerUseHealthMonitor(params: {
     fingerprint,
     intervalMs,
     timer: setInterval(() => {
-      void runCodexComputerUseHealthProbe(params.client, params.config, monitor);
+      void runCodexComputerUseHealthProbe(params.client, params.config, monitor, params.tools);
     }, intervalMs),
     disposeCloseHandler: () => undefined,
     running: false,
@@ -65,13 +66,17 @@ export function startCodexComputerUseHealthMonitor(params: {
   return { started: true, intervalMs };
 }
 
-function buildComputerUseHealthMonitorFingerprint(config: ResolvedCodexComputerUseConfig): string {
+function buildComputerUseHealthMonitorFingerprint(
+  config: ResolvedCodexComputerUseConfig,
+  tools?: readonly string[],
+): string {
   return JSON.stringify({
     autoRepair: config.autoRepair,
     healthCheckIntervalMinutes: config.healthCheckIntervalMinutes,
     liveTestTimeoutMs: config.liveTestTimeoutMs,
     mcpServerName: config.mcpServerName,
     toolCallTimeoutMs: config.toolCallTimeoutMs,
+    tools: tools?.toSorted(),
   });
 }
 
@@ -79,6 +84,7 @@ async function runCodexComputerUseHealthProbe(
   client: CodexAppServerClient,
   config: ResolvedCodexComputerUseConfig,
   monitor: ComputerUseHealthMonitor,
+  tools?: readonly string[],
 ): Promise<void> {
   if (monitor.running) {
     return;
@@ -87,6 +93,7 @@ async function runCodexComputerUseHealthProbe(
   try {
     const { liveTest, repair } = await runCodexComputerUseLiveTest({
       config,
+      tools,
       request: async <T>(
         method: string,
         requestParams?: unknown,

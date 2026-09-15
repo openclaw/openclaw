@@ -320,8 +320,9 @@ export async function startCodexAttemptThread(params: {
               config: params.config,
             });
             const turnRouter = getCodexAppServerTurnRouter(activeStartupClient);
+            let computerUseTools: string[] = [];
             try {
-              await ensureCodexComputerUse({
+              const computerUseStatus = await ensureCodexComputerUse({
                 client: activeStartupClient,
                 pluginConfig: params.pluginConfig,
                 config: params.config,
@@ -329,6 +330,7 @@ export async function startCodexAttemptThread(params: {
                 timeoutMs: params.appServer.requestTimeoutMs,
                 signal: startupAbandonController.signal,
               });
+              computerUseTools = computerUseStatus.tools;
             } catch (error) {
               if (
                 startupAbandonController.signal.aborted ||
@@ -556,6 +558,7 @@ export async function startCodexAttemptThread(params: {
               startCodexComputerUseHealthMonitor({
                 client: activeStartupClient,
                 config: params.computerUseConfig,
+                tools: computerUseTools,
               });
               startupAttemptSucceeded = true;
               return {

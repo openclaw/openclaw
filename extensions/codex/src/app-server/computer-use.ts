@@ -28,6 +28,7 @@ import {
 } from "./desktop-app-paths.js";
 import { isManagedCodexDesktopCommand } from "./managed-binary.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import type { ToolCallResult as CodexMcpToolCallResult } from "./protocol-mcp.js";
 import type {
   CodexAppServerRequestResult,
   CodexConfigReadResponse,
@@ -222,6 +223,9 @@ const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = [
 ];
 const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
 const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness probe";
+const COMPUTER_USE_LIST_APPS_TOOL = "list_apps";
+const COMPUTER_USE_UNIFIED_JS_TOOL = "js";
+const COMPUTER_USE_UNIFIED_JS_PROBE = "await cua.getState();";
 
 /** Reads Computer Use readiness without installing or mutating app-server state. */
 export async function readCodexComputerUseStatus(
@@ -645,6 +649,7 @@ async function readComputerUseTools(params: {
   const { liveTest, repair } = await runCodexComputerUseLiveTest({
     request: params.request,
     config: params.config,
+    tools,
   });
   const compatibilityStartupAllowed = !liveTest.ok && !params.config.strictReadiness;
   return {
@@ -688,10 +693,12 @@ function isNonStrictLiveTestStartupAllowed(
 export async function runCodexComputerUseLiveTest(params: {
   request: CodexComputerUseRequest;
   config: ResolvedCodexComputerUseConfig;
+  tools?: readonly string[];
 }): Promise<{ liveTest: CodexComputerUseLiveTestStatus; repair?: CodexComputerUseRepairStatus }> {
   const startedAt = Date.now();
   let lastError: unknown;
   let repair: CodexComputerUseRepairStatus | undefined;
+  const probe = resolveComputerUseLiveTestProbe(params.tools);
   for (let attempt = 0; attempt <= COMPUTER_USE_LIVE_TEST_RETRY_COUNT; attempt += 1) {
     let threadId: string | undefined;
     try {
@@ -707,18 +714,23 @@ export async function runCodexComputerUseLiveTest(params: {
         },
       );
       threadId = thread.thread.id;
-      await params.request(
+      const toolResult = await params.request<CodexMcpToolCallResult>(
         "mcpServer/tool/call",
         {
           threadId,
           server: params.config.mcpServerName,
-          tool: "list_apps",
-          arguments: {},
+          tool: probe.tool,
+          arguments: probe.arguments,
         },
         {
           timeoutMs: params.config.toolCallTimeoutMs,
         },
       );
+      if (toolResult.isError === true) {
+        throw new Error(
+          `Computer Use readiness tool ${params.config.mcpServerName}.${probe.tool} returned an error result`,
+        );
+      }
       return {
         liveTest: {
           status: "passed",
@@ -763,6 +775,22 @@ export async function runCodexComputerUseLiveTest(params: {
     },
     ...(repair ? { repair } : {}),
   };
+}
+
+function resolveComputerUseLiveTestProbe(tools: readonly string[] | undefined): {
+  tool: string;
+  arguments: Record<string, JsonValue>;
+} {
+  if (
+    tools?.includes(COMPUTER_USE_UNIFIED_JS_TOOL) &&
+    !tools.includes(COMPUTER_USE_LIST_APPS_TOOL)
+  ) {
+    return {
+      tool: COMPUTER_USE_UNIFIED_JS_TOOL,
+      arguments: { code: COMPUTER_USE_UNIFIED_JS_PROBE },
+    };
+  }
+  return { tool: COMPUTER_USE_LIST_APPS_TOOL, arguments: {} };
 }
 
 async function repairComputerUseMcpRuntime(
