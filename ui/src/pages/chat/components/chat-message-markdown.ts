@@ -12,6 +12,7 @@ import {
   normalizeRoleForGrouping,
 } from "../../../lib/chat/message-normalizer.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
+import { readTranscriptRunError } from "../chat-error-presentation.ts";
 import { persistedMessageEntryId, type AssistantMessageExpansionState } from "../chat-thread.ts";
 import { extractMessageMediaText } from "./chat-message-media.ts";
 
@@ -65,7 +66,8 @@ export function prepareChatMessageRender(message: unknown) {
   return {
     message,
     normalizedMessage,
-    displayMarkdown: resolveMessageDisplayMarkdown(message, normalizedMessage),
+    displayMarkdown:
+      readTranscriptRunError(message) ?? resolveMessageDisplayMarkdown(message, normalizedMessage),
   };
 }
 
@@ -101,7 +103,10 @@ export function resolveMessageActionDetails(
     ? { messageId: cappedMessageId, state: params.getAssistantMessageExpansion?.(cappedMessageId) }
     : undefined;
   const expansion = fullMessage?.state;
-  const expandedMarkdown = expansion?.status === "loaded" ? expansion.markdown : previewMarkdown;
+  const expandedMarkdown =
+    expansion?.status === "loaded"
+      ? (readTranscriptRunError(expansion.message) ?? expansion.markdown)
+      : previewMarkdown;
   const visibleMarkdown =
     role === "assistant" ? stripThinkingTags(expandedMarkdown) : expandedMarkdown;
   const markdown = role === "assistant" || pendingInput ? visibleMarkdown : undefined;

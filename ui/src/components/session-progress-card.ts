@@ -95,6 +95,7 @@ const progressActivityTime = directive(ProgressActivityTimeDirective);
 
 type ComposerProgressRunLifecycle = {
   activeRunId?: string | null;
+  snapshotRunId?: string | null;
   completedRunId?: string | null;
   readingHistory?: boolean;
 };
@@ -345,7 +346,7 @@ export function renderSessionProgressCard(
   card: ProgressCard | null | undefined,
   placement: SessionProgressCardPlacement,
   onDismiss?: (card: ProgressCard) => void,
-  sessionStatus?: SessionRunStatus,
+  snapshotStatus?: SessionRunStatus,
   startedAt?: number,
   endedAt?: number,
   hasActiveRun = true,
@@ -355,6 +356,15 @@ export function renderSessionProgressCard(
   if (!card) {
     return nothing;
   }
+  // A live owner for this exact run outranks a lagging terminal session row.
+  // Session-wide activity alone (including another run) cannot erase its outcome.
+  const sessionStatus =
+    placement === "composer" &&
+    hasActiveRun &&
+    composerRunLifecycle?.activeRunId &&
+    composerRunLifecycle.activeRunId === composerRunLifecycle.snapshotRunId
+      ? "running"
+      : snapshotStatus;
   const counts = progressCounts(card);
   const countLabel = counts
     ? t("sessionProgressCard.countLabel", {

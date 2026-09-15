@@ -30,13 +30,15 @@ import {
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { readTranscriptRunError } from "../chat-error-presentation.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import "../../../styles/chat/reply-preview.css";
 import "./chat-clawhub-card.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { readAsyncQuestions, type AsyncQuestionPresentation } from "./chat-async-question.ts";
+import { renderChatErrorCard } from "./chat-error-card.ts";
 import {
   renderAssistantAttachments,
   renderMessageAttachment,
@@ -288,6 +290,7 @@ export function renderGroupedMessage(
   if (workspaceConflict) {
     return renderWorkspaceConflictTranscriptMessage(workspaceConflict, messageKey, opts.entryId);
   }
+  const diagnostic = readTranscriptRunError(message);
   const isToolShell = normalizedRole === "tool";
   const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
 
@@ -361,6 +364,7 @@ export function renderGroupedMessage(
 
   const bubbleClasses = [
     "chat-bubble",
+    diagnostic ? "chat-bubble--run-error" : "",
     hasImages || videoPreviews.length > 0 || hasUserFiles ? "chat-bubble--with-images" : "",
     hasUserFiles ? "chat-bubble--with-files" : "",
     isToolShell ? "chat-bubble--tool-shell" : "",
@@ -546,7 +550,12 @@ export function renderGroupedMessage(
       { ...prepared.media, text: bodyMarkdown ?? "" },
     );
   };
-  const renderMessageContent = () => (renderInOrder ? renderOrderedContent() : renderText());
+  const renderMessageContent = () =>
+    diagnostic
+      ? renderChatErrorCard(diagnostic)
+      : renderInOrder
+        ? renderOrderedContent()
+        : renderText();
   // Collapsed tool results must not load attachments or render hidden markdown.
   // Retained panes use opacity, so hidden transcripts must unmount video previews.
   const renderBody = () => html`
