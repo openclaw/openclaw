@@ -6,6 +6,7 @@
 import { cloneAuthProfileStore } from "./clone.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {
+  isSafeToCopyOAuthRoutingScope,
   isSafeToCopyOAuthIdentity,
   normalizeAuthEmailToken,
   normalizeAuthIdentityToken,
@@ -97,6 +98,9 @@ function isSafeOAuthIdentityTransition(
     return policy.whenExistingCredentialMissing;
   }
   if (existing.provider !== incoming.provider) {
+    return false;
+  }
+  if (!isSafeToCopyOAuthRoutingScope(existing, incoming)) {
     return false;
   }
   if (areOAuthCredentialsEquivalent(existing, incoming)) {
