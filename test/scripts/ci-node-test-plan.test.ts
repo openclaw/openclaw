@@ -3493,6 +3493,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "src/gateway/gateway-concurrent-streams.test.ts",
           "src/gateway/gateway-cron-process-identity.windows.test.ts",
           "src/gateway/gateway-route-model-reuse.test.ts",
+          "src/gateway/gateway-ssh-upload-signal.test.ts",
         ],
         pretestBuildMode: "runtime",
         requiresDist: false,

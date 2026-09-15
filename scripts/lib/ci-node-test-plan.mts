@@ -173,6 +173,15 @@ const policyTestWatches = [
     testFile: "src/agents/model-ref-shared.test.ts",
     watchGlobs: ["extensions/anthropic/openclaw.plugin.json"],
   },
+  {
+    testFile: "src/gateway/gateway-ssh-upload-signal.test.ts",
+    watchGlobs: [
+      "src/agents/sandbox/remote-shell-transport.ts",
+      "src/agents/sandbox/remote-shell-backend.ts",
+      "src/agents/sandbox/ssh.ts",
+      "src/agents/sandbox/ssh-backend.ts",
+    ],
+  },
 ] satisfies readonly PolicyTestWatch[];
 
 /** Resolve policy tests whose scanned source surface intersects this diff. */

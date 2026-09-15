@@ -218,8 +218,10 @@ async function uploadDirectoryToRemoteCommand(
     const remoteStderr: Buffer[] = [];
     let tarClosed = false;
     let remoteClosed = false;
-    let tarCode = 0;
-    let remoteCode = 0;
+    let tarCode: number | null = 0;
+    let remoteCode: number | null = 0;
+    let tarSignal: NodeJS.Signals | null = null;
+    let remoteSignal: NodeJS.Signals | null = null;
     let settled = false;
 
     const fail = (error: unknown) => {
@@ -249,14 +251,16 @@ async function uploadDirectoryToRemoteCommand(
     tar.on("error", fail);
     remote.on("error", fail);
 
-    tar.on("close", (code) => {
+    tar.on("close", (code, signal) => {
       tarClosed = true;
-      tarCode = code ?? 0;
+      tarCode = code;
+      tarSignal = signal;
       maybeResolve();
     });
-    remote.on("close", (code) => {
+    remote.on("close", (code, signal) => {
       remoteClosed = true;
-      remoteCode = code ?? 0;
+      remoteCode = code;
+      remoteSignal = signal;
       maybeResolve();
     });
 
@@ -265,12 +269,23 @@ async function uploadDirectoryToRemoteCommand(
         return;
       }
       settled = true;
+      // A null code means the process died from a signal (OOM kill, dropped
+      // connection, supervisor teardown) without reporting a status. An
+      // unknown outcome is not evidence of a completed transfer.
+      if (tarCode === null) {
+        reject(new Error(`tar exited from signal ${tarSignal ?? "unknown"}`));
+        return;
+      }
       if (tarCode !== 0) {
         reject(
           new Error(
             Buffer.concat(tarStderr).toString("utf8").trim() || `tar exited with code ${tarCode}`,
           ),
         );
+        return;
+      }
+      if (remoteCode === null) {
+        reject(new Error(`remote exited from signal ${remoteSignal ?? "unknown"}`));
         return;
       }
       if (remoteCode !== 0) {
