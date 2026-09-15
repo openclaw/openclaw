@@ -3025,12 +3025,11 @@ dependencies = [
  "objc2-app-kit",
  "objc2-foundation",
  "objc2-web-kit",
- "rustls",
+ "openclaw-gateway-client",
  "security-framework",
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "subtle",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
@@ -3053,6 +3052,22 @@ dependencies = [
  "windows-core 0.61.2",
  "zbus",
  "zeroize",
+]
+
+[[package]]
+name = "openclaw-gateway-client"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "subtle",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-tungstenite",
+ "url",
 ]
 
 [[package]]

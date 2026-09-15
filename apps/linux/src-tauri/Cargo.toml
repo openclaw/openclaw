@@ -19,11 +19,10 @@ futures-util = "0.3.34"
 getrandom = "0.4.3"
 keyring = { version = "4.2.0", default-features = false, features = ["v1"] }
 mdns-sd = { version = "0.21.2", default-features = false }
-rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12"] }
+openclaw-gateway-client = { path = "../../../crates/openclaw-gateway-client" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
-subtle = "2.6.1"
 # macos-private-api backs Quick Chat's transparent window. Tauri gates
 # `WebviewWindowBuilder::transparent` behind it on macOS, and the feature must
 # stay in sync with `app.macOSPrivateApi` in tauri.conf.json or tauri-build
