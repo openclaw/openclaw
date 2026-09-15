@@ -562,6 +562,14 @@ export const PluginInstalledComponentsSchema = closedObject({
   /** Runtime-supported capability families; item arrays may be empty when names are unavailable. */
   mapped: Type.Array(NonEmptyString),
   skills: Type.Array(NonEmptyString),
+  skillDetails: Type.Optional(
+    Type.Array(
+      closedObject({
+        name: NonEmptyString,
+        description: Type.Optional(Type.String()),
+      }),
+    ),
+  ),
   mcpServers: Type.Array(NonEmptyString),
   commands: Type.Array(NonEmptyString),
   hooks: Type.Array(NonEmptyString),

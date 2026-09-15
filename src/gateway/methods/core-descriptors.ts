@@ -680,6 +680,8 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["controlUi.sessionPullRequests.checks", "control-ui", "operator.read", "2026.9"],
   ["diagnostics.cpuProfile", "diagnostics", "operator.admin", "2026.9"],
   ["plugins.credentials.inspect", "plugins", "operator.admin", "2026.9"],
+  // Plugin skill reads append without shifting previously advertised method indices.
+  ["plugins.skills.read", "plugins", "operator.read", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

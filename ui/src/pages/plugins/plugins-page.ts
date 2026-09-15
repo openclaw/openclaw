@@ -54,7 +54,7 @@ import {
 import { renderPluginsPage } from "./plugins-page-view.ts";
 import type { PluginsRouteData } from "./route-data.ts";
 import type { PluginSettingsTab } from "./settings-view.ts";
-import { showPluginToolPreview } from "./tool-preview.ts";
+import { PluginPreviewController } from "./skill-preview.ts";
 
 class PluginsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -76,7 +76,6 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private catalogDetail: PluginsPageCatalogDetail | null = null;
   @state() private installedDetailTab: InstalledPluginDetailTab = "readme";
   @state() private installWizard: PluginInstallWizardState | null = null;
-  private toolPreviewAbort = new AbortController();
   private configAutoSaveStatus = this.context?.runtimeConfig.state.configAutoSaveStatus ?? "idle";
   private pluginConfigEditPending = false;
   private routeDataConsumed = false;
@@ -105,6 +104,7 @@ class PluginsPage extends OpenClawLightDomElement {
       ),
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
   });
+  private readonly skillPreview = new PluginPreviewController(this, this.gateway);
   private readonly discovery = new PluginDiscoveryController(this, {
     getClient: () => this.gateway.client,
     isConnected: () => this.gateway.connected,
@@ -135,10 +135,7 @@ class PluginsPage extends OpenClawLightDomElement {
     clearPageNotice: () => {
       this.pageNotice = null;
     },
-    closeDetails: () => {
-      this.toolPreviewAbort.abort();
-      this.toolPreviewAbort = new AbortController();
-    },
+    closeDetails: () => this.skillPreview.close(),
     applyMutationResult: (result) => this.applyMutationResult(result),
     refreshCatalogAfterMutation: (client) => this.refreshCatalog(client),
     requestUpdate: () => this.requestUpdate(),
@@ -207,8 +204,7 @@ class PluginsPage extends OpenClawLightDomElement {
 
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
-      this.toolPreviewAbort.abort();
-      this.toolPreviewAbort = new AbortController();
+      this.skillPreview.close();
       if (
         !this.installWizard &&
         changed.get("routeData")?.location.pathname !== this.routeData?.location.pathname
@@ -230,7 +226,7 @@ class PluginsPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
-    this.toolPreviewAbort.abort();
+    this.skillPreview.close();
     this.installWizardController.disconnect();
     this.discovery.disconnect();
     this.subscriptions.clear();
@@ -258,7 +254,8 @@ class PluginsPage extends OpenClawLightDomElement {
       event.stopPropagation();
       return;
     }
-    if (document.querySelector("openclaw-modal-dialog")) {
+    // The file viewer owns Escape inside its shadow-root modal.
+    if (this.skillPreview.state || document.querySelector("openclaw-modal-dialog")) {
       return;
     }
     // Firefox does not emit blur when a focused input is removed from the document.
@@ -284,6 +281,9 @@ class PluginsPage extends OpenClawLightDomElement {
     const generation = snapshot.pluginCapabilities?.generation;
     const pluginsChanged = generation !== undefined && generation !== this.pluginGeneration;
     this.pluginGeneration = generation;
+    if (!change.initial && pluginsChanged) {
+      this.skillPreview.close();
+    }
     const iconAuthChanged = this.icons.updateAuth({
       hello: snapshot.hello,
       settings: { token: this.context.gateway.connection.token },
@@ -365,8 +365,7 @@ class PluginsPage extends OpenClawLightDomElement {
       void this.catalogTask.run([null]);
       this.discovery.invalidate();
     }
-    this.toolPreviewAbort.abort();
-    this.toolPreviewAbort = new AbortController();
+    this.skillPreview.close();
     // Inspection results belong to one connection epoch, including same-client reconnects.
     this.detail = null;
     this.catalogDetail = null;
@@ -652,17 +651,17 @@ class PluginsPage extends OpenClawLightDomElement {
       consentController: this.consentController,
       installWizardController: this.installWizardController,
       renderCredential: this.settings.render,
+      skillPreview: this.skillPreview,
       actions: {
         selectHubTab: (tab) => this.selectHubTab(tab),
         closeCatalogDetail: () => this.closeCatalogDetail(),
         retryCatalogDetail: () => void this.showCatalogDetail(this.catalogDetail?.id ?? null),
         installCatalogEntry: (id) => void this.installCatalogEntry(id),
-        openTool: (name) => {
-          const tool = this.detail?.tools?.find((entry) => entry.name === name) ?? { name };
-          this.toolPreviewAbort.abort();
-          this.toolPreviewAbort = new AbortController();
-          void showPluginToolPreview(tool, this.toolPreviewAbort.signal);
-        },
+        openSkill: (request) => void this.skillPreview.open(request),
+        openTool: (name) =>
+          this.skillPreview.openTool(
+            this.detail?.tools?.find((entry) => entry.name === name) ?? { name },
+          ),
         setQuery: (query) => {
           this.query = query;
         },
