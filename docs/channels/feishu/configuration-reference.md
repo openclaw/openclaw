@@ -41,6 +41,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.groups.<chat_id>.enabled`               | Enable/disable a specific group                                                      | `true`                               |
 | `channels.feishu.groups.<chat_id>.allowFrom`             | Per-group sender allowlist (overrides `groupSenderAllowFrom`)                        | -                                    |
 | `channels.feishu.groupSessionScope`                      | Group session mapping (`group`, `group_sender`, `group_topic`, `group_topic_sender`) | `group`                              |
+| `channels.feishu.historyLimit`                           | Max group messages to load as context (`0` disables)                                 | `50`                                 |
 | `channels.feishu.replyToMode`                            | Reply-reference mode (`off`, `first`, `all`, `batched`)                              | `all`                                |
 | `channels.feishu.replyInThread`                          | Bot replies create/continue topic threads (`disabled`, `enabled`)                    | `disabled`                           |
 | `channels.feishu.reactionNotifications`                  | Inbound reaction events (`off`, `own`, `all`)                                        | `own`                                |

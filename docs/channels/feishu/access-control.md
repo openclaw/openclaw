@@ -48,6 +48,12 @@ openclaw pairing approve feishu <CODE>
 Mentions of other people stay readable in the text sent to the agent,
 including when consecutive messages are combined.
 
+**Group history** (`channels.feishu.historyLimit`):
+
+- Maximum number of prior group messages retained as context for a group chat. Set `0` to disable history retention.
+- Falls back to `messages.groupChat.historyLimit` when unset; the default is `50`.
+- Per-account override: `channels.feishu.accounts.<id>.historyLimit`.
+
 ## Group configuration examples
 
 ### Allow all groups, no @mention required
