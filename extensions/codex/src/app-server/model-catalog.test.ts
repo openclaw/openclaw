@@ -371,17 +371,17 @@ describe("Codex app-server model catalog", () => {
       rpc.request.mockResolvedValue({ account, requiresOpenaiAuth: true });
       await owner.load(catalogParams, nativePluginConfig);
       expect(read({}, nativePluginConfig)).toEqual(readiness);
-      expect(read({ agentId: "another" })).toBeUndefined();
-      expect(read({ agentDir: "/tmp/another-agent" })).toBeUndefined();
-      expect(read({ workspaceDir: "/tmp/another-workspace" })).toBeUndefined();
-      expect(read({ config: { ...catalogParams.config } })).toBeUndefined();
-      expect(read({ modelId: "unlisted" })).toBeUndefined();
-      expect(read({ provider: "another" })).toBeUndefined();
+      expect(read({ agentId: "another" }, nativePluginConfig)).toBeUndefined();
+      expect(read({ agentDir: "/tmp/another-agent" }, nativePluginConfig)).toBeUndefined();
+      expect(read({ workspaceDir: "/tmp/another-workspace" }, nativePluginConfig)).toBeUndefined();
+      expect(read({ config: { ...catalogParams.config } }, nativePluginConfig)).toBeUndefined();
+      expect(read({ modelId: "unlisted" }, nativePluginConfig)).toBeUndefined();
+      expect(read({ provider: "another" }, nativePluginConfig)).toBeUndefined();
       expect(
         owner.read({ ...catalogParams, provider: "openai", modelId: "synthetic-opaque" }, {}),
       ).toBeUndefined();
       rpc.epoch += 1;
-      expect(read()).toBeUndefined();
+      expect(read({}, nativePluginConfig)).toBeUndefined();
     },
   );
 
