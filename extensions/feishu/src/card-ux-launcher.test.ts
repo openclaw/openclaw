@@ -2,10 +2,13 @@
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, describe, expect, it, vi, beforeEach } from "vitest";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import { decodeFeishuCardAction } from "./card-interaction.js";
 import {
+  expectFeishuCardButtonRow,
   expectFirstSentCardUsesFillWidthOnly,
   expectSentCardHasP2pAction,
 } from "./card-test-helpers.js";
+import { FEISHU_APPROVAL_REQUEST_ACTION } from "./card-ux-approval.js";
 import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
@@ -57,6 +60,45 @@ describe("feishu quick-action launcher", () => {
     expect(sendArgs?.cfg).toBe(cfg);
     expect(sendArgs?.to).toBe("user:u123");
     expect(sendArgs?.accountId).toBe("main");
+    const buttons = expectFeishuCardButtonRow(sendArgs?.card);
+    expect(buttons.map((button) => button.text)).toEqual([
+      { tag: "plain_text", content: "Help" },
+      { tag: "plain_text", content: "New session" },
+      { tag: "plain_text", content: "Reset" },
+    ]);
+    expect(buttons.map((button) => button.type)).toEqual(["default", "primary", "danger"]);
+    const context = { u: "u123", t: "p2p", e: 600_100 };
+    expect(buttons.map((button) => button.value)).toEqual([
+      { oc: "ocf1", k: "quick", a: "feishu.quick_actions.help", q: "/help", c: context },
+      {
+        oc: "ocf1",
+        k: "meta",
+        a: FEISHU_APPROVAL_REQUEST_ACTION,
+        m: {
+          command: "/new",
+          prompt: "Start a fresh session? This will reset the current chat context.",
+        },
+        c: context,
+      },
+      {
+        oc: "ocf1",
+        k: "meta",
+        a: FEISHU_APPROVAL_REQUEST_ACTION,
+        m: {
+          command: "/reset",
+          prompt: "Reset this session now? Any active conversation state will be cleared.",
+        },
+        c: context,
+      },
+    ]);
+    for (const button of buttons) {
+      expect(
+        decodeFeishuCardAction({
+          event: { operator: { open_id: "u123" }, context: {}, action: { value: button.value } },
+          now: 100,
+        }),
+      ).toEqual({ kind: "structured", envelope: button.value });
+    }
     expectSentCardHasP2pAction(sendCardFeishuMock);
     expectFirstSentCardUsesFillWidthOnly(sendCardFeishuMock);
   });
