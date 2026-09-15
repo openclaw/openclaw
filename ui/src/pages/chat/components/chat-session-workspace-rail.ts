@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { renderCopyButton } from "../../../components/copy-button.ts";
@@ -117,7 +118,7 @@ export function renderSessionWorkspaceRail(
   const artifacts = sessionWorkspace.list?.artifacts ?? [];
   const browser = sessionWorkspace.list?.browser;
   const entries = browser?.entries ?? [];
-  const search = sessionWorkspace.browserSearch.toLowerCase();
+  const search = normalizeOptionalString(sessionWorkspace.browserSearch)?.toLowerCase() ?? "";
   const matches = (...values: (string | undefined)[]) =>
     values.some((value) => value?.toLowerCase().includes(search));
   const modifiedFiles = files.filter((file) => file.kind === "modified");

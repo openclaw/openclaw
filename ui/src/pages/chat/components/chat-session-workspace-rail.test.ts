@@ -170,6 +170,66 @@ describe("session workspace path actions", () => {
     expect(mount.textContent).toContain("src/edited.ts");
   });
 
+  it.each(["inventory  report", "  INVENTORY  REPORT  ", "\tinventory  report\t"])(
+    "matches every Files group consistently for %j without collapsing internal spaces",
+    (query) => {
+      const workspace = createWorkspace({
+        browserSearch: query,
+        list: {
+          sessionKey: "agent:main:workspace",
+          files: [
+            {
+              kind: "modified",
+              name: "inventory  report.csv",
+              path: "inventory  report.csv",
+              missing: false,
+            },
+            {
+              kind: "read",
+              name: "inventory  report.md",
+              path: "inventory  report.md",
+              missing: false,
+            },
+            {
+              kind: "modified",
+              name: "inventory report.csv",
+              path: "inventory report.csv",
+              missing: false,
+            },
+          ],
+          artifacts: [
+            { id: "report", title: "Inventory  report", type: "file", download: { mode: "bytes" } },
+            { id: "other", title: "Inventory report", type: "file", download: { mode: "bytes" } },
+          ],
+          browser: {
+            path: "",
+            search: "inventory  report",
+            entries: [
+              { kind: "file", name: "inventory  report.csv", path: "inventory  report.csv" },
+            ],
+          },
+        },
+      });
+      const mount = document.body.appendChild(document.createElement("div"));
+      render(renderSessionWorkspaceRail(workspace), mount);
+      expect(
+        Array.from(
+          mount.querySelectorAll(".chat-workspace-rail__file-name"),
+          (row) => row.textContent,
+        ),
+      ).toEqual([
+        "inventory  report.csv",
+        "inventory  report.md",
+        "Inventory  report",
+        "inventory  report.csv",
+      ]);
+      expect(mount.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe(query);
+
+      render(renderSessionWorkspaceRail({ ...workspace, browserSearch: "   " }), mount);
+      expect(mount.querySelectorAll(".chat-workspace-rail__file-name")).toHaveLength(6);
+    },
+  );
+
   it("omits filter chips when only project files are available", () => {
     const workspace = createWorkspace({
       filter: "read",
