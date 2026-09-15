@@ -3,10 +3,7 @@ import type { AuditMessageFailureStage } from "../../audit/audit-event-types.js"
 import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import {
-  findPlatformMessageRejectedError,
-  isProvenDeliveryNotSentError,
-} from "../delivery-recovery.shared.js";
+import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import type {
@@ -14,8 +11,12 @@ import type {
   PlatformSendRoute,
 } from "./deliver-contracts.js";
 import { deliverOutboundPayloadsCore } from "./deliver-core.js";
+import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
 import { OUTBOUND_DELIVERY_LOG_SCOPE } from "./deliver-log.js";
 import {
+  findTerminalBatchRejection,
+  isProvenBatchNotSent,
+  rejectQueuedDelivery,
   persistQueuedPostSendState,
   persistQueuedPreSendState,
   type QueuedPostSendState,
@@ -31,7 +32,7 @@ import {
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import { runOutboundDeliveryCommitHooks } from "./delivery-commit-hooks.js";
-import { rejectDurableDelivery, settleDurableDelivery } from "./delivery-completion.js";
+import { settleDurableDelivery } from "./delivery-completion.js";
 import type { DeliveryProducerLease } from "./delivery-queue-lease.js";
 import {
   failDelivery,
@@ -161,6 +162,26 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     flushMessageSentEvents();
     if (deliveredResults.length > 0) {
       await runOutboundDeliveryCommitHooks(deliveredResults);
+    }
+  };
+  const failedTerminals = (failureStage: AuditMessageFailureStage) =>
+    failedOutboundAuditTerminals({
+      payloadCount,
+      results: deliveredResults,
+      payloadOutcomes,
+      failureStage,
+    });
+  const emitFailedTerminals = (failureStage: AuditMessageFailureStage) =>
+    emitTerminals(() => failedTerminals(failureStage));
+  const finishPermanentRejection = async (
+    owner: QueuedDeliveryOwner,
+    rejection: PlatformMessageNotDispatchedError,
+  ): Promise<void> => {
+    const terminals = failedTerminals("platform_send");
+    if (await rejectQueuedDelivery(owner, rejection, params, terminals)) {
+      queuedPostSendState = "acked";
+      await runCommitHooksAfterAck();
+      emitTerminals(() => terminals);
     }
   };
   let releaseCancelledPreparation: (() => Promise<void>) | undefined;
@@ -437,6 +458,14 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         const postSendState =
           queuedPostSendState ??
           (partialSendEvidence ? await persistPostSendState(queueOwner) : undefined);
+        const permanentRejection =
+          !partialSendEvidence && postSendState === undefined
+            ? findTerminalBatchRejection(failedOutcomes.map((outcome) => outcome.error))
+            : undefined;
+        if (permanentRejection) {
+          await finishPermanentRejection(queueOwner, permanentRejection);
+          return results;
+        }
         const error = "partial delivery failure (bestEffort)";
         if (postSendState === undefined || postSendState === "marked") {
           const recordFailure =
@@ -452,14 +481,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           // Direct ack is the fallback when the post-send marker cannot be
           // written. Once the row is gone, recovery cannot run these hooks.
           await runCommitHooksAfterAck();
-          emitTerminals(() =>
-            failedOutboundAuditTerminals({
-              payloadCount,
-              results,
-              payloadOutcomes,
-              failureStage: "platform_send",
-            }),
-          );
+          emitFailedTerminals("platform_send");
         }
       } else {
         const postSendState =
@@ -540,7 +562,8 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       }
     }
     return results;
-  } catch (err) {
+  } catch (caughtError) {
+    let err = caughtError;
     try {
       params.abortSignal?.removeEventListener("abort", cancelBeforeSend);
       await cancelledPreparationRetirement;
@@ -552,6 +575,19 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       if (isOutboundDeliveryAdmissionClosedError(err)) {
         throw err;
       }
+      if (
+        !platformSendStarted &&
+        deliveredResults.length === 0 &&
+        queuedPostSendState === undefined &&
+        !(err instanceof OutboundDeliveryError && err.sentBeforeError)
+      ) {
+        // Initial handler/bootstrap failures precede every adapter handoff.
+        try {
+          assertOutboundHandoffCurrent(wrappedParams.assertDirectAdapterHandoff);
+        } catch (rejection) {
+          err = rejection;
+        }
+      }
       if (err instanceof OutboundDeliveryError && err.results.length > 0) {
         deliveredResults = err.results;
       }
@@ -562,16 +598,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         (err instanceof OutboundDeliveryError && err.sentBeforeError) ||
         (reusableProducerClaimId !== undefined &&
           payloadOutcomes.some((outcome) => outcome.status === "sent"));
-      // Every terminal below reports the same failed batch; only the stage differs.
-      const emitFailedTerminals = (failureStage: AuditMessageFailureStage) =>
-        emitTerminals(() =>
-          failedOutboundAuditTerminals({
-            payloadCount,
-            results: deliveredResults,
-            payloadOutcomes,
-            failureStage,
-          }),
-        );
       const platformSendFailureStage: AuditMessageFailureStage =
         err instanceof OutboundDeliveryError ? err.stage : "platform_send";
       if (queueOwner) {
@@ -602,9 +628,10 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             emitFailedTerminals("queue");
           }
         } else if (!platformResultsReturned) {
+          const failureIsProvenNotSent = isProvenBatchNotSent(err, payloadOutcomes);
           const sendEvidence =
             deliveredResults.length > 0 ||
-            (!isProvenDeliveryNotSentError(err) &&
+            (!failureIsProvenNotSent &&
               (platformDispatchedPayloads.size > 0 ||
                 (err instanceof OutboundDeliveryError && err.sentBeforeError)));
           if (sendEvidence) {
@@ -626,61 +653,25 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
               emitFailedTerminals(platformSendFailureStage);
             }
           } else {
-            const permanentRejection = findPlatformMessageRejectedError(err);
-            let terminalRejectionHandled = false;
+            const permanentRejection =
+              queuedPostSendState === undefined && failureIsProvenNotSent
+                ? findTerminalBatchRejection([
+                    err,
+                    ...payloadOutcomes.flatMap((outcome) =>
+                      outcome.status === "failed" ? [outcome.error] : [],
+                    ),
+                  ])
+                : undefined;
             if (permanentRejection) {
-              let ownerRejected = false;
-              let queueAcked = false;
-              try {
-                const ambiguousStableRejection =
-                  producerClaimId !== undefined &&
-                  (deliveredResults.length > 0 ||
-                    queuedPostSendState === "marked" ||
-                    (reusableProducerClaimId &&
-                      payloadOutcomes.some((outcome) => outcome.status === "sent")));
-                if (ambiguousStableRejection) {
-                  await queueOwner.fail(
-                    failDeliveryAfterPlatformSend,
-                    `delivery partially sent before permanent rejection: ${permanentRejection.message}`,
-                  );
-                  queuedPostSendState = "failed";
-                  terminalRejectionHandled = true;
-                } else {
-                  if (params.deliveryCompletion) {
-                    await rejectDurableDelivery(
-                      params.deliveryCompletion,
-                      permanentRejection.message,
-                      platformQueueStateDir,
-                      params.deliveryQueueStateContext,
-                      params.conversationDeliveryTarget,
-                    );
-                    ownerRejected = true;
-                  }
-                  await (producerClaimId
-                    ? queueOwner.ack({ suppressCompletionReceipt: true })
-                    : queueOwner.ack());
-                  queueAcked = true;
-                }
-              } catch (rejectionError) {
-                log.warn(
-                  `failed to finalize permanently rejected delivery ${queueId}: ${formatErrorMessage(rejectionError)}`,
-                );
-              }
-              terminalRejectionHandled ||= ownerRejected || queueAcked;
-              if (queueAcked) {
-                queuedPostSendState = "acked";
-                await runCommitHooksAfterAck();
-                emitFailedTerminals("platform_send");
-              }
-            }
-            if (!terminalRejectionHandled) {
+              await finishPermanentRejection(queueOwner, permanentRejection);
+            } else {
               // A caller that resends this failure itself must not leave a row
               // behind: the recovery drain would send the same message again
               // behind that retry (#124279). Callers that only report the error
               // (CLI, gateway RPC) and durable completions keep their own owner,
               // so their rows stay replayable (#100979).
               const callerOwnsRetry =
-                isProvenDeliveryNotSentError(err) &&
+                failureIsProvenNotSent &&
                 params.deliveryRetryOwner === "caller" &&
                 !params.deliveryCompletion;
               if (callerOwnsRetry) {
@@ -699,7 +690,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
                   );
                 }
               } else {
-                const recordFailure = isProvenDeliveryNotSentError(err)
+                const recordFailure = failureIsProvenNotSent
                   ? failDeliveryBeforePlatformSend
                   : failDelivery;
                 try {
