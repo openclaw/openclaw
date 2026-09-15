@@ -18,6 +18,7 @@ import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts"
 import {
   browserPanelInspectHighlightRegion,
   browserPanelNormalizedPoint,
+  browserPanelStageNormalizedPoint,
   browserPanelRemotePoint,
   browserPanelShouldForwardKey,
   dispatchCompositedBrowserAnnotation,
@@ -47,7 +48,7 @@ interface BrowserPanelInputHost extends BrowserPanelInputState {
   };
   readonly operations: Pick<
     BrowserPanelOperationOwnership,
-    "beginInspection" | "captureClient" | "epoch" | "isLive"
+    "beginInspection" | "captureClient" | "epoch" | "isLive" | "invalidateInspection"
   >;
   readonly pendingInput: Pick<
     BrowserPanelPendingInput,
@@ -245,6 +246,14 @@ export class BrowserPanelInputController {
   handleOverlayPointerDown(event: PointerEvent): void {
     if (this.host.mode === "inspect") {
       this.suppressStageClick = true;
+      if (!this.remotePoint(event)) {
+        // Clicking the letterbox margin is not part of the page and must not
+        // capture the last inspected element or a pending inspection.
+        this.host.operations.invalidateInspection();
+        this.host.setState("inspected", null);
+        this.paintOverlay();
+        return;
+      }
       void this.sendAnnotation({ element: this.host.inspected });
       return;
     }
@@ -322,9 +331,16 @@ export class BrowserPanelInputController {
   private queueInspect(event: PointerEvent): void {
     const client = this.host.operations.captureClient();
     const point = this.remotePoint(event);
-    const stagePoint = browserPanelNormalizedPoint(this.stageElement(), event);
+    const stagePoint = browserPanelStageNormalizedPoint(this.stageElement(), event);
     const targetId = this.host.activeTargetId;
     if (!client || !point || !stagePoint || !targetId || this.host.evaluateUnavailable) {
+      if (!point && this.host.mode === "inspect") {
+        // The pointer left the painted frame; a stale element must not stay
+        // captured, and a queued or in-flight inspection must not restore it.
+        this.host.operations.invalidateInspection();
+        this.host.setState("inspected", null);
+        this.paintOverlay();
+      }
       return;
     }
     const current = this.host.operations.beginInspection(

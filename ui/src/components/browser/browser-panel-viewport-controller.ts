@@ -10,7 +10,7 @@ import type { BrowserPanelStream } from "./browser-panel-stream.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
 
 interface BrowserPanelViewportHost {
-  readonly host: { browserPanelIsOpen(): boolean };
+  readonly host: { browserPanelIsOpen(): boolean; requestUpdate(): void };
   readonly native: { readonly activeTab: NativeBrowserTab | undefined };
   readonly activeTargetId: string | null;
   readonly view: BrowserPanelView | null;
@@ -24,12 +24,48 @@ const VIEWPORT_RESIZE_DELAY_MS = 300;
 const MIN_VIEWPORT_DIMENSION = 100;
 const MAX_VIEWPORT_DIMENSION = 8192;
 
+const FIXED_VIEWPORT_PREF_KEY = "openclaw.browserPanel.fixedViewport";
+
+/**
+ * Fixed-viewport viewing: the panel scales the live frame instead of resizing
+ * the remote page, so the page keeps the viewport its agent or document chose.
+ */
+function readFixedViewportPreference(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(FIXED_VIEWPORT_PREF_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeFixedViewportPreference(value: boolean): void {
+  try {
+    globalThis.localStorage?.setItem(FIXED_VIEWPORT_PREF_KEY, value ? "1" : "0");
+  } catch {
+    // Storage can be unavailable (private mode, opaque origin); keep the in-memory value.
+  }
+}
+
 /** Reconciles the visible screenshot stage with its remote page's CSS viewport. */
 export class BrowserPanelViewportController {
   observedViewportSize: { width: number; height: number } | null = null;
+  /** Fixed-viewport viewing (toolbar toggle); persisted in localStorage. */
+  fixedViewportView = readFixedViewportPreference();
   private lastRequestedViewport: { targetId: string; width: number; height: number } | null = null;
 
   constructor(private readonly controller: BrowserPanelViewportHost) {}
+
+  /** Toolbar toggle: the page owns its viewport while this is on. */
+  setFixedViewport(value: boolean): void {
+    if (this.fixedViewportView === value) {
+      return;
+    }
+    writeFixedViewportPreference(value);
+    this.fixedViewportView = value;
+    this.controller.host.requestUpdate();
+    this.invalidate();
+    this.schedule();
+  }
 
   invalidate(): void {
     // The agent may resize the same document between panel presentations.
@@ -49,6 +85,9 @@ export class BrowserPanelViewportController {
 
   resize(width: number, height: number): void {
     this.observedViewportSize = { width, height };
+    // The dock geometry changed: repaint marks against the new stage even when
+    // the remote viewport itself is left alone (fixed-viewport viewing).
+    this.controller.host.requestUpdate();
     this.schedule();
   }
 
@@ -77,6 +116,11 @@ export class BrowserPanelViewportController {
       return;
     }
     this.controller.stream.resize();
+    if (this.fixedViewportView) {
+      // Fixed-viewport viewing: the page owns its viewport and the panel scales
+      // the live frame to fit, instead of resizing the remote page.
+      return;
+    }
     const width = Math.min(
       MAX_VIEWPORT_DIMENSION,
       Math.max(MIN_VIEWPORT_DIMENSION, Math.round(observed.width)),

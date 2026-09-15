@@ -51,7 +51,7 @@ describe("Browser toolbar", () => {
   it("renders all toolbar glyphs in a shared, stroked SVG coordinate system inside its shadow root", async () => {
     const panel = await mount();
     const glyphs = panel.renderRoot.querySelectorAll(".bp-toolbar button > svg");
-    expect(glyphs).toHaveLength(8);
+    expect(glyphs).toHaveLength(9);
     for (const glyph of glyphs) {
       expect(glyph.getAttribute("viewBox")).toBe("0 0 24 24");
       expect(glyph.getAttribute("stroke")).toBe("currentColor");

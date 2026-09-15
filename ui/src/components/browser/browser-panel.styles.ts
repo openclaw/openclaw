@@ -79,6 +79,10 @@ export const browserPanelStyles = css`
     background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
     color: var(--text, #d7dae0);
   }
+  .bp-toolbar .bp-icon.is-active {
+    background: color-mix(in srgb, var(--accent, #4c8dff) 22%, transparent);
+    color: var(--text, #d7dae0);
+  }
   .bp-url {
     flex: 1;
     min-width: 0;
@@ -151,6 +155,8 @@ export const browserPanelStyles = css`
   .bp-stage {
     position: relative;
     width: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
   }
   .bp-stage--native {
     flex: 1 1 auto;
@@ -165,7 +171,8 @@ export const browserPanelStyles = css`
   .bp-shot {
     display: block;
     width: 100%;
-    height: auto;
+    height: 100%;
+    object-fit: contain;
     user-select: none;
     -webkit-user-drag: none;
   }

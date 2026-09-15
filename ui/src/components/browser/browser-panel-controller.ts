@@ -68,7 +68,7 @@ export class BrowserPanelController implements ReactiveController {
   readonly stream: BrowserPanelStream;
   private activeClient: GatewayBrowserClient | null = null;
   urlDraftEditing = false;
-  private readonly viewport = new BrowserPanelViewportController(this);
+  readonly viewport = new BrowserPanelViewportController(this);
   private readonly snapshot = new BrowserPanelSnapshotController(this, this.viewport);
 
   constructor(readonly host: BrowserPanelControllerHost) {
