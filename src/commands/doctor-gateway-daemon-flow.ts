@@ -1,6 +1,10 @@
 /** Doctor gateway daemon repair flow for service install, bootstrap, restart, and port hints. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import {
+  DEFAULT_RESTART_HEALTH_DELAY_MS,
+  DEFAULT_RESTART_HEALTH_TIMEOUT_MS,
+} from "../cli/daemon-cli/restart-health.constants.js";
 import { resolveGatewayPort } from "../config/config.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -57,22 +61,26 @@ import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
 import { healthCommandNonExiting } from "./health.js";
 
-const GATEWAY_RESTART_HEALTH_ATTEMPTS = 20;
-const GATEWAY_RESTART_HEALTH_DELAY_MS = 500;
-
 function isTransientGatewayUnreachableError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /\bECONNREFUSED\b|couldn't connect|connection refused/i.test(message);
 }
 
 async function waitForGatewayHealthAfterRestart(runtime: RuntimeEnv): Promise<void> {
+  const startedAt = performance.now();
+  const deadline = startedAt + DEFAULT_RESTART_HEALTH_TIMEOUT_MS;
+  let nextProgressAt = startedAt + 5_000;
   let lastError: unknown;
-  for (let attempt = 0; attempt < GATEWAY_RESTART_HEALTH_ATTEMPTS; attempt += 1) {
-    if (attempt > 0) {
-      await sleep(GATEWAY_RESTART_HEALTH_DELAY_MS);
+  while (true) {
+    const remainingMs = deadline - performance.now();
+    if (remainingMs <= 0) {
+      break;
     }
     try {
-      await healthCommandNonExiting({ json: false, timeoutMs: 10_000 }, runtime);
+      await healthCommandNonExiting(
+        { json: false, timeoutMs: Math.min(10_000, remainingMs) },
+        runtime,
+      );
       return;
     } catch (err) {
       lastError = err;
@@ -80,8 +88,24 @@ async function waitForGatewayHealthAfterRestart(runtime: RuntimeEnv): Promise<vo
         throw err;
       }
     }
+    const now = performance.now();
+    if (now >= deadline) {
+      break;
+    }
+    if (now >= nextProgressAt) {
+      note(
+        `Gateway is still starting (${Math.round((now - startedAt) / 1000)} s elapsed). The host may be slow; waiting for restart readiness.`,
+        "Gateway",
+      );
+      nextProgressAt = now + 5_000;
+    }
+    await sleep(Math.min(DEFAULT_RESTART_HEALTH_DELAY_MS, deadline - now));
   }
-  throw lastError;
+  const detail = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(
+    `Gateway not reachable after restart; Doctor waited ${Math.round((performance.now() - startedAt) / 1000)} s.\n${detail}\nRun ${formatCliCommand("openclaw gateway status --deep")} to diagnose.`,
+    { cause: lastError },
+  );
 }
 
 type LaunchAgentBootstrapDoctorOutcome =
