@@ -422,7 +422,7 @@ async function runPreparedCliAgentOwned(
           `stdoutHash=${process.stdoutHash}`,
           `stderrBytes=${process.stderrBytes}`,
           `stderrHash=${process.stderrHash}`,
-          `useResume=${process.useResume ? "true" : "false"}`,
+          `useResume=${process.useResume ? "true" : "false"} toolCalls=${output.toolSummary?.calls ?? 0} tools=[${output.toolSummary?.tools.join(",") ?? ""}]`,
         ].join(" ");
         cliBackendLog.warn(`cli empty response diagnostics: ${diagnostics}`);
       }
