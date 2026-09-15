@@ -59,13 +59,15 @@ export function expandHomePrefix(
   return input.replace(/^~(?=$|[\\/])/, () => home);
 }
 
-/** Resolves a user-supplied path after trimming and expanding against the effective home. */
-export function resolveHomeRelativePath(
+type HomeRelativePathOptions = {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+};
+
+function resolveRelativePathWithHome(
   input: string,
-  opts?: {
-    env?: NodeJS.ProcessEnv;
-    homedir?: () => string;
-  },
+  opts: HomeRelativePathOptions | undefined,
+  resolveHome: typeof resolveRequiredHomeDir,
 ): string {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -73,13 +75,18 @@ export function resolveHomeRelativePath(
   }
   if (trimmed.startsWith("~")) {
     const expanded = expandHomePrefix(trimmed, {
-      home: resolveRequiredHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
+      home: resolveHome(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
       env: opts?.env,
       homedir: opts?.homedir,
     });
     return path.resolve(expanded);
   }
   return path.resolve(trimmed);
+}
+
+/** Resolves a user-supplied path after trimming and expanding against the effective home. */
+export function resolveHomeRelativePath(input: string, opts?: HomeRelativePathOptions): string {
+  return resolveRelativePathWithHome(input, opts, resolveRequiredHomeDir);
 }
 
 /** Resolves a user path against the effective home, preserving an empty input. */
@@ -95,24 +102,6 @@ export function resolveUserPath(
 }
 
 /** Resolves a user-supplied path against the OS home, ignoring OPENCLAW_HOME. */
-export function resolveOsHomeRelativePath(
-  input: string,
-  opts?: {
-    env?: NodeJS.ProcessEnv;
-    homedir?: () => string;
-  },
-): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("~")) {
-    const expanded = expandHomePrefix(trimmed, {
-      home: resolveRequiredOsHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
-      env: opts?.env,
-      homedir: opts?.homedir,
-    });
-    return path.resolve(expanded);
-  }
-  return path.resolve(trimmed);
+export function resolveOsHomeRelativePath(input: string, opts?: HomeRelativePathOptions): string {
+  return resolveRelativePathWithHome(input, opts, resolveRequiredOsHomeDir);
 }

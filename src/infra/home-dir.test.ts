@@ -291,6 +291,27 @@ describe("resolveHomeRelativePath", () => {
   });
 });
 
+describe.each([
+  { name: "effective home", resolve: resolveHomeRelativePath },
+  { name: "OS home", resolve: resolveOsHomeRelativePath },
+])("relative paths using $name", ({ resolve }) => {
+  it("leaves home resolution lazy for blank, relative and absolute paths", () => {
+    const homedir = vi.fn(() => "/fallback");
+    for (const input of ["", "   ", " ./file.txt ", path.resolve("/tmp/file.txt")]) {
+      expect(resolve(input, { env: {}, homedir })).toBe(
+        input.trim() ? path.resolve(input.trim()) : "",
+      );
+    }
+    expect(homedir).not.toHaveBeenCalled();
+  });
+
+  it("keeps named-user tilde paths literal", () => {
+    expect(resolve(" ~another/docs ", { env: { HOME: "/home/example" } })).toBe(
+      path.resolve("~another/docs"),
+    );
+  });
+});
+
 describe("resolveUserPath", () => {
   it("preserves the historical falsy-input contract", () => {
     expect(resolveUserPath(undefined as unknown as string)).toBe("");
