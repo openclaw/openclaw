@@ -19,6 +19,12 @@ const fallbackCases = [
     htmlTrigger: "empty-content",
   },
   {
+    name: "rich-message-non-empty",
+    message: "Bad Request: rich message must be non-empty",
+    richTrigger: "rich-content-required",
+    htmlTrigger: "empty-content",
+  },
+  {
     name: "html-parse",
     message: "Bad Request: can't parse entities: unsupported tag",
     richTrigger: "html-parse",
@@ -118,6 +124,7 @@ describe("isTelegramEmptyContentError", () => {
     "Bad Request: message text is empty",
     "Bad Request: text must be non-empty",
     "Bad Request: RICH_MESSAGE_CONTENT_REQUIRED",
+    "Bad Request: rich message must be non-empty",
   ])("recognizes %s", (message) => {
     expect(isTelegramEmptyContentError(new Error(message))).toBe(true);
   });

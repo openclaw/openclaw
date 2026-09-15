@@ -2882,6 +2882,35 @@ describe("deliverReplies", () => {
     expect(mockCallArg(sendMessage, 0, 2)?.parse_mode).toBeUndefined();
   });
 
+  it("falls back to standard sendMessage when older self-hosted Bot API server rejects rich message as non-empty", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 15,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    (bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> }).sendRichMessage = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          "GrammyError: Call to 'sendRichMessage' failed! (400: Bad Request: rich message must be non-empty)",
+        ),
+      );
+    const text = "system notice delivered through fallback";
+
+    await deliverWith({
+      replies: [{ text }],
+      runtime,
+      bot,
+      richMessages: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toBe(text);
+    expect(mockCallArg(sendMessage, 0, 2)?.parse_mode).toBeUndefined();
+  });
+
   it("falls back to plain text before raw rich send when rich markdown renders empty", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
