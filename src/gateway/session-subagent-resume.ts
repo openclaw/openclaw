@@ -44,6 +44,9 @@ function requirePausedChild(cfg: OpenClawConfig, caller: TrustedAgentToolCaller,
   ) {
     throw new Error("Task resume is limited to children controlled by the calling session.");
   }
+  if (entry.expectsCompletionMessage === false) {
+    throw new Error("Task resume requires a child with task-owned completion.");
+  }
   return entry;
 }
 

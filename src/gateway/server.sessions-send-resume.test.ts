@@ -180,6 +180,32 @@ it("rejects an unrelated visible controller without consuming input or producing
   }
 });
 
+it("rejects a child without task-owned completion before input or execution", async () => {
+  const announce = vi
+    .spyOn(subagentRegistryDeps, "runSubagentAnnounceFlow")
+    .mockResolvedValue("delivered");
+  try {
+    const proof = await arrangeAuthorityProof("completion-disabled");
+    const previous = expectDefined(subagentRuns.get(proof.previousRunId), "paused child");
+    previous.expectsCompletionMessage = false;
+    persistSubagentRunsToDiskOrThrow(subagentRuns, [proof.previousRunId]);
+    const result = await proof.send();
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "Task resume requires a child with task-owned completion.",
+    });
+    proof.expectUnadopted();
+    expect(listSessionPendingInputs(proof.scope)).toEqual({ items: [], total: 0 });
+    expect(listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([]);
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(proof.finalEffect).not.toHaveBeenCalled();
+    expect(announce).not.toHaveBeenCalled();
+  } finally {
+    announce.mockRestore();
+    testState.sessionStorePath = undefined;
+  }
+});
+
 it("rejects parent authority revoked while durable input preparation awaits", async ({
   signal,
 }) => {

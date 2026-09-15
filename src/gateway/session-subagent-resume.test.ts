@@ -119,6 +119,40 @@ it.each(["agent:main:subagent:resume-child", "agent:main:dashboard:resume-child"
   },
 );
 
+it("rejects binding a paused child without task-owned completion", async () => {
+  const state = await arrangePausedChild();
+  const task = findTaskByRunId(previousRunId);
+  expect(task).toBeDefined();
+  state.entry.expectsCompletionMessage = false;
+  persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
+  expect(() =>
+    bindParentSubagentResume({
+      cfg: state.cfg,
+      caller: state.caller,
+      childSessionKey: state.childSessionKey,
+      childSessionId: sessionId,
+    }),
+  ).toThrow("Task resume requires a child with task-owned completion.");
+  expect(subagentRuns.has(nextRunId)).toBe(false);
+  expect(subagentRuns.get(previousRunId)).toBe(state.entry);
+  expect(state.entry.pauseReason).toBe("sessions_yield");
+  expect(findTaskByRunId(previousRunId)).toEqual(task);
+});
+
+it("rejects adoption when task-owned completion is disabled after binding", async () => {
+  const state = await arrangePausedChild();
+  const task = findTaskByRunId(previousRunId);
+  expect(task).toBeDefined();
+  const adopt = await state.prepare();
+  state.entry.expectsCompletionMessage = false;
+  persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
+  expect(() => adopt()).toThrow("Task resume requires a child with task-owned completion.");
+  expect(subagentRuns.has(nextRunId)).toBe(false);
+  expect(subagentRuns.get(previousRunId)).toBe(state.entry);
+  expect(state.entry.pauseReason).toBe("sessions_yield");
+  expect(findTaskByRunId(previousRunId)).toEqual(task);
+});
+
 it("does not adopt ordinary peer messages or forged message provenance", async () => {
   const state = await arrangePausedChild();
   expect(
