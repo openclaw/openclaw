@@ -25,6 +25,7 @@ function runWatcher(
   headSha = sha,
   options: string[] = [],
   clock: "poll" | "wall" = "poll",
+  envOverrides: NodeJS.ProcessEnv = {},
 ) {
   return withTempDir("openclaw-watch-pr-ci-", async (binDir) => {
     const ghPath = join(binDir, "gh");
@@ -72,6 +73,7 @@ if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/wa
             encoding: "utf8",
             env: {
               ...process.env,
+              ...envOverrides,
               NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(clockPath).href}`,
               PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
             },
@@ -254,7 +256,7 @@ describe("watch-pr-ci", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "attaches to real CI when a newer draft workflow was skipped",
+    "revalidates run status when a newer draft workflow was skipped",
     async () => {
       const result = await runWatcher(
         `#!/usr/bin/env bash
@@ -267,7 +269,9 @@ case "$1 $2" in
     esac
     ;;
   "run view")
-    if [ "$3" = "202" ]; then
+    if [ "\${OCTOPOOL_FRESH:-}" != "1" ]; then
+      printf '{"status":"queued","conclusion":null}\\n'
+    elif [ "$3" = "202" ]; then
       printf '{"status":"completed","conclusion":"skipped"}\\n'
     else
       printf '{"status":"completed","conclusion":"success"}\\n'
@@ -278,6 +282,8 @@ esac
 `,
         sha,
         ["--completion", "ci-run"],
+        "poll",
+        { OCTOPOOL_FRESH: "0" },
       );
 
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
