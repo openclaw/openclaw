@@ -2,6 +2,8 @@ import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 
+export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
+
 // v17 records one-use prepared worker capacity and node workspace ownership.
 // v16 makes Skill Workshop ownership directory-based instead of row-provenance-based.
 // v15 removes redundant agent/session projections from conversation bindings.

@@ -241,6 +241,24 @@ describe("standalone upgrade survivor plugin registry", () => {
     );
   });
 
+  it.each([
+    ["custom-plugin-siblings", "openclaw@2026.9.4"],
+    ["abandoned-update", "openclaw@2026.9.2"],
+    ["workshop-doctor-recovery", "openclaw@2026.9.4"],
+  ])("follows the planner's no-registry decision for %s", (scenario, baseline) => {
+    const { captureDir, result } = runSurvivor({
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: baseline,
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(join(captureDir, "node-args"))).toBe(false);
+    expect(existsSync(join(captureDir, "docker-run-args"))).toBe(true);
+    expect(readFileSync(join(captureDir, "docker-args"), "utf8")).not.toContain(
+      "/tmp/openclaw-prepublish-plugin-registry",
+    );
+  });
+
   it("does not prepare a registry for a published candidate", () => {
     const { captureDir, packageTarball, result } = runSurvivor({
       OPENCLAW_CURRENT_PACKAGE_TGZ: undefined,

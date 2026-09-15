@@ -307,7 +307,7 @@ describe.each(["admission", "explicit", "async"] as const)("%s read-only state r
       expect(fs.readFileSync(options.path)).toEqual(before);
     });
   });
-  it("reads through the exact dangling Workshop index without changing its source", async () => {
+  it("requires Doctor for the exact dangling Workshop index without changing its source", async () => {
     await withTempDir("openclaw-state-readonly-dangling-workshop-", async (stateDir) => {
       const options = createOptions(stateDir);
       const opened = openOpenClawStateDatabase(options);
@@ -339,9 +339,11 @@ describe.each(["admission", "explicit", "async"] as const)("%s read-only state r
       }
       const before = fs.readFileSync(options.path);
 
-      expect(
-        await readState(({ db }) => db.prepare("SELECT role FROM schema_meta").get(), options),
-      ).toEqual({ role: "global" });
+      await expect(
+        Promise.resolve().then(() =>
+          readState(({ db }) => db.prepare("SELECT role FROM schema_meta").get(), options),
+        ),
+      ).rejects.toThrow(/legacy-workshop-review-index.*openclaw doctor --fix/);
       expect(fs.readFileSync(options.path)).toEqual(before);
     });
   });

@@ -8,6 +8,7 @@ import {
   preflightOpenClawDatabaseSchemas,
   type OpenClawDatabaseSchemaPreflight,
 } from "../state/openclaw-database-preflight.js";
+import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readStateSchemaPublicationBlocker } from "../state/openclaw-state-schema-publication.js";
@@ -28,7 +29,9 @@ async function readDrivingUpdater(): Promise<
   });
   try {
     const database = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
+    let closeSchemaReadAdmission: (() => void) | undefined;
     try {
+      closeSchemaReadAdmission = openDoctorStateSchemaReadAdmission(database);
       const blocker = readStateSchemaPublicationBlocker(database);
       return blocker
         ? {
@@ -37,8 +40,12 @@ async function readDrivingUpdater(): Promise<
           }
         : undefined;
     } finally {
-      clearNodeSqliteKyselyCacheForDatabase(database);
-      database.close();
+      try {
+        closeSchemaReadAdmission?.();
+      } finally {
+        clearNodeSqliteKyselyCacheForDatabase(database);
+        database.close();
+      }
     }
   } finally {
     await snapshot.cleanupAsync();
@@ -58,6 +65,7 @@ export async function guardUpdateDoctorSchemaUpgrade(options: {
     options.schemas ??
     (await preflightOpenClawDatabaseSchemas({
       env: process.env,
+      openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
     }));
   if (!schemas.pendingMigrations?.length) {
     return;

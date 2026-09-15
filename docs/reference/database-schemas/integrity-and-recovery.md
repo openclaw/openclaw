@@ -126,6 +126,21 @@ The heartbeat proves ownership, not migration progress. A live but stuck mainten
 
 `SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. Snapshot and integrity-child timeout errors include the applied budget and source file size; snapshot timeouts report an unknown size if the source stat failed. Integrity-child timeouts also retain `lastObservedPhase`. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
 
+### A legacy Workshop index prevents shared-state reads
+
+The `legacy-workshop-review-index` error requires `openclaw doctor --fix`.
+Ordinary Gateway reads and automatic migration do not enter the legacy catalog
+repair path. Healthy reads retain their prepared SQLite queries.
+
+With OpenClaw 2026.9.4, run Doctor before retrying `openclaw update`: the installed
+updater checks database integrity before it can launch the target version.
+
+Doctor checks database versions and active owners before repairing the exact
+known index. It restores catalog readability before loading dependent config
+and plugin state, then continues its normal migration and verification flow.
+The readability repair preserves review rows and schema-version markers;
+unrecognized damage and newer databases remain refused.
+
 ### The shared-state WAL keeps growing
 
 The running Gateway records the result of its existing WAL maintenance pass,

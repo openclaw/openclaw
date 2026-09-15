@@ -22,7 +22,6 @@ import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
-  hasFlag,
   normalizeGeneratedHelpCommandArgv,
   normalizeRootHelpTargetArgv,
   normalizeRootLogLevelArgv,
@@ -1209,7 +1208,7 @@ async function runCliWithPreparedOutputMode(
   const useSourceOnlyBestEffortConfig =
     !(await isCurrentRuntimeSupported()) ||
     normalizedInvocation.primary === "update" ||
-    (normalizedInvocation.primary === "doctor" && hasFlag(normalizedArgv, "--lint"));
+    normalizedInvocation.primary === "doctor";
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
     if (!bestEffortConfigPromise) {
       bestEffortConfigPromise = import("../config/io.js").then(async (configIo) => {

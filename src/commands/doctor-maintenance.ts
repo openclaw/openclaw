@@ -18,6 +18,7 @@ import {
   createOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
 } from "../state/openclaw-state-db-async-lifecycle.js";
+import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import { isDoctorUpdateRepairMode, resolveDoctorRepairMode } from "./doctor-repair-mode.js";
@@ -136,6 +137,7 @@ export async function beginDoctorMaintenance(params: {
           const runs = listUpdateRuns(
             { active: true, limit: 100, includeRunId: inheritedRunId },
             { env },
+            openDoctorStateSchemaReadAdmission,
           );
           const admission = inspectUpdateRepairDriverAdmission(runs, inheritedRunId);
           if (admission.kind === "conflict") {
@@ -209,7 +211,7 @@ export async function beginDoctorMaintenance(params: {
     const { assertNoOpenClawAgentDatabaseLeasesReadOnly, OpenClawAgentDatabaseLeaseActiveError } =
       await import("../state/openclaw-agent-db-lease.js");
     try {
-      assertNoOpenClawAgentDatabaseLeasesReadOnly({ env });
+      assertNoOpenClawAgentDatabaseLeasesReadOnly({ env }, openDoctorStateSchemaReadAdmission);
     } catch (error) {
       if (error instanceof OpenClawAgentDatabaseLeaseActiveError) {
         throw error;
@@ -220,6 +222,7 @@ export async function beginDoctorMaintenance(params: {
       const schemas = await preflightOpenClawDatabaseSchemas({
         env,
         scope: "state",
+        openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
       });
       const unreadable = schemas.indeterminate.find((database) => database.kind === "state");
       if (unreadable) {

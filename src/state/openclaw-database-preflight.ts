@@ -6,7 +6,11 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/ses
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  clearNodeSqliteKyselyCacheForDatabase,
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
@@ -59,15 +63,13 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
-import {
-  closeWorkshopIndexReadDatabase,
-  openDanglingWorkshopIndexReadAdmission,
-} from "./openclaw-state-db-dangling-workshop-index.js";
+import type { OpenClawStateSchemaReadAdmission } from "./openclaw-state-db-contract.js";
 import {
   assertOpenClawStateDatabaseOwner,
   assertOpenClawStateDatabaseForMaintenance,
   openClawStateMigrationAssertions,
 } from "./openclaw-state-db-maintenance.js";
+import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
 import { assertCanonicalStateSchemaShape } from "./openclaw-state-db-schema-repair.js";
 import {
   readStateSchemaContentVersion,
@@ -354,6 +356,7 @@ export async function preflightOpenClawDatabaseSchemas(options: {
       ) => readonly { agentId: string; path: string }[]);
   configuredAgentDatabaseCandidatePaths?: readonly string[];
   agentAdmissionConfig?: OpenClawConfig;
+  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
 }): Promise<OpenClawDatabaseSchemaPreflight> {
   options.signal?.throwIfAborted();
   const {
@@ -397,7 +400,7 @@ export async function preflightOpenClawDatabaseSchemas(options: {
       stateDatabase = openNodeSqliteDatabase(stateSnapshot.location, {
         readOnly: true,
       });
-      closeStateSchemaReadAdmission = openDanglingWorkshopIndexReadAdmission(stateDatabase);
+      closeStateSchemaReadAdmission = options.openStateSchemaReadAdmission?.(stateDatabase);
       stateDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
       const stateVersion = readSqliteUserVersion(stateDatabase);
       const contentVersion =
@@ -490,19 +493,25 @@ export async function preflightOpenClawDatabaseSchemas(options: {
   } catch (error) {
     // Accepted stop must not turn cancellation or failed cleanup into a
     // warn-and-continue result that launches the remaining startup runtime.
+    const failure = normalizeOpenClawStateSchemaReadError(error, statePath);
     if (options.signal?.aborted || options.requireStartupMigrationReadiness) {
-      throw error;
+      throw failure;
     }
     result.indeterminate.push({
       kind: "state",
       path: statePath,
-      reason: formatErrorMessage(error),
+      reason: formatErrorMessage(failure),
     });
     return result;
   } finally {
     try {
       if (stateDatabase) {
-        closeWorkshopIndexReadDatabase(stateDatabase, closeStateSchemaReadAdmission);
+        try {
+          closeStateSchemaReadAdmission?.();
+        } finally {
+          clearNodeSqliteKyselyCacheForDatabase(stateDatabase);
+          stateDatabase.close();
+        }
       }
     } finally {
       await stateSnapshot?.cleanupAsync();
