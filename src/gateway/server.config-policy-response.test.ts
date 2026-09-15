@@ -1,8 +1,8 @@
 // A config writer receives the committed revision before its own policy retires its socket.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as config from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import * as restartSentinel from "../infra/restart-sentinel.js";
 import { resetLogger } from "../logging/logger.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -71,12 +71,16 @@ describe("config writer policy-close ordering", () => {
       server = await startGatewayServerCore(port, { controlUiEnabled: false });
       await server.startupSettled;
       const held = createDeferredCore();
-      const published = createDeferredCore<restartSentinel.RestartSentinelPayload>();
-      const writeSentinel = restartSentinel.writeRestartSentinel;
-      vi.spyOn(restartSentinel, "writeRestartSentinel").mockImplementation(async (payload) => {
-        published.resolve(payload);
+      // Hold at replaceConfigFile: it is awaited before the RPC acknowledgement
+      // in commitGatewayConfigWrite, so it is a pre-ack barrier for both
+      // hot-applied and restart-requiring writes. The earlier sentinel spy hold
+      // no longer fires for hot-applied writes (#144063 skips sentinel
+      // persistence), which would race the policy-close handshake.
+      const replaceConfigFile = config.replaceConfigFile;
+      vi.spyOn(config, "replaceConfigFile").mockImplementation(async (...args) => {
+        const result = await replaceConfigFile(...args);
         await held.promise;
-        return await writeSentinel(payload);
+        return result;
       });
       const connect = async (credential: string, browser = false) => {
         const closed = createDeferredCore();
@@ -142,13 +146,13 @@ describe("config writer policy-close ordering", () => {
             : {}),
         });
         void result.catch(() => {});
-        const publication = await Promise.race([
-          published.promise,
-          result.then(() => {
-            throw new Error("RPC completed before its sentinel");
-          }),
-        ]);
-        expect(publication.stats?.requiresRestart).toBe(false);
+        // The pre-ack hold is on replaceConfigFile (awaited before
+        // acknowledgement in commitGatewayConfigWrite). Hot-applied writes
+        // skip sentinel persistence (#144063), so the hold moved here from the
+        // sentinel spy to preserve the barrier for both write kinds. After
+        // replaceConfigFile returns, the config is committed to disk; the hold
+        // delays the ack so peer-close and stale-read assertions run before the
+        // writer's socket is retired.
         await peer.closed;
         expect(writer.didClose()).toBe(false);
         const staleRead = writer.client.request("health");
