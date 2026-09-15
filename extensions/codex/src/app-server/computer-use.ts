@@ -28,6 +28,7 @@ import {
 } from "./desktop-app-paths.js";
 import { isManagedCodexDesktopCommand } from "./managed-binary.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import type { ToolCallResult as CodexMcpToolCallResult } from "./protocol-mcp.js";
 import type {
   CodexAppServerRequestResult,
   CodexConfigReadResponse,
@@ -713,7 +714,7 @@ export async function runCodexComputerUseLiveTest(params: {
         },
       );
       threadId = thread.thread.id;
-      await params.request(
+      const toolResult = await params.request<CodexMcpToolCallResult>(
         "mcpServer/tool/call",
         {
           threadId,
@@ -725,6 +726,11 @@ export async function runCodexComputerUseLiveTest(params: {
           timeoutMs: params.config.toolCallTimeoutMs,
         },
       );
+      if (toolResult.isError === true) {
+        throw new Error(
+          `Computer Use readiness tool ${params.config.mcpServerName}.${probe.tool} returned an error result`,
+        );
+      }
       return {
         liveTest: {
           status: "passed",

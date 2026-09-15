@@ -16,7 +16,8 @@ plugin, checks that the configured MCP server is available, and then lets Codex
 own the native MCP tool calls during Codex-mode turns. Readiness uses
 `list_apps` when the server exposes the legacy Computer Use surface. A newer
 server that exposes `js` instead is probed with one `await cua.getState();`
-call.
+call. An MCP response with `isError: true` fails readiness instead of counting
+as a successful response.
 
 Use this page when OpenClaw is already using the native Codex harness. For the
 runtime setup itself, see [Codex harness](/plugins/codex-harness).

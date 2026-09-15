@@ -541,6 +541,23 @@ describe("Codex Computer Use setup", () => {
     expect(status).toMatchObject({ ready: true, reason: "ready" });
   });
 
+  it("treats MCP error results as failed readiness probes", async () => {
+    const request = createComputerUseRequest({ installed: true, liveTestResultErrors: 2 });
+
+    const status = await readCodexComputerUseStatus({
+      pluginConfig: { computerUse: { enabled: true, marketplaceName: "desktop-tools" } },
+      request,
+    });
+
+    expect(status).toMatchObject({ ready: false, reason: "live_test_failed" });
+    expect(status.liveTest).toMatchObject({
+      status: "failed",
+      ok: false,
+      attempts: 2,
+      error: "Computer Use readiness tool computer-use.list_apps returned an error result",
+    });
+  });
+
   it("repairs a failed probe through the owning MCP runtime without signaling sibling processes", async () => {
     const request = createComputerUseRequest({ installed: true, liveTestFailures: 1 });
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
@@ -1868,6 +1885,7 @@ function createComputerUseRequest(params: {
   nativePluginsEnabled?: boolean | "absent";
   marketplaceAvailableAfterListCalls?: number;
   liveTestFailures?: number;
+  liveTestResultErrors?: number;
   reloadFailures?: number;
   mcpToolsAvailable?: boolean;
   remoteMarketplace?: {
@@ -1880,6 +1898,7 @@ function createComputerUseRequest(params: {
   let enabled = params.enabled ?? installed;
   let pluginListCalls = 0;
   let liveTestFailures = params.liveTestFailures ?? 0;
+  let liveTestResultErrors = params.liveTestResultErrors ?? 0;
   let reloadFailures = params.reloadFailures ?? 0;
   let threadStartCalls = 0;
   const pluginName = params.pluginName ?? "computer-use";
@@ -2015,8 +2034,15 @@ function createComputerUseRequest(params: {
       };
     }
     if (method === "mcpServer/tool/call") {
-      const tool = mcpTools.includes("list_apps") ? "list_apps" : "js";
-      expect(requestParams).toEqual({
+      const requestRecord = requireRecord(requestParams, "Computer Use readiness tool call");
+      const tool = requestRecord.tool;
+      if (typeof tool !== "string" || !mcpTools.includes(tool)) {
+        return {
+          content: [{ type: "text", text: `Unknown tool: ${String(tool)}` }],
+          isError: true,
+        };
+      }
+      expect(requestRecord).toEqual({
         threadId: `computer-use-probe-thread-${threadStartCalls}`,
         server: mcpServerName,
         tool,
@@ -2025,6 +2051,10 @@ function createComputerUseRequest(params: {
       if (liveTestFailures > 0) {
         liveTestFailures -= 1;
         throw new Error(`${tool} timed out`);
+      }
+      if (liveTestResultErrors > 0) {
+        liveTestResultErrors -= 1;
+        return { content: [{ type: "text", text: `${tool} failed` }], isError: true };
       }
       return { content: [{ type: "text", text: "[]" }] };
     }
