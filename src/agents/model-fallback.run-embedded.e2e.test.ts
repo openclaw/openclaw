@@ -113,6 +113,13 @@ const OVERLOADED_ERROR_PAYLOAD =
 const RATE_LIMIT_ERROR_MESSAGE = "rate limit exceeded";
 const LONG_RATE_LIMIT_ERROR_MESSAGE = "429 Too Many Requests: subscription usage limit reached";
 const NO_ENDPOINTS_FOUND_ERROR_MESSAGE = "404 No endpoints found for deepseek/deepseek-r1:free.";
+// Captured verbatim from a real local HTTP 429 round-tripped through the real
+// OpenRouter transport (streamOpenAICompletions) carrying the exact body reported
+// in #147546 — not hand-typed. See test/plugins/openrouter-per-day-rate-limit.integration.test.ts
+// and src/agents/embedded-agent-runner/run/attempt-recovery.test.ts, which independently
+// verify a real HTTP round-trip produces this exact string.
+const REAL_TRANSPORT_PER_DAY_CAP_ERROR_MESSAGE =
+  "429 Rate limit exceeded: free-models-per-day-high-balance.";
 const NO_ERROR_DETAILS_MESSAGE = "Unknown error (no error details in response)";
 
 type EmbeddedAttemptParams = {
@@ -714,6 +721,37 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       expectOpenAiThenGroqAttemptOrder({ primaryAttempts: 4 });
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("falls back after a real-transport per-day cap on the very first attempt, unlike overloaded's bounded retries (#147546)", async () => {
+    await withModelFallbackWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeFallbackAuthStore(agentDir);
+      mockPrimaryErrorThenFallbackSuccess(REAL_TRANSPORT_PER_DAY_CAP_ERROR_MESSAGE);
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey: "agent:test:per-day-cap-cross-provider",
+        runId: "run:per-day-cap-cross-provider",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("rate_limit");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+
+      const usageStats = await readFallbackUsageStats(agentDir);
+      expect(typeof usageStats["groq:p1"]?.lastUsed).toBe("number");
+
+      // The whole point of the fix: unlike overloaded above (4 bounded
+      // same-model retries before escalating), an exhausted daily/weekly/monthly
+      // cap gets exactly one primary attempt and no backoff sleep at all — the
+      // production orchestrator recognizes retrying cannot possibly succeed and
+      // routes straight to the real second model, which actually completes.
+      expectOpenAiThenGroqAttemptOrder({ primaryAttempts: 1 });
+      expect(computeBackoffMock).not.toHaveBeenCalled();
+      expect(sleepWithAbortMock).not.toHaveBeenCalled();
     });
   });
 
