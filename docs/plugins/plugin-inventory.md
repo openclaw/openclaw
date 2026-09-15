@@ -174,7 +174,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-92 plugins
+93 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm or ClawHub: `clawhub:@openclaw/acpx`. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -227,6 +227,8 @@ Each entry lists the package, distribution route, and description.
 - **[duckduckgo](/plugins/reference/duckduckgo)** (`@openclaw/duckduckgo-plugin`) - npm or ClawHub: `clawhub:@openclaw/duckduckgo-plugin`. Adds web search provider support.
 
 - **[exa](/plugins/reference/exa)** (`@openclaw/exa-plugin`) - npm or ClawHub: `clawhub:@openclaw/exa-plugin`. Adds web search provider support.
+
+- **[facetime](/plugins/reference/facetime)** (`@openclaw/facetime`) - npm or ClawHub: `clawhub:@openclaw/facetime`. Experimental FaceTime realtime voice carrier for OpenClaw agents.
 
 - **[featherless](/plugins/reference/featherless)** (`@openclaw/featherless-provider`) - npm or ClawHub: `clawhub:@openclaw/featherless-provider`. OpenClaw Featherless AI provider plugin.
 

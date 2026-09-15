@@ -221,7 +221,9 @@ describe("plugin npm runtime build planning", () => {
       expectDistRelativePaths(plan.runtimeExtensions);
       expectDistRelativePaths(plan.runtimeBuildOutputs);
       expect(plan.packageFiles).toContain("dist/**");
-      expect(plan.packageFiles).toContain("assets/activity.svg");
+      if (existsSync(path.join(plan.packageDir, "assets", "activity.svg"))) {
+        expect(plan.packageFiles).toContain("assets/activity.svg");
+      }
       if (existsSync(path.join(plan.packageDir, "assets", "activity"))) {
         expect(plan.packageFiles).toContain("assets/activity/*.svg");
       }

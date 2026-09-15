@@ -134,6 +134,7 @@ Source generation fails if a present channel secret-contract artifact cannot loa
 - `plugins.entries.codex.config.appServer.headers.*`
 - `plugins.entries.comfy.config.headers.*`
 - `plugins.entries.exa.config.webSearch.apiKey`
+- `plugins.entries.facetime.config.realtime.providers.*.apiKey`
 - `plugins.entries.firecrawl.config.webFetch.apiKey`
 - `plugins.entries.firecrawl.config.webSearch.apiKey`
 - `plugins.entries.google-meet.config.realtime.providers.*.apiKey`
