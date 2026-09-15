@@ -89,6 +89,7 @@ export async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<v
   const { noteInstallPolicyHealth } = await import("../commands/doctor-install-policy.js");
   const { noteSecurityWarnings } = await import("../commands/doctor-security.js");
   const { securityAuditFindingToHealthFinding } = await import("./doctor-core-checks.js");
+  await runCoreContributionHealth(ctx, ["core/doctor/exec-approval-arg-patterns"]);
   const findings = await noteSecurityWarnings(ctx.cfg);
   recordDoctorHealthWarnings(ctx, findings.map(securityAuditFindingToHealthFinding));
   await noteInstallPolicyHealth(ctx.cfg, { deep: ctx.options.deep === true, env: ctx.env });

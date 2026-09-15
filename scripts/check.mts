@@ -32,6 +32,7 @@ export const PREFLIGHT_CHECKS: CheckCommand[] = [
   { name: "tool display", args: ["tool-display:check"] },
   { name: "host env policy", args: ["check:host-env-policy:swift"] },
   { name: "browser inspect script", args: ["check:browser-inspect-script:swift"] },
+  { name: "exec arg pattern safety", args: ["check:exec-arg-pattern:swift"] },
   { name: "native conversation privacy defaults", args: ["native-catalogs:check"] },
   { name: "opengrep rule metadata", args: ["check:opengrep-rule-metadata"] },
   { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
