@@ -13,13 +13,13 @@ import {
   readOpenIncognitoAgentDatabaseGeneration,
 } from "../../state/openclaw-agent-db.js";
 import { readUserProfileVersion } from "../../state/user-profile-events.js";
-import { operatorSessionCap } from "../operator-role-policy.js";
+import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { readPreparedGatewayModelCatalogMetadata } from "../server-model-catalog-view.js";
 import { readSessionActivitySummaryVersion } from "../session-activity-summary-state.js";
 import { readSessionAutomationVersion } from "../session-automation-index.js";
 import { readSessionLifecyclePersistenceVersion } from "../session-lifecycle-state.js";
 import { readSessionObserverDigestVersion } from "../session-observer-model.js";
-import { isGatewayAdmin } from "../session-sharing.js";
+import { isGatewayAdmin, sharingIdentity } from "../session-sharing-policy.js";
 import { readSessionTitleProjectionUnavailableVersion } from "../session-transcript-title-reader.js";
 import type { SessionListModelCatalog, SessionsListResult } from "../session-utils.types.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
@@ -149,10 +149,14 @@ function sessionListWorkKey(
   client: GatewayClient | null,
   config: OpenClawConfig,
 ): string {
+  const actor = resolveGatewayOperatorRoleActor(client);
   return JSON.stringify([
-    // Admin visibility is global, but owner-first and involving-me rows remain viewer-specific.
+    sharingIdentity(client, actor)?.id ?? null,
+    // Attribution also selects owner-first/involving-me rows and membership decoration.
     gatewayClientSessionCreator(client)?.id ?? null,
     isGatewayAdmin(client) ? "admin" : (operatorSessionCap(client, config) ?? null),
+    actor?.kind === "system",
+    Boolean(client?.authenticatedGitHubIdentitySync),
     Object.entries(params).toSorted(([left], [right]) => left.localeCompare(right)),
   ]);
 }
