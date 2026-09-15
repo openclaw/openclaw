@@ -334,9 +334,10 @@ final class RemotePortTunnel: @unchecked Sendable {
     private static func sshOptions(
         localPort: UInt16,
         remotePort: Int,
-        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]
+        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy,
+        sandboxPortIsFree: ((UInt16) -> Bool)? = nil) -> [String]
     {
-        [
+        var options = [
             "-o", "BatchMode=yes",
             // The app tracks this exact child PID, so aliases must not hand the tunnel to a shared master.
             "-o", "ControlMaster=no",
@@ -350,7 +351,15 @@ final class RemotePortTunnel: @unchecked Sendable {
             "-n",
             "-N",
             "-L", "\(localPort):127.0.0.1:\(remotePort)",
-        ] + hostKeyPolicy.hostKeyOptions
+        ]
+        if remotePort < 65535 {
+            let sandboxPort = UInt16(remotePort + 1)
+            let isFree = sandboxPortIsFree?(sandboxPort) ?? self.portIsFree(sandboxPort)
+            if sandboxPort != localPort, isFree {
+                options += ["-L", "\(sandboxPort):127.0.0.1:\(sandboxPort)"]
+            }
+        }
+        return options + hostKeyPolicy.hostKeyOptions
     }
 
     private static func findPort(preferred: UInt16?, allowRandom: Bool) async throws -> UInt16 {
@@ -466,9 +475,14 @@ final class RemotePortTunnel: @unchecked Sendable {
     static func _testSSHOptions(
         localPort: UInt16,
         remotePort: Int,
-        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy = .strict) -> [String]
+        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy = .strict,
+        sandboxPortIsFree: ((UInt16) -> Bool)? = nil) -> [String]
     {
-        self.sshOptions(localPort: localPort, remotePort: remotePort, hostKeyPolicy: hostKeyPolicy)
+        self.sshOptions(
+            localPort: localPort,
+            remotePort: remotePort,
+            hostKeyPolicy: hostKeyPolicy,
+            sandboxPortIsFree: sandboxPortIsFree)
     }
 
     #endif

@@ -7,22 +7,47 @@ import Foundation
 
 struct RemotePortTunnelTests {
     @Test func `tunnel owns its SSH process instead of multiplexing`() {
-        let options = RemotePortTunnel._testSSHOptions(localPort: 28789, remotePort: 18789)
+        let options = RemotePortTunnel._testSSHOptions(
+            localPort: 28789,
+            remotePort: 18789,
+            sandboxPortIsFree: { _ in true })
 
         #expect(options.contains("ControlMaster=no"))
         #expect(options.contains("ControlPath=none"))
         #expect(options.contains("ControlPersist=no"))
         #expect(options.contains("ForkAfterAuthentication=no"))
         #expect(options.contains("28789:127.0.0.1:18789"))
+        #expect(options.contains("18790:127.0.0.1:18790"))
         #expect(options.contains("StrictHostKeyChecking=yes"))
         #expect(options.contains("UpdateHostKeys=yes"))
+    }
+
+    @Test func `sandbox port conflict does not remove the control forward`() {
+        let options = RemotePortTunnel._testSSHOptions(
+            localPort: 28789,
+            remotePort: 18789,
+            sandboxPortIsFree: { _ in false })
+
+        #expect(options.contains("28789:127.0.0.1:18789"))
+        #expect(!options.contains("18790:127.0.0.1:18790"))
+    }
+
+    @Test func `sandbox forward does not collide with remapped control port`() {
+        let options = RemotePortTunnel._testSSHOptions(
+            localPort: 18790,
+            remotePort: 18789,
+            sandboxPortIsFree: { _ in true })
+
+        #expect(options.contains("18790:127.0.0.1:18789"))
+        #expect(!options.contains("18790:127.0.0.1:18790"))
     }
 
     @Test func `tunnel requires explicit opt in to use SSH config host key policy`() {
         let options = RemotePortTunnel._testSSHOptions(
             localPort: 28789,
             remotePort: 18789,
-            hostKeyPolicy: .openssh)
+            hostKeyPolicy: .openssh,
+            sandboxPortIsFree: { _ in true })
 
         #expect(!options.contains { $0.hasPrefix("StrictHostKeyChecking=") })
         #expect(!options.contains { $0.hasPrefix("UpdateHostKeys=") })
