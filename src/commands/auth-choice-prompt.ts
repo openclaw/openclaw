@@ -15,6 +15,8 @@ import type { AuthChoice } from "./onboard-types.js";
 const BACK_VALUE = "__back";
 const MORE_VALUE = "__more";
 const KEEP_CURRENT_AUTH_CHOICE = "__keep-current";
+const PROVIDER_SEARCH_MESSAGE =
+  "Model/auth provider\nProvider not listed? Find community provider plugins at https://clawhub.ai/plugins";
 
 type KeepCurrentAuthChoice = typeof KEEP_CURRENT_AUTH_CHOICE;
 type PromptAuthChoiceResult = AuthChoice | KeepCurrentAuthChoice;
@@ -151,7 +153,7 @@ export async function promptAuthChoiceGrouped(
       );
       options.push({ value: BACK_VALUE, label: "Back" });
       const selection = await params.prompter.select({
-        message: "Model/auth provider",
+        message: PROVIDER_SEARCH_MESSAGE,
         options,
         searchable: true,
       });
@@ -181,7 +183,7 @@ export async function promptAuthChoiceGrouped(
         flatOptions.push({ value: skipOption.value, label: skipOption.label });
       }
       const selection = await params.prompter.select({
-        message: "Model/auth provider",
+        message: PROVIDER_SEARCH_MESSAGE,
         options: flatOptions,
         searchable: true,
       });
