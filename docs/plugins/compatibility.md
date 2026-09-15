@@ -233,3 +233,17 @@ consume it.
 Release notes should include upcoming plugin deprecations with target dates
 and links to migration docs, before a compatibility path moves to
 `removal-pending` or `removed`.
+
+## Related
+
+<CardGroup cols={3}>
+  <Card title="SDK migration" href="/plugins/sdk-migration" icon="arrow-right-arrow-left">
+    Removed surfaces, their replacements, and the removal timeline.
+  </Card>
+  <Card title="Plugin manifest" href="/plugins/manifest" icon="file-code">
+    The manifest fields a compatibility record can deprecate.
+  </Card>
+  <Card title="Manage plugins" href="/plugins/manage-plugins" icon="wrench">
+    Installing, updating, and inspecting installed plugins.
+  </Card>
+</CardGroup>

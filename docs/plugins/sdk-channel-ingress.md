@@ -19,6 +19,10 @@ Use `openclaw/plugin-sdk/channel-ingress-runtime` for receive paths.
 ## Runtime resolver
 
 ```ts
+// `config`, `route`, `agentRoute`, `readStoreAllowFrom`, and the platform facts
+// (`accountId`, `platformUserId`, `conversationId`, `messageId`, `isGroup`,
+// `hasControlCommand`) come from your own plugin; only the two imports below are
+// SDK surface.
 import {
   defineStableChannelIngressIdentity,
   resolveChannelMessageIngress,
@@ -50,7 +54,7 @@ const result = await resolveChannelMessageIngress({
   },
   allowFrom: config.allowFrom,
   groupAllowFrom: config.groupAllowFrom,
-  accessGroups: cfg.accessGroups,
+  accessGroups: config.accessGroups,
   route,
   readStoreAllowFrom,
   command: hasControlCommand ? { allowTextCommands: true, hasControlCommand } : undefined,

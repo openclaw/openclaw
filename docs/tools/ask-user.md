@@ -137,3 +137,9 @@ The model-facing contract tells the agent to:
 
 The agent should not use `ask_user` to ask whether it may proceed or to confirm
 its own plan.
+
+## Related
+
+- [Secrets](/tools/secrets) — the credential-safe path when the answer is a secret
+- [Control UI](/web/control-ui) — where the docked answer panel appears
+- [Tools overview](/tools) — the rest of the built-in tool surface

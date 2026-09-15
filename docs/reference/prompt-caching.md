@@ -375,15 +375,11 @@ Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per comp
 - **No effect from `cacheRetention`**: confirm the model key matches `agents.defaults.models["provider/model"]`.
 - **Bedrock Nova requests without cache hits**: set `cacheRetention` explicitly to `short` or `long`, verify that the model is one of the supported variants above, and check that the prefix meets AWS's token limits; `long` still uses a five-minute TTL.
 
-Related docs:
-
-- [Anthropic](/providers/anthropic)
-- [Token use and costs](/reference/token-use)
-- [Session pruning](/concepts/session-pruning)
-- [Gateway configuration reference](/gateway/configuration-reference)
-
 ## Related
 
 - [Token use and costs](/reference/token-use)
 - [API usage and costs](/reference/api-usage-costs)
 - [Usage tracking](/concepts/usage-tracking)
+- [Anthropic](/providers/anthropic)
+- [Session pruning](/concepts/session-pruning)
+- [Gateway configuration reference](/gateway/configuration-reference)
