@@ -106,6 +106,25 @@ describe("plugin install plan helpers", () => {
     });
   });
 
+  it("resolves Telnyx to its integrity-pinned npm artifact", () => {
+    expect(resolveCatalogOfficialExternalInstallPlan("telnyx")).toEqual({
+      pluginId: "telnyx",
+      spec: "@telnyx/openclaw-provider@0.1.0",
+      installSources: [
+        {
+          source: "npm",
+          spec: "@telnyx/openclaw-provider@0.1.0",
+          expectedIntegrity:
+            "sha512-NzIsRFvl/o0KlvOy+OzlXLfYSr6JYAhoaW4uQL2Obj817TXjG0rgguYsewVr7YvdNCukgS1mEK9OJVfYK8N1iQ==",
+        },
+        {
+          source: "clawhub",
+          spec: "clawhub:@team-telnyx/openclaw-provider@0.1.0",
+        },
+      ],
+    });
+  });
+
   it.each(["matrix@latest", "@openclaw/matrix@latest"])(
     "uses declared sources and retains default intent for %s",
     (rawSpec) => {
