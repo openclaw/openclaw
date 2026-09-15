@@ -1095,6 +1095,10 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-shell {
+  --sidebar-inset: 8px;
+  --sidebar-lead: 20px;
+  --sidebar-row-gap: 8px;
+  --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
   --sidebar-pad-x: 10px;
   --sidebar-session-link-padding-block: 4px;
   --sidebar-session-row-floor: 30px;
@@ -1260,11 +1264,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-sessions,
 .sidebar-online {
-  --sidebar-inset: 8px;
-  --sidebar-lead: 20px;
-  --sidebar-row-gap: 8px;
-  --sidebar-text-offset: calc(var(--sidebar-inset) + var(--sidebar-lead) + var(--sidebar-row-gap));
-
   display: flex;
   flex-direction: column;
   gap: 8px;
