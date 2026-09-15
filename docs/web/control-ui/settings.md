@@ -214,6 +214,24 @@ Reading the catalog and searching ClawHub require `operator.read`. Installing,
 enabling, disabling, or removing a plugin and changing MCP servers require
 `operator.admin`; those actions stay disabled for read-only operators.
 
+Plugin-declared credential fields support masked key entry and an inline key-signup
+link. The eye reveals only the key you are entering; it never retrieves the stored
+secret. Leaving an empty input unchanged preserves its existing credential.
+
+Administrators can inspect and edit a declared credential's secret reference: its
+source (`env`, `file`, `exec`, or `store`), provider alias, and identifier. The
+Gateway returns that metadata only for the selected field and current config
+revision, without resolving the secret. **Cancel** removes this field's unsaved
+reference change, including after a rejected save, while preserving other edits.
+**Save** waits for the existing Settings write to be acknowledged; the dialog
+cannot be dismissed while that write is pending. If the saved value cannot be
+confirmed, the dialog keeps the draft and displays the recovery error. Failed
+writes retain the draft, and stale revisions require a fresh read. Read-only config
+permits inspection but disables changes. Environment fallback is inspect-only:
+change the variable at its source. Saving a reference does not rotate a secret or
+verify a provider connection. Fields without declared credential metadata retain
+the ordinary schema editor.
+
 ClawHub installs run through the Gateway and keep the same trust, integrity,
 and plugin-install policy checks as other Gateway-mediated installs. Install,
 enable, disable, remove, and Reload actions wait for runtime application without

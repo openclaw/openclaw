@@ -2,6 +2,7 @@
 import type { Static, TSchema } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { PluginCredentialDescriptorSchema } from "./plugin-credentials.js";
 import type { PluginDeclaredSurfaceGroup } from "./plugin-declared-surface-groups.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -583,6 +584,7 @@ export const PluginsInspectResultSchema = closedObject({
       publisherName: Type.Optional(NonEmptyString),
     }),
   ),
+  credentials: Type.Optional(Type.Array(PluginCredentialDescriptorSchema)),
   plugin: closedObject({
     id: NonEmptyString,
     name: NonEmptyString,

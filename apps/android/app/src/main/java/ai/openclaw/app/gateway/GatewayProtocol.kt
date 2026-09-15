@@ -949,6 +949,7 @@ enum class GatewayMethod(
   SessionsActivitySummaryEnsure("sessions.activitySummary.ensure"),
   ControlUiSessionPullRequestsChecks("controlUi.sessionPullRequests.checks"),
   DiagnosticsCpuProfile("diagnostics.cpuProfile"),
+  PluginsCredentialsInspect("plugins.credentials.inspect"),
 }
 
 enum class GatewayEvent(

@@ -31,6 +31,7 @@ import type { PluginsConsentController } from "./plugins-consent-controller.ts";
 import { renderPluginsHubHeader } from "./plugins-hub-header.ts";
 import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
 import type { PluginsRouteData } from "./route-data.ts";
+import type { PluginSettingsEditor } from "./settings-editor.ts";
 import {
   pluginAdvancedSchema,
   pluginConfigSchema,
@@ -80,6 +81,7 @@ type PluginsPageViewActions = {
 };
 
 export type PluginsPageViewModel = {
+  renderCredential?: PluginSettingsEditor["renderCredential"];
   context: ApplicationContext;
   routeData?: PluginsRouteData;
   surface: "discovery" | "settings";
@@ -173,6 +175,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
       pluginId,
       inspection: detail?.inspection ?? null,
       inspectionError: detail?.error ?? null,
+      renderCredential: model.renderCredential,
       tools: detail?.tools,
       onOpenTool: actions.openTool,
       settingsHref: `${current?.pathname ?? ""}?${search}`,

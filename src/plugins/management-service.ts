@@ -24,6 +24,7 @@ import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
+import { resolvePluginCredentialDescriptors } from "./credential-descriptors.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import {
   emptyInstalledPluginComponents,
@@ -144,7 +145,7 @@ function resolveManagedPluginMetadataParams(config: OpenClawConfig, env: NodeJS.
   };
 }
 
-function resolveManagedPluginMetadata(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
+export function resolveManagedPluginMetadata(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
   const boot = getProcessGatewayPluginMetadataSnapshot();
   const candidate = getProcessPluginCache().desiredMetadata;
   return candidate && candidate.boot === boot
@@ -677,6 +678,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
         declared,
         components: projectInstalledPluginComponents({ manifest, declared }),
         overview: readInstalledPluginOverview(manifest),
+        credentials: manifest ? resolvePluginCredentialDescriptors(params.config, manifest) : [],
         reviewToken: computeDeclaredSurfaceHash(declared),
         ...(trust ? { trust } : {}),
       };

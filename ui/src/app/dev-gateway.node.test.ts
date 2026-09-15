@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { createLogger, createServer as createViteServer } from "vite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { getFreePort } from "../../../src/test-utils/ports.js";
+import { getDeterministicFreePortBlock } from "../../../src/test-utils/ports.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createControlUiDevGateway } from "../../config/control-ui-dev-gateway.ts";
 import controlUiViteConfig from "../../vite.config.ts";
@@ -154,7 +154,7 @@ describe("configured UI development Gateway", () => {
         logger.error = (message, options) => {
           recordError("vite-error", options?.error ?? new Error(message));
         };
-        const uiPort = await getFreePort();
+        const uiPort = await getDeterministicFreePortBlock({ offsets: [0] });
         const uiOrigin = `http://127.0.0.1:${uiPort}`;
         const webSocketOptions = {
           // Removal: use ws's `origin` option after Bun's built-in client honors it.
@@ -167,7 +167,9 @@ describe("configured UI development Gateway", () => {
           logLevel: "silent",
           customLogger: logger,
           optimizeDeps: { noDiscovery: true, include: [] },
-          server: { ...config.server, port: uiPort },
+          // This transport fixture does not exercise file watching; native watchers
+          // can outlive Vite shutdown and abort macOS workers (nodejs/node#65100).
+          server: { ...config.server, port: uiPort, watch: null },
         });
         const gateway = createControlUiDevGateway(upstreamUrl)!.gateway;
         vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", gateway);

@@ -15,6 +15,47 @@ const enPluginManagement = {
       reset: "Reset value",
       ask: "Ask OpenClaw",
     },
+    credentials: {
+      stored: "••••••••",
+      replace: "Enter a new key to replace the stored credential.",
+      reveal: "Show entered key",
+      hide: "Hide entered key",
+      signup: "Get an API key",
+      useReference: "Use a secret reference",
+      editReference: "Edit reference",
+      viewSource: "View source",
+      fromSource: "From {source}",
+      environment: "From environment · {name}",
+      referenceTitle: "Secret reference",
+      referenceHelp:
+        "Choose where this credential is stored. Saving changes the reference only; it does not rotate or test the secret.",
+      environmentHelp:
+        "This credential comes from {name} in the Gateway environment. Change that environment variable at its source. Its value is never shown here.",
+      source: "Source",
+      provider: "Provider",
+      identifier: "Identifier",
+      sources: {
+        env: "Environment",
+        file: "File",
+        exec: "Command provider",
+        store: "Secret store",
+      },
+      help: {
+        env: "Use the environment variable name, for example SEARCH_API_KEY.",
+        file: "Use a JSON pointer such as /search/apiKey, or value for a single-value file provider.",
+        exec: "Use the identifier accepted by the configured command provider, such as team/search-key.",
+        store: "Use the stored secret name, for example SEARCH_API_KEY.",
+      },
+      unresolved:
+        "This reference is currently unresolved. The configured source must provide the secret before the plugin can use it.",
+      invalid:
+        "The setting could not accept this value. Check the source, provider, and identifier.",
+      invalidStored:
+        "This credential has an invalid stored value. Replace it or edit its reference.",
+      stale: "Configuration changed. Reload this reference before editing it.",
+      saveFailed:
+        "The credential could not be saved. Your draft is still available; try saving again.",
+    },
     breadcrumb: "Breadcrumb",
     settingsDescription: "Configure installed plugins, access, and lifecycle.",
     settingsTabs: "Plugin settings sections",

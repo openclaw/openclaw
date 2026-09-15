@@ -37,6 +37,7 @@ import type { PluginInstallWizardState } from "./install-wizard-model.ts";
 import { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
 import { confirmPluginUninstall } from "./plugin-lifecycle-confirmation.ts";
 import type { PluginRowMessage } from "./plugin-row-message.ts";
+import { PluginSettingsController } from "./plugin-settings-controller.ts";
 import {
   committedMutationMessage,
   PluginsConsentController,
@@ -108,6 +109,17 @@ class PluginsPage extends OpenClawLightDomElement {
     getClient: () => this.gateway.client,
     isConnected: () => this.gateway.connected,
     onEntriesChanged: () => this.icons.syncCatalog(this.discovery, this.catalogDetail?.result),
+  });
+  private readonly settings = new PluginSettingsController({
+    gateway: this.gateway,
+    getContext: () => this.context,
+    getDetail: () => this.detail,
+    canInspect: () => hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+    canEdit: () => this.canEditConfig(),
+    onEdit: () => {
+      this.pluginConfigEditPending = true;
+    },
+    isSettings: () => this.installedDetailTab === "configuration",
   });
 
   private readonly consentController = new PluginsConsentController({
@@ -448,23 +460,6 @@ class PluginsPage extends OpenClawLightDomElement {
     return this.result?.mutationAllowed === true && this.accessBlockedReason() === null;
   }
 
-  private editConfig(path: Array<string | number>, value: unknown): boolean {
-    if (!this.canEditConfig()) {
-      return false;
-    }
-    this.pluginConfigEditPending = true;
-    const runtime = this.context.runtimeConfig;
-    if (value === undefined) {
-      runtime.removeFormValue(path);
-    } else {
-      runtime.patchForm(path, value);
-    }
-    if (this.detail && this.installedDetailTab === "configuration") {
-      void runtime.flushFormChanges();
-    }
-    return true;
-  }
-
   private canEditConfig(): boolean {
     const runtimeConfig = this.context.runtimeConfig;
     return this.accessBlockedReason(runtimeConfig.canSet, runtimeConfig.state.connected) === null;
@@ -656,6 +651,7 @@ class PluginsPage extends OpenClawLightDomElement {
       discovery: this.discovery,
       consentController: this.consentController,
       installWizardController: this.installWizardController,
+      renderCredential: this.settings.render,
       actions: {
         selectHubTab: (tab) => this.selectHubTab(tab),
         closeCatalogDetail: () => this.closeCatalogDetail(),
@@ -689,8 +685,8 @@ class PluginsPage extends OpenClawLightDomElement {
         reload: (pluginId, rowKey) =>
           void this.consentController.mutateInstalledPlugin(pluginId, "reload", rowKey),
         uninstall: (pluginId, rowKey) => void this.uninstall(pluginId, rowKey),
-        patchConfig: (path, value) => this.editConfig(path, value),
-        removeConfig: (path) => this.editConfig(path, undefined),
+        patchConfig: (path, value) => this.settings.patch(path, value),
+        removeConfig: (path) => this.settings.patch(path, undefined),
         reloadConfig: () => {
           this.pluginConfigEditPending = false;
           void this.context.runtimeConfig.discardDraft({ reloadOnly: true });

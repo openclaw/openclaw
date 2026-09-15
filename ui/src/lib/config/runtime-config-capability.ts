@@ -44,6 +44,8 @@ export type RuntimeConfigCapability = {
   setRaw: (value: string) => void;
   /** Reloads from disk; offline drafts reset locally unless reloadOnly is requested. */
   discardDraft: (options?: { reloadOnly?: boolean }) => Promise<void>;
+  /** Reconciles one canceled field with saved config while preserving unrelated draft edits. */
+  discardFormValue: (path: Array<string | number>) => Promise<boolean>;
   /** Pauses/resumes all config writes (autosave + manual) while e.g. the app updater runs. */
   setWritesSuspended: (suspended: boolean, refreshAdmission?: () => Promise<void>) => void;
   /** Resolves once no config write is in flight (used as an updater barrier). */
@@ -233,6 +235,7 @@ export function createRuntimeConfigCapability(
     removeFormValue: writes.removeFormValue,
     setRaw: writes.setRaw,
     discardDraft: writes.discardDraft,
+    discardFormValue: writes.discardFormValue,
     setWritesSuspended: writes.setWritesSuspended,
     waitForPendingWrites: writes.waitForPendingWrites,
     flushFormChanges: writes.flushFormChanges,

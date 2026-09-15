@@ -1839,6 +1839,8 @@ export const en: TranslationMap & {
       "Settings restoration could not be confirmed. Your draft is kept. Check {path} before saving again.",
     recoveryBackup: "Inspect the recovery backup at {path}.",
     recoveryReload: "Discard draft and reload",
+    discardUnconfirmed:
+      "The last save could not be confirmed. Your draft is kept. Reload configuration before discarding this setting.",
     autoSaveConflict: "Settings changed elsewhere",
     retry: "Retry",
     applyChanges: "Apply changes",
