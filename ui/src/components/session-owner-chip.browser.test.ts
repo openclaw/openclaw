@@ -1,8 +1,10 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
-import { userEvent } from "vitest/browser";
+import { page, userEvent } from "vitest/browser";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import "../test-helpers/load-styles.ts";
+import { resolveTheme, syncThemePaletteStylesheet, type ThemeName } from "../app/theme.ts";
+import { THEME_TYPEFACES, TYPEFACES, syncTypefaceStylesheets } from "../app/typography.ts";
 import { renderSessionLeadingState } from "./session-leading-indicator.ts";
 import "./session-owner-chip.ts";
 
@@ -28,10 +30,84 @@ function contrastRatio(first: number, second: number): number {
 }
 
 const originalTheme = document.documentElement.getAttribute("data-theme-mode");
+const originalPalette = document.documentElement.getAttribute("data-theme");
+
+async function applyTheme(theme: ThemeName, mode: "light" | "dark") {
+  await new Promise<void>((resolve) => {
+    syncThemePaletteStylesheet(theme, resolve);
+  });
+  document.documentElement.dataset.theme = resolveTheme(theme, mode);
+  document.documentElement.dataset.themeMode = mode;
+  const typefaces = THEME_TYPEFACES[theme];
+  syncTypefaceStylesheets(typefaces);
+  await expect
+    .poll(
+      () =>
+        document.querySelector<HTMLLinkElement>(`#openclaw-typeface-${typefaces.ui}`)?.sheet !=
+        null,
+    )
+    .toBe(true);
+  await document.fonts.load(`700 9px ${TYPEFACES[typefaces.ui].stack}`, "AB+241");
+}
+
+async function expectCenteredInk(face: HTMLElement) {
+  const base64 = await page.elementLocator(face).screenshot({ save: false });
+  const image = new Image();
+  image.src = `data:image/png;base64,${base64}`;
+  await image.decode();
+  const canvas = document.createElement("canvas");
+  canvas.width = image.width;
+  canvas.height = image.height;
+  const context = canvas.getContext("2d")!;
+  context.fillStyle = getComputedStyle(face).color;
+  context.fillRect(0, 0, 1, 1);
+  const foreground = context.getImageData(0, 0, 1, 1).data;
+  context.drawImage(image, 0, 0);
+  const pixels = context.getImageData(0, 0, image.width, image.height).data;
+  let left = image.width,
+    right = -1,
+    top = image.height,
+    bottom = -1;
+  for (let y = 0; y < image.height; y += 1) {
+    for (let x = 0; x < image.width; x += 1) {
+      // Exclude the circular edge and the peer behind this topmost face.
+      if (Math.hypot(x + 0.5 - image.width / 2, y + 0.5 - image.height / 2) > image.width * 0.375) {
+        continue;
+      }
+      const offset = (y * image.width + x) * 4;
+      if (
+        [0, 1, 2].every(
+          (channel) => Math.abs(pixels[offset + channel]! - foreground[channel]!) <= 40,
+        )
+      ) {
+        left = Math.min(left, x);
+        right = Math.max(right, x);
+        top = Math.min(top, y);
+        bottom = Math.max(bottom, y);
+      }
+    }
+  }
+  expect(right).toBeGreaterThan(left);
+  expect(bottom).toBeGreaterThan(top);
+  const scale = image.width / Number.parseFloat(getComputedStyle(face).width);
+  expect(
+    Math.abs((left + right + 1 - image.width) / (2 * scale)),
+    "painted text x",
+  ).toBeLessThanOrEqual(0.5);
+  expect(
+    Math.abs((top + bottom + 1 - image.height) / (2 * scale)),
+    "painted text y",
+  ).toBeLessThanOrEqual(0.5);
+}
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
 afterEach(() => {
   document.body.replaceChildren();
+  if (originalPalette === null) {
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    document.documentElement.setAttribute("data-theme", originalPalette);
+  }
   if (originalTheme === null) {
     document.documentElement.removeAttribute("data-theme-mode");
   } else {
@@ -55,19 +131,21 @@ async function mountOwnerChip(params: {
 
 describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
   it.each(
-    ["light", "dark"].flatMap((theme) =>
-      [2, 3, 5, 12, 13].flatMap((ownerCount) =>
-        ["present", "running", "away", "unread"].map((presence) => ({
-          theme,
-          ownerCount,
-          presence,
-        })),
+    (Object.keys(THEME_TYPEFACES) as ThemeName[])
+      .filter((theme) => theme !== "custom")
+      .flatMap((theme) =>
+        (["light", "dark"] as const).flatMap((mode) =>
+          (theme === "claw" ? [2, 3, 5, 12, 13] : [12]).flatMap((ownerCount) =>
+            (theme === "claw" ? ["present", "running", "away", "unread"] : ["present"]).map(
+              (presence) => ({ theme, mode, ownerCount, presence }),
+            ),
+          ),
+        ),
       ),
-    ),
   )(
-    "keeps $ownerCount owners in an equal pair in $theme while $presence",
-    async ({ theme, ownerCount, presence }) => {
-      document.documentElement.setAttribute("data-theme-mode", theme);
+    "keeps $ownerCount owners in an equal pair in $theme $mode while $presence",
+    async ({ theme, mode, ownerCount, presence }) => {
+      await applyTheme(theme, mode);
       const sidebar = document.createElement("aside");
       sidebar.className = "sidebar sidebar-recent-sessions";
       document.body.append(sidebar);
@@ -229,6 +307,35 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
           `${theme} ${state} text`,
         ).toBeGreaterThanOrEqual(4.5);
       }
+      if (presence === "present") {
+        row.classList.remove("sidebar-recent-session--selected");
+        row.style.zoom = "4";
+        await expectCenteredInk(ownerCount === 2 ? primary : peer);
+      }
+    },
+  );
+
+  it.each(
+    (["light", "dark"] as const).flatMap((mode) =>
+      (["row", "header"] as const).flatMap((size) =>
+        [false, true].map((profile) => ({ mode, size, profile })),
+      ),
+    ),
+  )(
+    "centers a single $size initial in $mode with profile=$profile",
+    async ({ mode, size, profile }) => {
+      await applyTheme("claw", mode);
+      const chip = await mountOwnerChip({});
+      chip.size = size;
+      if (profile) {
+        chip.owner = { ...chip.owner!, identity: { type: "profile", id: "profile-ada" } };
+      }
+      await chip.updateComplete;
+      await Promise.all(
+        [...chip.querySelectorAll("openclaw-viewer-avatar")].map((avatar) => avatar.updateComplete),
+      );
+      chip.style.zoom = "4";
+      await expectCenteredInk(chip.querySelector<HTMLElement>(".session-owner-chip")!);
     },
   );
 

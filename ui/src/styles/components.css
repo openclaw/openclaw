@@ -160,6 +160,13 @@ openclaw-session-owner-chip {
   opacity: 0.45;
 }
 
+/* Center capitals and counts by the font's cap box, excluding its descender space. */
+.session-owner-chip__initials,
+.session-owner-stack__count,
+openclaw-session-owner-chip .viewer-avatar__initials {
+  text-box: trim-both cap alphabetic;
+}
+
 .session-owner-chip .viewer-avatar {
   width: 100%;
   height: 100%;
@@ -198,10 +205,9 @@ openclaw-session-owner-chip {
 }
 
 .session-owner-stack__overflow {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: color-mix(in srgb, var(--text-strong) 26%, var(--bg-elevated));
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--text-strong) 26%, var(--sidebar-bg, var(--bg)));
   color: var(--text-strong);
   font-weight: 700;
   line-height: 1;

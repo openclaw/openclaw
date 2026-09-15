@@ -157,7 +157,7 @@ class SessionOwnerChip extends OpenClawLightDomElement {
         >${
           owner.identity?.type === "agent" || avatar.kind === "profile"
             ? renderSessionOwnerAvatar({ ...owner, id: owner.id })
-            : initials
+            : html`<span class="session-owner-chip__initials">${initials}</span>`
         }</span
       >
     `;
@@ -179,7 +179,9 @@ class SessionOwnerChip extends OpenClawLightDomElement {
         ${
           this.participantCount === 1 && participant
             ? renderSessionOwnerAvatar({ ...participant, id: participant.identity.id })
-            : html`<span class="session-owner-stack__overflow">+${this.participantCount}</span>`
+            : html`<span class="session-owner-stack__overflow"
+                ><span class="session-owner-stack__count">+${this.participantCount}</span></span
+              >`
         }
       </span>
       ${chip}
