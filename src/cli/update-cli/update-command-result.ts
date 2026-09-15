@@ -309,15 +309,16 @@ export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {
   meta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
   result: UpdateRunResult;
   jsonMode: boolean;
+  env: NodeJS.ProcessEnv | undefined;
 }): Promise<void> {
   if (!params.meta) {
     return;
   }
   try {
-    await writeControlPlaneUpdateRestartSentinel({
-      meta: params.meta,
-      result: params.result,
-    });
+    await writeControlPlaneUpdateRestartSentinel(
+      { meta: params.meta, result: params.result },
+      params.env,
+    );
   } catch (err) {
     const message = `Failed to write update.run restart sentinel: ${String(err)}`;
     if (params.jsonMode) {
@@ -332,12 +333,13 @@ export async function markControlPlaneUpdateRestartSentinelFailureBestEffort(par
   meta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
   reason: string;
   jsonMode: boolean;
+  env: NodeJS.ProcessEnv | undefined;
 }): Promise<void> {
   if (!params.meta) {
     return;
   }
   try {
-    await markControlPlaneUpdateRestartSentinelFailure(params.reason, params.meta);
+    await markControlPlaneUpdateRestartSentinelFailure(params.reason, params.meta, params.env);
   } catch (err) {
     const message = `Failed to mark update.run restart sentinel failed: ${String(err)}`;
     if (params.jsonMode) {

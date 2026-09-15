@@ -57,6 +57,13 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     throw new Error("Deferred native service loading is not supported on this platform.");
   }
   const assertCurrent = createUpdateCommandFinalizationFence(params);
+  // Final publication follows restoration of the caller's environment. Retain
+  // the admitted run's state for both notice policy and its matching sentinel.
+  const sentinelOptions = {
+    meta: params.controlPlaneUpdateSentinelMeta,
+    jsonMode: Boolean(params.opts.json),
+    env: params.opts.run?.env ?? params.ownedManagedUpdateEnv,
+  };
   assertCurrent();
   await assertUpdateCommandPackageFinalization(params);
   assertCurrent();
@@ -136,9 +143,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     result.recovery = settled.settlementFailed ? undefined : result.recovery;
     const reportDowntime = !settled.settlementFailed && pendingRestartAtMs === undefined;
     if (pendingNotify) {
-      const meta = params.controlPlaneUpdateSentinelMeta;
-      const jsonMode = Boolean(params.opts.json);
-      await writeControlPlaneUpdateRestartSentinelBestEffort({ meta, result, jsonMode });
+      await writeControlPlaneUpdateRestartSentinelBestEffort({ ...sentinelOptions, result });
     }
     return publishUpdateCommandTerminalResult(params, result, {
       rolledBack: rolledBack && !settled.settlementFailed,
@@ -333,9 +338,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     if (notify && recoverService) {
       pendingNotify = false;
       await writeControlPlaneUpdateRestartSentinelBestEffort({
-        meta: params.controlPlaneUpdateSentinelMeta,
+        ...sentinelOptions,
         result: finalResult,
-        jsonMode: Boolean(params.opts.json),
       });
     }
     // The recovering Gateway reads this notification at startup. Persist once
@@ -500,9 +504,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     }
     const notifyRestart = () =>
       writeControlPlaneUpdateRestartSentinelBestEffort({
-        meta: params.controlPlaneUpdateSentinelMeta,
+        ...sentinelOptions,
         result: buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
-        jsonMode: Boolean(params.opts.json),
       });
     if (!params.coreAlreadyCurrent) {
       await notifyRestart();
@@ -596,9 +599,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
         // The Gateway may have consumed its sentinel. Update only the existing
         // receipt so a failed repair cannot deliver a duplicate notification.
         await markControlPlaneUpdateRestartSentinelFailureBestEffort({
-          meta: params.controlPlaneUpdateSentinelMeta,
+          ...sentinelOptions,
           reason: recovered.result.reason ?? verificationFailure,
-          jsonMode: Boolean(params.opts.json),
         });
         const reported = await reportResult(recovered.result, false, undefined, false);
         throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported));
@@ -679,9 +681,8 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
       if (retirement.error) {
         defaultRuntime.error(retirement.error);
         await markControlPlaneUpdateRestartSentinelFailureBestEffort({
-          meta: params.controlPlaneUpdateSentinelMeta,
+          ...sentinelOptions,
           reason: "wrapper-retirement-failed",
-          jsonMode: Boolean(params.opts.json),
         });
         const reported = await reportResult(
           {
