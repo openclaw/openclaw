@@ -30,6 +30,8 @@ button deletes the comment. The composer's comment count is a passive indicator.
 Saved comments and their source markers follow the composer's existing draft and
 queue recovery behavior. When you send, each comment is attached as a text file
 containing the selection, comment, and source message reference; its draft marker is removed.
+Hover, keyboard-focus, or tap the sent comment count to read its selection and
+comment. Tap outside the preview to dismiss it.
 
 The headline owns that run's sidebar subtitle instead of heuristic live activity. It is shared with the official iOS and Android session lists. A final done or failed digest remains visible while the session is unread, then the row returns to its normal work subtitle.
 

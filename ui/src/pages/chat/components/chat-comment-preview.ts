@@ -65,17 +65,20 @@ export function renderCommentPreviewChip(
   count: number,
   content: TemplateResult,
   onReveal?: () => void,
+  openOnClick = false,
 ) {
   return html`<openclaw-tooltip
     class="chat-comment-preview"
     placement="top-start"
     .describe=${false}
+    .openOnClick=${openOnClick}
   >
     <span
       class="chat-selection-annotations__chip"
       tabindex="0"
       @pointerenter=${onReveal}
       @focusin=${onReveal}
+      @click=${openOnClick ? onReveal : undefined}
     >
       <span aria-hidden="true">${icons.messageSquare}</span>
       ${t(count === 1 ? "chat.messages.annotationCount" : "chat.messages.annotationsCount", { count: String(count) })}

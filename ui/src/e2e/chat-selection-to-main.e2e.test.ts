@@ -30,6 +30,47 @@ async function selectText(text: Locator) {
 }
 
 suite.define(() => {
+  it("reveals sent comments by touch after reload while draft counts stay passive", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: "en-US" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          historyMessages: [{ role: "assistant", content: selectedText }],
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const source = page.locator(".chat-bubble .chat-text p").filter({ hasText: selectedText });
+        await source.waitFor({ state: "visible" });
+        await selectText(source);
+        await page.getByRole("button", { name: "Add to chat", exact: true }).tap();
+        const editor = page.getByRole("dialog", { name: "Comment", exact: true });
+        await editor.getByRole("textbox").fill("Check the rollback steps. 🦞");
+        await editor.getByRole("button", { name: "Save comment", exact: true }).tap();
+        const preview = page.getByRole("region", { name: "Comments", exact: true });
+        await page.locator(".chat-attachments-preview .chat-selection-annotations__chip").tap();
+        expect(await preview.isVisible()).toBe(false);
+        await page.getByRole("button", { name: "Send message", exact: true }).tap();
+        const request = await gateway.waitForRequest("chat.send");
+        await gateway.emitChatFinal({
+          runId: (request.params as { idempotencyKey: string }).idempotencyKey,
+          text: "Selected passage received.",
+        });
+        await page.reload();
+        const sentChip = page.locator(
+          "openclaw-chat-sent-comments .chat-selection-annotations__chip",
+        );
+        await sentChip.waitFor({ state: "visible" });
+        await sentChip.tap();
+        await page.screenshot({ path: `${suite.artifactDir}/sent-comment-touch.png` });
+        await expect.poll(() => preview.isVisible()).toBe(true);
+        await expect.poll(() => preview.textContent()).toContain(selectedText);
+        await expect.poll(() => preview.textContent()).toContain("Check the rollback steps. 🦞");
+        expect(await preview.locator("button").count()).toBe(0);
+        await page.locator(".agent-chat__composer-shell textarea").tap();
+        await expect.poll(() => preview.isVisible()).toBe(false);
+      },
+    );
+  });
+
   it.each(viewports)(
     "stages, edits, restores, and sends annotations at $width px",
     async (viewport) => {
