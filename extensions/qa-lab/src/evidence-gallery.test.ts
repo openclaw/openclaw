@@ -169,104 +169,41 @@ describe("evidence gallery", () => {
   });
 
   it.each([
-    {
-      kind: "gif-runner-log",
-      file: "artifact.LOG",
-      content: "runner passed\n",
-      mediaKind: "text",
-      preview: "runner passed\n",
-    },
-    {
-      kind: "video-report",
-      file: "artifact.json",
-      content: '{"ok":true}',
-      mediaKind: "json",
-      preview: '{\n  "ok": true\n}',
-    },
-    {
-      kind: "screenshot-validation",
-      file: "artifact.webm",
-      content: "video",
-      mediaKind: "video",
-      preview: null,
-    },
-    {
-      kind: "video-report",
-      file: "artifact.png",
-      content: "image",
-      mediaKind: "image",
-      preview: null,
-    },
-    {
-      kind: "motion-preview-gif",
-      file: "artifact",
-      content: "image",
-      mediaKind: "image",
-      preview: null,
-    },
-    {
-      kind: "video-capture",
-      file: "artifact.capture",
-      content: "video",
-      mediaKind: "video",
-      preview: null,
-    },
-    {
-      kind: "validation-result",
-      file: "artifact.data",
-      content: '{"ok":true}',
-      mediaKind: "json",
-      preview: '{\n  "ok": true\n}',
-    },
-    {
-      kind: "report",
-      file: "artifact.html",
-      content: "<p>report</p>",
-      mediaKind: "text",
-      preview: "<p>report</p>",
-    },
-    {
-      kind: "video-screenshot",
-      file: "artifact.data",
-      content: "image",
-      mediaKind: "image",
-      preview: null,
-    },
-    {
-      kind: "attachment",
-      file: "artifact.data",
-      content: "opaque",
-      mediaKind: "file",
-      preview: null,
-    },
-  ])(
-    "classifies $file with $kind metadata",
-    async ({ kind, file, content, mediaKind, preview }) => {
-      const repoRoot = await createTempRepo();
-      try {
-        const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
-        await fs.mkdir(outputDir, { recursive: true });
-        await fs.writeFile(path.join(outputDir, file), content, "utf8");
-        await writeJson(
-          path.join(outputDir, QA_EVIDENCE_FILENAME),
-          vitestArtifactEvidence({
-            id: "qa-lab.artifact-classification",
-            title: "Artifact classification",
-            artifact: { kind, path: file },
-          }),
-        );
-        const model = await buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot });
-        expect(model.entries[0]?.artifacts[0]).toMatchObject({
-          exists: true,
-          kind,
-          mediaKind,
-          preview,
-        });
-      } finally {
-        await fs.rm(repoRoot, { recursive: true, force: true });
-      }
-    },
-  );
+    ["artifact.LOG", "gif-runner-log", "runner passed\n", "text", "runner passed\n"],
+    ["artifact.json", "video-report", '{"ok":true}', "json", '{\n  "ok": true\n}'],
+    ["artifact.webm", "screenshot-validation", "video", "video", null],
+    ["artifact.png", "video-report", "image", "image", null],
+    ["artifact", "motion-preview-gif", "image", "image", null],
+    ["artifact.capture", "video-capture", "video", "video", null],
+    ["artifact.data", "validation-result", '{"ok":true}', "json", '{\n  "ok": true\n}'],
+    ["artifact.html", "report", "<p>report</p>", "text", "<p>report</p>"],
+    ["artifact.data", "video-screenshot", "image", "image", null],
+    ["artifact.data", "attachment", "opaque", "file", null],
+  ])("classifies $0 with $1 metadata", async (file, kind, content, mediaKind, preview) => {
+    const repoRoot = await createTempRepo();
+    try {
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
+      await fs.mkdir(outputDir, { recursive: true });
+      await fs.writeFile(path.join(outputDir, file), content, "utf8");
+      await writeJson(
+        path.join(outputDir, QA_EVIDENCE_FILENAME),
+        vitestArtifactEvidence({
+          id: "qa-lab.artifact-classification",
+          title: "Artifact classification",
+          artifact: { kind, path: file },
+        }),
+      );
+      const model = await buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot });
+      expect(model.entries[0]?.artifacts[0]).toMatchObject({
+        exists: true,
+        kind,
+        mediaKind,
+        preview,
+      });
+    } finally {
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
 
   it("sanitizes local roots from gallery failure reasons", async () => {
     const repoRoot = await createTempRepo();
