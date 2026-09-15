@@ -54,6 +54,10 @@ export type {
   SandboxBackendHandle,
   SandboxBackendPreparedWorkdirDiscarder,
   SandboxBackendWorkdirValidator,
+  SandboxCapabilityRootDiscovery,
+  SandboxCapabilityRootRequest,
+  SandboxCapabilityTextFile,
+  SandboxEnvironmentCapabilities,
 } from "./backend-handle.types.js";
 
 const SANDBOX_BACKEND_FACTORIES_STATE_KEY = Symbol.for("openclaw.sandboxBackendFactories");

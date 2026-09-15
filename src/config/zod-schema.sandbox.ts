@@ -163,3 +163,47 @@ export const SandboxPruneSchema = z
   })
   .strict()
   .optional();
+
+const SandboxEnvironmentMcpServerRequirementSchema = z
+  .object({
+    command: z.string().min(1),
+    args: z.array(z.string()).optional(),
+    cwd: z.string().min(1).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+  })
+  .strict();
+
+export const SandboxEnvironmentSchema = z
+  .object({
+    capabilityRoots: z
+      .array(
+        z
+          .object({
+            id: z.string().min(1),
+            location: z.object({ type: z.literal("workspace") }).strict(),
+            mcpServers: z
+              .record(z.string().min(1), SandboxEnvironmentMcpServerRequirementSchema)
+              .refine((servers) => Object.keys(servers).length > 0, {
+                message: "capability root must authorize at least one MCP server",
+              }),
+          })
+          .strict(),
+      )
+      .max(8)
+      .superRefine((roots, ctx) => {
+        const ids = new Set<string>();
+        for (const [index, root] of roots.entries()) {
+          if (ids.has(root.id)) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [index, "id"],
+              message: "capability root ids must be unique",
+            });
+          }
+          ids.add(root.id);
+        }
+      })
+      .optional(),
+  })
+  .strict()
+  .optional();

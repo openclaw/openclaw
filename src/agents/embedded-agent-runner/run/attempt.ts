@@ -14,6 +14,8 @@ import {
 import { resolveAgentDir } from "../../agent-scope.js";
 import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
+import { discoverSandboxEnvironmentCapabilities } from "../../sandbox/environment-capabilities.js";
+import { resolveSandboxEnvironmentSkillExclusions } from "../../sandbox/environment-skills.js";
 import {
   clearToolSearchCatalog,
   type ToolSearchCatalogRef,
@@ -138,6 +140,25 @@ export async function runEmbeddedAttempt(
     params.abortSignal,
   );
   try {
+    const environmentCapabilities = await prepare("attempt.environment-capabilities", () =>
+      discoverSandboxEnvironmentCapabilities({
+        backend:
+          sandbox?.enabled &&
+          !params.disableTools &&
+          !params.modelRun &&
+          params.promptMode !== "none" &&
+          !params.forceRestartSafeTools &&
+          params.operation !== "settled-tool-finalization"
+            ? sandbox.backend
+            : undefined,
+        excludePaths: sandbox?.enabled
+          ? resolveSandboxEnvironmentSkillExclusions(sandbox)
+          : undefined,
+        capabilityRoots: sandbox?.environmentCapabilityRoots,
+        signal: runAbortController.signal,
+        warn: (message) => log.warn(message),
+      }),
+    );
     const preparedSkills = await prepare("attempt.skills", () =>
       prepareEmbeddedSkills({
         assertCurrent: () => {
@@ -145,6 +166,7 @@ export async function runEmbeddedAttempt(
           assertActiveRun?.();
         },
         includeCodeModeSkills: true,
+        environmentCapabilities,
         attempt: params,
         effectiveWorkspace,
         sandbox,
@@ -261,6 +283,8 @@ export async function runEmbeddedAttempt(
     const preparedBundleTools = await prepare("attempt.bundle-tools", () =>
       prepStages.measure("bundle-tools", () =>
         prepareEmbeddedAttemptBundleTools({
+          environmentCapabilities,
+          sandbox,
           agentDir,
           attempt: params,
           setup,
