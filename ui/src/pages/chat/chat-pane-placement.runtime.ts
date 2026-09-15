@@ -12,7 +12,11 @@ import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { requestPlaceCatalog } from "../new-session/cloud-target.ts";
-import { projectDevicePlacements } from "../new-session/device-placement.ts";
+import {
+  buildSessionPlacementBlockers,
+  projectDevicePlacements,
+  sessionPlacementDisabledReason,
+} from "../new-session/device-placement.ts";
 import { draftCloudProfileSupportsExecutionMode } from "../new-session/discovery.ts";
 import {
   repositorySessionNeedsWorker,
@@ -36,16 +40,22 @@ async function selectChatPanePlacementTarget(params: {
     method: params.mode === "move" ? "sessions.move" : "sessions.dispatch",
     requiredScope: "operator.write",
   });
+  const deviceDisabledReason = !workerAccess.allowed
+    ? workerAccess.reason
+    : sessionPlacementDisabledReason(
+        buildSessionPlacementBlockers({
+          runtimeUnsupportedReason:
+            runtime && !runtime.devicePlacement
+              ? t("newSession.deviceRuntimeUnsupported")
+              : undefined,
+        }),
+      );
   return await showSessionPlacementTargetDialog({
     mode: params.mode,
     sessionLabel: params.row.label || params.row.key,
     activeRun: params.row.hasActiveRun === true,
     gatewayDisabledReason: gatewayAccess.allowed ? undefined : gatewayAccess.reason,
-    deviceDisabledReason: !workerAccess.allowed
-      ? workerAccess.reason
-      : runtime && !runtime.devicePlacement
-        ? t("newSession.deviceRuntimeUnsupported")
-        : undefined,
+    deviceDisabledReason,
     profileDisabledReason: (profile) => {
       if (!workerAccess.allowed) {
         return workerAccess.reason;
@@ -59,12 +69,41 @@ async function selectChatPanePlacementTarget(params: {
         : undefined;
     },
     loadCatalog: async () => {
-      const catalog = await requestPlaceCatalog(params.client, runtime?.id);
+      const workspacePath =
+        (typeof (params.row as { cwd?: unknown }).cwd === "string"
+          ? ((params.row as { cwd?: string }).cwd ?? "").trim()
+          : "") ||
+        params.row.spawnedCwd?.trim() ||
+        params.row.sessionRoot?.trim() ||
+        params.row.worktree?.repoRoot?.trim() ||
+        "";
+      const catalog = await requestPlaceCatalog(params.client, {
+        runtimeId: runtime?.id,
+        workspacePath,
+      });
+      const catalogDisabledReason = sessionPlacementDisabledReason(
+        buildSessionPlacementBlockers({
+          runtimeUnsupportedReason:
+            runtime && !runtime.devicePlacement
+              ? t("newSession.deviceRuntimeUnsupported")
+              : undefined,
+          workspaceHasEscapingSymlinks:
+            catalog.sessionPlacement?.workspaceHasEscapingSymlinks === true,
+          missingPreparedAuth: catalog.sessionPlacement?.missingPreparedAuth === true,
+        }),
+      );
+      const disabledReason = !workerAccess.allowed
+        ? workerAccess.reason
+        : (catalogDisabledReason ?? deviceDisabledReason);
       return {
         profiles: hasOperatorAdminAccess(params.gatewaySnapshot.hello?.auth ?? null)
           ? catalog.profiles
           : [],
-        devices: projectDevicePlacements(catalog.environments, runtime?.devicePlacement),
+        devices: projectDevicePlacements(
+          catalog.environments,
+          runtime?.devicePlacement,
+          disabledReason,
+        ),
       };
     },
   });

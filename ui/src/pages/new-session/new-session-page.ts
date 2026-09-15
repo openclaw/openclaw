@@ -108,6 +108,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
         },
         agentsHydrated: this.place?.agentsHydrated ?? false,
         runtimeId: this.place?.devicePlacementRuntime()?.id ?? "",
+        workspacePath: this.place?.folder?.trim() || this.place?.workspacePath() || "",
       }),
       {
         requestUpdate: () => this.requestUpdate(),

@@ -93,8 +93,7 @@ export function renderNewSessionPlaceControls({
     deviceId: place.deviceId,
     autoDevice: place.autoDevice,
     devicePlacement: place.devicePlacementRuntime()?.devicePlacement,
-    deviceDisabledReason:
-      place.modelControl.devicePlacementUnsupportedReason() ?? gateway.deviceCatalogDisabledReason,
+    deviceDisabledReason: place.sessionPlacementDisabledReason(),
   });
   const projectState = resolveProjectChip({
     folder: place.folder,

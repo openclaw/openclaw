@@ -1,4 +1,3 @@
-import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   type DesktopObserveParams,
   type EnvironmentSummary,
@@ -17,8 +16,6 @@ import {
 import { projectPairedDeviceNodeBindings } from "../../infra/device-pairing-node-state.js";
 import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
-import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
-import type { NodeListNode } from "../../shared/node-list-types.js";
 import { isDesktopCredentialsRequiredError } from "../desktop/host-source-errors.js";
 import { getNodeDesktopService } from "../desktop/node-source-context.js";
 import {
@@ -27,147 +24,31 @@ import {
 } from "../desktop/observe-requester.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
-import {
-  isNodeCommandAllowed,
-  resolveNodeCommandAllowlist,
-  resolveRequiredNodeCommandAuthority,
-} from "../node-command-policy.js";
 import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
-import { readNodeSessionWithheldCommands, type NodeSession } from "../node-registry.js";
 import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
-import type { WorkerEnvironmentState } from "../worker-environments/state.js";
+import {
+  applySessionPlacementDisabledReasonToNodes,
+  resolveEnvironmentsListSessionPlacement,
+} from "../worker-environments/session-placement-preflight.js";
 import { formatForLog } from "../ws-log.js";
+import {
+  GATEWAY_ENVIRONMENT,
+  summarizeNodeEnvironment,
+  summarizeWorkerEnvironment,
+} from "./environments-summary.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-const GATEWAY_ENVIRONMENT: EnvironmentSummary = {
-  id: "gateway",
-  type: "local",
-  label: "Gateway local",
-  status: "available",
-  platform: process.platform,
-  sessionHost: true,
-  trust: "persistent",
-  capabilities: ["agent.run", "sessions", "tools", "workspace"],
-};
-const WORKER_STATUS: Record<WorkerEnvironmentState, EnvironmentSummary["status"]> = {
-  requested: "starting",
-  provisioning: "starting",
-  bootstrapping: "starting",
-  ready: "available",
-  attached: "available",
-  idle: "available",
-  draining: "stopping",
-  destroying: "stopping",
-  destroyed: "unavailable",
-  failed: "error",
-  orphaned: "error",
-};
-function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): string[] {
-  return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
-}
-function summarizeNodeEnvironment(
-  node: NodeListNode,
-  config: Parameters<typeof resolveNodeCommandAllowlist>[0],
-  requiredCommands: readonly string[],
-  liveNode: NodeSession | undefined,
-): EnvironmentSummary {
-  // Expose both declared capabilities and command names so older node
-  // runtimes still advertise useful execution surfaces in one stable list.
-  const capabilities = uniqueSortedStrings(node.caps, node.commands);
-  const platform = node.platform?.trim();
-  const allowlist =
-    node.connected === true
-      ? resolveNodeCommandAllowlist(config, {
-          platform: node.platform,
-          deviceFamily: node.deviceFamily,
-          commands: node.commands,
-          approvedCommands: node.commands,
-        })
-      : undefined;
-  const invocableCommands = allowlist
-    ? uniqueSortedStrings(node.commands)
-        .filter(
-          (command) =>
-            command.length <= 128 &&
-            isNodeCommandAllowed({ command, declaredCommands: node.commands, allowlist }).ok,
-        )
-        .slice(0, 128)
-    : [];
-  const desktop = invocableCommands.includes(NODE_DESKTOP_STREAM_COMMAND);
-  const requiredNodeCommand =
-    allowlist && liveNode
-      ? resolveRequiredNodeCommandAuthority({
-          requiredCommands,
-          declaredCommands: liveNode.declaredCommands,
-          effectiveCommands: liveNode.commands,
-          withheldCommands: readNodeSessionWithheldCommands(liveNode),
-          allowlist,
-        })
-      : undefined;
-  return {
-    id: `node:${node.nodeId}`,
-    type: "node",
-    label: node.displayName ?? node.nodeId,
-    status: node.connected ? "available" : "unavailable",
-    ...(platform ? { platform } : {}),
-    sessionHost: node.sessionHost === true,
-    ...(node.workerSlots ? { workerSlots: { ...node.workerSlots } } : {}),
-    ...(node.workerBundle ? { workerBundle: structuredClone(node.workerBundle) } : {}),
-    ...(node.lastConnectedAtMs !== undefined ? { lastConnectedAtMs: node.lastConnectedAtMs } : {}),
-    ...(node.lastDisconnectedAtMs !== undefined
-      ? { lastDisconnectedAtMs: node.lastDisconnectedAtMs }
-      : {}),
-    ...(node.lastSeenAtMs !== undefined ? { lastSeenAtMs: node.lastSeenAtMs } : {}),
-    ...(node.lastSeenReason ? { lastSeenReason: node.lastSeenReason } : {}),
-    trust: "persistent",
-    ...(desktop ? { desktop: true } : {}),
-    ...(liveNode?.desktopAvailability
-      ? { desktopAvailability: { ...liveNode.desktopAvailability } }
-      : {}),
-    ...(capabilities.length > 0 ? { capabilities } : {}),
-    ...(invocableCommands.length > 0 ? { invocableCommands } : {}),
-    ...(requiredNodeCommand ? { requiredNodeCommand } : {}),
-    ...(node.issues?.length ? { issues: [...node.issues] } : {}),
-  };
-}
-/** Projects a durable worker row without exposing its SSH credential reference. */
-export function summarizeWorkerEnvironment(
-  record: WorkerEnvironmentServiceRecord,
-  now = Date.now(),
-): EnvironmentSummary {
-  return {
-    id: record.environmentId,
-    type: "worker",
-    status: WORKER_STATUS[record.state],
-    ...(record.sharedHost === null
-      ? {}
-      : { trust: record.sharedHost ? "persistent" : "disposable" }),
-    ...(record.desktopAvailable ? { desktop: true } : {}),
-    ...(record.preparation
-      ? { preparation: { purpose: record.preparation.purpose, key: record.preparation.key } }
-      : {}),
-    worker: {
-      profileId: record.profileId,
-      providerId: record.providerId,
-      ...(record.leaseId ? { leaseId: record.leaseId } : {}),
-      state: record.state,
-      ageMs: Math.max(0, Math.trunc(now - record.createdAtMs)),
-      ...(record.state === "idle" && record.idleSinceAtMs !== null
-        ? { idleMs: Math.max(0, Math.trunc(now - record.idleSinceAtMs)) }
-        : {}),
-      attachedSessionIds: uniqueSortedStrings(record.attachedSessionIds),
-      tunnelStatus: record.tunnelStatus,
-      ...((record.state === "failed" || record.state === "orphaned") && record.error
-        ? { error: record.error }
-        : {}),
-      ...(record.desktopAvailable ? { desktop: true } : {}),
-      ...(record.desktopApps.length > 0 ? { desktopApps: [...record.desktopApps] } : {}),
-    },
-  };
-}
+export { summarizeWorkerEnvironment } from "./environments-summary.js";
+
+/**
+ * Projects gateway-visible environments for the session host picker.
+ * Runtime-scoped requiredNodeCommand authority is included when runtimeId is set.
+ * Session-scoped symlink / prepared-auth blockers are stamped by environments.list
+ * via resolveEnvironmentsListSessionPlacement when workspacePath / runtimeId are set.
+ */
 export async function listGatewayEnvironments(
   context: GatewayRequestContext,
   workers = listWorkerEnvironments(context),
@@ -481,7 +362,15 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateEnvironmentsListParams, "environments.list", respond)) {
       return;
     }
-    if (params.runtimeId) {
+    const runtimeId =
+      typeof params.runtimeId === "string" && params.runtimeId.trim()
+        ? params.runtimeId.trim()
+        : undefined;
+    const workspacePath =
+      typeof params.workspacePath === "string" && params.workspacePath.trim()
+        ? params.workspacePath.trim()
+        : undefined;
+    if (runtimeId || workspacePath) {
       const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
       const access = authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, scopes);
       if (!access.allowed) {
@@ -495,13 +384,31 @@ export const environmentsHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       const workers = listWorkerEnvironments(context);
-      const environments = await listGatewayEnvironments(context, workers, params.runtimeId);
+      const config = context.getRuntimeConfig();
+      const [listed, placement] = await Promise.all([
+        listGatewayEnvironments(context, workers, runtimeId),
+        resolveEnvironmentsListSessionPlacement({
+          config,
+          runtimeId,
+          workspacePath,
+        }),
+      ]);
+      const { sessionPlacement, sessionDisabledReason, hasSessionPlacement } = placement;
       const summarizedAtMs = Date.now();
-      environments.push(
+      const environments = [
+        ...applySessionPlacementDisabledReasonToNodes(listed, sessionDisabledReason),
         ...workers.map((record) => summarizeWorkerEnvironment(record, summarizedAtMs)),
-      );
+      ];
       const profiles = await listWorkerProfilesWithMachines(context);
-      respond(true, { environments, ...(profiles.length > 0 ? { profiles } : {}) }, undefined);
+      respond(
+        true,
+        {
+          environments,
+          ...(profiles.length > 0 ? { profiles } : {}),
+          ...(hasSessionPlacement ? { sessionPlacement } : {}),
+        },
+        undefined,
+      );
     });
   },
   "environments.status": async ({ params, respond, context }) => {

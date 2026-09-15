@@ -139,6 +139,8 @@ function createEnvironmentSummaryProperties() {
         key: NonEmptyString,
       }),
     ),
+    /** Session-scoped placement blocker reason projected for the host picker. */
+    disabledReason: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
   };
 }
 
@@ -152,9 +154,11 @@ export const EnvironmentSummarySchema = closedObject({
   requiredNodeCommand: Type.Optional(RequiredNodeCommandSchema),
 });
 
-/** Optional runtime scope for listing known environments. */
+/** Optional runtime / workspace scope for listing known environments. */
 export const EnvironmentsListParamsSchema = closedObject({
   runtimeId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  /** Absolute workspace path used for symlink-portability preflight. */
+  workspacePath: Type.Optional(Type.String({ minLength: 1, maxLength: 4096 })),
 });
 
 /** Provider-authored machine choice for one configured worker profile. */
@@ -204,10 +208,17 @@ const WorkerEnvironmentProfileSummarySchema = closedObject({
   ),
 });
 
+/** Session-scoped placement blockers projected with environments.list. */
+export const EnvironmentsSessionPlacementSchema = closedObject({
+  workspaceHasEscapingSymlinks: Type.Optional(Type.Boolean()),
+  missingPreparedAuth: Type.Optional(Type.Boolean()),
+});
+
 /** List response containing all gateway-visible environment summaries. */
 export const EnvironmentsListResultSchema = closedObject({
   environments: Type.Array(EnvironmentSummarySchema),
   profiles: Type.Optional(Type.Array(WorkerEnvironmentProfileSummarySchema)),
+  sessionPlacement: Type.Optional(EnvironmentsSessionPlacementSchema),
 });
 
 /** Status lookup request for one environment id. */
@@ -294,6 +305,7 @@ export type EnvironmentsDestroyParams = Static<typeof EnvironmentsDestroyParamsS
 export type EnvironmentsDestroyResult = Static<typeof EnvironmentsDestroyResultSchema>;
 export type EnvironmentsListParams = Static<typeof EnvironmentsListParamsSchema>;
 export type EnvironmentsListResult = Static<typeof EnvironmentsListResultSchema>;
+export type EnvironmentsSessionPlacement = Static<typeof EnvironmentsSessionPlacementSchema>;
 export type EnvironmentsStatusParams = Static<typeof EnvironmentsStatusParamsSchema>;
 export type EnvironmentsStatusResult = Static<typeof EnvironmentsStatusResultSchema>;
 export type WorkerDesktopObserveParams = Static<typeof WorkerDesktopObserveParamsSchema>;

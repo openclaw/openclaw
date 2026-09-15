@@ -24,50 +24,126 @@ export type DevicePlacementRequirement = Readonly<{
   consumesWorkerSlot: boolean;
 }>;
 
+/** Session-scoped placement blockers that apply to every paired-device row. */
+export type SessionPlacementBlockerCode =
+  | "runtime-unsupported"
+  | "workspace-symlinks"
+  | "prepared-auth";
+
+export type SessionPlacementBlocker = Readonly<{
+  code: SessionPlacementBlockerCode;
+  message: string;
+}>;
+
 const DEFAULT_DEVICE_PLACEMENT: DevicePlacementRequirement = {
   requiredNodeCommands: [],
   consumesWorkerSlot: true,
 };
 
-function unavailableReason(
-  environment: DraftEnvironment,
-  requirement: DevicePlacementRequirement,
-): string | undefined {
-  const updateIssue = environment.issues?.find((issue) => issue.code === "update-required");
-  if (updateIssue) {
-    return t("newSession.nodeUpdateRequired", {
-      updateCommand: updateIssue.updateCommand,
-      restartCommand: updateIssue.headlessReconnectCommand,
+/** Join complete-sentence disqualifiers without inventing a new grammar. */
+export function stackDisabledReasons(reasons: readonly (string | undefined)[]): string | undefined {
+  const unique: string[] = [];
+  for (const reason of reasons) {
+    const trimmed = reason?.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (!unique.some((existing) => existing === trimmed)) {
+      unique.push(trimmed);
+    }
+  }
+  return unique.length > 0 ? unique.join(" ") : undefined;
+}
+
+/**
+ * Builds session-level blockers for the shared picker.
+ * Workspace symlink portability and prepared OpenAI auth are session facts:
+ * when callers know them (preflight / draft), every device row hard-disables
+ * with those accurate reasons instead of looking hostable until dispatch fails.
+ */
+export function buildSessionPlacementBlockers(params: {
+  runtimeUnsupportedReason?: string;
+  workspaceHasEscapingSymlinks?: boolean;
+  missingPreparedAuth?: boolean;
+}): SessionPlacementBlocker[] {
+  const blockers: SessionPlacementBlocker[] = [];
+  const runtimeReason = params.runtimeUnsupportedReason?.trim();
+  if (runtimeReason) {
+    blockers.push({ code: "runtime-unsupported", message: runtimeReason });
+  }
+  if (params.workspaceHasEscapingSymlinks) {
+    blockers.push({
+      code: "workspace-symlinks",
+      message: t("newSession.workspaceSymlinksBlockPlacement"),
     });
   }
+  if (params.missingPreparedAuth) {
+    blockers.push({
+      code: "prepared-auth",
+      message: t("newSession.preparedAuthBlockPlacement"),
+    });
+  }
+  return blockers;
+}
+
+export function sessionPlacementDisabledReason(
+  blockers: readonly SessionPlacementBlocker[],
+): string | undefined {
+  return stackDisabledReasons(blockers.map((blocker) => blocker.message));
+}
+
+function collectUnavailableReasons(
+  environment: DraftEnvironment,
+  requirement: DevicePlacementRequirement,
+): string[] {
+  const reasons: string[] = [];
+  const updateIssue = environment.issues?.find((issue) => issue.code === "update-required");
+  if (updateIssue) {
+    // Update-required owns reconnect remediation; further inventory checks are stale.
+    return [
+      t("newSession.nodeUpdateRequired", {
+        updateCommand: updateIssue.updateCommand,
+        restartCommand: updateIssue.headlessReconnectCommand,
+      }),
+    ];
+  }
   if (environment.status !== "available") {
-    return t("newSession.deviceUnavailable");
+    // Offline rows cannot host; capacity and command authority are reconnect-scoped.
+    return [t("newSession.deviceUnavailable")];
   }
   if (environment.sessionHost !== true) {
-    return t("newSession.sessionHostingDisabled");
+    reasons.push(t("newSession.sessionHostingDisabled"));
   }
   if (requirement.requiredNodeCommands.length > 0) {
     const requiredCommand = environment.requiredNodeCommand;
     if (!requiredCommand) {
-      return t("newSession.placementNotReady");
-    }
-    if (requiredCommand.state === "pending-approval") {
-      return t("newSession.nodeCommandPendingApproval", { command: requiredCommand.command });
-    }
-    if (requiredCommand.state === "undeclared") {
-      return t("newSession.nodeCommandUndeclared", { command: requiredCommand.command });
-    }
-    if (requiredCommand.state === "unauthorized") {
-      return t("newSession.nodeCommandUnauthorized", { command: requiredCommand.command });
+      reasons.push(t("newSession.placementNotReady"));
+    } else if (requiredCommand.state === "pending-approval") {
+      reasons.push(
+        t("newSession.nodeCommandPendingApproval", { command: requiredCommand.command }),
+      );
+    } else if (requiredCommand.state === "undeclared") {
+      reasons.push(t("newSession.nodeCommandUndeclared", { command: requiredCommand.command }));
+    } else if (requiredCommand.state === "unauthorized") {
+      reasons.push(t("newSession.nodeCommandUnauthorized", { command: requiredCommand.command }));
     }
   }
-  if (!requirement.consumesWorkerSlot) {
-    return undefined;
+  // Capacity only applies to session hosts; non-hosts already surface hosting remediation.
+  if (environment.sessionHost === true && requirement.consumesWorkerSlot) {
+    if (!environment.workerSlots) {
+      reasons.push(t("newSession.deviceCapacityUnavailable"));
+    } else if (environment.workerSlots.available === 0) {
+      reasons.push(t("newSession.deviceNoSlots"));
+    }
   }
-  if (!environment.workerSlots) {
-    return t("newSession.deviceCapacityUnavailable");
-  }
-  return environment.workerSlots.available === 0 ? t("newSession.deviceNoSlots") : undefined;
+  return reasons;
+}
+
+function unavailableReason(
+  environment: DraftEnvironment,
+  requirement: DevicePlacementRequirement,
+): string | undefined {
+  return stackDisabledReasons(collectUnavailableReasons(environment, requirement));
 }
 
 /** One projection owns device presentation, restore eligibility, and submit eligibility. */
@@ -85,7 +161,13 @@ export function projectDevicePlacements(
       if (!deviceId) {
         return [];
       }
-      const disabledReason = placementDisabledReason ?? unavailableReason(environment, requirement);
+      // Session blockers hard-disable every row; still surface stacked device
+      // inventory disqualifiers so operators see the full binding reason.
+      const disabledReason = stackDisabledReasons([
+        placementDisabledReason,
+        environment.disabledReason,
+        unavailableReason(environment, requirement),
+      ]);
       const facts = environmentMenuFacts(environment, {
         connected: environment.status === "available",
       });
@@ -114,7 +196,9 @@ export function projectDevicePlacements(
               : environment.status === "available" && environment.sessionHost !== true
                 ? "enable-session-hosting"
                 : undefined,
-          facts: placementDisabledReason ? [placementDisabledReason] : visibleFacts,
+          facts: placementDisabledReason
+            ? [disabledReason ?? placementDisabledReason]
+            : visibleFacts,
           workerSlots: environment.workerSlots,
           capabilities: environment.capabilities,
           invocableCommands: environment.invocableCommands,

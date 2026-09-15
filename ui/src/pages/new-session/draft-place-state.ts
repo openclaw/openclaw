@@ -9,8 +9,11 @@ import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
 import {
+  buildSessionPlacementBlockers,
   projectDevicePlacements,
   resolveAutomaticDevicePlacementDisabledReason,
+  sessionPlacementDisabledReason as formatSessionPlacementDisabledReason,
+  stackDisabledReasons,
 } from "./device-placement.ts";
 import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -252,11 +255,28 @@ export class DraftPlaceState {
     });
   }
 
+  /** Session-scoped blockers that hard-disable every paired-device row. */
+  sessionPlacementBlockers() {
+    const sessionPlacement = this.gateway.sessionPlacement;
+    return buildSessionPlacementBlockers({
+      runtimeUnsupportedReason: this.modelControl.devicePlacementUnsupportedReason(),
+      workspaceHasEscapingSymlinks: sessionPlacement?.workspaceHasEscapingSymlinks === true,
+      missingPreparedAuth: sessionPlacement?.missingPreparedAuth === true,
+    });
+  }
+
+  sessionPlacementDisabledReason() {
+    return stackDisabledReasons([
+      formatSessionPlacementDisabledReason(this.sessionPlacementBlockers()),
+      this.gateway.deviceCatalogDisabledReason,
+    ]);
+  }
+
   devices() {
     return projectDevicePlacements(
       this.gateway.environments,
       this.devicePlacementRuntime()?.devicePlacement,
-      this.gateway.deviceCatalogDisabledReason,
+      this.sessionPlacementDisabledReason(),
     );
   }
 
@@ -275,6 +295,7 @@ export class DraftPlaceState {
       return resolveAutomaticDevicePlacementDisabledReason(
         this.gateway.environments,
         this.devices(),
+        this.sessionPlacementDisabledReason(),
       );
     }
     if (!this.deviceIdValue) {

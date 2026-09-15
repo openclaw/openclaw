@@ -106,6 +106,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       },
       agentsHydrated: place?.agentsHydrated ?? false,
       runtimeId: place?.devicePlacementRuntime()?.id ?? "",
+      workspacePath: place?.folder?.trim() || place?.workspacePath?.() || "",
     }),
     {
       requestUpdate: vi.fn(),

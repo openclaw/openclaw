@@ -287,8 +287,16 @@ describe("worker environment protocol schemas", () => {
 
     expect(validateEnvironmentsListParams({})).toBe(true);
     expect(validateEnvironmentsListParams({ runtimeId: "codex" })).toBe(true);
+    expect(validateEnvironmentsListParams({ workspacePath: "/tmp/workspace" })).toBe(true);
+    expect(
+      validateEnvironmentsListParams({
+        runtimeId: "codex",
+        workspacePath: "/tmp/workspace",
+      }),
+    ).toBe(true);
     expect(validateEnvironmentsListParams({ runtimeId: "" })).toBe(false);
     expect(validateEnvironmentsListParams({ runtimeId: "x".repeat(129) })).toBe(false);
+    expect(validateEnvironmentsListParams({ workspacePath: "" })).toBe(false);
     expect(validateEnvironmentsListParams({ runtimeId: "codex", command: "runtime.exec" })).toBe(
       false,
     );
@@ -305,6 +313,14 @@ describe("worker environment protocol schemas", () => {
       lastSeenReason: "silent_push",
     };
     expect(Value.Check(EnvironmentSummarySchema, node)).toBe(true);
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        disabledReason:
+          "Workspace contains absolute symlinks and can't be synced to a paired device.",
+      }),
+    ).toBe(true);
+    expect(Value.Check(EnvironmentSummarySchema, { ...node, disabledReason: "" })).toBe(false);
     expect(Value.Check(EnvironmentSummarySchema, { ...node, lastDisconnectedAtMs: -1 })).toBe(
       false,
     );

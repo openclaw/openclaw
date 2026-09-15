@@ -6443,6 +6443,7 @@ public struct EnvironmentSummary: Codable, Sendable {
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
     public let preparation: [String: AnyCodable]?
+    public let disabledreason: String?
     public let requirednodecommand: RequiredNodeCommand?
 
     public init(
@@ -6466,6 +6467,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil,
         preparation: [String: AnyCodable]? = nil,
+        disabledreason: String? = nil,
         requirednodecommand: RequiredNodeCommand? = nil)
     {
         self.id = id
@@ -6488,6 +6490,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         self.issues = issues
         self.worker = worker
         self.preparation = preparation
+        self.disabledreason = disabledreason
         self.requirednodecommand = requirednodecommand
     }
 
@@ -6512,6 +6515,7 @@ public struct EnvironmentSummary: Codable, Sendable {
         case issues
         case worker
         case preparation
+        case disabledreason = "disabledReason"
         case requirednodecommand = "requiredNodeCommand"
     }
 }
@@ -6555,6 +6559,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
     public let preparation: [String: AnyCodable]?
+    public let disabledreason: String?
 
     public init(
         id: String,
@@ -6576,7 +6581,8 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         desktopavailability: DesktopAvailability? = nil,
         issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil,
-        preparation: [String: AnyCodable]? = nil)
+        preparation: [String: AnyCodable]? = nil,
+        disabledreason: String? = nil)
     {
         self.id = id
         self.type = type
@@ -6598,6 +6604,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         self.issues = issues
         self.worker = worker
         self.preparation = preparation
+        self.disabledreason = disabledreason
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6621,6 +6628,7 @@ public struct EnvironmentsCreateResult: Codable, Sendable {
         case issues
         case worker
         case preparation
+        case disabledreason = "disabledReason"
     }
 }
 
@@ -6663,6 +6671,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
     public let preparation: [String: AnyCodable]?
+    public let disabledreason: String?
 
     public init(
         id: String,
@@ -6684,7 +6693,8 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         desktopavailability: DesktopAvailability? = nil,
         issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil,
-        preparation: [String: AnyCodable]? = nil)
+        preparation: [String: AnyCodable]? = nil,
+        disabledreason: String? = nil)
     {
         self.id = id
         self.type = type
@@ -6706,6 +6716,7 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         self.issues = issues
         self.worker = worker
         self.preparation = preparation
+        self.disabledreason = disabledreason
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6729,33 +6740,47 @@ public struct EnvironmentsDestroyResult: Codable, Sendable {
         case issues
         case worker
         case preparation
+        case disabledreason = "disabledReason"
     }
 }
 
 public struct EnvironmentsListParams: Codable, Sendable {
     public let runtimeid: String?
+    public let workspacepath: String?
 
     public init(
-        runtimeid: String? = nil)
+        runtimeid: String? = nil,
+        workspacepath: String? = nil)
     {
         self.runtimeid = runtimeid
+        self.workspacepath = workspacepath
     }
 
     private enum CodingKeys: String, CodingKey {
         case runtimeid = "runtimeId"
+        case workspacepath = "workspacePath"
     }
 }
 
 public struct EnvironmentsListResult: Codable, Sendable {
     public let environments: [EnvironmentSummary]
     public let profiles: [[String: AnyCodable]]?
+    public let sessionplacement: EnvironmentsSessionPlacement?
 
     public init(
         environments: [EnvironmentSummary],
-        profiles: [[String: AnyCodable]]? = nil)
+        profiles: [[String: AnyCodable]]? = nil,
+        sessionplacement: EnvironmentsSessionPlacement? = nil)
     {
         self.environments = environments
         self.profiles = profiles
+        self.sessionplacement = sessionplacement
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case environments
+        case profiles
+        case sessionplacement = "sessionPlacement"
     }
 }
 
@@ -6799,6 +6824,24 @@ public struct EnvironmentsPrepareResult: Codable, Sendable {
     }
 }
 
+public struct EnvironmentsSessionPlacement: Codable, Sendable {
+    public let workspacehasescapingsymlinks: Bool?
+    public let missingpreparedauth: Bool?
+
+    public init(
+        workspacehasescapingsymlinks: Bool? = nil,
+        missingpreparedauth: Bool? = nil)
+    {
+        self.workspacehasescapingsymlinks = workspacehasescapingsymlinks
+        self.missingpreparedauth = missingpreparedauth
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case workspacehasescapingsymlinks = "workspaceHasEscapingSymlinks"
+        case missingpreparedauth = "missingPreparedAuth"
+    }
+}
+
 public struct EnvironmentsStatusParams: Codable, Sendable {
     public let environmentid: String
 
@@ -6834,6 +6877,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
     public let issues: [[String: AnyCodable]]?
     public let worker: WorkerEnvironmentMetadata?
     public let preparation: [String: AnyCodable]?
+    public let disabledreason: String?
 
     public init(
         id: String,
@@ -6855,7 +6899,8 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         desktopavailability: DesktopAvailability? = nil,
         issues: [[String: AnyCodable]]? = nil,
         worker: WorkerEnvironmentMetadata? = nil,
-        preparation: [String: AnyCodable]? = nil)
+        preparation: [String: AnyCodable]? = nil,
+        disabledreason: String? = nil)
     {
         self.id = id
         self.type = type
@@ -6877,6 +6922,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         self.issues = issues
         self.worker = worker
         self.preparation = preparation
+        self.disabledreason = disabledreason
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6900,6 +6946,7 @@ public struct EnvironmentsStatusResult: Codable, Sendable {
         case issues
         case worker
         case preparation
+        case disabledreason = "disabledReason"
     }
 }
 

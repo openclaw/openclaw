@@ -72,6 +72,12 @@ export type DraftEnvironment = {
   invocableCommands?: string[];
   requiredNodeCommand?: RequiredNodeCommand;
   issues?: RuntimeTargetIssue[];
+  disabledReason?: string;
+};
+
+export type DraftSessionPlacement = {
+  workspaceHasEscapingSymlinks?: boolean;
+  missingPreparedAuth?: boolean;
 };
 
 function normalizeTimestamp(value: unknown): number | undefined {
@@ -310,6 +316,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
         invocableCommands?: unknown;
         requiredNodeCommand?: unknown;
         issues?: unknown;
+        disabledReason?: unknown;
       };
       const id = normalizeOptionalString(environment.id);
       const type = normalizeOptionalString(environment.type);
@@ -340,6 +347,7 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
       const lastSeenReason = normalizeOptionalString(environment.lastSeenReason);
       const issues = readRuntimeTargetIssues(environment.issues);
       const workerSlots = readWorkerSlots(environment.workerSlots);
+      const disabledReason = normalizeOptionalString(environment.disabledReason)?.slice(0, 512);
       return [
         {
           id,
@@ -360,8 +368,25 @@ export function readDraftEnvironments(value: unknown): DraftEnvironment[] {
           ...(invocableCommands ? { invocableCommands } : {}),
           ...(requiredNodeCommand ? { requiredNodeCommand } : {}),
           ...(issues ? { issues } : {}),
+          ...(disabledReason ? { disabledReason } : {}),
         },
       ];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+export function readDraftSessionPlacement(value: unknown): DraftSessionPlacement | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const workspaceHasEscapingSymlinks =
+    value.workspaceHasEscapingSymlinks === true ? true : undefined;
+  const missingPreparedAuth = value.missingPreparedAuth === true ? true : undefined;
+  if (!workspaceHasEscapingSymlinks && !missingPreparedAuth) {
+    return undefined;
+  }
+  return {
+    ...(workspaceHasEscapingSymlinks ? { workspaceHasEscapingSymlinks } : {}),
+    ...(missingPreparedAuth ? { missingPreparedAuth } : {}),
+  };
 }

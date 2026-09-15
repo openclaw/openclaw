@@ -99,6 +99,7 @@ export {
   EnvironmentsDestroyResultSchema,
   EnvironmentsListParamsSchema,
   EnvironmentsListResultSchema,
+  EnvironmentsSessionPlacementSchema,
   EnvironmentsStatusParamsSchema,
   EnvironmentsStatusResultSchema,
   WorkerDesktopObserveParamsSchema,

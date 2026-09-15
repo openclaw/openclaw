@@ -17,21 +17,31 @@ import {
   defaultCloudOs,
   readDraftCloudProfiles,
   readDraftEnvironments,
+  readDraftSessionPlacement,
+  type DraftSessionPlacement,
 } from "./discovery.ts";
 
 registerNewSessionSetupEnglish();
 
 export async function requestPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
-  runtimeId?: string,
-): Promise<{ profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }> {
-  const result = await client.request<EnvironmentsListResult>(
-    "environments.list",
-    runtimeId ? { runtimeId } : {},
-  );
+  options: { runtimeId?: string; workspacePath?: string } = {},
+): Promise<{
+  profiles: DraftCloudProfile[];
+  environments: DraftEnvironment[];
+  sessionPlacement?: DraftSessionPlacement;
+}> {
+  const runtimeId = options.runtimeId?.trim();
+  const workspacePath = options.workspacePath?.trim();
+  const result = await client.request<EnvironmentsListResult>("environments.list", {
+    ...(runtimeId ? { runtimeId } : {}),
+    ...(workspacePath ? { workspacePath } : {}),
+  });
+  const sessionPlacement = readDraftSessionPlacement(result?.sessionPlacement);
   return {
     profiles: readDraftCloudProfiles(result?.profiles),
     environments: readDraftEnvironments(result?.environments),
+    ...(sessionPlacement ? { sessionPlacement } : {}),
   };
 }
 

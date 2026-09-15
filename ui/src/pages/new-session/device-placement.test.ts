@@ -1,7 +1,12 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import { projectDevicePlacements } from "./device-placement.ts";
+import {
+  buildSessionPlacementBlockers,
+  projectDevicePlacements,
+  sessionPlacementDisabledReason,
+  stackDisabledReasons,
+} from "./device-placement.ts";
 import type { DraftEnvironment } from "./discovery.ts";
 
 const updateIssue = {
@@ -223,5 +228,90 @@ describe("device placement projection", () => {
     if (reason) {
       expect(device?.disabledReason).toBe(reason);
     }
+  });
+
+  it("stacks connected-host inventory disqualifiers instead of a single misleading reason", () => {
+    const [device] = projectDevicePlacements(
+      [
+        node({
+          sessionHost: false,
+          workerSlots: { total: 1, available: 0 },
+          capabilities: ["codex.exec-server.stdio.v1"],
+          invocableCommands: [],
+          requiredNodeCommand: {
+            command: "codex.exec-server.stdio.v1",
+            state: "undeclared",
+          },
+        }),
+      ],
+      {
+        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+        consumesWorkerSlot: false,
+      },
+    );
+
+    expect(device?.selectable).toBe(false);
+    expect(device?.disabledReason).toMatch(/session hosting is disabled/i);
+    expect(device?.disabledReason).toMatch(/codex\.exec-server\.stdio\.v1/i);
+    expect(device?.disabledReason).toMatch(/available on this device/i);
+  });
+
+  it("hard-disables every host when session blockers include workspace symlinks and prepared auth", () => {
+    const blockers = buildSessionPlacementBlockers({
+      workspaceHasEscapingSymlinks: true,
+      missingPreparedAuth: true,
+    });
+    const reason = sessionPlacementDisabledReason(blockers);
+    expect(reason).toMatch(/absolute symlinks/i);
+    expect(reason).toMatch(/prepared OpenAI auth/i);
+    expect(reason).toMatch(/homeScope="agent"/i);
+
+    const [device] = projectDevicePlacements([node({})], undefined, reason);
+    expect(device?.selectable).toBe(false);
+    expect(device?.disabledReason).toBe(reason);
+    expect(device?.remediation).toBeUndefined();
+  });
+
+  it("does not offer selectable hosts when only a runtime session blocker applies", () => {
+    const reason = sessionPlacementDisabledReason(
+      buildSessionPlacementBlockers({
+        runtimeUnsupportedReason: "This runtime does not support paired devices",
+      }),
+    );
+    const devices = projectDevicePlacements(
+      [
+        node({ id: "node:macbook", label: "MacBook" }),
+        node({ id: "node:pi", label: "Raspberry Pi" }),
+      ],
+      { requiredNodeCommands: [], consumesWorkerSlot: true },
+      reason,
+    );
+    expect(devices.every((device) => device.selectable === false)).toBe(true);
+    expect(devices.map((device) => device.disabledReason)).toEqual([reason, reason]);
+  });
+
+  it("hard-disables from environments.list disabledReason / sessionPlacement projection", () => {
+    const listReason = sessionPlacementDisabledReason(
+      buildSessionPlacementBlockers({
+        workspaceHasEscapingSymlinks: true,
+        missingPreparedAuth: true,
+      }),
+    );
+    const [device] = projectDevicePlacements(
+      [
+        node({
+          disabledReason: listReason,
+        }),
+      ],
+      { requiredNodeCommands: [], consumesWorkerSlot: true },
+    );
+    expect(device?.selectable).toBe(false);
+    expect(device?.disabledReason).toMatch(/absolute symlinks/i);
+    expect(device?.disabledReason).toMatch(/prepared OpenAI auth/i);
+  });
+
+  it("stackDisabledReasons deduplicates identical sentences", () => {
+    expect(stackDisabledReasons(["A.", "A.", "B."])).toBe("A. B.");
+    expect(stackDisabledReasons([undefined, "  ", undefined])).toBeUndefined();
   });
 });
