@@ -171,7 +171,7 @@ describe("channel DM access request views", () => {
       senderId: "987654321",
     };
     const props = createProps({
-      pairingBusyRequestId: request.requestId,
+      pairingBusy: { requestId: request.requestId, operation: "approve" },
       pairingSnapshot: {
         ...createProps().pairingSnapshot!,
         requests: [request, secondRequest],
@@ -180,10 +180,29 @@ describe("channel DM access request views", () => {
     const container = renderInto(renderChannelPairingQueue(props));
     const actionButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>("button"),
-    ).filter((button) => /^(Approve|Dismiss) /u.test(button.getAttribute("aria-label") ?? ""));
+    ).filter((button) =>
+      /^(Approving|Approve|Dismissing|Dismiss) /u.test(button.getAttribute("aria-label") ?? ""),
+    );
 
     expect(actionButtons).toHaveLength(4);
     expect(actionButtons.every((button) => button.disabled)).toBe(true);
+  });
+
+  it("names the running operation without borrowing the other action's label", () => {
+    const props = createProps({
+      pairingBusy: { requestId: request.requestId, operation: "dismiss" },
+    });
+    const container = renderInto(renderChannelPairingQueue(props));
+    const labels = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).map(
+      (button) => button.getAttribute("aria-label") ?? "",
+    );
+
+    // The pending dismissal owns the progress copy; approval stays described
+    // as approval rather than claiming to be loading.
+    expect(labels.some((label) => label.startsWith("Dismissing "))).toBe(true);
+    expect(labels.some((label) => label.startsWith("Approve "))).toBe(true);
+    expect(labels.some((label) => label.startsWith("Approving "))).toBe(false);
+    expect(container.textContent).not.toContain("Loading…");
   });
 
   it("shows explicit notification and first-owner choices for an admin", () => {

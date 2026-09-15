@@ -103,7 +103,7 @@ export function createContext(
     pairingSnapshot: null,
     pairingError: null,
     pairingLastSuccess: null,
-    pairingBusyRequestId: null,
+    pairingBusy: null,
     whatsappLoginMessage: null,
     whatsappLoginQrDataUrl: null,
     whatsappLoginSessionKey: null,

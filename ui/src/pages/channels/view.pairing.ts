@@ -89,8 +89,22 @@ function renderFilters(props: ChannelsProps) {
 }
 
 function renderRequest(request: ChannelsPairingRequest, props: ChannelsProps) {
-  const busy = Boolean(props.pairingBusyRequestId);
-  const thisRequestBusy = props.pairingBusyRequestId === request.requestId;
+  const busy = Boolean(props.pairingBusy);
+  // Only the operation that is actually running may claim progress. A pending
+  // dismissal must leave the Approve action reading as idle rather than borrow
+  // its label, and its accessible name must describe the same operation.
+  const pendingOperation =
+    props.pairingBusy?.requestId === request.requestId ? props.pairingBusy.operation : null;
+  const approvalAriaBase = t("channels.pairing.approveAria", {
+    sender: request.senderId,
+    channel: request.channelLabel,
+    account: requestAccountName(request),
+  });
+  const dismissalAriaBase = t("channels.pairing.dismissAria", {
+    sender: request.senderId,
+    channel: request.channelLabel,
+    account: requestAccountName(request),
+  });
   const metadata = Object.entries(request.metadata ?? {});
   return html`
     <div class="settings-row settings-row--stacked channels-pairing-request">
@@ -111,27 +125,39 @@ function renderRequest(request: ChannelsPairingRequest, props: ChannelsProps) {
             type="button"
             class="btn btn--sm primary"
             ?disabled=${busy || !props.canManagePairing}
-            aria-label=${t("channels.pairing.approveAria", {
-              sender: request.senderId,
-              channel: request.channelLabel,
-              account: requestAccountName(request),
-            })}
+            aria-label=${
+              pendingOperation === "approve"
+                ? t("channels.pairing.approvingAria", {
+                    sender: request.senderId,
+                    channel: request.channelLabel,
+                    account: requestAccountName(request),
+                  })
+                : approvalAriaBase
+            }
             @click=${() => props.onPairingApprove(request)}
           >
-            ${thisRequestBusy ? t("common.loading") : t("channels.pairing.approve")}
+            ${
+              pendingOperation === "approve"
+                ? t("channels.pairing.approving")
+                : t("channels.pairing.approve")
+            }
           </button>
           <button
             type="button"
             class="btn btn--sm"
             ?disabled=${busy || !props.canManagePairing}
-            aria-label=${t("channels.pairing.dismissAria", {
-              sender: request.senderId,
-              channel: request.channelLabel,
-              account: requestAccountName(request),
-            })}
+            aria-label=${
+              pendingOperation === "dismiss"
+                ? t("channels.pairing.dismissingAria", {
+                    sender: request.senderId,
+                    channel: request.channelLabel,
+                    account: requestAccountName(request),
+                  })
+                : dismissalAriaBase
+            }
             @click=${() => props.onPairingDismiss(request)}
           >
-            ${t("channels.pairing.dismiss")}
+            ${pendingOperation === "dismiss" ? t("channels.pairing.dismissing") : t("channels.pairing.dismiss")}
           </button>
         </div>
       </div>
@@ -288,8 +314,9 @@ export function renderChannelPairingPrompt(props: ChannelsProps) {
     return nothing;
   }
   const request = prompt.request;
-  const busy = props.pairingBusyRequestId === request.requestId;
   const approving = prompt.kind === "approve";
+  // The confirmation must report the operation it is running, not the idle verb.
+  const busy = props.pairingBusy?.requestId === request.requestId;
   const ownerMissing = props.pairingSnapshot?.commandOwnerConfigured === false;
   const dialogTitle = approving
     ? t("channels.pairing.approveDialogTitle")
@@ -367,7 +394,15 @@ export function renderChannelPairingPrompt(props: ChannelsProps) {
             ?disabled=${busy}
             @click=${props.onPairingPromptConfirm}
           >
-            ${approving ? t("channels.pairing.approve") : t("channels.pairing.dismiss")}
+            ${
+              busy
+                ? approving
+                  ? t("channels.pairing.approving")
+                  : t("channels.pairing.dismissing")
+                : approving
+                  ? t("channels.pairing.approve")
+                  : t("channels.pairing.dismiss")
+            }
           </button>
           <button type="button" class="btn" ?disabled=${busy} @click=${props.onPairingPromptCancel}>
             ${t("common.cancel")}

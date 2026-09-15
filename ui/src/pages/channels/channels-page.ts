@@ -570,7 +570,7 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   private openPairingPrompt(kind: ChannelPairingPrompt["kind"], request: ChannelsPairingRequest) {
-    if (this.context.channels.state.pairingBusyRequestId) {
+    if (this.context.channels.state.pairingBusy) {
       return;
     }
     this.pairingNotice = null;
@@ -662,7 +662,7 @@ class ChannelsPage extends OpenClawLightDomElement {
           pairingSnapshot: channels.pairingSnapshot,
           pairingError: channels.pairingError,
           pairingLastSuccessAt: channels.pairingLastSuccess,
-          pairingBusyRequestId: channels.pairingBusyRequestId,
+          pairingBusy: channels.pairingBusy,
           pairingChannelFilter: this.pairingChannelFilter,
           pairingAccountFilter: this.pairingAccountFilter,
           pairingPrompt: this.pairingPrompt,
