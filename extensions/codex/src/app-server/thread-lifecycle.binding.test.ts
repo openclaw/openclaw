@@ -3437,6 +3437,126 @@ describe("Codex app-server thread lifecycle bindings", () => {
     },
   );
 
+  it("retires the client when a settled systemError thread refuses the configuration handoff", async () => {
+    // A settled provider failure leaves the thread loaded but not idle. Native
+    // thread/resume reloads configuration only for an idle thread, so it never
+    // emits the notLoaded status change the configuration fence waits for. The
+    // fence refuses correctly; the client must not be kept, or every retry
+    // repeats the same refusal against the same loaded state.
+    const sessionFile = path.join(tempDir, "system-error-handoff.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const threadId = "thread-system-error";
+    const params = createParams(sessionFile, workspaceDir);
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    const respond = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start" || method === "thread/resume") {
+        const result = threadStartResult(threadId);
+        (result.thread as Record<string, unknown>).status = { type: "systemError" };
+        return result;
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond,
+    });
+    const abandonClient = vi.fn(async () => {});
+    const common = {
+      client: fixture.client,
+      abandonClient,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+    };
+    try {
+      await startOrResumeThread({ ...common, developerInstructions: "initial policy" });
+      await fixture.endTurn(threadId);
+      const before = await readCodexAppServerBinding(sessionFile);
+
+      await expect(
+        startOrResumeThread({ ...common, developerInstructions: "replacement policy" }),
+      ).rejects.toThrow("did not confirm unloading");
+      // The retry is only recoverable through a fresh client, so this one is retired.
+      expect(abandonClient).toHaveBeenCalledTimes(1);
+      // Its history must survive: the binding still names the same native thread.
+      expect(await readCodexAppServerBinding(sessionFile)).toEqual(before);
+    } finally {
+      closeHost();
+    }
+  });
+
+  it("preserves the client when a settled systemError ring-zero thread refuses the configuration handoff", async () => {
+    // Ring-zero bindings bind ringZeroClientInstanceId into the durable binding.
+    // Retiring that client forces a fresh client ID on next acquisition, which
+    // rotates (clears) the binding and erases the native history. Ring-zero
+    // threads are therefore excluded from automatic retirement on handoff refusal.
+    const sessionFile = path.join(tempDir, "system-error-ring-zero.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const threadId = "thread-system-error-ring-zero";
+    const params = createParams(sessionFile, workspaceDir);
+    params.toolsAllow = ["openclaw"];
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    const respond = vi.fn(async (method: string) => {
+      if (method === "config/read") {
+        return { config: {}, layers: [] };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/start" || method === "thread/resume") {
+        const result = threadStartResult(threadId);
+        (result.thread as Record<string, unknown>).status = { type: "systemError" };
+        return result;
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [], nextCursor: null };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond,
+    });
+    const abandonClient = vi.fn(async () => {});
+    const common = {
+      client: fixture.client,
+      abandonClient,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [createNamedDynamicTool("openclaw")],
+      appServer: createThreadLifecycleAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+      hostSystemAgentActive: true,
+    };
+    try {
+      await startOrResumeThread({ ...common, developerInstructions: "initial policy" });
+      await fixture.endTurn(threadId);
+      const before = await readCodexAppServerBinding(sessionFile);
+      expect(before?.ringZeroClientInstanceId).toBeDefined();
+
+      await expect(
+        startOrResumeThread({ ...common, developerInstructions: "replacement policy" }),
+      ).rejects.toThrow("did not confirm unloading");
+      // The client must NOT be retired, preserving its ring-zero binding identity.
+      expect(abandonClient).not.toHaveBeenCalled();
+      expect(await readCodexAppServerBinding(sessionFile)).toEqual(before);
+    } finally {
+      closeHost();
+    }
+  });
+
   it("fails closed before starting OpenClaw when inherited MCP enumeration fails", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

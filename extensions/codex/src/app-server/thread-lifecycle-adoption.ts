@@ -252,6 +252,7 @@ async function preparePendingCodexThreadResume(
       assertConfigured: observation.assertConfigured,
       assertCurrent,
       dispose,
+      settledSystemError: observation.settledSystemError,
     };
   } catch (error) {
     dispose();
@@ -313,6 +314,7 @@ function observeCodexThreadConfiguration(
   if (!isCodexThreadNonRunning(thread.status)) {
     throw new CodexAdoptedThreadActiveError();
   }
+  const settledSystemError = thread.status.type === "systemError";
   let unloaded = thread.status.type === "notLoaded";
   const dispose = params.client.addNotificationHandler((notification) => {
     if (
@@ -327,6 +329,7 @@ function observeCodexThreadConfiguration(
   });
   return {
     dispose,
+    settledSystemError,
     assertConfigured: () => {
       assertCurrent();
       // Native resume can acknowledge ignored overrides when another subscriber
