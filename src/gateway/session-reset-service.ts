@@ -122,13 +122,16 @@ import {
   rollbackGatewaySessionPreparation,
 } from "./session-lifecycle-preparation.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
+import {
+  type BeforeResetHookMessages,
+  readBeforeResetHookMessages,
+} from "./session-reset-hook-messages.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import {
   archiveSessionTranscriptsDetailed,
   resolveStableSessionEndTranscript,
   type ArchivedSessionTranscript,
 } from "./session-transcript-files.fs.js";
-import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import {
   loadSessionEntry,
   resolveGatewaySessionStoreTarget,
@@ -938,7 +941,8 @@ export async function cleanupSessionBeforeMutation(params: {
 export async function emitGatewayBeforeResetPluginHook(params: {
   cfg: OpenClawConfig;
   key: string;
-  messages?: unknown[];
+  /** Bounded pre-reset snapshot captured before the lifecycle commit, when available. */
+  beforeResetMessages?: BeforeResetHookMessages;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   storePath: string;
   entry?: SessionEntry;
@@ -956,11 +960,11 @@ export async function emitGatewayBeforeResetPluginHook(params: {
     ? formatSqliteSessionFileMarker({ agentId, sessionId, storePath: params.storePath })
     : undefined;
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
-  const messages =
-    params.messages ??
-    (await readGatewayBeforeResetPluginHookMessages({
+  const payload =
+    params.beforeResetMessages ??
+    (await readBeforeResetHookMessages({
       agentId,
-      entry: params.entry,
+      sessionEntry: params.entry,
       sessionId,
       sessionKey,
       storePath: params.storePath,
@@ -970,7 +974,9 @@ export async function emitGatewayBeforeResetPluginHook(params: {
     .runBeforeReset(
       {
         sessionFile,
-        messages,
+        messages: payload.messages,
+        totalMessages: payload.totalMessages,
+        truncated: payload.truncated,
         reason: params.reason,
       },
       {
@@ -983,38 +989,6 @@ export async function emitGatewayBeforeResetPluginHook(params: {
     .catch((err: unknown) => {
       logVerbose(`before_reset hook failed: ${String(err)}`);
     });
-}
-
-async function readGatewayBeforeResetPluginHookMessages(params: {
-  agentId: string;
-  entry?: SessionEntry;
-  sessionId?: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<unknown[]> {
-  if (typeof params.sessionId !== "string" || params.sessionId.trim().length === 0) {
-    return [];
-  }
-  try {
-    return await readSessionMessagesAsync(
-      {
-        agentId: params.agentId,
-        sessionEntry: params.entry,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
-      {
-        mode: "full",
-        reason: "before_reset hook payload",
-      },
-    );
-  } catch (err) {
-    logVerbose(
-      `before_reset: failed to read session messages for ${params.sessionId}; firing hook with empty messages (${String(err)})`,
-    );
-    return [];
-  }
 }
 
 export async function performGatewaySessionReset(params: {
@@ -1533,9 +1507,9 @@ export async function performGatewaySessionReset(params: {
         });
       }
       const beforeResetMessages = getGlobalHookRunner()?.hasHooks("before_reset")
-        ? await readGatewayBeforeResetPluginHookMessages({
+        ? await readBeforeResetHookMessages({
             agentId: resolveLifecycleAgentId(cfg, target.agentId ?? requestedAgentId),
-            entry,
+            sessionEntry: entry,
             sessionId: entry?.sessionId,
             sessionKey: target.canonicalKey ?? params.key,
             storePath,
@@ -1573,7 +1547,7 @@ export async function performGatewaySessionReset(params: {
         await emitGatewayBeforeResetPluginHook({
           cfg,
           key: params.key,
-          messages: beforeResetMessages,
+          beforeResetMessages,
           target,
           storePath,
           entry,
@@ -1898,7 +1872,7 @@ export async function performGatewaySessionReset(params: {
           await emitGatewayBeforeResetPluginHook({
             cfg,
             key: params.key,
-            messages: beforeResetMessages,
+            beforeResetMessages,
             target,
             storePath,
             entry: mutation.previousEntry,

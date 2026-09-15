@@ -59,6 +59,7 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "../../gateway/active-sessions-shutdown-tracker.js";
+import type { BeforeResetHookMessages } from "../../gateway/session-reset-hook-messages.js";
 import {
   captureSessionMemoryTranscript,
   type SessionMemoryTranscript,
@@ -202,7 +203,7 @@ export type SessionInitResult = {
   initialSessionEntry?: SessionEntry;
   previousSessionEntry?: SessionEntry;
   previousSessionMemory?: SessionMemoryTranscript;
-  previousSessionResetMessages?: unknown[];
+  previousSessionResetMessages?: BeforeResetHookMessages;
   sessionEntryHandle: ReplySessionEntryHandle;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
@@ -1104,7 +1105,7 @@ async function initSessionStateAttemptLocked(
     : undefined;
   const resetBoundaryAppended = resetBoundary !== undefined;
   let previousSessionMemory: SessionMemoryTranscript | undefined;
-  let previousSessionResetMessages: unknown[] | undefined;
+  let previousSessionResetMessages: BeforeResetHookMessages | undefined;
   const committed = await commitReplySessionInitialization({
     commitGuard: !entry
       ? () => {
@@ -1170,8 +1171,9 @@ async function initSessionStateAttemptLocked(
         );
       }
       if (resetTriggered && getGlobalHookRunner()?.hasHooks("before_reset")) {
-        // Plugin observers retain their full-message contract independently of
-        // the bounded memory excerpt. This preparation runs outside the commit.
+        // Plugin observers receive a bounded newest-messages snapshot (see
+        // readBeforeResetHookMessages); an unbounded read froze the Gateway on
+        // multi-million-row sessions. This preparation runs outside the commit.
         previousSessionResetMessages = await readBeforeResetMessages({
           agentId,
           sessionId: currentEntry.sessionId,

@@ -12,12 +12,15 @@ import type {
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
   runBeforeReset: vi.fn<HookRunner["runBeforeReset"]>(),
-  loadTranscriptEvents: vi.fn(async (): Promise<unknown[]> => []),
+  readSessionTranscriptHookMessages: vi.fn(async () => ({
+    messages: [] as unknown[],
+    totalMessages: 0,
+  })),
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => {
+vi.mock("../../config/sessions/session-accessor.sqlite-hook-messages.js", () => {
   return {
-    loadTranscriptEvents: hookRunnerMocks.loadTranscriptEvents,
+    readSessionTranscriptHookMessages: hookRunnerMocks.readSessionTranscriptHookMessages,
   };
 });
 
@@ -78,10 +81,13 @@ describe("emitResetCommandHooks", () => {
   beforeEach(() => {
     hookRunnerMocks.hasHooks.mockReset();
     hookRunnerMocks.runBeforeReset.mockReset();
-    hookRunnerMocks.loadTranscriptEvents.mockReset();
+    hookRunnerMocks.readSessionTranscriptHookMessages.mockReset();
     hookRunnerMocks.hasHooks.mockImplementation((hookName) => hookName === "before_reset");
     hookRunnerMocks.runBeforeReset.mockResolvedValue(undefined);
-    hookRunnerMocks.loadTranscriptEvents.mockResolvedValue([]);
+    hookRunnerMocks.readSessionTranscriptHookMessages.mockResolvedValue({
+      messages: [],
+      totalMessages: 0,
+    });
   });
 
   afterEach(() => {
@@ -115,13 +121,10 @@ describe("emitResetCommandHooks", () => {
   });
 
   it("loads marker-backed before_reset transcripts by session identity", async () => {
-    hookRunnerMocks.loadTranscriptEvents.mockResolvedValueOnce([
-      {
-        type: "message",
-        id: "m1",
-        message: { role: "user", content: "Recovered from archive" },
-      },
-    ]);
+    hookRunnerMocks.readSessionTranscriptHookMessages.mockResolvedValueOnce({
+      messages: [{ role: "user", content: "Recovered from archive" }],
+      totalMessages: 1,
+    });
     const command = {
       surface: "telegram",
       senderId: "vac",
@@ -147,78 +150,45 @@ describe("emitResetCommandHooks", () => {
 
     await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
     const [event, ctx] = firstBeforeResetCall();
-    expect(hookRunnerMocks.loadTranscriptEvents).toHaveBeenCalledWith({
-      agentId: "main",
-      sessionId: "prev-session",
-      sessionKey: "agent:main:telegram:group:-1003826723328:topic:8428",
-      storePath: "/tmp/openclaw-agent.sqlite",
-    });
+    expect(hookRunnerMocks.readSessionTranscriptHookMessages).toHaveBeenCalledWith(
+      {
+        agentId: "main",
+        sessionId: "prev-session",
+        sessionKey: "agent:main:telegram:group:-1003826723328:topic:8428",
+        storePath: "/tmp/openclaw-agent.sqlite",
+      },
+      { maxMessages: 4096, maxBytes: 8 * 1024 * 1024 },
+    );
+    expect(event.totalMessages).toBe(1);
+    expect(event.truncated).toBe(false);
     expect(event.sessionFile).toBe("sqlite:main:prev-session:/tmp/openclaw-agent.sqlite");
     expect(event.messages).toEqual([{ role: "user", content: "Recovered from archive" }]);
     expect(event.reason).toBe("new");
     expect(ctx.sessionId).toBe("prev-session");
   });
 
-  it("keeps leaf-controlled side branches out of before_reset hooks", async () => {
-    hookRunnerMocks.loadTranscriptEvents.mockResolvedValueOnce([
-      {
-        type: "message",
-        id: "active-root",
-        parentId: null,
-        message: { role: "user", content: "active root" },
-      },
-      {
-        type: "message",
-        id: "side-entry",
-        parentId: "active-root",
-        message: { role: "assistant", content: "side delivery" },
-      },
-      {
-        type: "leaf",
-        id: "active-leaf",
-        parentId: "side-entry",
-        targetId: "active-root",
-      },
-      {
-        type: "message",
-        id: "active-tail",
-        parentId: "active-root",
-        message: { role: "assistant", content: "active tail" },
-      },
-      {
-        type: "metadata",
-        id: "opaque-after-active-tail",
-        parentId: "side-entry",
-      },
-    ]);
-
+  it("forwards a prepared bounded snapshot without rereading the transcript", async () => {
+    const snapshot = {
+      messages: [{ role: "assistant", content: "retained tail" }],
+      totalMessages: 10_000,
+      truncated: true,
+    };
     await emitResetCommandHooks({
       action: "new",
       ctx: {} as HandleCommandsParams["ctx"],
       cfg: {} as HandleCommandsParams["cfg"],
-      command: {
-        surface: "discord",
-        senderId: "rai",
-        channel: "discord",
-        from: "discord:rai",
-        to: "discord:bot",
-        resetHookTriggered: false,
-      } as HandleCommandsParams["command"],
+      command: { resetHookTriggered: false } as HandleCommandsParams["command"],
       sessionKey: "agent:main:main",
       storePath: "/tmp/openclaw-agent.sqlite",
       previousSessionEntry: {
         sessionId: "prev-session",
-        sessionFile: "sqlite:main:prev-session:/tmp/openclaw-agent.sqlite",
       } as HandleCommandsParams["previousSessionEntry"],
+      previousSessionResetMessages: snapshot,
       workspaceDir: "/tmp/openclaw-workspace",
     });
-
     await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
-    const [event] = firstBeforeResetCall();
-    expect(event.messages).toEqual([
-      { role: "user", content: "active root" },
-      { role: "assistant", content: "active tail" },
-    ]);
+    expect(hookRunnerMocks.readSessionTranscriptHookMessages).not.toHaveBeenCalled();
+    expect(firstBeforeResetCall()[0]).toMatchObject(snapshot);
   });
 });
 

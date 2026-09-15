@@ -30,6 +30,8 @@ type HookEventRecord = Record<string, unknown> & {
     previousSessionEntry?: { sessionId?: string };
   };
   messages?: Array<{ role?: string; content?: unknown }>;
+  totalMessages?: number;
+  truncated?: boolean;
 };
 
 type CommandNewHookEvent = {
@@ -69,6 +71,8 @@ function expectTranscriptResetEvent(params: {
   expect(params.event.messages).toHaveLength(1);
   expect(params.event.messages?.[0]?.role).toBe("user");
   expect(params.event.messages?.[0]?.content).toBe(params.content);
+  expect(params.event.totalMessages).toBe(1);
+  expect(params.event.truncated).toBe(false);
 }
 
 function expectMainHookContext(context: HookEventRecord, sessionId: string) {

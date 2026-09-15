@@ -179,6 +179,42 @@ To short-circuit an agent turn with a synthetic reply or silence, use
 | `before_compaction` / `after_compaction` | Observe | Observe compaction boundaries; no rewrite or veto result     |
 | `before_reset`                           | Observe | Observe session-reset events (`/reset`, programmatic resets) |
 
+`before_reset.messages` is a bounded snapshot (at most 4,096 messages and
+8 MiB of serialized UTF-8 JSON, oldest first), not a complete-history export.
+Selection stops at the first message that would exceed the byte budget; an
+oversized newest message can therefore produce an empty, truncated snapshot.
+`totalMessages`, when present, reports the source message count before bounding;
+`truncated` indicates omitted or incompletely classified history. Raw snapshots
+preserve `JSON.parse` semantics, including last duplicate members and deeply
+nested JSON. Parser-compatible fallback classification is itself limited to
+4,096 rows and 8 MiB of stored JSON. Navigation uses a separate
+8 MiB encoded-structure budget, not the 4,096-message payload count. The canonical
+owner accounts for retained nodes (including entry, identity, cursor, and index
+fields) and other retained records before accepting more data; metadata is sized
+before transfer. This is not an 8 MiB total-heap guarantee. If classification
+or navigation cannot fit its safety budget, the snapshot is empty with `truncated: true` and
+`totalMessages` omitted rather than an invented zero. Stored bytes and emitted
+JSON bytes are checked separately because parsing can expand numeric spellings.
+Missing identity or a failed read still produces an empty snapshot, so
+`truncated: false` alone does not establish successful capture.
+
+Each entry point preserves its existing selection: chat reset commands observe
+raw message records (including earlier reset intervals), with leaf navigation
+selecting the active branch in canonical path order, including retained reset
+prefixes. Index readiness does not change raw membership or ordering. Gateway
+resets observe reset-relative display
+history, including visible reset, compaction, and custom records.
+
+Plugins must handle truncation rather than assume that a reset provides every
+message. `sessionFile` is legacy metadata, **not** a path or a supported
+`sessions_history` argument. History tools use `sessionKey` and optional
+`messageId` anchors; an unanchored read after reset addresses the new window.
+A previously captured message anchor may reopen its retained reset interval,
+subject to tool access, retention, redaction, and output limits. Raw command
+payloads do not acquire new message IDs, and this hook does not guarantee an
+anchor or complete recovery of omitted history. Plugins needing complete
+records must maintain them incrementally, not reconstruct them from this hook.
+
 Successful engine-owned compaction attempts emit `after_compaction` even when
 no history changes, with `compactedCount: 0`. Failed or aborted attempts do not
 emit that completion hook.

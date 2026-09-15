@@ -5,6 +5,7 @@ import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunk
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { BeforeResetHookMessages } from "../../gateway/session-reset-hook-messages.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.js";
 import type { PluginCommandContext } from "../../plugins/types.js";
 import type { ExplicitSkillSelection, SkillCommandSpec } from "../../skills/types.js";
@@ -66,7 +67,7 @@ export type HandleCommandsParams = {
   allowCreateSessionEntry?: boolean;
   previousSessionEntry?: SessionEntry;
   previousSessionMemory?: SessionMemoryTranscript;
-  previousSessionResetMessages?: unknown[];
+  previousSessionResetMessages?: BeforeResetHookMessages;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;

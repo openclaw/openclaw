@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   boundedJsonUtf8Bytes,
+  boundedParsedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
   jsonUtf8Bytes,
   jsonUtf8BytesOrInfinity,
@@ -92,10 +93,9 @@ describe("boundedJsonUtf8Bytes", () => {
       }),
     },
   ])("matches JSON.stringify byte length for $name", ({ value }) => {
-    expect(boundedJsonUtf8Bytes(value, 100_000)).toEqual({
-      bytes: Buffer.byteLength(JSON.stringify(value), "utf8"),
-      complete: true,
-    });
+    const expected = { bytes: Buffer.byteLength(JSON.stringify(value), "utf8"), complete: true };
+    expect(boundedJsonUtf8Bytes(value, 100_000)).toEqual(expected);
+    expect(boundedParsedJsonUtf8Bytes(value, 100_000)).toEqual(expected);
   });
 
   it("stops once the byte limit is exceeded", () => {
@@ -137,6 +137,34 @@ describe("boundedJsonUtf8Bytes", () => {
     const result = boundedJsonUtf8Bytes(value, 8_192);
     expect(result.complete).toBe(false);
     expect(result.bytes).toBeGreaterThan(8_192);
+  });
+});
+
+describe("bounded JSON parser-depth compatibility", () => {
+  it.each([
+    '{"0":'.repeat(10000) + "0" + "}".repeat(10000),
+    '{"toJSON":null,"value":' + "[".repeat(10000) + "0" + "]".repeat(10000) + "}",
+  ])("counts deep parsed JSON without recursive serialization %#", (raw) => {
+    const value: unknown = JSON.parse(raw);
+    expect(() => JSON.stringify(value)).toThrow();
+    expect(boundedJsonUtf8Bytes(value, 1_000_000).complete).toBe(false);
+    expect(boundedParsedJsonUtf8Bytes(value, 1_000_000)).toEqual({
+      bytes: Buffer.byteLength(raw),
+      complete: true,
+    });
+  });
+  it("counts repeated acyclic references separately", () => {
+    const shared = { value: "x" };
+    const value = [shared, shared];
+    expect(boundedParsedJsonUtf8Bytes(value, 100)).toEqual({
+      bytes: Buffer.byteLength(JSON.stringify(value)),
+      complete: true,
+    });
+  });
+  it("counts decimal expansion instead of the source numeric spelling", () => {
+    const value: unknown = JSON.parse("[1e20,1e20]");
+    expect(boundedParsedJsonUtf8Bytes(value, 20)).toEqual({ bytes: 22, complete: false });
+    expect(boundedParsedJsonUtf8Bytes(value, 100)).toEqual({ bytes: 45, complete: true });
   });
 });
 

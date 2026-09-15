@@ -7,6 +7,7 @@ import type { ExecPolicyOverrides } from "../../agents/exec-defaults.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { BeforeResetHookMessages } from "../../gateway/session-reset-hook-messages.js";
 import { logVerbose } from "../../globals.js";
 import type { SessionMemoryTranscript } from "../../hooks/bundled/session-memory/capture.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -159,7 +160,7 @@ export async function handleInlineActions(params: {
   allowCreateSessionEntry?: boolean;
   previousSessionEntry?: SessionEntry;
   previousSessionMemory?: SessionMemoryTranscript;
-  previousSessionResetMessages?: unknown[];
+  previousSessionResetMessages?: BeforeResetHookMessages;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
   storePath?: string;

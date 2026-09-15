@@ -177,12 +177,18 @@ export type SessionTranscriptNavigationStorage<T> = {
   invalidLeafControlIds: TranscriptNavigationSet;
 };
 
-export function scanSessionTranscriptTree<T>(entries: Iterable<T>): SessionTranscriptTree<T> {
+export function scanSessionTranscriptTree<T>(
+  entries: Iterable<T>,
+  options?: { beforeRetainNode?: (node: Readonly<SessionTranscriptTreeNode<T>>) => void },
+): SessionTranscriptTree<T> {
   const nodes: SessionTranscriptTreeNode<T>[] = [];
   const byId = new Map<string, SessionTranscriptTreeNode<T>>();
   const navigation = scanSessionTranscriptNavigation(entries, {
     byId,
-    addNode: (node) => nodes.push(node),
+    addNode: (node) => {
+      options?.beforeRetainNode?.(node);
+      nodes.push(node);
+    },
     resetDescendantIds: new Set(),
     invalidLeafControlIds: new Set(),
   });

@@ -155,3 +155,142 @@ export function boundedJsonUtf8Bytes(value: unknown, maxBytes: number): BoundedJ
     return { bytes: Math.max(bytes, maxBytes + 1), complete: false };
   }
 }
+
+/**
+ * Depth-safe byte accounting for already parsed JSON/owned message values.
+ * This proves a byte bound, not that downstream recursive serializers can handle
+ * the same nesting. Keep the existing best-effort counter contract for its SDK
+ * consumers that use it before JSON.stringify or structuredClone.
+ */
+export function boundedParsedJsonUtf8Bytes(value: unknown, maxBytes: number): BoundedJsonUtf8Bytes {
+  let bytes = 0;
+  const seen = new WeakSet<object>();
+  type Frame =
+    | { kind: "value"; value: unknown; inArray: boolean }
+    | { kind: "array"; value: unknown[]; index: number }
+    | {
+        kind: "object";
+        value: object;
+        keys: Generator<string>;
+        wroteField: boolean;
+      }
+    | { kind: "leave"; value: object };
+  const stack: Frame[] = [{ kind: "value", value, inArray: false }];
+  const add = (amount: number): void => {
+    bytes += amount;
+    if (bytes > maxBytes) {
+      throw new Error("json_byte_limit_exceeded");
+    }
+  };
+  function* ownKeys(entry: object): Generator<string> {
+    for (const key in entry) {
+      if (Object.prototype.propertyIsEnumerable.call(entry, key)) {
+        yield key;
+      }
+    }
+  }
+  try {
+    while (stack.length > 0) {
+      const frame = stack.pop();
+      if (!frame) {
+        break;
+      }
+      if (frame.kind === "leave") {
+        seen.delete(frame.value);
+        continue;
+      }
+      if (frame.kind === "array") {
+        if (frame.index >= frame.value.length) {
+          add(1);
+          seen.delete(frame.value);
+          continue;
+        }
+        if (frame.index > 0) {
+          add(1);
+        }
+        const entry = frame.value[frame.index++];
+        stack.push(frame, { kind: "value", value: entry, inArray: true });
+        continue;
+      }
+      if (frame.kind === "object") {
+        let next = frame.keys.next();
+        while (!next.done) {
+          const key = next.value;
+          const field: unknown = Reflect.get(frame.value, key);
+          if (field !== undefined && typeof field !== "function" && typeof field !== "symbol") {
+            if (frame.wroteField) {
+              add(1);
+            }
+            frame.wroteField = true;
+            add(jsonStringByteLengthUpToLimit(key, maxBytes - bytes));
+            add(1);
+            stack.push(frame, { kind: "value", value: field, inArray: false });
+            break;
+          }
+          next = frame.keys.next();
+        }
+        if (next.done) {
+          add(1);
+          seen.delete(frame.value);
+        }
+        continue;
+      }
+      const entry = frame.value;
+      if (entry === null) {
+        add(4);
+        continue;
+      }
+      switch (typeof entry) {
+        case "string":
+          add(jsonStringByteLengthUpToLimit(entry, maxBytes - bytes));
+          continue;
+        case "number":
+          add(jsonUtf8BytesOrInfinity(Number.isFinite(entry) ? entry : null));
+          continue;
+        case "boolean":
+          add(entry ? 4 : 5);
+          continue;
+        case "undefined":
+        case "function":
+        case "symbol":
+          if (frame.inArray) {
+            add(4);
+          }
+          continue;
+        case "bigint":
+          throw new Error("json_byte_length_unsupported");
+        case "object":
+          break;
+      }
+      if (seen.has(entry)) {
+        throw new Error("json_byte_length_circular");
+      }
+      // Custom toJSON can reshape output or hide arbitrary work; retain the
+      // existing Date-only conversion exception rather than invoking it here.
+      if (typeof Reflect.get(entry, "toJSON") === "function" && !(entry instanceof Date)) {
+        throw new Error("json_byte_length_custom_to_json");
+      }
+      seen.add(entry);
+      if (entry instanceof Date) {
+        stack.push(
+          { kind: "leave", value: entry },
+          { kind: "value", value: entry.toJSON(), inArray: frame.inArray },
+        );
+      } else if (Array.isArray(entry)) {
+        add(1);
+        stack.push({ kind: "array", value: entry, index: 0 });
+      } else {
+        add(1);
+        stack.push({
+          kind: "object",
+          value: entry,
+          keys: ownKeys(entry),
+          wroteField: false,
+        });
+      }
+    }
+    return { bytes, complete: true };
+  } catch {
+    return { bytes: Math.max(bytes, maxBytes + 1), complete: false };
+  }
+}

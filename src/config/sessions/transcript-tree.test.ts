@@ -429,4 +429,28 @@ describe("session transcript tree helpers", () => {
     ]);
     expect(selectSessionTranscriptLeafControlledPath([root, missingTarget])).toBeUndefined();
   });
+  it("closes navigation input when the owner rejects a node before retention", () => {
+    let closed = false;
+    let visited = 0;
+    function* entries() {
+      try {
+        yield { type: "custom", id: "root", parentId: null };
+        yield { type: "custom", id: "child", parentId: "root" };
+        throw new Error("Read past the retained structure budget");
+      } finally {
+        closed = true;
+      }
+    }
+    expect(() =>
+      scanSessionTranscriptTree(entries(), {
+        beforeRetainNode: () => {
+          if (++visited > 1) {
+            throw new Error("navigation budget");
+          }
+        },
+      }),
+    ).toThrow("navigation budget");
+    expect(visited).toBe(2);
+    expect(closed).toBe(true);
+  });
 });

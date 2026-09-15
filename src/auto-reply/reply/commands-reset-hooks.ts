@@ -1,9 +1,11 @@
 // Emits reset hooks and cleanup work around session reset commands.
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
+import {
+  type BeforeResetHookMessages,
+  readBeforeResetHookMessages,
+} from "../../gateway/session-reset-hook-messages.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -19,49 +21,16 @@ function loadRouteReplyRuntime() {
 
 export type ResetCommandAction = "new" | "reset";
 
-function parseTranscriptMessages(entries: unknown[]): unknown[] {
-  const selectedEntries = selectSessionTranscriptLeafControlledPath(entries) ?? entries;
-  return selectedEntries.flatMap((entry) => {
-    if (
-      entry &&
-      typeof entry === "object" &&
-      !Array.isArray(entry) &&
-      (entry as { type?: unknown }).type === "message" &&
-      (entry as { message?: unknown }).message
-    ) {
-      return [(entry as { message: unknown }).message];
-    }
-    return [];
-  });
-}
+export type { BeforeResetHookMessages } from "../../gateway/session-reset-hook-messages.js";
 
+/** Bounded pre-reset transcript for plugin observers; see `readBeforeResetHookMessages`. */
 export async function readBeforeResetMessages(params: {
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
   storePath?: string;
-}): Promise<unknown[]> {
-  if (!params.sessionId || !params.sessionKey || !params.storePath) {
-    logVerbose("before_reset: no session identity available, firing hook with empty messages");
-    return [];
-  }
-  try {
-    return parseTranscriptMessages(
-      // before_reset snapshots the canonical pre-reset rows. sessionFile is
-      // hook metadata only and must not be treated as a readable path.
-      await loadTranscriptEvents({
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      }),
-    );
-  } catch (err: unknown) {
-    logVerbose(
-      `before_reset: failed to read transcript identity ${params.sessionKey}/${params.sessionId}; firing hook with empty messages (${String(err)})`,
-    );
-    return [];
-  }
+}): Promise<BeforeResetHookMessages> {
+  return readBeforeResetHookMessages(params, "raw");
 }
 
 export async function emitResetCommandHooks(params: {
@@ -78,7 +47,7 @@ export async function emitResetCommandHooks(params: {
   sessionEntry?: HandleCommandsParams["sessionEntry"];
   previousSessionEntry?: HandleCommandsParams["previousSessionEntry"];
   previousSessionMemory?: HandleCommandsParams["previousSessionMemory"];
-  previousSessionResetMessages?: unknown[];
+  previousSessionResetMessages?: BeforeResetHookMessages;
   onObservedReplyDelivery?: () => Promise<void> | void;
   workspaceDir: string;
 }): Promise<{ routedReply: boolean }> {
@@ -145,7 +114,7 @@ export async function emitResetCommandHooks(params: {
       agentId && prevEntry?.sessionId && storePath
         ? formatSqliteSessionFileMarker({ agentId, sessionId: prevEntry.sessionId, storePath })
         : params.sessionKey;
-    const messages =
+    const payload =
       params.previousSessionResetMessages ??
       (await readBeforeResetMessages({
         agentId,
@@ -156,7 +125,13 @@ export async function emitResetCommandHooks(params: {
     void (async () => {
       try {
         await hookRunner.runBeforeReset(
-          { sessionFile, messages, reason: params.action },
+          {
+            sessionFile,
+            messages: payload.messages,
+            totalMessages: payload.totalMessages,
+            truncated: payload.truncated,
+            reason: params.action,
+          },
           {
             agentId,
             sessionKey: params.sessionKey,
