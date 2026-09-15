@@ -1,4 +1,6 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
+import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -18,7 +20,10 @@ import {
   type SessionSqliteTargetResolutionCache,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
-import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import {
+  assertCanonicalSqliteSessionKeysCurrent,
+  hasCanonicalSessionValidationProjection,
+} from "./session-canonical-key.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type ResolvedSqliteSessionEntry = {
@@ -47,7 +52,12 @@ export function resolveSessionEntry(
     };
   };
   if (options.readOnly) {
-    const result = withOpenClawAgentDatabaseReadOnly(read, toDatabaseOptions(resolved));
+    const result = withOpenClawAgentDatabaseReadOnly((database) => {
+      hasCanonicalSessionValidationProjection(database);
+      return withSqlitePostCommitPublications(database.db, () =>
+        runSqliteDeferredTransactionSync(database.db, () => read(database)),
+      );
+    }, toDatabaseOptions(resolved));
     return result.found
       ? result.value
       : { existing: undefined, legacyKeys: [], normalizedKey: resolved.sessionKey };
@@ -103,7 +113,12 @@ export function loadExactSessionEntryCandidates(
   if (!scope.readOnly) {
     return read(openOpenClawAgentDatabase(options));
   }
-  const result = withOpenClawAgentDatabaseReadOnly(read, options);
+  const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    hasCanonicalSessionValidationProjection(database);
+    return withSqlitePostCommitPublications(database.db, () =>
+      runSqliteDeferredTransactionSync(database.db, () => read(database)),
+    );
+  }, options);
   return result.found ? result.value : [];
 }
 

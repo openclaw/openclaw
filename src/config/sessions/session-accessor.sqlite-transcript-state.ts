@@ -15,6 +15,7 @@ import {
   assertCanonicalSessionKeyWriteMatchesDatabase,
   canonicalSessionKeyMigrationRequiredError,
 } from "./session-canonical-key.js";
+import { certifyCanonicalSessionValidationRows } from "./session-canonical-validation.js";
 import {
   assertSessionTranscriptHot,
   readSessionColdTranscript,
@@ -238,6 +239,9 @@ export function ensureTranscriptSessionRoot(
         }),
       ),
   );
+  if (!options.allowStoredAlias) {
+    certifyCanonicalSessionValidationRows(database, [scope.sessionKey]);
+  }
 }
 
 export function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId: string): number {

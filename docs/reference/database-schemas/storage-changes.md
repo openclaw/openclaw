@@ -196,9 +196,16 @@ ordering while awaiting its driver.
 Read-only callbacks made while a cached agent writer holds a transaction use a
 separate read-only companion connection. Each call rereads committed rows and
 checks the current schema, agent owner, and physical file identity. The companion
-retains prepared statements and connection-local canonical-key validation, never
-an authorization result or an open read transaction. Canonical validation checks
-the committed main-key policy before reuse. The companion retires with its writer's
+retains prepared statements, never an authorization result or an open read
+transaction. Canonical validation belongs to the admitted physical database:
+first admission requires full proof, then the schema-21 pending-key projection
+records changes independently of connection lifetime. Startup and initial Gateway
+authorization of an unadmitted reader use the existing mutation worker for pending
+validation and recheck live authority after awaiting it. Native readers preserve
+their existing main-key admission and raw-row parser behavior; each new reader
+checks pending keys without rescanning unrelated certified entries. Synchronous commit guards still read committed
+rows. See [incremental canonical validation](/reference/database-schemas/agent-schema-history#incremental-canonical-session-validation)
+for migration and rollback behavior. The companion retires with its writer's
 native close, disposal, or replacement, including eviction and update cleanup.
 Cold readers outside the history worker and extension-capable readers remain
 one-shot; incognito reads retain their existing process-local owner.

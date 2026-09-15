@@ -31,7 +31,12 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { VERSION } from "../version.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
 import {
+  canonicalSessionValidationSchemaSql,
+  withoutCanonicalSessionValidationSchema,
+} from "./openclaw-agent-canonical-validation-schema.js";
+import {
   AGENT_MEDIA_SCHEMA_VERSION,
+  CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   type OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
@@ -567,6 +572,18 @@ function persistAgentSchemaMetadata(
   );
 }
 
+function seedCanonicalSessionValidationPending(db: DatabaseSync): void {
+  // Migration records work only; the canonical owner validates and certifies row contents.
+  db.exec(`
+    INSERT INTO session_canonical_validation_pending (session_key)
+    SELECT node.session_key FROM session_nodes AS node
+    WHERE NOT EXISTS (
+      SELECT 1 FROM session_canonical_validation_pending AS pending
+      WHERE pending.session_key = node.session_key
+    );
+  `);
+}
+
 function ensureAgentSchema(
   db: DatabaseSync,
   agentId: string,
@@ -576,7 +593,9 @@ function ensureAgentSchema(
   const schemaSql =
     targetVersion < 18
       ? withLegacySessionParticipantsSchema(OPENCLAW_AGENT_SCHEMA_SQL)
-      : OPENCLAW_AGENT_SCHEMA_SQL;
+      : targetVersion < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
+        ? withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL)
+        : OPENCLAW_AGENT_SCHEMA_SQL;
   const identityMigration =
     targetVersion >= 18 &&
     readSqliteUserVersion(db) < targetVersion &&
@@ -606,6 +625,27 @@ function ensureAgentSchema(
         throw new Error(
           `OpenClaw agent database ${pathname} uses schema version ${previousVersion}; expected at most ${targetVersion} for this migration.`,
         );
+      }
+      if (
+        previousVersion === CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION - 1 &&
+        targetVersion === CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
+      ) {
+        const previousSchema = withoutCanonicalSessionValidationSchema(schemaSql);
+        repairCanonicalSqliteIndexes(db, pathname, previousSchema, {
+          verifyPhysicalIntegrity: false,
+        });
+        assertAgentSchemaVersion(
+          db,
+          { agentId, pathname, version: previousVersion },
+          previousSchema,
+        );
+        db.exec(canonicalSessionValidationSchemaSql(schemaSql));
+        seedCanonicalSessionValidationPending(db);
+        db.exec(`PRAGMA user_version = ${targetVersion};`);
+        persistAgentSchemaMetadata(db, agentId, targetVersion);
+        assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);
+        maintenanceAuthority.assertAgentDatabaseMaintenanceAuthority();
+        return;
       }
       if (previousVersion === AGENT_MEDIA_SCHEMA_VERSION) {
         const legacySql = withLegacySessionParticipantsSchema(OPENCLAW_AGENT_SCHEMA_SQL);
@@ -677,6 +717,12 @@ function ensureAgentSchema(
         migrateSqliteSchemaToStrictInTransaction(db, schemaSql, {
           databaseLabel: pathname,
         });
+      }
+      if (
+        previousVersion < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION &&
+        targetVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
+      ) {
+        seedCanonicalSessionValidationPending(db);
       }
       repairCanonicalSqliteIndexes(db, pathname, schemaSql, {
         verifyPhysicalIntegrity: false,

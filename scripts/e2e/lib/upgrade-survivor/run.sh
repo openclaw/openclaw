@@ -7,6 +7,7 @@ exec 3>&1
 source scripts/lib/openclaw-e2e-instance.sh
 source scripts/e2e/lib/prepublish-plugin-registry.sh
 source scripts/e2e/lib/upgrade-survivor/plugin-dependency-fixtures.sh
+source scripts/e2e/lib/upgrade-survivor/backup-rollback.sh
 
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 
@@ -190,7 +191,7 @@ MOBILE_PAIRING_CANDIDATE_RESTART_EVIDENCE="$ARTIFACT_ROOT/mobile-pairing-candida
 MOBILE_PAIRING_FINAL_EVIDENCE="$ARTIFACT_ROOT/mobile-pairing-final.json"
 HISTORICAL_PACKAGE_REPLACEMENT_EVIDENCE="$ARTIFACT_ROOT/historical-package-replacement.json"
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON="$CONFIG_COVERAGE_JSON"
-rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON"
+rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON" "$ARTIFACT_ROOT/backup-rollback.json"
 : >"$PHASE_LOG"
 
 validate_baseline_package_spec() {
@@ -299,6 +300,7 @@ write_summary() {
     SUMMARY_RESTART_FIXTURE="$restart_fixture_evidence" \
     SUMMARY_RESTART_RUNTIME_FIXTURE="$restart_runtime_evidence" \
     SUMMARY_RESTART_INFERENCE="$restart_inference" \
+    SUMMARY_BACKUP_ROLLBACK="$ARTIFACT_ROOT/backup-rollback.json" \
     node --input-type=module <<'NODE'
 import fs from "node:fs";
 import path from "node:path";
@@ -347,6 +349,9 @@ const summary = {
   restartFixture: readJsonOrNull(process.env.SUMMARY_RESTART_FIXTURE),
   restartRuntimeFixture: readJsonOrNull(process.env.SUMMARY_RESTART_RUNTIME_FIXTURE),
   restartInference: process.env.SUMMARY_RESTART_INFERENCE || null,
+  backupRollback: process.env.SUMMARY_SCENARIO === "legacy-operator-state"
+    ? readJsonOrNull(process.env.SUMMARY_BACKUP_ROLLBACK)
+    : undefined,
   timings: {
     startupSeconds: numberOrNull(process.env.SUMMARY_START_SECONDS),
     updateRestartSeconds: numberOrNull(process.env.SUMMARY_UPDATE_RESTART_SECONDS),
@@ -885,7 +890,7 @@ rm_rf_retry() {
 }
 
 reset_run_state() {
-  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR" "$STATE_HOME_ROOT"
+  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR" "$STATE_HOME_ROOT" "$RUNTIME_ROOT/backup-rollback"
   rm -f "$SYSTEMCTL_SHIM_PID_FILE" "$SYSTEMCTL_SHIM_DAEMON_LOG"
   mkdir -p "$npm_config_prefix" "$npm_config_cache" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR"
 }
@@ -1988,6 +1993,7 @@ fi
 run_plugin_fixture_phase configure-plugin-registry configure_plugin_registry
 if [ "$SCENARIO" = "legacy-operator-state" ]; then
   phase prepare-schema-expectation prepare_schema_expectation
+  phase capture-backup-rollback capture_backup_rollback
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     phase prepare-baseline-update-manager install_update_restart_systemctl_shim
     phase prepare-baseline-update-service run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
@@ -2121,6 +2127,9 @@ if [ "$SCENARIO" = "sqlite-volume" ]; then
 fi
 if [ "$LIVE_OPENAI" = "1" ]; then
   phase live-openai run_live_openai
+fi
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase verify-backup-rollback verify_backup_rollback
 fi
 
 run_completed="1"

@@ -25,23 +25,31 @@ export function registerOpenClawAgentDatabaseIdentity(db: DatabaseSync): void {
 
 /** Reuse facts captured at open; aliases must never be resolved again at a handoff. */
 export function readOpenClawAgentDatabaseIdentity(database: AgentDatabaseOwner) {
-  const prepared = identities.get(database.db);
+  const prepared = findOpenClawAgentDatabaseIdentity(database);
   if (prepared === undefined) {
     throw new Error("OpenClaw agent database identity was not prepared at open");
   }
   return prepared;
 }
 
-/** A retained connection can remain open after its public pathname is replaced. */
+/** Raw diagnostic connections have no admitted physical identity. */
+export function findOpenClawAgentDatabaseIdentity(database: AgentDatabaseOwner) {
+  return identities.get(database.db);
+}
+
+/** A retained connection can outlive its pathname or be deserialized away from that file. */
 export function isOpenClawAgentDatabasePathCurrent(
   database: AgentDatabaseOwner & { path: string },
 ): boolean {
   if (!database.db.isOpen) {
     return false;
   }
-  const { identity } = readOpenClawAgentDatabaseIdentity(database);
+  const { identity, filename } = readOpenClawAgentDatabaseIdentity(database);
   if (typeof identity === "symbol") {
     return true;
+  }
+  if (database.db.location() !== filename) {
+    return false;
   }
   const current = statSync(database.path, { bigint: true, throwIfNoEntry: false });
   return current !== undefined && identity === `${current.dev}:${current.ino}`;
