@@ -229,9 +229,10 @@ export function resolveDiscordRawMessageText(
     attachments: message.attachments ?? undefined,
     stickers: resolveDiscordSnapshotStickers(message),
   });
-  const embedText = resolveDiscordEmbedText(message.embeds);
-  const componentText = extractDiscordComponentsV2Text(message.components);
-  const forwardedText = resolveDiscordForwardedMessagesTextFromSnapshots(message.message_snapshots);
-  const text = content || embedText || componentText || forwardedText;
+  const text =
+    content ||
+    resolveDiscordEmbedText(message.embeds) ||
+    extractDiscordComponentsV2Text(message.components) ||
+    resolveDiscordForwardedMessagesTextFromSnapshots(message.message_snapshots);
   return [text, mediaText].filter(Boolean).join("\n");
 }
