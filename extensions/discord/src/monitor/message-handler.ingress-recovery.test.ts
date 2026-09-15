@@ -212,7 +212,12 @@ describe("Discord durable ingress replacement recovery", () => {
         preflight: bufferedPreflight,
         debounceMs: 60_000,
       });
-      await vi.waitFor(async () => expect(await queue.listClaims()).toHaveLength(1));
+      // Both rows sit on `channel:lane-a`. Releasing the lane on defer lets the
+      // second row be claimed and buffered by the same debounce window instead
+      // of being guillotined behind the first, so the buffered handler holds two
+      // claims, not one. Neither may reach preflight, and neither may lose its
+      // retry facts on replacement — that is what this case guards.
+      await vi.waitFor(async () => expect(await queue.listClaims()).toHaveLength(2));
       await bufferedHandler.deactivate();
       expect(bufferedPreflight).not.toHaveBeenCalled();
       expect(await retryFacts(queue, "poison")).toEqual(expectedFacts);

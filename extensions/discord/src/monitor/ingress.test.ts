@@ -12,6 +12,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDiscordIngressMonitor, type DiscordIngressLifecycle } from "./ingress.js";
+import type { DiscordMessageEvent } from "./listeners.js";
 
 type DiscordIngressPayload = {
   version: 1;
@@ -241,6 +242,53 @@ describe("Discord durable ingress", () => {
           expect(verdict.kind).toBe("completed");
         });
         expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("admits a second same-lane message while the first is still deferred, without waiting for adoption", async () => {
+    await withQueue(async (queue) => {
+      const dispatched: string[] = [];
+      const lifecycles = new Map<string, DiscordIngressLifecycle>();
+      const dispatch = vi.fn(
+        async (event: DiscordMessageEvent, lifecycle: DiscordIngressLifecycle) => {
+          const id = String(event.id);
+          dispatched.push(id);
+          lifecycles.set(id, lifecycle);
+          return { kind: "deferred" as const };
+        },
+      );
+      const monitor = createDiscordIngressMonitor({
+        accountId: "default",
+        client: {} as never,
+        runtime: runtime(),
+        queue,
+        dispatch,
+      });
+      monitor.start();
+      try {
+        // Same channel_id: both messages share a lane.
+        const first = createRawMessage("2001", "channel-shared");
+        const second = createRawMessage("2002", "channel-shared");
+        await monitor.accept(first);
+        await monitor.accept(second);
+
+        // deferredLaneOccupancy: "release" frees the channel lane as soon as
+        // the first claim defers (before adoption), so the second message is
+        // dispatched without waiting for the first to be adopted. Holding the
+        // lane (the drain default) would guillotine it instead. Same defect
+        // and fix as #101335 (Telegram) and #119382 (WhatsApp).
+        await vi.waitFor(() => expect(dispatched).toEqual(["2001", "2002"]));
+
+        const firstLifecycle = lifecycles.get("2001");
+        const secondLifecycle = lifecycles.get("2002");
+        if (!firstLifecycle || !secondLifecycle) {
+          throw new Error("expected both dispatch lifecycles");
+        }
+        await firstLifecycle.onAdopted();
+        await secondLifecycle.onAdopted();
       } finally {
         await monitor.stop();
       }
