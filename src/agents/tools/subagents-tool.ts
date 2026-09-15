@@ -16,6 +16,7 @@ import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js"
 import { resolveTaskSessionAgentId } from "../../tasks/task-session-identity.js";
 import { TASK_STATUS_DETAIL_MAX_CHARS, sanitizeTaskStatusText } from "../../tasks/task-status.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
+import { ensureSubagentControllerOwnsRun } from "../subagents/registry/subagent-control-scope.js";
 import {
   DEFAULT_RECENT_MINUTES,
   listControlledSubagentRuns,
@@ -89,11 +90,17 @@ function listTreeTasks(
   rootSessionKeys: ReadonlySet<string>,
   rootAgentId: string,
   cfg: OpenClawConfig,
-  requireCurrentSubagentOwnership = false,
+  subagentOwnership: "retained" | "visible" | "controlled" = "retained",
 ): TaskRecord[] {
-  const visibleSessions = new Set<string>();
+  const visibleSessions = new Map<
+    string,
+    { controllerSessionKey: string; controllerAgentId: string }
+  >();
   for (const key of rootSessionKeys) {
-    visibleSessions.add(`${rootAgentId}\0${key}`);
+    visibleSessions.set(`${rootAgentId}\0${key}`, {
+      controllerSessionKey: key,
+      controllerAgentId: rootAgentId,
+    });
   }
   const visibleTasks = new Set<string>();
   const controlledRunsByOwner = new Map<string, ReturnType<typeof listControlledSubagentRuns>>();
@@ -113,9 +120,10 @@ function listTreeTasks(
         continue;
       }
       if (
-        requireCurrentSubagentOwnership &&
+        subagentOwnership !== "retained" &&
         task.runtime === "subagent" &&
-        readTaskBackingInstance(task.detail)?.runtime === "subagent" &&
+        (subagentOwnership === "controlled" ||
+          readTaskBackingInstance(task.detail)?.runtime === "subagent") &&
         task.runId &&
         task.childSessionKey
       ) {
@@ -129,7 +137,12 @@ function listTreeTasks(
           !controlledRuns.some(
             (run) =>
               run.childSessionKey === task.childSessionKey &&
-              (run.taskRunId ?? run.runId) === task.runId,
+              (run.taskRunId ?? run.runId) === task.runId &&
+              (subagentOwnership !== "controlled" ||
+                [...visibleSessions.values()].some(
+                  (controller) =>
+                    ensureSubagentControllerOwnsRun({ cfg, controller, entry: run }) === undefined,
+                )),
           )
         ) {
           continue;
@@ -137,9 +150,13 @@ function listTreeTasks(
       }
       visibleTasks.add(task.taskId);
       if (task.childSessionKey) {
-        const childIdentity = `${task.agentId ?? taskRequesterAgentId ?? ""}\0${task.childSessionKey}`;
+        const childAgentId = task.agentId ?? taskRequesterAgentId ?? "";
+        const childIdentity = `${childAgentId}\0${task.childSessionKey}`;
         if (!visibleSessions.has(childIdentity)) {
-          visibleSessions.add(childIdentity);
+          visibleSessions.set(childIdentity, {
+            controllerSessionKey: task.childSessionKey,
+            controllerAgentId: childAgentId,
+          });
           changed = true;
         }
       }
@@ -305,7 +322,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
           current.allowedOwnerKeys,
           current.controllerAgentId,
           current.cfg,
-          true,
+          "visible",
         );
       };
 
@@ -332,6 +349,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         allowedOwnerKeys,
         controllerAgentId,
         cfg,
+        action === "cancel" ? "controlled" : "retained",
       );
 
       if (action === "list") {

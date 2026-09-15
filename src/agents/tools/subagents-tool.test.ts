@@ -49,11 +49,13 @@ function task(params: {
 }
 
 describe("subagents tool", () => {
-  it.each(["reparent", "remove", "timeout"] as const)(
+  it.each(["reparent", "controller", "legacy-controller", "remove", "timeout"] as const)(
     "rechecks the current control graph after %s without trusting retained task links",
     async (transition) => {
       resetSubagentRegistryForTests();
-      if (transition === "timeout") {
+      const retainsReadAccess = transition === "controller" || transition === "legacy-controller";
+      const waitsUntilTimeout = transition === "timeout" || retainsReadAccess;
+      if (waitsUntilTimeout) {
         vi.useFakeTimers();
       }
       const owner = "agent:main:main";
@@ -75,13 +77,18 @@ describe("subagents tool", () => {
       const childTask = {
         ...task({ taskId: "controlled-task", runtime: "subagent", childSessionKey: childKey }),
         runId: childRun.runId,
-        detail: createSubagentTaskBackingDetail(1),
+        detail: transition === "legacy-controller" ? undefined : createSubagentTaskBackingDetail(1),
       };
       const descendant = task({ taskId: "descendant-task", runtime: "cli", ownerKey: childKey });
+      const cancelTask = vi.fn<typeof cancelDetachedTaskRunById>().mockResolvedValue({
+        found: true,
+        cancelled: true,
+      });
       const tool = createSubagentsTool({
         agentSessionKey: owner,
         config: {},
         listTasks: () => [childTask, descendant],
+        cancelTask,
       });
       try {
         expect(
@@ -93,6 +100,19 @@ describe("subagents tool", () => {
             })
           ).details,
         ).toMatchObject({ reason: "timeout", tasks: [{ taskId: descendant.taskId }] });
+        expect(
+          (
+            await tool.execute("cancel-before", {
+              action: "cancel",
+              taskId: descendant.taskId,
+            })
+          ).details,
+        ).toMatchObject({ status: "cancelled", taskId: descendant.taskId });
+        expect(cancelTask).toHaveBeenCalledExactlyOnceWith({
+          cfg: {},
+          taskId: descendant.taskId,
+        });
+        cancelTask.mockClear();
         const waiting = tool.execute("waiting", {
           action: "wait",
           taskIds: [childTask.taskId, descendant.taskId],
@@ -104,24 +124,46 @@ describe("subagents tool", () => {
           addSubagentRunForTests({
             ...childRun,
             controllerSessionKey: "agent:main:other",
-            requesterSessionKey: "agent:main:other",
+            requesterSessionKey: retainsReadAccess ? owner : "agent:main:other",
           });
         }
         descendant.progressSummary = "FORMER_CHILD_NEW_PRIVATE_WORK";
-        if (transition === "timeout") {
+        if (waitsUntilTimeout) {
           await vi.advanceTimersByTimeAsync(1_000);
         } else {
           descendant.status = "succeeded";
           emitTaskRegistryObserverEvent(() => ({ kind: "upserted", task: descendant }));
         }
         const result = await waiting;
-        expect(result.details).toMatchObject({
-          reason: "unavailable",
-          unavailable: [childTask.taskId, descendant.taskId],
-          tasks: [],
-        });
-        expect(JSON.stringify(result.details)).not.toContain("FORMER_CHILD_NEW_PRIVATE_WORK");
+        if (retainsReadAccess) {
+          expect(result.details).toMatchObject({
+            reason: "timeout",
+            tasks: [{ taskId: childTask.taskId }, { taskId: descendant.taskId }],
+          });
+        } else {
+          expect(result.details).toMatchObject({
+            reason: "unavailable",
+            unavailable: [childTask.taskId, descendant.taskId],
+            tasks: [],
+          });
+          expect(JSON.stringify(result.details)).not.toContain("FORMER_CHILD_NEW_PRIVATE_WORK");
+        }
         expect(childTask.ownerKey).toBe(owner);
+        expect(
+          (
+            await tool.execute("cancel-after", {
+              action: "cancel",
+              taskId: descendant.taskId,
+            })
+          ).details,
+        ).toMatchObject({ status: "forbidden", error: "Task outside session tree." });
+        expect(cancelTask).not.toHaveBeenCalled();
+        expect((await tool.execute("list", { action: "list" })).details).toMatchObject({
+          tasks: expect.arrayContaining([
+            expect.objectContaining({ taskId: childTask.taskId }),
+            ...(retainsReadAccess ? [expect.objectContaining({ taskId: descendant.taskId })] : []),
+          ]),
+        });
       } finally {
         vi.useRealTimers();
         resetSubagentRegistryForTests();
@@ -627,5 +669,49 @@ describe("subagents tool", () => {
       expect.objectContaining({ details: expect.objectContaining({ status: "cancelled" }) }),
     );
     expect(cancelTask).toHaveBeenCalledWith({ cfg: {}, taskId: "retained-media" });
+
+    const childKey = "agent:main:subagent:retained-native";
+    const childRun: SubagentRunRecord = {
+      runId: "retained-native-run",
+      childSessionKey: childKey,
+      controllerSessionKey: policyKey,
+      requesterSessionKey: durableKey,
+      requesterDisplayKey: durableKey,
+      requesterAgentId: "main",
+      task: "Retained native work",
+      generation: 1,
+      createdAt: Date.now(),
+      cleanup: "keep",
+      execution: { status: "running", startedAt: Date.now() },
+    };
+    tasks.push(
+      {
+        ...task({
+          taskId: "retained-native",
+          runtime: "subagent",
+          ownerKey: durableKey,
+          requesterSessionKey: durableKey,
+          childSessionKey: childKey,
+        }),
+        runId: childRun.runId,
+        detail: createSubagentTaskBackingDetail(1),
+      },
+      task({ taskId: "retained-descendant", runtime: "cli", ownerKey: childKey }),
+    );
+    resetSubagentRegistryForTests();
+    addSubagentRunForTests(childRun);
+    try {
+      expect(
+        (
+          await tool.execute("cancel-native-descendant", {
+            action: "cancel",
+            taskId: "retained-descendant",
+          })
+        ).details,
+      ).toMatchObject({ status: "cancelled", taskId: "retained-descendant" });
+      expect(cancelTask).toHaveBeenCalledWith({ cfg: {}, taskId: "retained-descendant" });
+    } finally {
+      resetSubagentRegistryForTests();
+    }
   });
 });

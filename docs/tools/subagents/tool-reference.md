@@ -332,8 +332,11 @@ child session key. An authorized operator or integration must send that
 continuation; merely yielding does not schedule one.
 
 Use `action: "cancel"` with a `taskId` returned by `action: "list"` to stop
-a task. Cancellation is confined to the controlled session tree; a leaf
-sub-agent cannot cancel work owned by another session.
+a task. Cancellation is confined to the current controlled session tree; retained
+task history does not grant control over a former child's work. A leaf sub-agent
+cannot cancel work owned by another session. A completion recipient can still
+read and wait for results when another session controls the child, but that read
+access does not permit cancellation.
 
 Messages and control have distinct effects. `sessions_send` with
 `mode: "steer"` injects guidance into an active supported run and rejects an
