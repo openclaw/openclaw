@@ -221,7 +221,15 @@ export function estimateBase64DecodedByteLength(value: string): number {
   return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
 }
 
-const REALTIME_TALK_PCM_OUTPUT_MAX_QUEUED_SECONDS = 10;
+// Realtime providers can relay an entire spoken reply over the socket far
+// faster than it plays back (e.g. several sentences of audio arriving in a
+// second or two), which pushes the queued-ahead duration past a small cap
+// long before the reply is actually finished. A 10s cap left too little
+// headroom for ordinary multi-sentence replies and caused them to be
+// cancelled mid-sentence with reason "playback-overflow" (#148658); 60s
+// comfortably covers realistic reply lengths while keeping queued PCM16
+// memory bounded (60s of 24kHz mono PCM is under 3MB).
+const REALTIME_TALK_PCM_OUTPUT_MAX_QUEUED_SECONDS = 60;
 const REALTIME_TALK_PCM_OUTPUT_MAX_SOURCES = 320;
 
 type RealtimeTalkPcmOutputQueuePlayResult = "queued" | "ignored" | "overflow";

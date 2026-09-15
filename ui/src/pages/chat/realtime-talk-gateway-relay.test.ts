@@ -543,7 +543,8 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     emitTalkEvent({
       relaySessionId: "relay-1",
       type: "audio",
-      audioBase64: zeroPcmBase64(24000 * 11),
+      // 65s of audio at 24kHz, comfortably past the 60s queued-seconds cap.
+      audioBase64: zeroPcmBase64(24000 * 65),
     });
 
     await waitForFast(() =>

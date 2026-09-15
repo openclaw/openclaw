@@ -346,8 +346,11 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
           modelTurn: {
             parts: [
               {
+                // 4,200,000 base64 chars decode to 3,150,000 bytes ==
+                // 1,575,000 samples; at 24kHz that's 65.625s of audio,
+                // comfortably past the 60s queued-seconds cap.
                 inlineData: {
-                  data: "!".repeat(700_000),
+                  data: "!".repeat(4_200_000),
                   mimeType: "audio/pcm;rate=24000",
                 },
               },
