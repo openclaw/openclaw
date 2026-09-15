@@ -299,6 +299,41 @@ Agents must never run `npm install -g openclaw` or stop the Gateway service
 from a chat shell; use `/update` or the update action so restart and notification
 stay coordinated.
 
+## Inspect FreeBSD service discovery
+
+The standalone `scripts/freebsd-service-inspect.mjs` diagnostic reports which
+`openclaw` rc.d definitions the native configuration selects. It requires a
+root-owned Node installation and script. It does not require the OpenClaw Ports
+service package.
+
+From an existing root shell, install the script from a trusted OpenClaw package:
+
+```sh
+install -d -o root -g wheel -m 0755 /usr/local/libexec
+install -o root -g wheel -m 0644 /path/to/openclaw/scripts/freebsd-service-inspect.mjs /usr/local/libexec/openclaw-service-inspect.mjs
+(cd / && /usr/bin/env -i HOME=/ PATH=/sbin:/bin:/usr/sbin:/usr/bin LC_ALL=C /usr/local/bin/node /usr/local/libexec/openclaw-service-inspect.mjs)
+```
+
+Use your root-owned Node path if it differs. Clear the environment before Node
+starts, as shown, to exclude Node preload options. The command accepts no arguments.
+It reads native administrator shell configuration as root and requests no
+service lifecycle operation. Administrator configuration is trusted shell code,
+not a sandboxed data format.
+
+The result includes the exact clean environment and working directory used for
+discovery. It corresponds to `service` invoked with that same context. Configuration
+that depends on another environment or directory can select different services.
+
+The single JSON result reports `absent`, `present`, or `unknown`. Present results
+include executable and non-executable definitions, their native search order,
+and the first executable definition. Symlinks, unsafe ownership, incomplete
+inspection, or unexpected configuration output produce `unknown` and exit 1.
+Configuration contents and subprocess errors are not included in the result.
+
+This is a diagnostic observation. It does not establish process or package
+ownership, authorize an update, or enable CLI-managed rc.d service updates.
+Continue to use the installation owner's update procedure above.
+
 ## Stale update history
 
 Untouched, identityless legacy admissions older than 24 hours can
