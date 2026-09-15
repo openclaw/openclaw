@@ -10,6 +10,7 @@ import { AgentRosterElement } from "../lib/agents/roster-element.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { newSessionSearch } from "../pages/new-session/location.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.ts";
+import { renderPersonalSessionEmpty } from "./app-sidebar-session-filter-summary.ts";
 import { renderSessionListFrame, renderSessionSection } from "./app-sidebar-session-list-render.ts";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SessionListHost } from "./app-sidebar-session-row-render.ts";
@@ -228,6 +229,16 @@ class SidebarAgentRoster extends AgentRosterElement {
                 }
               </section>`;
             },
+          )}
+          ${renderPersonalSessionEmpty(
+            this.host,
+            this.sections.every((section) => section.totalRowCount === 0),
+            this.connected &&
+              this.roster.result !== null &&
+              !this.roster.loading &&
+              !error &&
+              !this.roster.result.hasMore &&
+              !this.host.sessionData.sessionMutationError,
           )}
         </div>`,
       );

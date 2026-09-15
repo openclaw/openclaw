@@ -2101,6 +2101,9 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-session-pagination__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 0;
   border: 0;
   background: transparent;
@@ -2109,7 +2112,7 @@ openclaw-settings-save-indicator:empty {
   line-height: 18px;
 }
 
-.sidebar-session-pagination__button:hover,
+.sidebar-session-pagination__button:hover:not(:disabled),
 .sidebar-session-pagination__button:focus-visible {
   color: var(--text);
 }

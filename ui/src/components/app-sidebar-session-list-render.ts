@@ -5,6 +5,7 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
+import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import {
   isPresenceViewerIdle,
   presenceViewerLabel,
@@ -16,8 +17,8 @@ import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
 import {
-  renderSessionFilterSummary,
-  renderSidebarSessionFilter,
+  renderPersonalSessionEmpty,
+  renderSessionListToolbar,
 } from "./app-sidebar-session-filter-summary.ts";
 import {
   renderChildSessionLoadError,
@@ -35,6 +36,7 @@ import {
 } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 import { renderNewSessionLink } from "./new-session-link.ts";
+import type { SessionDataController } from "./session-data-controller.ts";
 
 type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
   totalRowCount: number;
@@ -47,6 +49,15 @@ type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
 type SidebarSessionListHost = SessionListHost & {
   readonly sidebarAgentsMode: "chip" | "roster";
   readonly sessionInvolvingMeFilterActive: boolean;
+  readonly sessionData: SessionListHost["sessionData"] &
+    Pick<
+      SessionDataController,
+      | "sessionsLoading"
+      | "sessionsResult"
+      | "sessionCatalogs"
+      | "sessionCatalogLive"
+      | "loadingMoreSessionCatalogIds"
+    >;
   loadMoreSidebarSessions(): Promise<void>;
 };
 
@@ -400,8 +411,13 @@ function renderRosterLoadMore(
       <button
         type="button"
         class="sidebar-session-pagination__button"
-        aria-label=${t("chat.selectors.loadMoreRosterSessions")}
+        aria-label=${host.sessionData.sessionsLoading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
+        ?disabled=${host.sessionData.sessionsLoading}
+        aria-busy=${String(host.sessionData.sessionsLoading)}
         @click=${() => {
+          if (host.sessionData.sessionsLoading) {
+            return;
+          }
           void host.loadMoreSidebarSessions().then(() => {
             for (const section of sections) {
               host.setVisibleSessionLimit(
@@ -412,7 +428,8 @@ function renderRosterLoadMore(
           });
         }}
       >
-        ${t("chat.selectors.loadMoreRosterSessions")}
+        ${host.sessionData.sessionsLoading ? html`<span class="session-run-spinner" aria-hidden="true"></span>` : nothing}
+        ${host.sessionData.sessionsLoading ? t("common.loading") : t("chat.selectors.loadMoreRosterSessions")}
       </button>
     </div>
   `;
@@ -608,29 +625,6 @@ function renderSessionListBody(params: {
   `;
 }
 
-function renderSessionListToolbar(host: SidebarSessionListHost) {
-  const newSessionAccess = host.readNewSessionAccess();
-  const filtered =
-    host.sessionOwnerFilterActive ||
-    host.sessionInvolvingMeFilterActive ||
-    host.sessionsStatusFilter !== "active";
-  return html`
-    <div class="sidebar-session-toolbar">
-      <span class="sidebar-recent-sessions__label-text">${t("chat.sidebar.threads")}</span>
-      ${filtered ? renderSessionFilterSummary(host) : nothing}
-      ${renderSidebarSessionFilter(host, "sidebar-session-toolbar__button")}
-      ${renderNewSessionLink({
-        basePath: host.basePath,
-        agentId: host.expandedAgentId(),
-        className: "sidebar-session-toolbar__button sidebar-new-session",
-        label: t("agentChip.newConversation"),
-        disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
-        onOpen: (agentId, target) => host.requestOpenNewSession(agentId, target),
-      })}
-    </div>
-  `;
-}
-
 export function renderSessionList(params: {
   host: SidebarSessionListHost;
   empty: boolean;
@@ -640,6 +634,20 @@ export function renderSessionList(params: {
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
+  const catalogData = host.sessionData;
+  const catalogsSettled =
+    isGatewayMethodAdvertised(
+      host.sessionDataContext?.gateway.snapshot ?? {},
+      "sessions.catalog.list",
+    ) !== true ||
+    (catalogData.sessionCatalogRefreshStatus.hasLoaded &&
+      !catalogData.sessionCatalogRefreshStatus.awaitingGateway &&
+      catalogData.sessionCatalogLive.requestGeneration === null &&
+      catalogData.loadingMoreSessionCatalogIds.size === 0 &&
+      catalogData.sessionCatalogs.every(
+        (catalog) =>
+          !catalog.error && catalog.hosts.every((entry) => !entry.error && !entry.nextCursor),
+      ));
   return renderSessionListFrame(
     host,
     html`
@@ -652,6 +660,18 @@ export function renderSessionList(params: {
           catalogRenderer: params.catalogRenderer,
         })}
         ${renderRosterLoadMore(host, params.sections, params.nativeSessionsHaveMore)}
+        ${renderPersonalSessionEmpty(
+          host,
+          params.empty && params.sections.every((section) => section.totalRowCount === 0),
+          host.connected &&
+            host.sessionData.sessionsResult !== null &&
+            !host.sessionData.sessionsLoading &&
+            !host.sessionData.sessionMutationError &&
+            !params.nativeSessionsHaveMore &&
+            params.catalogs.catalogs.length === 0 &&
+            catalogsSettled &&
+            !host.sessionData.sessionCatalogRefreshStatus.error,
+        )}
         ${
           host.sessionsStatusFilter === "archived" && params.empty
             ? html`<span class="sidebar-session-empty-hint"
