@@ -11,7 +11,11 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { onDecodedOutput } from "../decoded-output.js";
+import {
+  createAwaitedDecodedOutput,
+  joinProcessCompletionAndOutput,
+  onDecodedOutput,
+} from "../decoded-output.js";
 import { pipeProcessOutput } from "../pipe-output.js";
 import { prepareSecretInputStdio } from "../spawn-secret-input.js";
 import { createManagedChildStdin } from "./adapters/child-stdin.js";
@@ -53,7 +57,8 @@ function reserveStdioEntry(stdio: StdioEntry[], value: StdioEntry): number {
   return fd;
 }
 
-function createOutputRelay(stream?: Readable, piped = false) {
+function createOutputRelay(stream?: Readable, piped = false, onFailure?: () => void) {
+  const consumer = onFailure && stream ? createAwaitedDecodedOutput(stream, onFailure) : undefined;
   const listeners = new Set<(chunk: string) => void>();
   const rawListeners = new Set<(chunk: Buffer) => void>();
   const pending: Array<string | Buffer> = [];
@@ -102,7 +107,7 @@ function createOutputRelay(stream?: Readable, piped = false) {
     ended = true;
   };
   if (stream) {
-    if (!piped) {
+    if (!piped && !consumer) {
       onDecodedOutput(stream, push, push);
     }
     stream.once("end", end);
@@ -115,14 +120,19 @@ function createOutputRelay(stream?: Readable, piped = false) {
     push,
     end,
     subscribe: (listener: (chunk: string) => void, onRaw?: (chunk: Buffer) => void) => {
+      if (consumer) {
+        throw new Error("Process stdout requires its awaited consumer");
+      }
       listeners.add(listener);
       if (onRaw) {
         rawListeners.add(onRaw);
       }
       activate(true);
     },
-    drain: () => activate(false),
+    consume: consumer?.consume,
+    drain: () => (consumer ? consumer.drain() : activate(false)),
     clear: () => {
+      consumer?.close();
       listeners.clear();
       rawListeners.clear();
       pending.length = 0;
@@ -142,6 +152,7 @@ export async function createServiceChildRelayAdapter(
     input?: string;
     secretInput?: SpawnSecretInput;
     stderrDestination?: Writable;
+    stdoutConsumption?: "awaited";
     oomScoreWrapperSelected: boolean;
     windowsShellCommand?: string;
   },
@@ -149,6 +160,9 @@ export async function createServiceChildRelayAdapter(
   const generation = randomUUID();
   const useWindowsJobAnchor =
     process.platform === "win32" && params.windowsShellCommand !== undefined;
+  if (useWindowsJobAnchor && params.stdoutConsumption === "awaited") {
+    throw new Error("Windows Job output does not support awaited stdout consumption");
+  }
   const workerUrl = resolveRuntimeWorkerUrl(
     useWindowsJobAnchor
       ? runtimeProcessEntrypoints.serviceChildWindowsJobAnchor
@@ -198,7 +212,11 @@ export async function createServiceChildRelayAdapter(
     extinctionCompletion.reject(error);
     throw error;
   }
-  const stdoutRelay = createOutputRelay(child.stdout ?? undefined);
+  const stopOnOutputFailure =
+    params.stdoutConsumption === "awaited"
+      ? () => requestedSignal !== "SIGKILL" && kill("SIGKILL")
+      : undefined;
+  const stdoutRelay = createOutputRelay(child.stdout ?? undefined, false, stopOnOutputFailure);
   const stderrRelay = createOutputRelay(
     child.stderr ?? undefined,
     Boolean(params.stderrDestination),
@@ -673,16 +691,16 @@ export async function createServiceChildRelayAdapter(
       stdin?.end();
     }
   } catch (error) {
-    stdoutRelay.drain();
+    void stdoutRelay.drain();
     unpipeStderr?.();
-    stderrRelay.drain();
+    void stderrRelay.drain();
     child.kill("SIGKILL");
     throw error;
   } finally {
     removeConstructionAbortListener();
   }
 
-  const kill = (signal: NodeJS.Signals = "SIGKILL") => {
+  function kill(signal: NodeJS.Signals = "SIGKILL") {
     // A closing receipt retires cancellation; channel/anchor exit still owns extinction.
     if (state !== "active") {
       return;
@@ -702,7 +720,7 @@ export async function createServiceChildRelayAdapter(
         loseIdentity(toErrorObject(error, "service child cancellation failed").message);
       }
     });
-  };
+  }
 
   return {
     pid: commandPid,
@@ -710,15 +728,18 @@ export async function createServiceChildRelayAdapter(
     oomScoreWrapperSelected: params.oomScoreWrapperSelected,
     supportsRawOutput: !useWindowsJobAnchor,
     onStdout: stdoutRelay.subscribe,
+    ...(stdoutRelay.consume ? { consumeStdout: stdoutRelay.consume } : {}),
     onStderr: stderrRelay.subscribe,
     onExit: events.onExit,
     onError: events.onError,
     wait: async () => {
       // A caller may intentionally ignore one stream; wait still owns draining it.
-      stdoutRelay.drain();
-      stderrRelay.drain();
+      const output = stdoutRelay.drain();
+      void stderrRelay.drain();
       settleWait();
-      return await resultCompletion.promise;
+      return output
+        ? await joinProcessCompletionAndOutput(resultCompletion.promise, output)
+        : await resultCompletion.promise;
     },
     waitForExtinction: async () => await extinctionCompletion.promise,
     kill,

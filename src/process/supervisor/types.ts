@@ -66,6 +66,11 @@ export type ProcessAdapterConstruction = {
   onSpawnCleanup?: (cleanup: Promise<void>) => void;
 };
 
+export type AwaitedStdoutConsumer = {
+  /** Subscribe once; EOF, decoder flush, and every accepted chunk settle before resolution. */
+  consumeStdout: (listener: (chunk: string) => void | Promise<void>) => Promise<void>;
+};
+
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
   pid?: number;
   stdin?: ManagedRunStdin;
