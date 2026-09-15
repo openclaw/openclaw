@@ -21,6 +21,7 @@ import { resolveDropIndicator, type DropIndicator } from "./chat-page-drop-indic
 import { renderChatPagePaneCell } from "./chat-page-pane-render.ts";
 import { ChatPageRetainedSessions } from "./chat-page-retained-sessions.ts";
 import { closeStagedPane, resumeStagedPanes } from "./chat-pane-attachment-handoff.ts";
+import { focusSurvivingComposer } from "./chat-pane-shared.ts";
 import { bindChatPageSession } from "./chat-state-route.ts";
 import { ChatViewerPresenceController } from "./chat-viewer-presence.ts";
 import "../../styles/chat.ts";
@@ -548,6 +549,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     if (activePane) {
       this.updateRoute(activePane.sessionKey, true);
     }
+    void focusSurvivingComposer(this, paneId, activePane?.sessionKey);
   }
 
   private readonly handleClosePane = (paneId: string) => {
