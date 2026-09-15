@@ -16,6 +16,35 @@ import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
 import { createToolSchemaNormalizationCache } from "./tool-schema-normalization-cache.js";
 
 /**
+ * Tool schemas are external/MCP-controllable but normalize through deep recursion, so every
+ * schema-edge walker below enforces one shared budget. The budget lives inside the recursion
+ * itself (not a pre-walk document check) because local-$ref expansion deepens a flat document.
+ * One depth convention applies to every walker: descending into a child schema node (array
+ * element, schema-map entry, or keyword child) costs exactly one level, containers cost zero,
+ * and opaque literal payloads (const/default/enum/examples) never recurse. Legit schemas nest
+ * far below this cap; it only bounds hostile or malformed input that would otherwise overflow
+ * the stack as a RangeError.
+ */
+export const MAX_TOOL_SCHEMA_NESTING_DEPTH = 256;
+
+/** Thrown when a tool schema nests deeper than {@link MAX_TOOL_SCHEMA_NESTING_DEPTH}. */
+export class ToolSchemaDepthLimitError extends Error {
+  constructor() {
+    super(
+      `Tool schema nesting exceeds the maximum supported depth of ${MAX_TOOL_SCHEMA_NESTING_DEPTH}; ` +
+        "reduce the schema's nesting or split deep definitions into shallower pieces.",
+    );
+    this.name = "ToolSchemaDepthLimitError";
+  }
+}
+
+function assertToolSchemaDepthWithinBudget(depth: number): void {
+  if (depth > MAX_TOOL_SCHEMA_NESTING_DEPTH) {
+    throw new ToolSchemaDepthLimitError();
+  }
+}
+
+/**
  * Narrow structural view of the host's model compat config. packages/ai must stay
  * config-agnostic, so only tool-schema-relevant fields are modeled here; the host's
  * ModelCompatConfig remains structurally assignable.
@@ -235,14 +264,15 @@ function isTrulyEmptySchema(schemaRecord: Record<string, unknown>): boolean {
 
 type ArrayItemsMode = "add" | "omit" | "normalize";
 
-function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode): unknown {
+function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode, depth = 0): unknown {
+  assertToolSchemaDepthWithinBudget(depth);
   if (Array.isArray(schema)) {
     // Only omission descends through a malformed array used as a schema node.
     // Addition visits direct tuple/composition entries through normalizeValue below.
     if (mode === "add") {
       return schema;
     }
-    const entries = schema.map((entry) => normalizeArraySchemaItems(entry, "omit"));
+    const entries = schema.map((entry) => normalizeArraySchemaItems(entry, "omit", depth + 1));
     return entries.some((entry, index) => entry !== schema[index]) ? entries : schema;
   }
   if (!isSchemaRecord(schema)) {
@@ -264,9 +294,12 @@ function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode): unkno
     schema.type === "array" || (Array.isArray(schema.type) && schema.type.includes("array"));
   const normalizeValue = (value: unknown, valueMode: ArrayItemsMode): unknown => {
     if (!Array.isArray(value)) {
-      return normalizeArraySchemaItems(value, valueMode);
+      return normalizeArraySchemaItems(value, valueMode, depth + 1);
     }
-    const entries = value.map((entry) => normalizeArraySchemaItems(entry, valueMode));
+    // The composition/tuple container itself costs nothing; each child schema costs one level,
+    // matching the inliner and the other walkers so one nesting depth means the same thing
+    // across add/omit/strict paths.
+    const entries = value.map((entry) => normalizeArraySchemaItems(entry, valueMode, depth + 1));
     return entries.some((entry, index) => entry !== value[index]) ? entries : value;
   };
   for (const [key, value] of Object.entries(normalized)) {
@@ -285,7 +318,7 @@ function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode): unkno
     if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
       const entries = Object.entries(value);
       for (const entry of entries) {
-        entry[1] = normalizeArraySchemaItems(entry[1], mode);
+        entry[1] = normalizeArraySchemaItems(entry[1], mode, depth + 1);
       }
       if (entries.some(([entryKey, entry]) => entry !== value[entryKey])) {
         next = Object.fromEntries(entries);
@@ -395,7 +428,8 @@ function resolveLocalJsonPointer(rootDocument: unknown, ref: string): unknown {
   return resolveJsonPointerPath(rootDocument, ref.slice(2).split("/"));
 }
 
-const SCHEMA_MAP_KEYS = new Set([
+/** Keywords whose values are maps of user-named subschemas — entry names are never schema keywords. */
+export const SCHEMA_MAP_KEYS: ReadonlySet<string> = new Set([
   "$defs",
   "definitions",
   "dependentSchemas",
@@ -416,7 +450,13 @@ const SCHEMA_OBJECT_KEYS = new Set([
 
 const SCHEMA_ARRAY_KEYS = new Set(["allOf", "anyOf", "items", "oneOf", "prefixItems"]);
 
-const SCHEMA_LITERAL_KEYS = new Set(["const", "default", "enum", "examples"]);
+/** Keywords whose values are opaque literal payloads, not nested schemas — never recurse or count depth here. */
+export const SCHEMA_LITERAL_KEYS: ReadonlySet<string> = new Set([
+  "const",
+  "default",
+  "enum",
+  "examples",
+]);
 
 function tryResolveLocalRef(
   ref: string,
@@ -442,13 +482,19 @@ function inlineLocalSchemaRefsWithDefs(
   refStack: Set<string> | undefined,
   state: { unresolvedLocalRefs: boolean },
   rootDocument: unknown,
+  depth: number,
 ): unknown {
+  // The depth budget lives here because every normalizer recursion funnels through schema-edge
+  // descent: raw nesting deepens via the map/object/array branches below, and $ref expansion
+  // deepens via the resolution call. A flat $defs chain is shallow as a document but recurses
+  // once per resolved link, so a pre-expansion document check cannot bound it — this can.
+  assertToolSchemaDepthWithinBudget(depth);
   if (!schema || typeof schema !== "object") {
     return schema;
   }
   if (Array.isArray(schema)) {
     return schema.map((entry) =>
-      inlineLocalSchemaRefsWithDefs(entry, defs, refStack, state, rootDocument),
+      inlineLocalSchemaRefsWithDefs(entry, defs, refStack, state, rootDocument, depth + 1),
     );
   }
 
@@ -475,6 +521,7 @@ function inlineLocalSchemaRefsWithDefs(
       nextRefStack,
       state,
       rootDocument,
+      depth + 1,
     );
     if (!inlined || typeof inlined !== "object" || Array.isArray(inlined)) {
       return inlined;
@@ -499,7 +546,14 @@ function inlineLocalSchemaRefsWithDefs(
     if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
       const entries = Object.entries(value);
       for (const entry of entries) {
-        entry[1] = inlineLocalSchemaRefsWithDefs(entry[1], nextDefs, refStack, state, rootDocument);
+        entry[1] = inlineLocalSchemaRefsWithDefs(
+          entry[1],
+          nextDefs,
+          refStack,
+          state,
+          rootDocument,
+          depth + 1,
+        );
       }
       setOwnSchemaProperty(result, key, Object.fromEntries(entries));
       continue;
@@ -508,7 +562,7 @@ function inlineLocalSchemaRefsWithDefs(
       setOwnSchemaProperty(
         result,
         key,
-        inlineLocalSchemaRefsWithDefs(value, nextDefs, refStack, state, rootDocument),
+        inlineLocalSchemaRefsWithDefs(value, nextDefs, refStack, state, rootDocument, depth + 1),
       );
       continue;
     }
@@ -517,7 +571,7 @@ function inlineLocalSchemaRefsWithDefs(
         result,
         key,
         value.map((entry) =>
-          inlineLocalSchemaRefsWithDefs(entry, nextDefs, refStack, state, rootDocument),
+          inlineLocalSchemaRefsWithDefs(entry, nextDefs, refStack, state, rootDocument, depth + 1),
         ),
       );
       continue;
@@ -552,6 +606,7 @@ function inlineLocalToolSchemaRefs(schema: unknown): TSchema {
       unresolvedLocalRefs: false,
     },
     schema,
+    0,
   ) as TSchema;
 }
 
@@ -615,11 +670,12 @@ function wrapNullableComposedSchema(schema: Record<string, unknown>): Record<str
   return wrapped;
 }
 
-function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
+function normalizeOpenApiSchemaKeywords(schema: unknown, depth = 0): unknown {
+  assertToolSchemaDepthWithinBudget(depth);
   if (Array.isArray(schema)) {
     let changed = false;
     const normalized = schema.map((entry) => {
-      const next = normalizeOpenApiSchemaKeywords(entry);
+      const next = normalizeOpenApiSchemaKeywords(entry, depth + 1);
       changed ||= next !== entry;
       return next;
     });
@@ -648,15 +704,15 @@ function normalizeOpenApiSchemaKeywords(schema: unknown): unknown {
       let mapChanged = false;
       const mapEntries = Object.entries(value);
       for (const entry of mapEntries) {
-        const nextEntry = normalizeOpenApiSchemaKeywords(entry[1]);
+        const nextEntry = normalizeOpenApiSchemaKeywords(entry[1], depth + 1);
         mapChanged ||= nextEntry !== entry[1];
         entry[1] = nextEntry;
       }
       next = mapChanged ? Object.fromEntries(mapEntries) : value;
     } else if (SCHEMA_OBJECT_KEYS.has(key) && isSchemaRecord(value)) {
-      next = normalizeOpenApiSchemaKeywords(value);
+      next = normalizeOpenApiSchemaKeywords(value, depth + 1);
     } else if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-      const nextEntries = value.map(normalizeOpenApiSchemaKeywords);
+      const nextEntries = value.map((entry) => normalizeOpenApiSchemaKeywords(entry, depth + 1));
       // A changed sibling also exposes these composition-array copies.
       (normalized ??= Object.fromEntries(entries))[key] = nextEntries;
       changed ||= nextEntries.some((entry, index) => entry !== value[index]);
