@@ -303,4 +303,14 @@ describe("ToolExecutionComponent", () => {
     expect(linkedRtl?.indexOf("\u2067")).toBeLessThan(linkedRtl?.indexOf("\x1b]8;;") ?? -1);
     expect(linkedRtl?.indexOf("\u2069")).toBeGreaterThan(linkedRtl?.lastIndexOf("\x1b]8;;") ?? -1);
   });
+
+  it("omits empty recovered tool arguments instead of rendering braces", () => {
+    const recovered = new ToolExecutionComponent("read", {});
+    recovered.setResult({ content: [{ type: "text", text: "done" }] });
+    expect(normalizeTestText(recovered.render(80).join("\n"))).not.toContain("{}");
+
+    const hydrated = new ToolExecutionComponent("read", { path: "src/index.ts" });
+    hydrated.setResult({ content: [{ type: "text", text: "done" }] });
+    expect(normalizeTestText(hydrated.render(80).join("\n"))).toContain("src/index.ts");
+  });
 });

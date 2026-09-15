@@ -191,3 +191,81 @@ describe("progress card tool display", () => {
     },
   );
 });
+
+describe("ask_user tool display", () => {
+  it("shows ask_user options with numbers and reply guidance", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "ask_user",
+        args: {
+          questions: [
+            {
+              question: "Lunch plans?",
+              options: [{ label: "Noodles" }, { label: "Rice" }],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(detail).toBe("Lunch plans? 1. Noodles 2. Rice (reply with the number or option text)");
+  });
+
+  it("keeps a distinct ask_user header alongside the question", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "ask_user",
+        args: {
+          questions: [
+            {
+              header: "Target",
+              question: "Where should this deploy?",
+              options: [{ label: "Staging" }, { label: "Production" }],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(detail).toBe(
+      "Target: Where should this deploy? 1. Staging 2. Production (reply with the number or option text)",
+    );
+  });
+
+  it("numbers multiple ask_user questions and truncates beyond three", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "ask_user",
+        args: {
+          questions: [
+            { question: "Pick a color", options: [{ label: "Red" }, { label: "Blue" }] },
+            { question: "Name the file?" },
+            { question: "Any notes?" },
+            { question: "This one is truncated" },
+          ],
+        },
+      }),
+    );
+
+    const joined = "1) Pick a color 1. Red 2. Blue | 2) Name the file? | 3) Any notes? | …";
+    expect(detail).toBe(`${joined} (reply with the number or option text)`);
+  });
+
+  it("guides free-text ask_user questions to reply with an answer", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "ask_user",
+        args: { questions: [{ question: "Describe the bug" }] },
+      }),
+    );
+
+    expect(detail).toBe("Describe the bug (reply with your answer)");
+  });
+
+  it("returns no detail for ask_user args without questions", () => {
+    expect(formatToolDetail(resolveToolDisplay({ name: "ask_user", args: {} }))).toBeUndefined();
+    expect(
+      formatToolDetail(resolveToolDisplay({ name: "ask_user", args: { questions: [] } })),
+    ).toBeUndefined();
+  });
+});

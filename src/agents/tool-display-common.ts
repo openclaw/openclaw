@@ -657,6 +657,32 @@ function resolveDetailFromKeys(
   return parts.join(", ");
 }
 
+/** Resolves the compact ask_user summary: numbered options plus reply guidance. */
+function resolveAskUserDetail(args: unknown): string | undefined {
+  const record = asRecord(args);
+  const questions: unknown[] = record && Array.isArray(record.questions) ? record.questions : [];
+  let hasOptions = false;
+  const parts = questions.slice(0, 3).map((raw, index) => {
+    const entry = asRecord(raw) ?? {};
+    const header = normalizeOptionalString(entry.header) ?? "";
+    const text = normalizeOptionalString(entry.question) ?? header;
+    const options = (Array.isArray(entry.options) ? entry.options : [])
+      .slice(0, 4)
+      .map((option, optionIndex) => {
+        const label = normalizeOptionalString(asRecord(option)?.label) ?? "";
+        return label ? `${optionIndex + 1}. ${label}` : "";
+      })
+      .filter(Boolean);
+    hasOptions ||= options.length > 0;
+    const merged = text && header && header !== text ? `${header}: ${text}` : text;
+    const segment = [merged, options.join(" ")].filter(Boolean).join(" ");
+    return segment ? `${questions.length > 1 ? `${index + 1}) ` : ""}${segment}` : "";
+  });
+  const joined = parts.filter(Boolean).join(" | ") + (questions.length > 3 ? " | …" : "");
+  const hint = hasOptions ? "reply with the number or option text" : "reply with your answer";
+  return joined ? `${joined} (${hint})` : undefined;
+}
+
 /** Resolve display verb/detail from tool args and optional display metadata. */
 export function resolveToolVerbAndDetailForArgs(params: {
   toolKey: string;
@@ -716,6 +742,9 @@ export function resolveToolVerbAndDetailForArgs(params: {
   }
   if (!detail && toolKey === "tool_search_code") {
     detail = resolveToolSearchCodeDetail(args);
+  }
+  if (!detail && toolKey === "ask_user") {
+    detail = resolveAskUserDetail(args);
   }
 
   const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? fallbackDetailKeys ?? [];
