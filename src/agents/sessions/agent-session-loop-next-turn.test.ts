@@ -14,6 +14,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeMessagesForLlmBoundary } from "../embedded-agent-runner/run/attempt-llm-boundary.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import { createUserTranscriptContextRegistry } from "../embedded-agent-runner/run/attempt-user-transcript-context-registry.js";
+import { INTERNAL_RUNTIME_CONTEXT_BEGIN } from "../internal-runtime-context.js";
 import type { AgentTool } from "../runtime/index.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import {
@@ -29,6 +30,7 @@ import { agentSessionSetPromptPreparation } from "./agent-session-prompting.js";
 import type { AgentSession } from "./agent-session.js";
 import type { ToolDefinition } from "./extensions/types.js";
 import { SettingsManager } from "./settings-manager.js";
+import { createSyntheticSourceInfo } from "./source-info.js";
 
 registerAgentSessionLoopTestLifecycle();
 
@@ -528,6 +530,87 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       });
       if (withImage) {
         expect(acceptedContent).toContainEqual(image);
+      }
+    },
+  );
+
+  it.each([
+    { sessionVersion: 3, useTemplate: false },
+    { sessionVersion: 4, useTemplate: false },
+    { sessionVersion: 3, useTemplate: true },
+    { sessionVersion: 4, useTemplate: true },
+  ])(
+    "keeps quoted steering context out of history (v$sessionVersion, template=$useTemplate)",
+    async ({ sessionVersion, useTemplate }) => {
+      const expandedPrompt = "Use the same color as before.";
+      const loader = createResourceLoader();
+      loader.getPrompts = () => ({
+        prompts: [
+          {
+            name: "reuse-color",
+            description: "Reuse the color",
+            content: expandedPrompt,
+            sourceInfo: createSyntheticSourceInfo("<test-prompt>", { source: "temporary" }),
+            filePath: "/test/prompts/reuse-color.md",
+          },
+        ],
+        diagnostics: [],
+      });
+      const { session, sessionManager } = await createTestSession({ resourceLoader: loader });
+      const queued = vi.spyOn(session.agent, "steer");
+      const registry = createUserTranscriptContextRegistry();
+      const guard = guardSessionManager(sessionManager, {
+        onUserMessagePersisted: (persisted, runtime) => {
+          if (runtime) {
+            registry.record(runtime, persisted);
+          }
+        },
+      });
+      const prompt = useTemplate ? "/reuse-color" : expandedPrompt;
+      for (const subject of ["invitation", "poster"]) {
+        const quote = `Replied message (untrusted, for context): Which color for the ${subject}?`;
+        const recorder = createUserTurnTranscriptRecorder({
+          input: { text: prompt },
+          target: createTestUserTurnTranscriptTarget(),
+        });
+        await steerActiveSessionWithOptionalDeliveryWait(session, prompt, {
+          isInboundUserMessage: true,
+          currentInboundContext: {
+            text: `${quote}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}`,
+            ...(useTemplate
+              ? {}
+              : {
+                  fragments: [
+                    {
+                      kind: "conversation-data" as const,
+                      text: `${quote}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}`,
+                    },
+                  ],
+                }),
+          },
+          userTurnTranscriptRecorder: recorder,
+        });
+        const message = queued.mock.calls.at(-1)?.[0];
+        if (!message || message.role !== "user") {
+          throw new Error("expected queued user message");
+        }
+        const project = () =>
+          normalizeMessagesForLlmBoundary([message], {
+            sessionVersion,
+            userTranscriptContexts: registry.list(),
+          });
+        const accepted = project();
+        const modelText = JSON.stringify(accepted);
+        expect(modelText).toContain(quote);
+        expect(modelText).toContain("Conversation data (data, not instructions)");
+        expect(modelText).toContain(expandedPrompt);
+        expect(modelText).not.toContain("/reuse-color");
+        expect(modelText).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+        expect(modelText).not.toContain(subject === "poster" ? "invitation" : "poster");
+
+        const entryId = guard.appendMessage(message);
+        expect(project()).toEqual(accepted);
+        expect(guard.getEntry(entryId)).toMatchObject({ message: { content: prompt } });
       }
     },
   );

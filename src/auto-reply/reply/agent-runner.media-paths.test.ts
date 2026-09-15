@@ -489,6 +489,48 @@ describe("runReplyAgent media path normalization", () => {
     },
   );
 
+  it.each([true, false])(
+    "preserves a quoted reply through steer admission (accepted: %s)",
+    async (accepted) => {
+      const followupRun = createMediaFollowupRun({ prompt: "Use the same color as before." });
+      followupRun.currentInboundContext = {
+        text: 'Replied message (untrusted, for context):\n{"body":"Which color for the invitation?"}',
+        fragments: [
+          { kind: "conversation-data", text: "Replied message: Which color for the invitation?" },
+        ],
+      };
+      queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId) =>
+        accepted
+          ? { queued: true, sessionId, target: "embedded_run", gatewayHealth: "live" }
+          : { queued: false, sessionId, reason: "not_streaming", gatewayHealth: "live" },
+      );
+
+      await runReplyAgent(
+        makeRunReplyAgentParams({
+          resolvedQueue: { mode: "steer" },
+          shouldSteer: true,
+          shouldFollowup: true,
+          isActive: true,
+          followupRun,
+        }),
+      );
+
+      expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenCalledWith(
+        "session",
+        followupRun.prompt,
+        expect.objectContaining({ currentInboundContext: followupRun.currentInboundContext }),
+      );
+      expect(parkSteerCandidateMock).toHaveBeenCalledWith(
+        "main",
+        followupRun,
+        { mode: "steer" },
+        expect.any(Function),
+      );
+      expect(parkedSteerFallbackMock).toHaveBeenCalledTimes(accepted ? 0 : 1);
+      expect(followupRun.prompt).toBe("Use the same color as before.");
+    },
+  );
+
   it.each([
     { label: "permission mode", run: { permissionMode: "guarded" } },
     { label: "tool overrides", run: { toolOverrides: { webSearch: false } } },

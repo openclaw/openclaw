@@ -2,7 +2,7 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
+import type { CurrentInboundPromptContext } from "../../agents/internal-runtime-context.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";

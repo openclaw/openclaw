@@ -54,6 +54,7 @@ import type { ContextEngineLogicalTurnLease } from "../../harness/context-engine
 import type { ContextEngineTurnAttemptFacts } from "../../harness/context-engine-turn-attempt.js";
 import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-artifact.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
+import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
 import type { ModelFallbackAttemptProvenance } from "../../model-fallback.types.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
@@ -79,16 +80,6 @@ type ReasoningStreamPayload = Pick<
   "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
 > & {
   requiresReasoningProgressOptIn?: boolean;
-};
-
-export type CurrentInboundPromptContext = {
-  text: string;
-  /** Producer-owned fragments for model projection; text remains the legacy rendering. */
-  fragments?: import("../../internal-runtime-context.js").RuntimeContextFragment[];
-  resumableText?: string;
-  promptJoiner?: "\n\n" | "\n" | " ";
-  /** Generated goal blocks owned by inbound-context assembly, never user text. */
-  injectedGoalContexts?: string[];
 };
 
 export type RunEmbeddedAgentParams = {

@@ -177,6 +177,9 @@ export async function runActiveReplySteer(
     const injectionAttempt = beginReplyMessageInjectionTarget(injectionTarget, followupRun.prompt, {
       steeringMode: "all",
       isInboundUserMessage: true,
+      ...(followupRun.currentInboundContext
+        ? { currentInboundContext: followupRun.currentInboundContext }
+        : {}),
       toolAuthorityFingerprint: params.toolAuthorityFingerprint,
       ...(params.pendingInputAuthorityFingerprint
         ? { pendingInputAuthorityFingerprint: params.pendingInputAuthorityFingerprint }
