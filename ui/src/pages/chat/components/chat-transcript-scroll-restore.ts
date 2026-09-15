@@ -71,7 +71,9 @@ function schedulePendingScrollRetry(owner: TranscriptScrollRestoreHost): void {
     requestAnimationFrame(() => {
       owner.setPendingScrollFrame(null);
       if (owner.isConnected() && owner.offsetState.pendingScrollOffset) {
-        owner.requestUpdate();
+        // Retry the restore directly. A frame only needs fresh scroll geometry;
+        // rerendering the whole transcript here adds avoidable switch-time work.
+        applyPendingScrollOffset(owner);
       }
     }),
   );

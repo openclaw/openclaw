@@ -356,6 +356,33 @@ describe("chat transcript controller", () => {
     expect(onSettled).toHaveBeenCalledWith({ scrollTop: 0, anchorToEnd: true });
   });
 
+  it("drives pending scroll-restore retries from geometry without a host re-render", async () => {
+    const flushFrames = stubAnimationFrames();
+    const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
+      kind: "content" as const,
+      key: `row:${index}`,
+      content: html`<div>row ${index}</div>`,
+    }));
+    const { container, transcript } = await mountTestTranscript("pane-restore-retry", rows);
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, value: 2000 },
+    });
+
+    const onSettled = vi.fn();
+    transcript.scrollToOffset(420, onSettled);
+    // The restore's own host update. Every frame after this one must advance the
+    // retry on its own: the test host's requestUpdate is a no-op, so a retry that
+    // asks the host to re-render instead of re-reading geometry never converges.
+    transcript.hostUpdated();
+
+    for (let frame = 0; frame < 15; frame += 1) {
+      flushFrames();
+    }
+
+    expect(onSettled).toHaveBeenCalledWith({ scrollTop: 420, anchorToEnd: false });
+  });
+
   it.each([
     { behavior: "auto", resizeBefore: true, deltaY: -100, observerLate: false },
     { behavior: "smooth", resizeBefore: true, deltaY: -100, observerLate: false },
