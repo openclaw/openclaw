@@ -182,6 +182,43 @@ describe("normalizePendingFinalRecoveryPayloads", () => {
     ).toBeUndefined();
   });
 
+  it("recovers rich-text-only presentation as plain text instead of losing the reply", () => {
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "## Clienti — Rossi\n| Cliente | Saldo |\n| Rossi | 1.00 € |",
+          presentation: { blocks: [{ type: "text", text: "styled" }] },
+        },
+      ]),
+    ).toContain("Clienti");
+    // Buttons still block: stripping them would lose actions, not just formatting.
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "Pick one",
+          presentation: { blocks: [{ type: "text", text: "styled" }] },
+          interactive: { blocks: [{ type: "buttons", buttons: [] }] },
+        },
+      ]),
+    ).toBeUndefined();
+    // Media + presentation still blocks: media directives must not cross payloads.
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        {
+          text: "Chart",
+          mediaUrl: "/tmp/a.png",
+          presentation: { blocks: [{ type: "text", text: "styled" }] },
+        },
+      ]),
+    ).toBeUndefined();
+    // Empty text with only styling has nothing worth replaying.
+    expect(
+      buildRecoverablePendingFinalDeliveryText([
+        { text: "   ", presentation: { blocks: [{ type: "text", text: "styled" }] } },
+      ]),
+    ).toBeUndefined();
+  });
+
   it("separates implicit delivery threading from explicit reply semantics", () => {
     expect(
       buildRecoverablePendingFinalDeliveryText([

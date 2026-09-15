@@ -38,13 +38,21 @@ export function buildRecoverablePendingFinalDeliveryText(
     if (deliveryPayloads.length === 0) {
       continue;
     }
+    const replayablePayload = downgradeRichTextOnlyForRecovery(recoveryPayload) ?? recoveryPayload;
+    const replayableDeliveryPayloads =
+      replayablePayload === recoveryPayload
+        ? deliveryPayloads
+        : normalizeReplyPayloadsForDelivery([replayablePayload]);
+    if (replayableDeliveryPayloads.length === 0) {
+      continue;
+    }
     if (
-      hasUnsupportedDurableRecoveryShape(recoveryPayload) ||
-      deliveryPayloads.some(hasUnrecoverableNormalizedDeliveryShape)
+      hasUnsupportedDurableRecoveryShape(replayablePayload) ||
+      replayableDeliveryPayloads.some(hasUnrecoverableNormalizedDeliveryShape)
     ) {
       return undefined;
     }
-    sendablePayloads.push(...deliveryPayloads);
+    sendablePayloads.push(...replayableDeliveryPayloads);
   }
   if (
     sendablePayloads.length > 1 &&
@@ -116,6 +124,42 @@ function collectDurableMediaDirectives(payload: ReplyPayload): string[] {
       seen.add(mediaUrl);
       return true;
     });
+}
+
+/**
+ * Downgrades rich-text-only payloads (visible formatting in `presentation`)
+ * to plain text for durable recovery. Buttons (`interactive`), threads,
+ * media, voice/video, and delivery directives stay unrecoverable: stripping
+ * them would lose actions, not just formatting.
+ */
+function downgradeRichTextOnlyForRecovery(payload: ReplyPayload): ReplyPayload | undefined {
+  if (payload.presentation === undefined) {
+    return undefined;
+  }
+  if (!payload.text?.trim()) {
+    return undefined;
+  }
+  if (
+    payload.sensitiveMedia === true ||
+    payload.trustedLocalMedia === true ||
+    payload.interactive !== undefined ||
+    payload.btw !== undefined ||
+    payload.delivery !== undefined ||
+    payload.channelData !== undefined ||
+    payload.location !== undefined ||
+    payload.replyToId !== undefined ||
+    payload.replyToTag === true ||
+    payload.replyToCurrent === true ||
+    payload.audioAsVoice === true ||
+    payload.videoAsNote === true ||
+    payload.spokenText !== undefined ||
+    payload.ttsSupplement !== undefined ||
+    hasDurableMedia(payload)
+  ) {
+    return undefined;
+  }
+  const { presentation: _presentation, ...plainPayload } = payload;
+  return plainPayload;
 }
 
 function hasUnsupportedDurableRecoveryShape(payload: ReplyPayload): boolean {
