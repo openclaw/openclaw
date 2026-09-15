@@ -13,6 +13,7 @@ import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "../../packages/gateway-protocol/src/startup-unavailable.js";
+import { withCanonicalSessionValidationDeferral } from "../config/sessions/session-canonical-validation-deferral.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -272,77 +273,90 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   error: ErrorShape | null;
   sessionMutationAuthorization?: SessionMutationAuthorization;
 }> {
-  // Dynamic scope lookup must use the same registry as the eventual handler.
-  const authError = withPluginRuntimeRegistryScope(
-    // SAFETY: The host-owned method registry carries the PluginRegistry selected for dispatch.
-    params.methodRegistry.pluginRegistry as PluginRegistry | undefined,
-    () =>
-      authorizeGatewayMethod(
-        params.method,
-        params.client,
-        params.requestParams,
-        params.methodRegistry,
-      ),
-  );
-  if (authError) {
-    return { error: authError };
-  }
-  // GitHub-backed connections receive hello before remote account resolution. Profile-owned
-  // methods must cross this single router fence before session authorization or handler work.
-  const profileError = await authorizeAuthenticatedProfileForMethod(params);
-  if (profileError) {
-    return { error: profileError };
-  }
-  try {
-    params.expectedProfileBinding?.assertCurrent();
-  } catch (error) {
-    if (error instanceof SessionMutationAuthorizationChangedError) {
-      return { error: error.error };
+  while (true) {
+    // Dynamic scope lookup must use the same registry as the eventual handler.
+    const authError = withPluginRuntimeRegistryScope(
+      // SAFETY: The host-owned method registry carries the PluginRegistry selected for dispatch.
+      params.methodRegistry.pluginRegistry as PluginRegistry | undefined,
+      () =>
+        authorizeGatewayMethod(
+          params.method,
+          params.client,
+          params.requestParams,
+          params.methodRegistry,
+        ),
+    );
+    if (authError) {
+      return { error: authError };
     }
-    throw error;
-  }
-  // Startup gating precedes session authorization: session stores are not loaded yet,
-  // so an authorization read here would deny with a misleading non-retryable error.
-  if (params.context.unavailableGatewayMethods?.has(params.method)) {
-    return {
-      error: errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `${params.method} unavailable during gateway startup`,
-        {
-          retryable: true,
-          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
-          details: { ...gatewayStartupUnavailableDetails(), method: params.method },
-        },
-      ),
-    };
-  }
-  const sessionMutation = resolveSessionMutationAuthorization({
-    client: params.client ?? null,
-    method: params.method,
-    requestParams: params.requestParams,
-    context: params.context,
-  });
-  if (sessionMutation.error) {
-    return { error: sessionMutation.error };
-  }
-  if (
-    params.client?.connect.role === "node" &&
-    (!params.client.connId ||
-      !(await params.context.nodeRegistry.isConnectionCurrentPairingState(params.client.connId)))
-  ) {
-    return {
-      error: errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
-        retryable: true,
-        details: { code: "PAIRING_CHANGED" },
+    // GitHub-backed connections receive hello before remote account resolution. Profile-owned
+    // methods must cross this single router fence before session authorization or handler work.
+    const profileError = await authorizeAuthenticatedProfileForMethod(params);
+    if (profileError) {
+      return { error: profileError };
+    }
+    try {
+      params.expectedProfileBinding?.assertCurrent();
+    } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        return { error: error.error };
+      }
+      throw error;
+    }
+    // Startup gating precedes session authorization: session stores are not loaded yet,
+    // so an authorization read here would deny with a misleading non-retryable error.
+    if (params.context.unavailableGatewayMethods?.has(params.method)) {
+      return {
+        error: errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `${params.method} unavailable during gateway startup`,
+          {
+            retryable: true,
+            retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+            details: { ...gatewayStartupUnavailableDetails(), method: params.method },
+          },
+        ),
+      };
+    }
+    const preparedSessionMutation = withCanonicalSessionValidationDeferral(() =>
+      resolveSessionMutationAuthorization({
+        client: params.client ?? null,
+        method: params.method,
+        requestParams: params.requestParams,
+        context: params.context,
       }),
+    );
+    if (preparedSessionMutation.kind === "pending") {
+      const { certifySessionCanonicalValidationPending } =
+        await import("../config/sessions/session-canonical-validation-readiness.js");
+      await certifySessionCanonicalValidationPending(preparedSessionMutation.database);
+      // No permission result survives readiness. Method scopes, profile binding,
+      // startup state, target selection and current session facts all run again.
+      continue;
+    }
+    const sessionMutation = preparedSessionMutation.value;
+    if (sessionMutation.error) {
+      return { error: sessionMutation.error };
+    }
+    if (
+      params.client?.connect.role === "node" &&
+      (!params.client.connId ||
+        !(await params.context.nodeRegistry.isConnectionCurrentPairingState(params.client.connId)))
+    ) {
+      return {
+        error: errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
+          retryable: true,
+          details: { code: "PAIRING_CHANGED" },
+        }),
+      };
+    }
+    return {
+      error: null,
+      ...(sessionMutation.authorization
+        ? { sessionMutationAuthorization: sessionMutation.authorization }
+        : {}),
     };
   }
-  return {
-    error: null,
-    ...(sessionMutation.authorization
-      ? { sessionMutationAuthorization: sessionMutation.authorization }
-      : {}),
-  };
 }
 
 type GatewayRequestEnvelopeOptions<T> = Pick<

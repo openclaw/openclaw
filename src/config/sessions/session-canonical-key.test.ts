@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
+  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -114,43 +115,56 @@ describe("cold canonical session validation", () => {
     expect(doctor[0]?.updatedAt).toBe(1);
   });
 
-  it("reloads metadata when another connection commits during canonical validation", () => {
-    const scope = createScope();
-    const entry = { sessionId: "cold-key", updatedAt: 1, label: "before" };
-    replaceSessionEntrySync(scope, entry);
-    closeOpenClawAgentDatabasesForTest();
-    openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
-    const writer = new DatabaseSync(scope.storePath);
-    const originalParse = JSON.parse;
-    let committed = false;
-    const parse = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
-      const value = originalParse(text, reviver);
-      if (!committed && value?.sessionId === entry.sessionId && value?.label === "before") {
-        committed = true;
-        writer.exec("BEGIN IMMEDIATE");
-        writer
-          .prepare("UPDATE session_nodes SET entry_json = ?, label = 'after' WHERE session_key = ?")
-          .run(JSON.stringify({ ...entry, label: "after" }), scope.sessionKey);
-        writer
-          .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-          .run(scope.sessionKey);
-        writer.exec("COMMIT");
+  it.each([false, true])(
+    "reloads metadata after a commit during required validation (pending rewrite: %s)",
+    (certifiedReopen) => {
+      const scope = createScope();
+      const entry = { sessionId: "cold-key", updatedAt: 1, label: "before" };
+      replaceSessionEntrySync(scope, entry);
+      if (certifiedReopen) {
+        const pending = openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
+        pending.db.exec(
+          "UPDATE session_nodes SET entry_json = entry_json || ' '; UPDATE session_nodes SET entry_valid = 1",
+        );
+        closeOpenClawAgentDatabaseByPath(scope.storePath);
+      } else {
+        closeOpenClawAgentDatabasesForTest();
       }
-      return value;
-    });
-    try {
-      expect(listSessionEntriesReadOnly({ ...scope, projection: "list" })[0]?.entry.label).toBe(
-        "after",
-      );
-      expect(committed).toBe(true);
-      expect(listSessionEntriesReadOnly({ ...scope, projection: "list" })[0]?.entry.label).toBe(
-        "after",
-      );
-    } finally {
-      parse.mockRestore();
-      writer.close();
-    }
-  });
+      openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
+      const writer = new DatabaseSync(scope.storePath);
+      const originalParse = JSON.parse;
+      let committed = false;
+      const parse = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+        const value = originalParse(text, reviver);
+        if (!committed && value?.sessionId === entry.sessionId && value?.label === "before") {
+          committed = true;
+          writer.exec("BEGIN IMMEDIATE");
+          writer
+            .prepare(
+              "UPDATE session_nodes SET entry_json = ?, label = 'after' WHERE session_key = ?",
+            )
+            .run(JSON.stringify({ ...entry, label: "after" }), scope.sessionKey);
+          writer
+            .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+            .run(scope.sessionKey);
+          writer.exec("COMMIT");
+        }
+        return value;
+      });
+      try {
+        expect(listSessionEntriesReadOnly({ ...scope, projection: "list" })[0]?.entry.label).toBe(
+          "after",
+        );
+        expect(committed).toBe(true);
+        expect(listSessionEntriesReadOnly({ ...scope, projection: "list" })[0]?.entry.label).toBe(
+          "after",
+        );
+      } finally {
+        parse.mockRestore();
+        writer.close();
+      }
+    },
+  );
 
   it("does not publish a partial snapshot after a later malformed row", () => {
     const scope = createScope();

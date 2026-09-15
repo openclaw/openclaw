@@ -232,6 +232,10 @@ export interface SchemaMeta {
   updated_at: number;
 }
 
+export interface SessionCanonicalValidationPending {
+  session_key: string;
+}
+
 export interface SessionConversations {
   conversation_id: string;
   first_seen_at: number;
@@ -566,6 +570,7 @@ export interface DB {
   memory_session_tombstones: MemorySessionTombstones;
   message_tool_run_outcomes: MessageToolRunOutcomes;
   schema_meta: SchemaMeta;
+  session_canonical_validation_pending: SessionCanonicalValidationPending;
   session_conversations: SessionConversations;
   session_goal_operations: SessionGoalOperations;
   session_input_completions: SessionInputCompletions;

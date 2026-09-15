@@ -26,6 +26,7 @@ const statementCacheCapacity = 32;
 const statementCacheEntryBytes = 64 * 1024;
 
 type SqliteAuthorizer = Parameters<DatabaseSync["setAuthorizer"]>[0];
+type SqliteDisposeReason = "close" | "replace";
 
 type StatementCache = {
   statements: Map<string, StatementSync>;
@@ -38,13 +39,13 @@ type StatementCacheOwner = DatabaseSync & {
   [statementInvalidationSymbol]?: true;
   [statementCacheEnabledSymbol]?: true;
   [authorizerActiveSymbol]?: boolean;
-  [disposeCallbacksSymbol]?: Set<() => void>;
+  [disposeCallbacksSymbol]?: Set<(reason: SqliteDisposeReason) => void>;
 };
 
 /** Retire dependent native resources before this connection closes or is replaced. */
 export function registerNodeSqliteDisposeCallback(
   db: DatabaseSync,
-  callback: () => void,
+  callback: (reason: SqliteDisposeReason) => void,
 ): () => void {
   const owner: StatementCacheOwner = db;
   installStatementInvalidation(owner);
@@ -55,9 +56,12 @@ export function registerNodeSqliteDisposeCallback(
   };
 }
 
-export function disposeNodeSqliteDependents(owner: StatementCacheOwner): void {
+export function disposeNodeSqliteDependents(
+  owner: StatementCacheOwner,
+  reason: SqliteDisposeReason = "close",
+): void {
   for (const callback of owner[disposeCallbacksSymbol] ?? []) {
-    callback();
+    callback(reason);
   }
 }
 
@@ -102,7 +106,7 @@ export function installStatementInvalidation(owner: StatementCacheOwner): void {
       configurable: true,
       writable: true,
       value(this: StatementCacheOwner, ...args: Parameters<DatabaseSync["deserialize"]>): void {
-        disposeNodeSqliteDependents(this);
+        disposeNodeSqliteDependents(this, "replace");
         try {
           deserialize(...args);
         } finally {

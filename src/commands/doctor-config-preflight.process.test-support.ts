@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 const execFileAsync = promisify(execFile);
@@ -172,6 +173,7 @@ export function seedV17AdditiveRepairDatabase(
       path: databasePath,
       register: false,
     });
+    removeCanonicalValidationFromHistoricalAgentFixture(database);
     database.exec(`
       DROP TABLE session_participants;
       DROP TRIGGER session_conversations_route_context_invalidate_after_update;

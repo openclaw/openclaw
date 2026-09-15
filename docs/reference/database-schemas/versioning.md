@@ -66,6 +66,16 @@ the schema migration; changing the cold-storage age setting afterward needs no
 Gateway restart. These are separate operations: live configuration reload does
 not authorize an active schema migration.
 
+Agent schema 21 makes the canonical-validation pending table and its node,
+window and main-key invalidation triggers required. This needs a version bump:
+older schema inspectors reject unexpected triggers on canonical tables. The
+maintenance migration marks existing nodes pending without rewriting their
+contents; readiness and Doctor own validation. Already-open older connections
+leave pending markers when they change canonical inputs. Reopening with older
+code is refused. Rollback uses the verified pre-migration backup and matching
+build, not marker changes or removal of the derived table alone. See
+[incremental canonical-session validation](/reference/database-schemas/agent-schema-history#incremental-canonical-session-validation).
+
 Agent schema 19 records collected input consumption in the nullable
 `session_pending_inputs.consumed_event_id TEXT` column. Doctor and the feature's
 first-use ensure add it when needed; the schema version stays 19. The column

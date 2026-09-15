@@ -21,10 +21,7 @@ import {
   createSqliteTranscriptArchiveWorker,
   runExclusiveSqliteTranscriptArchiveWorker,
 } from "./session-accessor.sqlite-archive.js";
-import type {
-  SqliteSessionReclamationAdmissionDiagnostics,
-  SqliteSessionReclamationDiagnostics,
-} from "./session-accessor.sqlite-contract.js";
+import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import type {
   SqliteSessionReclamationPlan,
   SqliteSessionReclamationResult,
@@ -34,7 +31,9 @@ import {
   runSqliteMutationWorkerRequest,
   type SqliteMutationWorkerMessage,
   type SqliteMutationWorkerValidationOwner,
+  type SqliteWorkerWriteAdmission,
 } from "./session-accessor.sqlite-worker-request.js";
+import type { CanonicalSessionValidationResult } from "./session-canonical-validation-readiness.js";
 
 type DatabaseOptions = SqliteSessionReclamationPlan["databaseOptions"];
 export type SqliteReclamationWorkerRequest = {
@@ -42,6 +41,26 @@ export type SqliteReclamationWorkerRequest = {
   operationId: number;
   commitGate: SharedArrayBuffer;
   plan: SqliteSessionReclamationPlan;
+};
+export type SqliteCanonicalValidationWorkerRequest = {
+  type: "canonical-validation";
+  operationId: number;
+  commitGate: SharedArrayBuffer;
+  databaseOptions: DatabaseOptions;
+  maxRows: number;
+  maxBytes: number;
+  initializeCanonicalValidation: boolean;
+};
+type SqliteMutationWorkerRequest =
+  | SqliteReclamationWorkerRequest
+  | SqliteCanonicalValidationWorkerRequest;
+type MutationRunParams<Result> = {
+  claim: OpenClawAgentDatabaseClaim;
+  validationOwner?: SqliteMutationWorkerValidationOwner;
+  diagnostics?: SqliteSessionReclamationDiagnostics;
+  commitGate: SharedArrayBuffer;
+  onCommitRequest: () => unknown[];
+  withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
 };
 type WorkerCleanup = { cleanupWarnings: string[]; settled: boolean };
 export type SqliteReclamationWorkerMessage =
@@ -181,21 +200,59 @@ class SqliteReclamationWorker {
     }
   }
 
-  run(params: {
-    claim: OpenClawAgentDatabaseClaim;
-    validationOwner?: SqliteMutationWorkerValidationOwner;
-    diagnostics?: SqliteSessionReclamationDiagnostics;
-    plan: SqliteSessionReclamationPlan;
-    commitGate: SharedArrayBuffer;
-    onCommitRequest: () => unknown[];
-    withWriteAdmission: (
-      run: (refusal?: { error: unknown }) => Promise<SqliteSessionReclamationResult | undefined>,
-      diagnostics: SqliteSessionReclamationAdmissionDiagnostics,
-    ) => Promise<void>;
-    transferList: ArrayBuffer[];
-  }): Promise<SqliteSessionReclamationResult> {
+  run(
+    params: MutationRunParams<SqliteSessionReclamationResult> & {
+      plan: SqliteSessionReclamationPlan;
+      transferList: ArrayBuffer[];
+    },
+  ): Promise<SqliteSessionReclamationResult> {
+    return this.runRequest({
+      ...params,
+      databaseOptions: params.plan.databaseOptions,
+      kind: params.plan.kind,
+      request: (operationId) => ({
+        type: "reclaim",
+        operationId,
+        commitGate: params.commitGate,
+        plan: params.plan,
+      }),
+    });
+  }
+
+  runCanonicalValidation(
+    params: MutationRunParams<CanonicalSessionValidationResult> & {
+      databaseOptions: DatabaseOptions;
+      maxRows: number;
+      maxBytes: number;
+      initializeCanonicalValidation: boolean;
+    },
+  ): Promise<CanonicalSessionValidationResult> {
+    return this.runRequest({
+      ...params,
+      kind: "canonical-validation",
+      transferList: [],
+      request: (operationId) => ({
+        type: "canonical-validation",
+        operationId,
+        commitGate: params.commitGate,
+        databaseOptions: params.databaseOptions,
+        maxRows: params.maxRows,
+        maxBytes: params.maxBytes,
+        initializeCanonicalValidation: params.initializeCanonicalValidation,
+      }),
+    });
+  }
+
+  private runRequest<Result>(
+    params: MutationRunParams<Result> & {
+      databaseOptions: DatabaseOptions;
+      kind: string;
+      request: (operationId: number) => SqliteMutationWorkerRequest;
+      transferList: ArrayBuffer[];
+    },
+  ): Promise<Result> {
     const startedAt = performance.now();
-    this.assertCurrent(params.plan.databaseOptions, params.claim);
+    this.assertCurrent(params.databaseOptions, params.claim);
     this.worker ??= this.start();
     const worker = this.worker;
     if (params.diagnostics) {
@@ -204,7 +261,7 @@ class SqliteReclamationWorker {
     const operationId = ++this.operationId;
     this.commitGate = params.commitGate;
     let exitCode: number | undefined;
-    const operation = runSqliteMutationWorkerRequest<SqliteSessionReclamationResult>({
+    const operation = runSqliteMutationWorkerRequest<Result>({
       worker,
       operationId,
       completion: "result",
@@ -223,16 +280,7 @@ class SqliteReclamationWorker {
       },
       withWriteAdmission: params.withWriteAdmission,
       validationOwner: params.validationOwner,
-      dispatch: () =>
-        worker.postMessage(
-          {
-            type: "reclaim",
-            operationId,
-            commitGate: params.commitGate,
-            plan: params.plan,
-          } satisfies SqliteReclamationWorkerRequest,
-          params.transferList,
-        ),
+      dispatch: () => worker.postMessage(params.request(operationId), params.transferList),
     });
     const observeCompletion = (outcome: "resolved" | "rejected") => {
       const elapsedMs = Math.round(performance.now() - startedAt);
@@ -241,7 +289,7 @@ class SqliteReclamationWorker {
           pid: process.pid,
           threadId,
           isMainThread,
-          reclamationKind: params.diagnostics?.kind ?? params.plan.kind,
+          reclamationKind: params.diagnostics?.kind ?? params.kind,
           workerThreadId: this.workerThreadId,
           elapsedMs,
           outcome,

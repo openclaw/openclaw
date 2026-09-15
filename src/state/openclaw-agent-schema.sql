@@ -163,6 +163,121 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_windows_conversation
   ON session_windows(primary_conversation_id, updated_at DESC, session_id)
   WHERE primary_conversation_id IS NOT NULL;
 
+-- No foreign key: node triggers settle key renames and deletion even while a
+-- maintenance owner has disabled foreign-key enforcement.
+CREATE TABLE IF NOT EXISTS session_canonical_validation_pending (
+  session_key TEXT NOT NULL PRIMARY KEY
+) STRICT;
+
+-- Avoid trigger-local conflict clauses: SQLite inherits the outer writer's
+-- conflict policy, including writers that predate this validation projection.
+CREATE TRIGGER IF NOT EXISTS session_nodes_canonical_pending_after_insert
+AFTER INSERT ON session_nodes
+BEGIN
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT NEW.session_key
+  WHERE NOT EXISTS (
+    SELECT 1 FROM session_canonical_validation_pending WHERE session_key = NEW.session_key
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_nodes_canonical_pending_after_update
+AFTER UPDATE OF session_key, current_session_id, entry_json, entry_valid,
+  parent_session_key, spawned_by, fork_source_session_key ON session_nodes
+WHEN OLD.session_key IS NOT NEW.session_key
+  OR OLD.current_session_id IS NOT NEW.current_session_id
+  OR OLD.entry_json IS NOT NEW.entry_json
+  OR OLD.entry_valid IS NOT NEW.entry_valid
+  OR OLD.parent_session_key IS NOT NEW.parent_session_key
+  OR OLD.spawned_by IS NOT NEW.spawned_by
+  OR OLD.fork_source_session_key IS NOT NEW.fork_source_session_key
+BEGIN
+  DELETE FROM session_canonical_validation_pending
+  WHERE session_key = OLD.session_key AND OLD.session_key IS NOT NEW.session_key;
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT NEW.session_key
+  WHERE NOT EXISTS (
+    SELECT 1 FROM session_canonical_validation_pending WHERE session_key = NEW.session_key
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_nodes_canonical_pending_after_delete
+AFTER DELETE ON session_nodes
+BEGIN
+  DELETE FROM session_canonical_validation_pending WHERE session_key = OLD.session_key;
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_windows_canonical_pending_after_insert
+AFTER INSERT ON session_windows
+BEGIN
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT node.session_key FROM session_nodes AS node
+  WHERE node.current_session_id = NEW.session_id
+    AND NOT EXISTS (
+      SELECT 1 FROM session_canonical_validation_pending AS pending
+      WHERE pending.session_key = node.session_key
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_windows_canonical_pending_after_update
+AFTER UPDATE OF session_id, session_key ON session_windows
+WHEN OLD.session_id IS NOT NEW.session_id OR OLD.session_key IS NOT NEW.session_key
+BEGIN
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT node.session_key FROM session_nodes AS node
+  WHERE node.current_session_id IN (OLD.session_id, NEW.session_id)
+    AND NOT EXISTS (
+      SELECT 1 FROM session_canonical_validation_pending AS pending
+      WHERE pending.session_key = node.session_key
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_windows_canonical_pending_after_delete
+AFTER DELETE ON session_windows
+BEGIN
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT node.session_key FROM session_nodes AS node
+  WHERE node.current_session_id = OLD.session_id
+    AND NOT EXISTS (
+      SELECT 1 FROM session_canonical_validation_pending AS pending
+      WHERE pending.session_key = node.session_key
+    );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_key_contract_canonical_pending_after_insert
+AFTER INSERT ON session_key_contract
+BEGIN
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT node.session_key FROM session_nodes AS node
+  WHERE NOT EXISTS (
+    SELECT 1 FROM session_canonical_validation_pending AS pending
+    WHERE pending.session_key = node.session_key
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_key_contract_canonical_pending_after_update
+AFTER UPDATE OF main_key ON session_key_contract
+WHEN OLD.main_key IS NOT NEW.main_key
+BEGIN
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT node.session_key FROM session_nodes AS node
+  WHERE NOT EXISTS (
+    SELECT 1 FROM session_canonical_validation_pending AS pending
+    WHERE pending.session_key = node.session_key
+  );
+END;
+
+CREATE TRIGGER IF NOT EXISTS session_key_contract_canonical_pending_after_delete
+AFTER DELETE ON session_key_contract
+BEGIN
+  INSERT INTO session_canonical_validation_pending (session_key)
+  SELECT node.session_key FROM session_nodes AS node
+  WHERE NOT EXISTS (
+    SELECT 1 FROM session_canonical_validation_pending AS pending
+    WHERE pending.session_key = node.session_key
+  );
+END;
+
 CREATE TABLE IF NOT EXISTS conversations (
   conversation_id TEXT NOT NULL PRIMARY KEY,
   channel TEXT NOT NULL,

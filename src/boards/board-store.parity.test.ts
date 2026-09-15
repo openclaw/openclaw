@@ -10,6 +10,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { readBoardHtml, createTestBoardStore } from "./board-store.test-support.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
@@ -503,6 +504,7 @@ describe("SqliteBoardStore persistence", () => {
 
     const { DatabaseSync } = requireNodeSqlite();
     const existingV14 = new DatabaseSync(databasePath);
+    removeCanonicalValidationFromHistoricalAgentFixture(existingV14);
     existingV14.exec(`
       DROP TABLE board_widgets;
       DROP TABLE board_tabs;
@@ -597,6 +599,7 @@ describe("SqliteBoardStore persistence", () => {
       /^CREATE TABLE board_widgets/u,
       "CREATE TABLE board_widgets_legacy",
     );
+    removeCanonicalValidationFromHistoricalAgentFixture(opened.db);
     opened.db.exec(`
       PRAGMA foreign_keys = OFF;
       BEGIN IMMEDIATE;

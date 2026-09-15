@@ -30,6 +30,7 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-participants-migration.js";
 import { sessionParticipantsSchemaSql } from "../state/openclaw-agent-session-participants-schema.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -102,6 +103,7 @@ async function createHistoricalSharedStore(corruptIndex = false, schemaVersion: 
   closeOpenClawStateDatabaseForTest();
   const database = openNodeSqliteDatabase(store.sqlitePath);
   try {
+    removeCanonicalValidationFromHistoricalAgentFixture(database);
     const goalState = readStoredGoalState(database, store.scope.sessionKey);
     // v17 has legacy participant columns; v18 already has the current table.
     // v19 changes creator data only, so restore its unqualified historical shape.

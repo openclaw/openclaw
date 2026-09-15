@@ -12,13 +12,16 @@ import {
   type OpenClawAgentDatabaseWorkerLeaseReceipt,
 } from "../../state/openclaw-agent-db-lease.js";
 import { readOpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/openclaw-agent-db-lifecycle.js";
+import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
   getOpenClawAgentDatabaseValidation,
+  hasOpenClawAgentCanonicalValidation,
   type OpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   borrowOpenClawAgentDatabase,
   settleOpenClawAgentDatabaseWorkerClose,
+  runOpenClawAgentWriteTransaction,
   withOpenClawAgentDatabaseAdmission,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
@@ -31,10 +34,13 @@ import {
   waitForSqliteReclamationCommit,
 } from "./session-accessor.sqlite-reclamation-commit.js";
 import type {
+  SqliteCanonicalValidationWorkerRequest,
   SqliteReclamationWorkerRequest,
   SqliteReclamationWorkerMessage,
 } from "./session-accessor.sqlite-reclamation-worker.js";
 import type { SqliteMutationWorkerMessage } from "./session-accessor.sqlite-worker-request.js";
+import type { CanonicalSessionValidationResult } from "./session-canonical-validation-readiness.js";
+import type { ValidatedCanonicalSessionValidationBatch } from "./session-canonical-validation.js";
 import type {
   SessionColdWorkerData,
   SessionColdMutationResult,
@@ -226,6 +232,7 @@ export async function runReclamationWorkerPort(
       // SAFETY: only the typed private parent sends on this port.
       const request = message as
         | SqliteReclamationWorkerRequest
+        | SqliteCanonicalValidationWorkerRequest
         | { type: "close" }
         | { type: "admission" };
       if (request.type === "close") {
@@ -236,13 +243,43 @@ export async function runReclamationWorkerPort(
         continue;
       }
       commitGate = request.commitGate;
+      const requestDatabaseOptions =
+        request.type === "canonical-validation"
+          ? request.databaseOptions
+          : request.plan.databaseOptions;
       if (
         request.operationId !== ++operationId ||
-        !isDeepStrictEqual(request.plan.databaseOptions, databaseOptions)
+        !isDeepStrictEqual(requestDatabaseOptions, databaseOptions)
       ) {
         throw new Error("SQLite session reclamation database owner is no longer current");
       }
       claim?.assertCurrent();
+      // Parsing and validation stay outside foreground write admission. The batch
+      // never crosses threads; certification compares the exact captured inputs.
+      const canonical =
+        request.type === "canonical-validation"
+          ? await import("./session-canonical-validation.js")
+          : undefined;
+      let prepared: ValidatedCanonicalSessionValidationBatch | undefined;
+      if (
+        canonical &&
+        request.type === "canonical-validation" &&
+        !request.initializeCanonicalValidation
+      ) {
+        const prepare = (database: { agentId: string; db: DatabaseSync }) => {
+          const batch = canonical.readPendingCanonicalSessionValidationBatch(database, request);
+          return canonical.validateCanonicalSessionValidationBatch(batch);
+        };
+        if (retainedDatabase) {
+          prepared = prepare({ agentId: databaseOptions.agentId, db: retainedDatabase });
+        } else {
+          const opened = withFreshOpenClawAgentDatabaseReadOnly(prepare, databaseOptions);
+          if (!opened.found) {
+            throw new Error(`Cannot validate canonical sessions: ${opened.reason}`);
+          }
+          prepared = opened.value;
+        }
+      }
       let validation: OpenClawAgentDatabaseValidation | undefined;
       const result = await withWorkerWriteAdmission(
         port,
@@ -261,21 +298,65 @@ export async function runReclamationWorkerPort(
             } satisfies SqliteReclamationWorkerMessage);
           }
           claim.assertCurrent();
+          const currentClaim = claim;
           if (retainedDatabase !== database.db || !lease) {
             throw new Error("SQLite session reclamation database owner is no longer current");
           }
           assertOpenClawAgentDatabaseLease(lease.leaseId, databaseOptions);
           try {
-            const reclaimed = reclaimSqliteSessionInTransaction(request.plan, {
-              beforeMutation: claim.assertCurrent,
-              onCommit: () =>
-                waitForSqliteReclamationCommit(request.commitGate, () =>
-                  port.postMessage({
-                    type: "commit-request",
-                    operationId,
-                  } satisfies SqliteReclamationWorkerMessage),
-                ),
-            });
+            const authorizeCommit = () =>
+              waitForSqliteReclamationCommit(request.commitGate, () =>
+                port.postMessage({
+                  type: "commit-request",
+                  operationId,
+                } satisfies SqliteReclamationWorkerMessage),
+              );
+            const reclaimed =
+              request.type === "canonical-validation"
+                ? runOpenClawAgentWriteTransaction(
+                    (transactionDatabase) => {
+                      currentClaim.assertCurrent();
+                      if (!canonical) {
+                        throw new Error("Canonical validation lost its prepared batch");
+                      }
+                      if (request.initializeCanonicalValidation) {
+                        if (!hasOpenClawAgentCanonicalValidation(transactionDatabase)) {
+                          canonical.seedCanonicalSessionValidation(transactionDatabase);
+                        }
+                        authorizeCommit();
+                        return {
+                          validatedRows: 0,
+                          certifiedRows: 0,
+                          hasMore:
+                            canonical.hasPendingCanonicalSessionValidation(transactionDatabase),
+                          oversizedRows: 0,
+                        } satisfies CanonicalSessionValidationResult;
+                      }
+                      if (!prepared) {
+                        throw new Error("Canonical validation lost its prepared batch");
+                      }
+                      const batch = prepared;
+                      const certifiedRows =
+                        canonical.compareAndCertifyCanonicalSessionValidationBatch(
+                          transactionDatabase,
+                          batch,
+                        );
+                      authorizeCommit();
+                      return {
+                        validatedRows: batch.rows.length,
+                        certifiedRows,
+                        hasMore:
+                          canonical.hasPendingCanonicalSessionValidation(transactionDatabase),
+                        oversizedRows: batch.oversizedRows,
+                      } satisfies CanonicalSessionValidationResult;
+                    },
+                    databaseOptions,
+                    { operationLabel: "session.canonical-validation.certify" },
+                  )
+                : reclaimSqliteSessionInTransaction(request.plan, {
+                    beforeMutation: claim.assertCurrent,
+                    onCommit: authorizeCommit,
+                  });
             // Warm results must not revive proof invalidated by the parent between requests.
             if (openedForRequest) {
               validation = getOpenClawAgentDatabaseValidation(database);
@@ -290,14 +371,16 @@ export async function runReclamationWorkerPort(
         },
       );
       // The matching settlement releases this victim's admission and all plan buffers.
-      request.plan.materializedPlans.length = 0;
+      if (request.type === "reclaim") {
+        request.plan.materializedPlans.length = 0;
+      }
       port.postMessage({
         type: "reclaimed",
         operationId,
         result,
         settled: true,
         validation,
-      } satisfies SqliteReclamationWorkerMessage);
+      } satisfies SqliteMutationWorkerMessage<typeof result>);
       commitGate = undefined;
     }
   } catch (error) {

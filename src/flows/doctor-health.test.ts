@@ -48,6 +48,7 @@ import {
   openOpenClawAgentDatabase,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../state/openclaw-agent-db.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { withLegacySessionParticipantsSchema } from "../state/openclaw-agent-participants-migration.js";
 import { sessionParticipantsSchemaSql } from "../state/openclaw-agent-session-participants-schema.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -377,6 +378,8 @@ describe("runDoctorHealthFlow", () => {
         const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
         const secondary = openOpenClawAgentDatabase({ agentId: "research", env: state.env });
         if (!clean) {
+          removeCanonicalValidationFromHistoricalAgentFixture(secondary.db);
+          removeCanonicalValidationFromHistoricalAgentFixture(initial.db);
           secondary.db.exec(
             "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
           );
@@ -654,6 +657,7 @@ describe("runDoctorHealthFlow", () => {
     async (options) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+        removeCanonicalValidationFromHistoricalAgentFixture(initial.db);
         initial.db.exec(
           "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
         );
@@ -755,6 +759,7 @@ describe("runDoctorHealthFlow", () => {
           env: state.env,
           ...(configuredPath ? { path: configuredPath } : {}),
         });
+        removeCanonicalValidationFromHistoricalAgentFixture(initial.db);
         initial.db.exec(
           "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
         );

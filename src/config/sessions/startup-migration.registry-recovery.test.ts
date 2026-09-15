@@ -9,10 +9,12 @@ import {
   beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
 } from "../../state/agent-deletion-journal.js";
+import { assertNoOpenClawAgentDatabaseLeasesReadOnly } from "../../state/openclaw-agent-db-lease.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawAgentDatabasesAsync,
   getOpenClawAgentDatabaseIfOpen,
   isOpenClawAgentDatabaseOpen,
   listOpenClawRegisteredAgentDatabases,
@@ -39,7 +41,8 @@ import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
 });
@@ -51,6 +54,10 @@ it.each(["cold", "preexisting"] as const)(
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const options = { agentId: "main", env };
     const initial = openOpenClawAgentDatabase(options);
+    await replaceSessionEntry(
+      { ...options, sessionKey: "agent:main:retained" },
+      { sessionId: "retained-session", updatedAt: 1 },
+    );
     setCanonicalSqliteSessionMainKey(initial, "previous");
     if (lifetime === "cold") {
       closeOpenClawAgentDatabasesForTest();
@@ -66,6 +73,8 @@ it.each(["cold", "preexisting"] as const)(
     expect(isOpenClawAgentDatabaseOpen(initial.path)).toBe(lifetime === "preexisting");
     if (lifetime === "preexisting") {
       expect(getOpenClawAgentDatabaseIfOpen(options)).toBe(initial);
+    } else {
+      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env })).not.toThrow();
     }
   },
 );

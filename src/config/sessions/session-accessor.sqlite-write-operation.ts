@@ -12,6 +12,7 @@ export type SqliteSessionWriteOperation =
   | "session.archive.retention-commit"
   | "session.archive.retention-prepare"
   | "session.canonical-repair.generations"
+  | "session.canonical-validation.certify"
   | "session.checkpoint.branch"
   | "session.checkpoint.restore"
   | "session.entry-replacements"
