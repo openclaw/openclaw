@@ -100,12 +100,12 @@ it("keeps the root path selected before trusted dotenv publishes a config select
   const other = path.join(state, "other.json");
   fs.writeFileSync(other, JSON.stringify({ gateway: { mode: "local", port: 19001 } }));
   fs.writeFileSync(path.join(state, ".env"), `OPENCLAW_CONFIG_PATH=${other}\n`);
-  const config = await withoutMainSql(() =>
-    withPluginCache(createPluginCache(), captureRuntimeConfigAsyncReader()),
-  );
+  const read = captureRuntimeConfigAsyncReader();
+  const config = await withoutMainSql(() => withPluginCache(createPluginCache(), read));
   expect(config.gateway?.port).toBe(18789);
   expect(process.env.OPENCLAW_CONFIG_PATH).toBe(other);
   expect(getRuntimeConfigSnapshot()).toBe(config);
+  expect(() => read.assertCurrent()).not.toThrow();
 });
 
 it("retains dotenv but rejects config-owned environment when strict validation fails", async () => {
@@ -122,7 +122,9 @@ it("retains dotenv but rejects config-owned environment when strict validation f
 it("does not load a different ambient namespace after the reader was captured", async () => {
   fixture();
   const read = captureRuntimeConfigAsyncReader();
+  expect(() => read.assertCurrent()).not.toThrow();
   vi.stubEnv("OPENCLAW_CONFIG_PATH", "/fixture/another-config.json");
+  expect(() => read.assertCurrent()).toThrow("Runtime config source changed");
   await expect(withoutMainSql(() => Promise.resolve().then(read))).rejects.toThrow(
     "Runtime config source changed",
   );
