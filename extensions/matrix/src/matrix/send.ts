@@ -142,6 +142,9 @@ export async function sendMessageMatrix(
   if (!messageText.trim() && !opts.mediaUrl) {
     throw new Error("Matrix send requires text or media");
   }
+  if (opts.emote && opts.mediaUrl) {
+    throw new Error("Matrix emote sends cannot include media");
+  }
   const durableIdentity = resolveMatrixDurableDeliveryIdentity({
     queueId: opts.deliveryQueueId,
     partIndex: opts.deliveryPartIndex,
@@ -270,7 +273,9 @@ export async function sendMessageMatrix(
             if (!chunk.trim()) {
               continue;
             }
-            const content = buildTextContent(chunk, relation);
+            const content = buildTextContent(chunk, relation, {
+              msgtype: opts.emote ? MsgType.Emote : undefined,
+            });
             await enrichMatrixFormattedContent({
               client,
               content,
