@@ -98,6 +98,9 @@ export function resolveSubagentRunOrphanReason(params: {
   // Execution, recovery, and completion obligations outlive individual turns.
   // Missing session metadata must not steal those owners or manufacture success.
   if (
+    (typeof entry.waitExpiryObservedAt === "number" &&
+      Number.isFinite(entry.waitExpiryObservedAt) &&
+      entry.execution.endedAt === undefined) ||
     entry.execution.outcome ||
     entry.collectorCompletion ||
     entry.requesterSettleWake ||

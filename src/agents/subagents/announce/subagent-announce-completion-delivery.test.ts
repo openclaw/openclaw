@@ -31,6 +31,27 @@ describe("hasFailedSubagentNoOutputCompletion", () => {
     expect(hasFailedSubagentNoOutputCompletion([event])).toBe(expected);
   });
 
+  it.each([
+    { disposition: "still-running", failed: false },
+    { disposition: "exited", failed: true },
+    { disposition: "killed", failed: true },
+    { disposition: undefined, failed: true },
+  ] as const)(
+    "classifies no-output timeout with $disposition disposition",
+    ({ disposition, failed }) => {
+      expect(
+        hasFailedSubagentNoOutputCompletion([
+          {
+            ...failedChild,
+            status: "timeout",
+            disposition,
+            noVisibleResult: true,
+          },
+        ]),
+      ).toBe(failed);
+    },
+  );
+
   it("reports nothing for an absent or empty event list", () => {
     expect(hasFailedSubagentNoOutputCompletion(undefined)).toBe(false);
     expect(hasFailedSubagentNoOutputCompletion([])).toBe(false);

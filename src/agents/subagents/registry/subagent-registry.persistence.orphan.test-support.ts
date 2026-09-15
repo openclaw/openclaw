@@ -1,4 +1,5 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
 import { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
@@ -37,6 +38,90 @@ export function registerSubagentOrphanTaskCases({
   restartRegistry: () => void;
   waitForRegistryWork: (predicate: () => boolean | Promise<boolean>) => Promise<void>;
 }) {
+  it.each(["observation-only", "ordinary"] as const)(
+    "handles a missing-session restored %s run without inventing child stop evidence",
+    async (representation) => {
+      const now = Date.now();
+      const runId = `run-missing-session-${representation}`;
+      const childSessionKey = `agent:main:subagent:missing-session-${representation}`;
+      const observed = representation === "observation-only";
+      await writePersistedRegistry(
+        {
+          runs: {
+            [runId]: {
+              runId,
+              taskRunId: runId,
+              generation: 1,
+              childSessionKey,
+              requesterSessionKey: "agent:main:main",
+              requesterDisplayKey: "main",
+              task: "restore missing session without stop evidence",
+              cleanup: "keep",
+              expectsCompletionMessage: false,
+              createdAt: now - 10_000,
+              execution: { status: "running", startedAt: now - 10_000 },
+              ...(observed ? { waitExpiryObservedAt: now - 1_000 } : {}),
+            },
+          },
+        },
+        { seedChildSessions: false },
+      );
+      expect(
+        createRunningTaskRun({
+          runtime: "subagent",
+          runId,
+          childSessionKey,
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          task: "restore missing session without stop evidence",
+          startedAt: now - 10_000,
+          deliveryStatus: "not_applicable",
+          detail: createSubagentTaskBackingDetail(1),
+        }),
+      ).not.toBeNull();
+      const childResult = createDeferred<{ status: "ok"; startedAt: number; endedAt: number }>();
+      vi.mocked(callGateway).mockImplementation(async (request) =>
+        request.method === "agent.wait" ? await childResult.promise : {},
+      );
+      const hasWait = () =>
+        vi.mocked(callGateway).mock.calls.some(([request]) => request.method === "agent.wait");
+      try {
+        restartRegistry();
+        // Reach either the legitimate re-wait or the erroneous terminal path;
+        // do not use a sleep to infer absence of asynchronous completion.
+        await waitForRegistryWork(
+          () => hasWait() || findTaskByRunIdForStatus(runId)?.status === "failed",
+        );
+        if (observed) {
+          expect(hasWait(), "unconfirmed child is re-waited after restore").toBe(true);
+          expect(findTaskByRunIdForStatus(runId)?.status).toBe("running");
+          const retained = loadSubagentRegistryFromSqlite().get(runId);
+          expect(retained?.waitExpiryObservedAt).toBe(now - 1_000);
+          expect(retained?.execution.endedAt).toBeUndefined();
+          expect(retained?.execution.outcome).toBeUndefined();
+          expect(retained?.cleanupCompletedAt).toBeUndefined();
+          childResult.resolve({ status: "ok", startedAt: now - 10_000, endedAt: now });
+          await waitForRegistryWork(() => findTaskByRunIdForStatus(runId)?.status === "succeeded");
+          expect(loadSubagentRegistryFromSqlite().get(runId)?.execution.outcome).toMatchObject({
+            status: "ok",
+          });
+        } else {
+          expect(hasWait(), "ordinary orphan still reaches canonical completion").toBe(false);
+          expect(findTaskByRunIdForStatus(runId)).toMatchObject({
+            status: "failed",
+            error: "subagent run orphaned: missing-session-entry",
+          });
+          await waitForRegistryWork(
+            () => loadSubagentRegistryFromSqlite().get(runId)?.cleanupCompletedAt !== undefined,
+          );
+        }
+      } finally {
+        childResult.resolve({ status: "ok", startedAt: now - 10_000, endedAt: now });
+        await settleSubagentRegistryPersistenceWork();
+      }
+    },
+  );
+
   it("settles the linked task before retiring a stale orphan restored with a retained session", async () => {
     const now = Date.now();
     const runId = "run-stale-unended-restore";
