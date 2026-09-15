@@ -70,8 +70,24 @@ function walkSourceFiles(dir: string): string[] {
   return files;
 }
 
-function sourceWithoutOpenShellMoveImports(filePath: string, source: string): string {
-  if (filePath !== "extensions/openshell/src/backend.ts") {
+const PLUGIN_OWNED_FS_SAFE_IMPORTS: Record<
+  string,
+  { module: string; values: readonly string[]; types?: readonly string[] }
+> = {
+  "extensions/openshell/src/backend.ts": {
+    module: "@openclaw/fs-safe/atomic",
+    values: ["movePathWithCopyFallback"],
+    types: ["MovePathPublicationReceipt"],
+  },
+  "extensions/file-transfer/src/node-host/file-write.ts": {
+    module: "@openclaw/fs-safe/advanced",
+    values: ["overwriteFileHandle"],
+  },
+};
+
+function sourceWithoutPluginOwnedImports(filePath: string, source: string): string {
+  const allowed = PLUGIN_OWNED_FS_SAFE_IMPORTS[filePath];
+  if (!allowed) {
     return source;
   }
   const parsed = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest);
@@ -80,7 +96,7 @@ function sourceWithoutOpenShellMoveImports(filePath: string, source: string): st
     if (
       !ts.isImportDeclaration(statement) ||
       !ts.isStringLiteral(statement.moduleSpecifier) ||
-      statement.moduleSpecifier.text !== "@openclaw/fs-safe/atomic"
+      statement.moduleSpecifier.text !== allowed.module
     ) {
       continue;
     }
@@ -95,14 +111,14 @@ function sourceWithoutOpenShellMoveImports(filePath: string, source: string): st
       !bindings.elements.every((element) => {
         const name = (element.propertyName ?? element.name).text;
         return (
-          name === "movePathWithCopyFallback" ||
-          (name === "MovePathPublicationReceipt" && (clause.isTypeOnly || element.isTypeOnly))
+          allowed.values.includes(name) ||
+          (allowed.types?.includes(name) && (clause.isTypeOnly || element.isTypeOnly))
         );
       })
     ) {
       continue;
     }
-    // This plugin owns the move dependency to preserve its supported host floor.
+    // These plugins own their dependency; path admission still uses OpenClaw policy.
     const specifier = statement.moduleSpecifier;
     checkedSource =
       checkedSource.slice(0, specifier.getStart(parsed)) + checkedSource.slice(specifier.end);
@@ -114,11 +130,27 @@ function hasDisallowedFsSafeImport(filePath: string, source: string): boolean {
   if (ALLOWED_PREFIXES.some((prefix) => filePath.startsWith(prefix))) {
     return false;
   }
-  const checked = sourceWithoutOpenShellMoveImports(filePath, source);
+  const checked = sourceWithoutPluginOwnedImports(filePath, source);
   return checked.includes('"@openclaw/fs-safe') || checked.includes("'@openclaw/fs-safe");
 }
 
 describe("fs-safe import boundary", () => {
+  it("limits File Transfer's descriptor overwrite helper", () => {
+    const owner = "extensions/file-transfer/src/node-host/file-write.ts";
+    const source = 'import { overwriteFileHandle as operation } from "@openclaw/fs-safe/advanced";';
+    expect(hasDisallowedFsSafeImport(owner, source)).toBe(false);
+    expect(hasDisallowedFsSafeImport(`${owner}.other.ts`, source)).toBe(true);
+    expect(
+      hasDisallowedFsSafeImport(
+        owner,
+        'import { overwriteFileHandle, root } from "@openclaw/fs-safe/advanced";',
+      ),
+    ).toBe(true);
+    expect(
+      hasDisallowedFsSafeImport(owner, `${source}\nimport { root } from "@openclaw/fs-safe/root";`),
+    ).toBe(true);
+  });
+
   it.each([
     [
       "move and receipt",

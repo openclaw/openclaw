@@ -42,7 +42,7 @@ beforeEach(() => {
   runFfmpeg.mockReset();
 });
 
-async function createSource(fileName: string, contents: string) {
+async function createSource(fileName: string, contents: string | Buffer) {
   const fixturePath = path.join(tempHome.home, fileName);
   await fs.writeFile(fixturePath, contents);
   const sourcePath = await fs.realpath(fixturePath);
@@ -50,6 +50,40 @@ async function createSource(fileName: string, contents: string) {
 }
 
 describe("playback input staging", () => {
+  it("passes every staged input byte to ffmpeg before publishing the rendition", async () => {
+    const contents = Buffer.alloc(1024 * 1024 + 19);
+    for (let index = 0; index < contents.length; index += 1) {
+      contents[index] = index % 251;
+    }
+    const source = await createSource("complete-input.caf", contents);
+    let inputPath: string | undefined;
+    runFfmpeg.mockImplementationOnce(async (args: string[]) => {
+      inputPath = args[args.indexOf("-i") + 1];
+      expect(inputPath).toBeDefined();
+      expect(await fs.readFile(inputPath!)).toEqual(contents);
+      await fs.writeFile(args.at(-1) ?? "", "normalized-audio");
+      return "";
+    });
+    try {
+      const params = {
+        ...source,
+        mimeType: "audio/x-caf",
+        kind: "audio" as const,
+        probe: { durationMs: 1000, audioStreamIndex: 0 },
+      };
+      expect(await playback.resolvePlaybackTranscode(params)).toEqual({ kind: "preparing" });
+      await waitForPlaybackTranscodeJobsForTest("all");
+      expect(runFfmpeg).toHaveBeenCalledOnce();
+      expect(await playback.resolvePlaybackTranscode(params)).toMatchObject({
+        kind: "transcoded",
+        contentType: "audio/mp4",
+      });
+      await expect(fs.stat(inputPath!)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await settlePlaybackTranscodeJobsForTest();
+    }
+  });
+
   it.each(["grow", "truncate", "rewrite", "replace"] as const)(
     "rejects a source that changes after open via %s before starting ffmpeg",
     async (change) => {
@@ -88,7 +122,7 @@ describe("playback input staging", () => {
         };
         expect(await playback.resolvePlaybackTranscode(params)).toEqual({ kind: "preparing" });
         await expect(waitForPlaybackTranscodeJobsForTest("all")).rejects.toThrow(
-          /changed|mismatch/,
+          change === "grow" ? /exceeds limit/ : /changed|mismatch/,
         );
         expect(changed).toBe(true);
         expect(runFfmpeg).not.toHaveBeenCalled();

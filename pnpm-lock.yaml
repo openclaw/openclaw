@@ -1100,6 +1100,9 @@ importers:
 
   extensions/file-transfer:
     dependencies:
+      '@openclaw/fs-safe':
+        specifier: 0.11.0
+        version: 0.11.0
       minimatch:
         specifier: 10.2.6
         version: 10.2.6

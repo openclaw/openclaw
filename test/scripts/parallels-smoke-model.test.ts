@@ -2214,21 +2214,19 @@ if (commandArgs[0] === "list") {
       const tempDir = makeTempDir(tempDirs, "openclaw-parallels-host-command-pipes-");
       const grandchildPidPath = join(tempDir, "grandchild.pid");
       let grandchildPid = 0;
-      const grandchildScript = [
-        "const { renameSync, writeFileSync } = require('node:fs');",
-        // Outlive the assertion bound, but self-clean if PID setup fails.
-        "setTimeout(() => process.exit(0), 3_000);",
-        "const pidPath = process.env.GRANDCHILD_PID_PATH;",
-        "writeFileSync(pidPath + '.tmp', String(process.pid));",
-        "renameSync(pidPath + '.tmp', pidPath);",
-      ].join("\n");
+      // Outlive the assertion bound, but self-clean if PID setup fails.
+      const grandchildScript = "setTimeout(() => process.exit(0), 3_000);";
       const parentScript = [
         "const { spawn } = require('node:child_process');",
+        "const { renameSync, writeFileSync } = require('node:fs');",
         `const child = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], {`,
         "  detached: true,",
         "  env: process.env,",
         "  stdio: ['ignore', 'inherit', 'inherit'],",
         "});",
+        "const pidPath = process.env.GRANDCHILD_PID_PATH;",
+        "writeFileSync(pidPath + '.tmp', String(child.pid));",
+        "renameSync(pidPath + '.tmp', pidPath);",
         "child.unref();",
         "setInterval(() => {}, 1000);",
       ].join("\n");
@@ -2242,7 +2240,8 @@ if (commandArgs[0] === "list") {
             GRANDCHILD_PID_PATH: grandchildPidPath,
           },
           quiet: true,
-          timeoutMs: 100,
+          // Let the command spawn its pipe holder before exercising timeout settlement.
+          timeoutMs: 500,
         });
 
         const durationMs = Date.now() - startedAt;

@@ -1,5 +1,4 @@
 // Filesystem preflight and archive helpers for legacy meeting transcripts.
-import { createHash } from "node:crypto";
 import fsSync, { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -13,7 +12,7 @@ import type {
 import { TRANSCRIPT_EXPORT_FILE_NAMES } from "../transcripts/store-artifacts.js";
 import type { TranscriptsSummary } from "../transcripts/summary.js";
 import { renderTranscriptsMarkdown } from "../transcripts/summary.js";
-import { sha256File, sha256Hex } from "./crypto-digest.js";
+import { sha256File, sha256FileSync, sha256Hex } from "./crypto-digest.js";
 import { assertNoSymlinkParents } from "./fs-safe-advanced.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
@@ -31,24 +30,6 @@ export type LegacyMeetingTranscriptSnapshot = {
   sourceHash: string;
   sourceSizeBytes: number;
 };
-
-function sha256FileSync(filePath: string): string {
-  const digest = createHash("sha256");
-  const descriptor = fsSync.openSync(filePath, "r");
-  const buffer = Buffer.allocUnsafe(64 * 1024);
-  try {
-    while (true) {
-      const bytesRead = fsSync.readSync(descriptor, buffer, 0, buffer.length, null);
-      if (bytesRead === 0) {
-        break;
-      }
-      digest.update(buffer.subarray(0, bytesRead));
-    }
-  } finally {
-    fsSync.closeSync(descriptor);
-  }
-  return digest.digest("hex");
-}
 
 export function isRecordedCanonicalTranscriptExport(params: {
   sessionDir: string;

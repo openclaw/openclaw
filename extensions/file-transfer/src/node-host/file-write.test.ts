@@ -342,30 +342,41 @@ describe("handleFileWrite — symlink protection", () => {
     await expect(fs.readFile(moved, "utf8")).resolves.toBe("approved");
   });
 
-  it("writes through the preflight binding when the existing file is unchanged", async () => {
-    const target = path.join(tmpRoot, "target.txt");
-    await fs.writeFile(target, "before");
-    const preflight = await handleFileWrite({
-      path: target,
-      contentBase64: b64("after"),
-      overwrite: true,
-      preflightOnly: true,
-    });
-    if (!preflight.ok) {
-      throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
-    }
+  it.each(["", "after", "after!", "a longer replacement"])(
+    "preserves the preflight-bound inode and hardlinks for payload %j",
+    async (content) => {
+      const target = path.join(tmpRoot, "target.txt");
+      const alias = path.join(tmpRoot, "alias.txt");
+      await fs.writeFile(target, "before");
+      await fs.link(target, alias);
+      const identity = await fs.stat(target, { bigint: true });
+      const preflight = await handleFileWrite({
+        path: target,
+        contentBase64: b64(content),
+        overwrite: true,
+        preflightOnly: true,
+      });
+      if (!preflight.ok) {
+        throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
+      }
 
-    const result = await handleFileWrite({
-      path: target,
-      contentBase64: b64("after"),
-      overwrite: true,
-      expectedCanonicalPath: preflight.path,
-      expectedBinding: preflight.binding,
-    });
+      const result = await handleFileWrite({
+        path: target,
+        contentBase64: b64(content),
+        overwrite: true,
+        expectedCanonicalPath: preflight.path,
+        expectedBinding: preflight.binding,
+      });
 
-    expectSuccessFields(result, { path: target, size: 5 });
-    await expect(fs.readFile(target, "utf8")).resolves.toBe("after");
-  });
+      expectSuccessFields(result, { path: target, size: Buffer.byteLength(content) });
+      await expect(fs.readFile(target, "utf8")).resolves.toBe(content);
+      await expect(fs.readFile(alias, "utf8")).resolves.toBe(content);
+      await expect(fs.stat(target, { bigint: true })).resolves.toMatchObject({
+        dev: identity.dev,
+        ino: identity.ino,
+      });
+    },
+  );
 
   it("rejects a parent replacement before creating a new file", async () => {
     const parent = path.join(tmpRoot, "parent");

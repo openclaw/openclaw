@@ -984,7 +984,6 @@ if mainline_drift_requires_sync ${f.main} ${f.main}; then
 else
   test "$?" -eq 1
 fi`,
-      "/bin/bash",
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain(hasFiles ? "no overlap" : "no mainline changes");
@@ -1021,7 +1020,6 @@ fi`,
     f.configure({ failFetchAt: 2 });
     const result = f.shell(
       'enter_worktree 42 false\nif refresh_main_snapshot; then exit 99; fi\nprintf "snapshot=%s\\n" "$PR_MAIN_SHA"',
-      "/bin/bash",
     );
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("snapshot=\n");
@@ -1031,10 +1029,7 @@ fi`,
   it("propagates authentication failure under an OR-list before any main fetch", () => {
     const f = fixture();
     f.configure({ failAuth: true });
-    const result = f.shell(
-      "review_validate_artifacts 42 || exit 1\necho UNEXPECTED_SUCCESS",
-      "/bin/bash",
-    );
+    const result = f.shell("review_validate_artifacts 42 || exit 1\necho UNEXPECTED_SUCCESS");
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("GitHub API preflight failed");
     expect(f.events().some((e) => e.kind === "main-fetch")).toBe(false);
@@ -1060,28 +1055,23 @@ fi`,
     expect(f.git(f.canonical, "for-each-ref", "--format=%(refname)", "refs/openclaw")).toBe("");
   });
 
-  for (const bash of ["bash", ...(process.platform === "darwin" ? ["/bin/bash"] : [])]) {
-    for (const command of [
-      "enter_worktree 42 false",
-      "review_guard 42",
-      "review_validate_artifacts 42",
-    ]) {
-      it.each([false, true])(
-        `propagates failed refresh through ${command} in ${bash} (OR-list=%s)`,
-        (orList) => {
-          const f = fixture();
-          f.configure({ failFetch: true });
-          const result = f.shell(
-            `${command}${orList ? " || exit 1" : ""}\necho UNEXPECTED_SUCCESS`,
-            bash,
-          );
-          expect(result.stderr).toContain("injected main fetch failure");
-          expect(result.status, result.stdout + result.stderr).not.toBe(0);
-          expect(result.stdout).not.toContain("UNEXPECTED_SUCCESS");
-          expect(result.stdout).not.toContain("review artifacts validated");
-          expect(existsSync(join(f.local, "prep.env"))).toBe(false);
-        },
-      );
-    }
+  for (const command of [
+    "enter_worktree 42 false",
+    "review_guard 42",
+    "review_validate_artifacts 42",
+  ]) {
+    it.each([false, true])(
+      `propagates failed refresh through ${command} (OR-list=%s)`,
+      (orList) => {
+        const f = fixture();
+        f.configure({ failFetch: true });
+        const result = f.shell(`${command}${orList ? " || exit 1" : ""}\necho UNEXPECTED_SUCCESS`);
+        expect(result.stderr).toContain("injected main fetch failure");
+        expect(result.status, result.stdout + result.stderr).not.toBe(0);
+        expect(result.stdout).not.toContain("UNEXPECTED_SUCCESS");
+        expect(result.stdout).not.toContain("review artifacts validated");
+        expect(existsSync(join(f.local, "prep.env"))).toBe(false);
+      },
+    );
   }
 });
