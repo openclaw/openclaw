@@ -51,6 +51,36 @@ describe("base64 helpers", () => {
     expect(delta).toBeLessThan(64 * 1024 * 1024);
   });
 
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+  it("canonicalizeBase64 accepts the full standard alphabet", () => {
+    expect(canonicalizeBase64(alphabet)).toBe(alphabet);
+  });
+
+  it.each(["*", ",", ".", ":", "@", "[", "`", "{", "-", "_", "\u007f", "é", "\ud800", "\udc00"])(
+    "canonicalizeBase64 rejects non-alphabet glyph %j",
+    (glyph) => {
+      expect(canonicalizeBase64("AA" + glyph + "A")).toBeUndefined();
+    },
+  );
+
+  it.each(Array.from(alphabet))(
+    "canonicalizeBase64 validates terminal pad bits for %s",
+    (glyph) => {
+      const paddedByte = `A${glyph}==`;
+      const paddedPair = `AA${glyph}=`;
+
+      expect(canonicalizeBase64(paddedByte)).toBe("AQgw".includes(glyph) ? paddedByte : undefined);
+      expect(canonicalizeBase64("A" + glyph)).toBe("AQgw".includes(glyph) ? paddedByte : undefined);
+      expect(canonicalizeBase64(paddedPair)).toBe(
+        "AEIMQUYcgkosw048".includes(glyph) ? paddedPair : undefined,
+      );
+      expect(canonicalizeBase64("AA" + glyph)).toBe(
+        "AEIMQUYcgkosw048".includes(glyph) ? paddedPair : undefined,
+      );
+    },
+  );
+
   it.each([
     {
       name: "canonicalizeBase64 normalizes whitespace and keeps valid base64",
