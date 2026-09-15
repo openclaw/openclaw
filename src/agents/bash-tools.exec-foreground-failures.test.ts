@@ -299,6 +299,31 @@ describe("exec foreground failures", () => {
     });
   });
 
+  it("does not report an exit with no captured exit code as a completed run", async () => {
+    // A supervisor that observes an exit without any status (PTY hosts that
+    // close without reporting one) labels the reason "exit" with a null code.
+    // No exit code is not evidence of success.
+    mockSpawn({ reason: "exit", exitCode: null, exitSignal: null });
+
+    const run = await runExecProcess({
+      command: "sleep 10",
+      workdir: process.cwd(),
+      env: {},
+      usePty: false,
+      warnings: [],
+      maxOutput: 1_000,
+      pendingMaxOutput: 1_000,
+      notifyOnExit: false,
+      timeoutSec: null,
+    });
+
+    await expect(run.promise).resolves.toMatchObject({
+      status: "failed",
+      reason: "Command aborted before exit code was captured",
+      exitCode: null,
+    });
+  });
+
   it.each([
     {
       name: "unwrapped SIGKILL",
