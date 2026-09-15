@@ -48,6 +48,8 @@ export type AgentRuntimeIdentity = {
   sessionKey: string;
   operationalRunInstance: OperationalRunInstanceRef;
   delegatedAuthority: AgentRuntimeDelegatedAuthority;
+  /** Host-prepared tool posture; only explicit true bypasses operator approval. */
+  fullPermission?: true;
   approvalOwnerPluginId?: string;
   executionIdentity?: ExecutionIdentityAdmissionToken;
   turnSourceChannel?: string;
@@ -203,6 +205,7 @@ const agentRuntimeIdentityTokenPayloadSchema = z.object({
   sessionKey: z.string(),
   operationalRunInstance: operationalRunInstanceSchema,
   delegatedAuthority: delegatedAuthoritySchema,
+  fullPermission: z.literal(true).optional(),
   approvalOwnerPluginId: z.string().optional().catch(undefined),
   executionIdentity: z.unknown().optional(),
   turnSourceChannel: z.string().optional().catch(undefined),
@@ -392,6 +395,7 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
       sessionKey,
       operationalRunInstance,
       delegatedAuthority,
+      ...(raw.fullPermission === true ? { fullPermission: true as const } : {}),
       ...(approvalOwnerPluginId ? { approvalOwnerPluginId } : {}),
       ...(turnSourceChannel ? { turnSourceChannel } : {}),
       ...(turnSourceLocal ? { turnSourceLocal } : {}),
@@ -438,6 +442,7 @@ export type AgentRuntimeIdentityTokenParams = {
   executionLineageHandoffId?: string;
   workerTurnClaim?: WorkerSessionTurnClaim;
   approvalAuthority?: AgentRunDelegatedAuthority;
+  fullPermission?: boolean;
 };
 
 function prepareAgentRuntimeIdentityTokenPayload(
@@ -533,6 +538,7 @@ function prepareAgentRuntimeIdentityTokenPayload(
       runId: operationalRunId,
     },
     delegatedAuthority,
+    ...(params.fullPermission === true ? { fullPermission: true as const } : {}),
     ...(normalizeOptionalString(params.approvalOwnerPluginId)
       ? { approvalOwnerPluginId: normalizeOptionalString(params.approvalOwnerPluginId) }
       : {}),
@@ -637,6 +643,7 @@ function resolveAgentRuntimeIdentityPayload(
     sessionKey: payload.sessionKey,
     operationalRunInstance: payload.operationalRunInstance,
     delegatedAuthority: payload.delegatedAuthority,
+    ...(payload.fullPermission === true ? { fullPermission: true } : {}),
     ...(payload.approvalOwnerPluginId
       ? { approvalOwnerPluginId: payload.approvalOwnerPluginId }
       : {}),
