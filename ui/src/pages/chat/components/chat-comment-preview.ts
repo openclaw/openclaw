@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../../../components/icons.ts";
+import { scrollState } from "../../../components/scroll-state.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
@@ -49,11 +50,18 @@ export function renderCommentPreviewRow(
   return html`<li class="chat-comment-preview__item">
     <div class="chat-comment-preview__body">
       <span class="muted">${t("chat.messages.annotationSelectedText")}</span>
-      <div class="chat-comment-preview__text">${comment.text}</div>
+      <div
+        class="chat-comment-preview__text chat-comment-preview__text--selection"
+        .textContent=${comment.text}
+      ></div>
       ${
         comment.comment
           ? html`<span class="muted">${t("chat.messages.annotationUserComment")}</span>
-              <div class="chat-comment-preview__text">${comment.comment}</div>`
+              <div
+                class="chat-comment-preview__text chat-comment-preview__text--comment"
+                .textContent=${comment.comment}
+                ${scrollState(false, false)}
+              ></div>`
           : nothing
       }
     </div>
@@ -69,16 +77,19 @@ export function renderCommentPreviewChip(
   return html`<openclaw-tooltip
     class="chat-comment-preview"
     placement="top-start"
+    auto-size
     .describe=${false}
   >
     <span
-      class="chat-selection-annotations__chip"
+      class="chat-attachment-thumb chat-attachment-thumb--file chat-selection-annotations__chip"
       tabindex="0"
       @pointerenter=${onReveal}
       @focusin=${onReveal}
     >
-      <span aria-hidden="true">${icons.messageSquare}</span>
-      ${t(count === 1 ? "chat.messages.annotationCount" : "chat.messages.annotationsCount", { count: String(count) })}
+      <span class="chat-attachment-file">
+        <span aria-hidden="true">${icons.messageSquare}</span>
+        ${t(count === 1 ? "chat.messages.annotationCount" : "chat.messages.annotationsCount", { count: String(count) })}
+      </span>
     </span>
     <div
       slot="content"
@@ -86,6 +97,7 @@ export function renderCommentPreviewChip(
       tabindex="0"
       role="region"
       aria-label=${t("chat.messages.annotations")}
+      ${scrollState()}
     >
       ${content}
     </div>

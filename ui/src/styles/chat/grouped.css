@@ -957,6 +957,10 @@ img.chat-avatar {
   color: hsl(var(--chat-sender-hue) 60% 36%);
 }
 
+.chat-group.user .chat-bubble:has(openclaw-chat-sent-comments) {
+  --chat-bubble-background: var(--bg-elevated);
+}
+
 /* Ephemeral drafts share sent-turn geometry, typography, and identity tint. */
 .agent-chat__typing-indicator {
   display: grid;

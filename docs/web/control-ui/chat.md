@@ -20,16 +20,19 @@ Side chat answers questions about the selected session and its project without e
 The question box wraps and grows like the main composer; Enter (or your configured send shortcut) asks the question, and Shift+Enter adds a line. Highlighting text in a chat message offers **Ask in side chat**, which opens the rail with a quoted draft ready to edit.
 
 Highlight text and choose **Add to chat** to attach a comment to the main
-composer. The optional comment field stays compact while you type; confirm or
-press Enter to save it. Saving keeps your existing draft and does not send a message.
+composer. The optional comment field starts on one line, grows to five lines,
+then scrolls internally. Confirm or press Enter to save; Shift+Enter adds a line.
+Saving keeps your existing draft and does not send a message.
 
 Saving leaves a small, filled comment marker beside the selected passage. Click
-that marker to reopen its comment in the larger editor beside it. **Save**, Command-Enter, or
-Ctrl-Enter saves changes; **Cancel** or Escape discards the edit; and the trash
+that marker, or the pencil in the comment count's hover preview, to reopen the
+same editor beside it. **Save** or Enter saves changes; **Cancel** or Escape discards the edit; and the trash
 button deletes the comment. The composer's comment count is a passive indicator.
 Saved comments and their source markers follow the composer's existing draft and
 queue recovery behavior. When you send, each comment is attached as a text file
 containing the selection, comment, and source message reference; its draft marker is removed.
+Hover or keyboard-focus the sent comment count to read a compact, scrollable
+preview. Sent comments remain read-only. Escape closes the preview.
 
 The headline owns that run's sidebar subtitle instead of heuristic live activity. It is shared with the official iOS and Android session lists. A final done or failed digest remains visible while the session is unread, then the row returns to its normal work subtitle.
 
