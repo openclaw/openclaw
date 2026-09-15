@@ -1377,7 +1377,7 @@ extension GatewayChannelActor {
         timeoutMs: Double? = nil) async throws -> Data
     {
         try Task.checkCancellation()
-        try await self.connectOrThrow(context: "gateway connect")
+        try await self.connect()
         try Task.checkCancellation()
         let connectionGeneration = self.connectionGeneration
         guard self.isConnected(connectionGeneration: connectionGeneration),
@@ -1521,7 +1521,7 @@ extension GatewayChannelActor {
 
     public func send(method: String, params: [String: AnyCodable]?) async throws {
         try Task.checkCancellation()
-        try await self.connectOrThrow(context: "gateway connect")
+        try await self.connect()
         try Task.checkCancellation()
         try await self.send(
             method: method,
@@ -1598,14 +1598,6 @@ extension GatewayChannelActor {
         let ns = error as NSError
         let desc = ns.localizedDescription.isEmpty ? "unknown" : ns.localizedDescription
         return NSError(domain: ns.domain, code: ns.code, userInfo: [NSLocalizedDescriptionKey: "\(context): \(desc)"])
-    }
-
-    private func connectOrThrow(context: String) async throws {
-        do {
-            try await self.connect()
-        } catch {
-            throw self.wrap(error, context: context)
-        }
     }
 
     private func encodeRequest(
