@@ -203,7 +203,50 @@ describe("runExecProcess cursor tracking", () => {
   });
 });
 
-describe("sandbox exec preparation failures", () => {
+describe("sandbox exec preparation", () => {
+  it("preserves the backend transport environment when spawning sandbox exec", async () => {
+    const backendEnv = {
+      BASH_ENV: "/sandbox/transport/bash-env",
+      PATH: "/sandbox/transport/bin",
+    };
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) =>
+      runtimeManagedRun(input),
+    );
+
+    const run = await runExecProcess({
+      command: "sandbox-command",
+      workdir: "/tmp",
+      env: {},
+      sandbox: {
+        containerName: "sandbox",
+        workspaceDir: "/workspace",
+        containerWorkdir: "/workspace",
+        buildExecSpec: async () => ({
+          argv: ["sandbox-transport", "exec", "sandbox-command"],
+          env: backendEnv,
+          stdinMode: "pipe-closed",
+        }),
+      },
+      usePty: false,
+      warnings: [],
+      maxOutput: 1_000,
+      pendingMaxOutput: 1_000,
+      notifyOnExit: false,
+      timeoutSec: null,
+    });
+    await run.promise;
+
+    expect(supervisorMock.spawn).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        mode: "child",
+        argv: ["sandbox-transport", "exec", "sandbox-command"],
+        env: backendEnv,
+        exactEnv: true,
+        cleanupOwnership: "external",
+      }),
+    );
+  });
+
   it.each(["preparation", "supervisor"] as const)(
     "rechecks the admitting repair authority after deferred %s work",
     async (boundary) => {
