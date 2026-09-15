@@ -40,6 +40,10 @@ type PendingWake = SessionEventWakeRequest & {
   readyAt: number;
   notBefore: number;
   settlements: Settlement[];
+  /** Admission/preparation may have effects even before model dispatch. Never reset on retry. */
+  workStarted: boolean;
+  /** Every request represented by this wake must be an authoritative, task-free monitor poll. */
+  pureNativePoll: boolean;
 };
 type WakeGroup = {
   task?: PendingWake;
@@ -48,6 +52,11 @@ type WakeGroup = {
   blockedUntil: number;
 };
 type ActiveWake = { generation: number; controller: AbortController };
+type WakeAttempt = {
+  signal: AbortSignal;
+  wake: PendingWake;
+  terminalPollDisposition: boolean;
+};
 type RequestOptions = Omit<SessionEventWakeRequest, "retainedWork"> & { coalesceMs?: number };
 
 const SLOTS = ["task", "scheduled", "event"] as const;
@@ -117,6 +126,8 @@ function merge(previous: PendingWake, next: PendingWake): PendingWake {
       : undefined,
     retainedWork: !bypass && (previous.retainedWork || next.retainedWork),
     settlements: [...previous.settlements, ...next.settlements].filter((entry) => entry.active),
+    workStarted: previous.workStarted || next.workStarted,
+    pureNativePoll: previous.pureNativePoll && next.pureNativePoll,
   };
 }
 
@@ -149,7 +160,7 @@ function shouldRetain(
 function createSessionEventWakeRuntime() {
   const pending = new Map<string, WakeGroup>();
   const active = new Map<string, ActiveWake>();
-  const abortSignals = new AsyncLocalStorage<AbortSignal>();
+  const attempts = new AsyncLocalStorage<WakeAttempt>();
   let handler: WakeHandler | null = null;
   let generation = 0;
   let sequence = 0;
@@ -327,6 +338,7 @@ function createSessionEventWakeRuntime() {
           handOff(wakes, index);
           return;
         }
+        const attempt: WakeAttempt = { signal, wake, terminalPollDisposition: false };
         let result: SessionEventWakeResult;
         let onAbort: (() => void) | undefined;
         try {
@@ -361,7 +373,7 @@ function createSessionEventWakeRuntime() {
               ...(wake.retainedWork ? { retainedWork: true } : {}),
             };
             // A synchronous handler throw must not leave the abort promise unobserved.
-            const running = abortSignals.run(signal, async () => run(request, signal));
+            const running = attempts.run(attempt, async () => run(request, signal));
             return Promise.race([running, aborted]);
           }, "heartbeat:wake");
         } catch {
@@ -376,7 +388,11 @@ function createSessionEventWakeRuntime() {
             signal.removeEventListener("abort", onAbort);
           }
         }
-        if (result.status === "skipped" && shouldRetain(wake, result)) {
+        if (
+          result.status === "skipped" &&
+          !isTerminalPollAttempt(attempt) &&
+          shouldRetain(wake, result)
+        ) {
           if (owner.generation === generation) {
             retry(wake, result);
           } else {
@@ -515,6 +531,17 @@ function createSessionEventWakeRuntime() {
         readyAt: now + resolveTimerTimeoutMs(coalesceMs, COALESCE_MS, 0),
         notBefore: 0,
         settlements: settlement ? [settlement] : [],
+        workStarted: false,
+        pureNativePoll:
+          // Native monitors are targeted. A broadcast shares this attempt across
+          // agents, so one idle sibling cannot retire another sibling's payload.
+          targetKey(normalized) !== GLOBAL_TARGET &&
+          wake.source === "interval" &&
+          wake.intent === "scheduled" &&
+          typeof wake.scheduledEveryMs === "number" &&
+          Number.isSafeInteger(wake.scheduledEveryMs) &&
+          wake.scheduledEveryMs > 0 &&
+          !wake.tasks?.length,
       };
       const key = enqueue(pendingWake);
       schedulePending(0, key);
@@ -554,11 +581,48 @@ function createSessionEventWakeRuntime() {
     });
   }
 
+  function isTerminalPollAttempt(attempt: WakeAttempt | undefined): boolean {
+    return Boolean(
+      attempt &&
+      !attempt.signal.aborted &&
+      attempt.terminalPollDisposition &&
+      attempt.wake.pureNativePoll &&
+      !attempt.wake.workStarted,
+    );
+  }
+
+  // These operations stay internal to the owner/runner, outside the SDK adapter.
+  function markSessionEventWakeWorkStarted(): void {
+    const attempt = attempts.getStore();
+    if (attempt) {
+      attempt.signal.throwIfAborted();
+      attempt.wake.workStarted = true;
+      attempt.terminalPollDisposition = false;
+    }
+  }
+
+  function deferSessionEventWakePoll(): boolean {
+    const attempt = attempts.getStore();
+    if (
+      !attempt ||
+      attempt.signal.aborted ||
+      !attempt.wake.pureNativePoll ||
+      attempt.wake.workStarted
+    ) {
+      return false;
+    }
+    attempt.terminalPollDisposition = true;
+    return true;
+  }
+
   return {
     setSessionEventWakeHandler,
     requestSessionEventWake,
     requestSessionEventWakeAndWait,
-    getSessionEventWakeAbortSignal: () => abortSignals.getStore(),
+    getSessionEventWakeAbortSignal: () => attempts.getStore()?.signal,
+    markSessionEventWakeWorkStarted,
+    deferSessionEventWakePoll,
+    isSessionEventWakePollDeferred: () => isTerminalPollAttempt(attempts.getStore()),
     areSessionEventWakesEnabled: () => enabled,
     setSessionEventWakesEnabled: (value: boolean) => {
       enabled = value;
@@ -572,6 +636,9 @@ export const {
   requestSessionEventWake,
   requestSessionEventWakeAndWait,
   getSessionEventWakeAbortSignal,
+  markSessionEventWakeWorkStarted,
+  deferSessionEventWakePoll,
+  isSessionEventWakePollDeferred,
   areSessionEventWakesEnabled,
   setSessionEventWakesEnabled,
 } = resolveGlobalSingleton(Symbol.for("openclaw.sessionEventWake"), createSessionEventWakeRuntime);
