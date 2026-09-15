@@ -44,6 +44,11 @@ afterEach(() => resetPluginStateStoreForTests());
 describe("registered Codex harness model attribution", () => {
   it("reports the ready native model and current-turn reroutes before settlement", async () => {
     const params = createTestParams();
+    // Supervision replaces the helper model; this fixture supplies no host tools.
+    params.hostCapabilities = Object.freeze({
+      ...params.hostCapabilities,
+      createToolSurface: () => [],
+    });
     params.agentDir = path.join(tempDir, "agent");
     params.provider = "anthropic";
     params.modelId = "picker-model";
@@ -154,6 +159,9 @@ describe("registered Codex harness model attribution", () => {
             break;
           case "thread/unsubscribe":
             result = { status: "unsubscribed" };
+            break;
+          case "thread/backgroundTerminals/list":
+            result = { data: [], nextCursor: null };
             break;
         }
         send({ id: message.id, result });
