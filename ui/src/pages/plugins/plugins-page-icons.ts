@@ -1,4 +1,8 @@
 import type { ApplicationContext } from "../../app/context.ts";
+import {
+  resolveControlUiAuthCandidates,
+  type ControlUiAuthSource,
+} from "../../app/control-ui-auth.ts";
 import type { PluginDiscoveryDetailResult, PluginListResult } from "../../lib/plugins/index.ts";
 import type { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
 import { PluginIconController } from "./plugin-icon-controller.ts";
@@ -11,6 +15,7 @@ type PluginsPageIconsHost = {
 };
 
 export class PluginsPageIcons {
+  private authCandidates: string[] = [];
   private readonly installed: PluginIconController;
   private readonly catalog: PluginIconController;
 
@@ -39,6 +44,15 @@ export class PluginsPageIcons {
       ...shared,
       onUrlsChange: host.onCatalogUrlsChange,
     });
+  }
+
+  updateAuth(source: ControlUiAuthSource): boolean {
+    const next = resolveControlUiAuthCandidates(source);
+    const changed =
+      next.length !== this.authCandidates.length ||
+      next.some((candidate, index) => candidate !== this.authCandidates[index]);
+    this.authCandidates = next;
+    return changed;
   }
 
   syncInstalled(result: PluginListResult | null, view: ParentNode): void {

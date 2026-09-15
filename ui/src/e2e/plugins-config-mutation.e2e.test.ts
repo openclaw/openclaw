@@ -112,6 +112,7 @@ suite.define(() => {
 
         const workboardRow = page.locator('[data-plugin-id="workboard"]');
         await workboardRow.waitFor();
+        const connects = (await gateway.getRequests("connect")).length;
         if (captureUiProofEnabled) {
           await workboardRow.screenshot({
             animations: "disabled",
@@ -124,14 +125,9 @@ suite.define(() => {
           pathname: "/settings/plugins/workboard",
           routeId: "plugin-settings",
         });
-        await page.getByRole("tab", { name: "Lifecycle", exact: true }).click();
 
         await gateway.deferNext("plugins.setEnabled");
-        const enabledSwitch = page.getByRole("switch", {
-          name: "Enable or disable Workboard",
-          exact: true,
-        });
-        await page.locator("wa-switch").click();
+        await page.getByRole("button", { name: "Enable Workboard", exact: true }).click();
         expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
 
         const pendingDraft = await gateway.waitForRequest("config.set");
@@ -152,15 +148,18 @@ suite.define(() => {
         await gateway.resolveDeferred("plugins.setEnabled", {
           ok: true,
           plugin: workboardEnabled,
-          restartRequired: true,
+          restartRequired: false,
+          runtime: { operationId: "enable-workboard", generation: 1, pluginIds: ["workboard"] },
         });
 
-        await expect.poll(() => enabledSwitch.isChecked()).toBe(true);
+        await page.getByRole("button", { name: "Disable Workboard", exact: true }).waitFor();
         expect((await gateway.getRequests("plugins.inspect")).length).toBeGreaterThan(0);
         expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
           .toBeGreaterThanOrEqual(2);
+        expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
+        expect(await gateway.getRequests("connect")).toHaveLength(connects);
         if (captureUiProofEnabled) {
           await page.locator(".content").screenshot({
             animations: "disabled",

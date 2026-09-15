@@ -151,7 +151,11 @@ const inspection = {
       versions: [
         { version: "1.2.3", createdAt: 1_788_000_000_000, changelog: "", tags: ["latest"] },
       ],
-      security: { status: "clean" },
+      security: {
+        status: "clean",
+        verdict: "clean",
+        auditUrl: "https://clawhub.ai/openclaw/plugins/workboard/security-audit",
+      },
     },
   },
   grants: {
@@ -513,8 +517,10 @@ suite.define(() => {
               },
             },
           });
-          await page.goto(`${suite.server.baseUrl}settings/plugins/${manifest.id}#configuration`);
-          await page.getByRole("tab", { name: "Configuration", exact: true }).waitFor();
+          await page.goto(`${suite.server.baseUrl}settings/plugins/${manifest.id}?view=settings`);
+          await page
+            .getByRole("heading", { level: 1, name: `${name} Settings`, exact: true })
+            .waitFor();
           await page.getByText("Web Search", { exact: true }).click();
           if (sectionLabel !== "Web Search") {
             await page.getByText(sectionLabel, { exact: true }).click();
@@ -559,9 +565,12 @@ suite.define(() => {
               },
             },
           });
-          const reads = (await gateway.getRequests("config.get")).length;
-          await page.getByRole("button", { name: "Reload", exact: true }).click();
-          await gateway.waitForRequest("config.get", { after: reads });
+          await page.reload();
+          await page.getByText("Web Search", { exact: true }).click();
+          if (sectionLabel !== "Web Search") {
+            await page.getByText(sectionLabel, { exact: true }).click();
+          }
+          await gateway.waitForRequest("config.get");
           await expect.poll(() => apiKey.inputValue()).toBe("synthetic-credential");
           expect(await reference.inputValue()).toBe("");
           expect(await reference.getAttribute("readonly")).not.toBeNull();
@@ -576,7 +585,7 @@ suite.define(() => {
     },
   );
 
-  it("moves needs-setup guidance into the Configuration tab", async () => {
+  it("opens settings for a plugin that still requires configuration without overview setup prompts", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -586,59 +595,32 @@ suite.define(() => {
       },
       async ({ page }) => {
         const needsSetup = { ...workboard, enabled: false, state: "needs-setup" as const };
-        const localInspection = {
-          ...inspection,
-          catalog: undefined,
-          components: {
-            mapped: ["commands"],
-            skills: [],
-            mcpServers: [],
-            commands: [],
-            hooks: [],
-            lspServers: [],
-            unavailable: {
-              capabilities: ["agents", "hooks", "rules"],
-              mcpServers: [],
-              lspServers: [],
-            },
-          },
-        };
         await installMockGateway(page, {
           featureMethods: pluginMethods,
           methodResponses: {
             ...pluginResponses(),
             "plugins.list": { ...inventory, plugins: [needsSetup] },
-            "plugins.inspect": {
-              ...localInspection,
-              plugin: { ...localInspection.plugin, enabled: false },
-            },
+            "plugins.inspect": { ...inspection, plugin: { ...inspection.plugin, enabled: false } },
           },
           operatorScopes: ["operator.read", "operator.admin"],
         });
-
         await page.goto(`${suite.server.baseUrl}settings/plugins/workboard`);
-        const configuration = page.getByRole("tab", { name: /Configuration/iu });
-        await configuration.waitFor();
-        expect(await page.locator(".plugin-catalog-detail--no-sidebar").count()).toBe(1);
-        expect(await page.locator(".plugin-catalog-detail__sidebar").count()).toBe(0);
-        expect(await page.getByRole("tab", { name: "Commands", exact: true }).count()).toBe(0);
-        expect(await page.getByRole("tab", { name: "Hooks", exact: true }).count()).toBe(0);
-        const dot = configuration.locator(".plugin-installed-detail__setup-dot");
-        expect(await dot.getAttribute("title")).toBe(
-          "This plugin requires additional configuration",
-        );
-        expect(await page.getByText("Setup required", { exact: true }).count()).toBe(0);
-        await configuration.click();
-        await page
-          .getByText("Complete the required configuration before enabling this plugin.", {
-            exact: true,
-          })
-          .waitFor();
+        const actions = page.locator(".plugin-catalog-detail__actions");
+        await actions.getByRole("link", { name: "Settings", exact: true }).waitFor();
+        expect(await page.getByRole("alert").count()).toBe(0);
+        expect(
+          await actions
+            .getByRole("button", { name: "Enable Workboard", exact: true })
+            .getAttribute("aria-disabled"),
+        ).toBe("true");
+        await actions.getByRole("link", { name: "Settings", exact: true }).click();
+        await page.getByLabel("Workspace label", { exact: true }).waitFor();
+        expect(new URL(page.url()).searchParams.get("view")).toBe("settings");
       },
     );
   });
 
-  it("drills from searchable inventory into the shared tabbed detail shell", async () => {
+  it("drills from searchable inventory into overview and settings", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -652,55 +634,34 @@ suite.define(() => {
           methodResponses: pluginResponses(),
           operatorScopes: ["operator.read", "operator.admin"],
         });
-
         await openWorkboard(page, suite.server.baseUrl);
         await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
-        await page.getByRole("link", { name: "Settings", exact: true }).waitFor();
         await page.getByText("Plan and track agent-owned work.", { exact: true }).waitFor();
-        await page.getByRole("link", { name: "View on ClawHub", exact: true }).waitFor();
+        expect(await page.getByRole("link", { name: "View on ClawHub", exact: true }).count()).toBe(
+          0,
+        );
         const securityAudit = page.getByRole("link", { name: /Security audit/iu });
         expect(await securityAudit.getAttribute("href")).toBe(
           "https://clawhub.ai/openclaw/plugins/workboard/security-audit",
         );
-        expect(await securityAudit.getAttribute("class")).toContain(
-          "plugin-catalog-detail__security--pass",
-        );
-        expect(await securityAudit.getByText("Pass", { exact: true }).count()).toBe(1);
+        expect(await securityAudit.getByText("Clean", { exact: true }).count()).toBe(1);
         expect(
-          await securityAudit.locator(".plugin-catalog-detail__security-score > span").count(),
+          await securityAudit
+            .locator(".plugin-catalog-detail__security-score > span.is-filled")
+            .count(),
         ).toBe(3);
-        expect(await securityAudit.getByText("clean", { exact: true }).count()).toBe(0);
-        expect(
-          await page
-            .getByRole("tab")
-            .evaluateAll((tabs) => tabs.map((tab) => tab.textContent?.trim()).filter(Boolean)),
-        ).toEqual([
-          "README",
-          "Configuration",
-          "Skills",
-          "MCP servers",
-          "Compatibility",
-          "Versions",
-          "Access",
-          "Lifecycle",
-          "Advanced",
-        ]);
-        await page.getByRole("tab", { name: "Configuration", exact: true }).click();
-        const refresh = page.getByRole("button", { name: "Reload", exact: true });
-        await refresh.waitFor();
-        expect((await refresh.textContent())?.trim()).toBe("");
-        expect(await refresh.getAttribute("title")).toBeNull();
+        await page.getByText("Weekly planning", { exact: true }).waitFor();
+        await page.getByText("Coordinate agent work in one place.", { exact: true }).waitFor();
+        await page.getByText("workboard_list", { exact: true }).waitFor();
         expect(await gateway.getRequests("plugins.inspect")).toHaveLength(1);
-
-        await page.getByRole("tab", { name: "Access", exact: true }).click();
+        await page
+          .locator(".plugin-catalog-detail__actions")
+          .getByRole("link", { name: "Settings", exact: true })
+          .click();
+        await page.getByLabel("Workspace label", { exact: true }).waitFor();
         await page.getByText("Add context to prompts", { exact: true }).waitFor();
         await page.getByText("Read conversation context", { exact: true }).waitFor();
-        expect(await page.getByText("workboard_list", { exact: true }).count()).toBe(0);
-        await page.getByRole("tab", { name: "Advanced", exact: true }).click();
-        await page.getByText("workboard_list", { exact: true }).waitFor();
-        await page.getByRole("tab", { name: "Lifecycle", exact: true }).click();
-        await page.locator("code").filter({ hasText: "@openclaw/workboard" }).first().waitFor();
-        await page.getByText("v1.2.3", { exact: true }).waitFor();
+        expect(await page.getByRole("button", { name: "Reload", exact: true }).count()).toBe(0);
         if (captureUiProof) {
           await page.screenshot({
             animations: "disabled",
@@ -709,12 +670,14 @@ suite.define(() => {
           });
         }
         await page.reload();
-        await waitForControlUiRoute(page, {
-          pathname: "/settings/plugins/workboard",
-          routeId: "plugin-settings",
-        });
-        await page.locator("code").filter({ hasText: "@openclaw/workboard" }).first().waitFor();
-        await page.getByRole("link", { name: "Settings", exact: true }).click();
+        await page.getByLabel("Workspace label", { exact: true }).waitFor();
+        expect(new URL(page.url()).searchParams.get("view")).toBe("settings");
+        await page
+          .locator(".plugins-settings-breadcrumb")
+          .getByRole("link", { name: "Workboard", exact: true })
+          .click();
+        await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
+        await page.locator(".plugins-settings-breadcrumb__parent").click();
         await waitForControlUiRoute(page, {
           pathname: "/settings/plugins",
           routeId: "plugin-settings",
@@ -758,7 +721,6 @@ suite.define(() => {
         });
 
         await page.getByRole("heading", { level: 1, name: "Broken plugin", exact: true }).waitFor();
-        await page.getByText("Needs attention", { exact: true }).waitFor();
         await page
           .getByRole("alert")
           .filter({
@@ -768,8 +730,12 @@ suite.define(() => {
         expect(await page.getByRole("tab", { name: "Configuration", exact: true }).count()).toBe(0);
         expect(await page.getByRole("button", { name: "Reload", exact: true }).count()).toBe(0);
         expect(await page.getByText("This plugin has no configurable settings.").count()).toBe(0);
-        await page.getByRole("tab", { name: "Access", exact: true }).waitFor();
-        await page.getByRole("tab", { name: "Lifecycle", exact: true }).waitFor();
+        await page.getByRole("button", { name: "Uninstall Broken plugin", exact: true }).waitFor();
+        await page
+          .locator(".plugin-catalog-detail__actions")
+          .getByRole("link", { name: "Settings", exact: true })
+          .click();
+        await page.getByText("Add context to prompts", { exact: true }).waitFor();
       },
     );
   });
@@ -790,7 +756,7 @@ suite.define(() => {
         });
         await openWorkboard(page, suite.server.baseUrl);
 
-        const toggle = page.locator("wa-switch").filter({ hasText: "Enable or disable Workboard" });
+        const toggle = page.getByRole("button", { name: "Disable Workboard", exact: true });
         const connections = (await gateway.getRequests("connect")).length;
         await toggle.click();
         await gateway.waitForRequest("plugins.setEnabled");
@@ -806,7 +772,10 @@ suite.define(() => {
           .toBe(1);
         expect(await gateway.getRequests("connect")).toHaveLength(connections);
 
-        await page.getByRole("tab", { name: "Configuration", exact: true }).click();
+        await page
+          .locator(".plugin-catalog-detail__actions")
+          .getByRole("link", { name: "Settings", exact: true })
+          .click();
         const workspace = page.getByLabel("Workspace label", { exact: true });
         const catalogRequests = (await gateway.getRequests("plugins.list")).length;
         await workspace.fill("Release planning");
@@ -827,7 +796,10 @@ suite.define(() => {
         ).toBe(0);
 
         const uninstallCount = (await gateway.getRequests("plugins.uninstall")).length;
-        await page.getByRole("tab", { name: "Lifecycle", exact: true }).click();
+        await page
+          .locator(".plugins-settings-breadcrumb")
+          .getByRole("link", { name: "Workboard", exact: true })
+          .click();
         await page.getByRole("button", { name: /(?:Remove|Uninstall) Workboard/iu }).click();
         await page.getByRole("dialog").waitFor();
         await page
@@ -845,8 +817,8 @@ suite.define(() => {
     );
   });
 
-  it.each(["click", "Enter", " "] as const)(
-    "retains a fallback tab selected with %j while reconnect inspection finishes",
+  it.each(["click", "Enter"] as const)(
+    "retains settings selected with %j while refreshed inspection finishes",
     async (activation) => {
       await suite.withPage(
         {
@@ -862,37 +834,30 @@ suite.define(() => {
             operatorScopes: ["operator.read", "operator.admin"],
           });
           await openWorkboard(page, suite.server.baseUrl);
-          const readme = page.getByRole("tab", { name: "README", exact: true });
-          await readme.waitFor();
+          await page.getByText("Weekly planning", { exact: true }).waitFor();
           const inspections = (await gateway.getRequests("plugins.inspect")).length;
           await gateway.deferNext("plugins.inspect");
-          await page
-            .locator("wa-switch")
-            .filter({ hasText: "Enable or disable Workboard" })
-            .click();
+          await page.getByRole("button", { name: "Disable Workboard", exact: true }).click();
           await gateway.waitForRequest("plugins.inspect", { after: inspections });
-          await readme.waitFor({ state: "detached" });
-
-          const configuration = page.getByRole("tab", { name: "Configuration", exact: true });
-          await configuration.waitFor();
-          expect(await configuration.getAttribute("aria-selected")).toBe("true");
+          const settings = page
+            .locator(".plugin-catalog-detail__actions")
+            .getByRole("link", { name: "Settings", exact: true });
           if (activation === "click") {
-            await configuration.click();
+            await settings.click();
           } else {
-            await configuration.press(activation);
+            await settings.press(activation);
           }
+          await page.getByLabel("Workspace label", { exact: true }).waitFor();
           await gateway.resolveDeferred("plugins.inspect", inspection);
-          await readme.waitFor();
+          await page.getByText("Read conversation context", { exact: true }).waitFor();
+          expect(new URL(page.url()).searchParams.get("view")).toBe("settings");
+          await page.getByLabel("Workspace label", { exact: true }).waitFor();
           if (captureUiProof && activation === "click") {
             await page.screenshot({
               animations: "disabled",
-              path: path.join(proofDir, "selected-tab-after-inspection.png"),
+              path: path.join(proofDir, "settings-after-inspection.png"),
             });
           }
-
-          await expect.poll(() => new URL(page.url()).hash).toBe("#configuration");
-          expect(await configuration.getAttribute("aria-selected")).toBe("true");
-          await page.getByLabel("Workspace label", { exact: true }).waitFor();
         },
       );
     },
@@ -938,11 +903,17 @@ suite.define(() => {
         expect(
           await page.getByRole("button", { name: "Save configuration", exact: true }).count(),
         ).toBe(0);
-        const toggle = page.locator("wa-switch").filter({ hasText: "Enable or disable Workboard" });
-        await page.getByRole("tab", { name: "Configuration", exact: true }).click();
+        const toggle = page.getByRole("button", { name: "Disable Workboard", exact: true });
+        await page
+          .locator(".plugin-catalog-detail__actions")
+          .getByRole("link", { name: "Settings", exact: true })
+          .click();
         const workspace = page.getByLabel("Workspace label", { exact: true });
         expect(await workspace.isDisabled()).toBe(true);
-        await page.getByRole("tab", { name: "Lifecycle", exact: true }).click();
+        await page
+          .locator(".plugins-settings-breadcrumb")
+          .getByRole("link", { name: "Workboard", exact: true })
+          .click();
         const uninstall = page.getByRole("button", {
           name: /(?:Remove|Uninstall) Workboard/iu,
         });
@@ -1011,16 +982,18 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("plugins.inspect")).length)
           .toBe(2);
-        await page.getByRole("tab", { name: "README", exact: true }).waitFor();
-        await page.getByRole("tab", { name: "Access", exact: true }).click();
-        await expect.poll(() => new URL(page.url()).hash).toBe("#access");
-        await page.getByText("Add context to prompts", { exact: true }).waitFor();
-
-        await page.getByRole("tab", { name: "Configuration", exact: true }).click();
+        await page
+          .locator(".plugin-catalog-detail__actions")
+          .getByRole("link", { name: "Settings", exact: true })
+          .click();
         await page.getByRole("alert").filter({ hasText: "Configuration unavailable" }).waitFor();
         const configRequests = (await gateway.getRequests("config.get")).length;
         await gateway.setMethodResponse("config.get", configMocks["config.get"]);
-        await page.getByRole("button", { name: "Reload", exact: true }).click();
+        await page
+          .getByRole("alert")
+          .filter({ hasText: "Configuration unavailable" })
+          .getByRole("button", { name: "Try again", exact: true })
+          .click();
         await page.getByLabel("Workspace label", { exact: true }).waitFor();
         expect(await gateway.getRequests("config.get")).toHaveLength(configRequests + 1);
       },

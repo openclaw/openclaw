@@ -15,7 +15,7 @@ import type {
   PluginListResult,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
-import { renderPluginCatalogDetail, type PluginCatalogDetailTab } from "./catalog-detail.ts";
+import { renderPluginCatalogDetail } from "./catalog-detail.ts";
 import { renderPluginCatalogResults } from "./catalog-results.ts";
 import { renderPluginConsentDialog } from "./consent-dialog.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
@@ -49,17 +49,18 @@ type CatalogDetailState = {
 };
 
 type InstalledDetailState = {
+  tools?: Array<{ name: string; description?: string }>;
   pluginId: string;
   inspection: PluginsInspectResult | null;
   error: string | null;
 };
 
 type PluginsPageViewActions = {
+  openTool: (name: string) => void;
   selectHubTab: (tab: PluginsHubTab) => void;
   closeCatalogDetail: () => void;
   retryCatalogDetail: () => void;
   installCatalogEntry: (id: string) => void;
-  selectCatalogDetailTab: (tab: PluginCatalogDetailTab) => void;
   setQuery: (query: string) => void;
   refreshCatalog: () => void;
   openPluginSettings: (pluginId: string | null, fromDiscovery: boolean) => void;
@@ -95,7 +96,6 @@ export type PluginsPageViewModel = {
   catalogIconUrls: Record<string, string>;
   pageNotice: PluginRowMessage | null;
   catalogDetail: CatalogDetailState | null;
-  catalogDetailTab: PluginCatalogDetailTab;
   installedDetailTab: InstalledPluginDetailTab;
   installWizard: PluginInstallWizardState | null;
   mutationBlockedReason: string | null;
@@ -160,6 +160,45 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     onRefresh: actions.refreshCatalog,
   };
 
+  const renderInstalled = (pluginId: string) => {
+    const current = model.routeData?.location;
+    const search = new URLSearchParams(current?.search);
+    search.set("view", "settings");
+    const settings = model.installedDetailTab === "configuration";
+    const backSearch = new URLSearchParams(current?.search);
+    backSearch.delete("view");
+    const overviewHref = `${current?.pathname ?? ""}${backSearch.size ? `?${backSearch}` : ""}`;
+    return renderPluginSettingsDetail({
+      ...settingsShared,
+      pluginId,
+      inspection: detail?.inspection ?? null,
+      inspectionError: detail?.error ?? null,
+      tools: detail?.tools,
+      onOpenTool: actions.openTool,
+      settingsHref: `${current?.pathname ?? ""}?${search}`,
+      configSchema: pluginConfigSchema(configAnalysis.schema, pluginId),
+      hostControlsSchema: pluginHostControlsSchema(configAnalysis.schema, pluginId),
+      backHref: settings
+        ? overviewHref
+        : pathForRoute(
+            model.surface === "discovery" ? "plugins" : settingsParentRoute,
+            context.basePath,
+          ),
+      backLabel:
+        model.surface === "discovery" || settingsParentRoute === "plugins"
+          ? t("tabs.plugins")
+          : t("nav.settings"),
+      tab: model.installedDetailTab,
+      onBack: settings
+        ? () => actions.selectInstalledDetailTab("readme")
+        : model.surface === "discovery"
+          ? actions.closeCatalogDetail
+          : () => actions.closeSettingsDetail(settingsParentRoute),
+      onRetryInspection: () => actions.retrySettingsDetail(pluginId),
+      onTabChange: actions.selectInstalledDetailTab,
+    });
+  };
+
   return html`
     ${
       model.surface === "discovery" && !catalogDetail
@@ -185,29 +224,29 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
               aria-labelledby="plugins-tab-plugins"
               >${
                 catalogDetail
-                  ? renderPluginCatalogDetail({
-                      connected: model.connected,
-                      result: catalogDetail.result,
-                      error: catalogDetail.error,
-                      tab: model.catalogDetailTab,
-                      backHref: pathForRoute("plugins", context.basePath),
-                      onBack: actions.closeCatalogDetail,
-                      onRetry: actions.retryCatalogDetail,
-                      onTabChange: actions.selectCatalogDetailTab,
-                      canInstall:
-                        model.canMutate &&
-                        Boolean(
-                          catalogDetail.result &&
-                          installRequestForDiscoveryDetail(catalogDetail.result),
-                        ),
-                      installBlockedReason: model.mutationBlockedReason,
-                      onInstall: () => {
-                        if (catalogDetail.result) {
-                          installWizardController.open(catalogDetail.result);
-                        }
-                      },
-                      iconUrls: model.catalogIconUrls,
-                    })
+                  ? detailPluginId
+                    ? renderInstalled(detailPluginId)
+                    : renderPluginCatalogDetail({
+                        connected: model.connected,
+                        result: catalogDetail.result,
+                        error: catalogDetail.error,
+                        backHref: pathForRoute("plugins", context.basePath),
+                        onBack: actions.closeCatalogDetail,
+                        onRetry: actions.retryCatalogDetail,
+                        canInstall:
+                          model.canMutate &&
+                          Boolean(
+                            catalogDetail.result &&
+                            installRequestForDiscoveryDetail(catalogDetail.result),
+                          ),
+                        installBlockedReason: model.mutationBlockedReason,
+                        onInstall: () => {
+                          if (catalogDetail.result) {
+                            installWizardController.open(catalogDetail.result);
+                          }
+                        },
+                        iconUrls: model.catalogIconUrls,
+                      })
                   : renderSettingsPage(
                       renderPluginCatalogResults({
                         connected: model.connected,
@@ -245,21 +284,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
               }</wa-tab-panel
             >`
           : detailPluginId
-            ? renderPluginSettingsDetail({
-                ...settingsShared,
-                pluginId: detailPluginId,
-                inspection: detail?.inspection ?? null,
-                inspectionError: detail?.error ?? null,
-                configSchema: pluginConfigSchema(configAnalysis.schema, detailPluginId),
-                hostControlsSchema: pluginHostControlsSchema(configAnalysis.schema, detailPluginId),
-                backHref: pathForRoute(settingsParentRoute, context.basePath),
-                backLabel:
-                  settingsParentRoute === "plugins" ? t("tabs.plugins") : t("nav.settings"),
-                tab: model.installedDetailTab,
-                onBack: () => actions.closeSettingsDetail(settingsParentRoute),
-                onRetryInspection: () => actions.retrySettingsDetail(detailPluginId),
-                onTabChange: actions.selectInstalledDetailTab,
-              })
+            ? renderInstalled(detailPluginId)
             : renderPluginSettingsInventory({
                 ...settingsShared,
                 tab: model.settingsTab,

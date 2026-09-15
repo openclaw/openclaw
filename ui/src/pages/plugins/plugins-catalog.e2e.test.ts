@@ -96,14 +96,12 @@ describeControlUiE2e("Control UI installed plugin catalog", () => {
     });
     try {
       await page.goto(`${server.baseUrl}settings/plugins/calendar-plus#lifecycle`);
-      const toggle = page.getByRole("switch", {
-        name: "Enable or disable Calendar Plus",
+      const toggle = page.getByRole("button", {
+        name: "Disable Calendar Plus",
         exact: true,
       });
       await toggle.waitFor();
-      expect(await page.locator("wa-switch.settings-toggle").getAttribute("aria-disabled")).toBe(
-        "true",
-      );
+      expect(await toggle.getAttribute("aria-disabled")).toBe("true");
       for (const name of ["Reload Calendar Plus", "Uninstall Calendar Plus"]) {
         const action = page.getByRole("button", { name, exact: true });
         await action.waitFor();

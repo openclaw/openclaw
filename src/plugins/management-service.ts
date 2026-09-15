@@ -33,6 +33,7 @@ import {
   createInstalledPluginEnabledPredicate,
   isInstalledPluginEnabled,
 } from "./installed-plugin-index.js";
+import { readInstalledPluginOverview } from "./installed-plugin-overview.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
   type ManagedPluginIconSource,
@@ -603,6 +604,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
           enabled,
         },
         declared: pendingReview.declared,
+        overview: readInstalledPluginOverview(manifest),
         components: projectInstalledPluginComponents({
           manifest,
           declared: pendingReview.declared,
@@ -674,6 +676,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
         ...summary,
         declared,
         components: projectInstalledPluginComponents({ manifest, declared }),
+        overview: readInstalledPluginOverview(manifest),
         reviewToken: computeDeclaredSurfaceHash(declared),
         ...(trust ? { trust } : {}),
       };

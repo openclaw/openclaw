@@ -190,6 +190,7 @@ describe("tools.catalog handler", () => {
       id: "voice_call",
       label: "voice_call",
       description: "Plugin calling tool",
+      fullDescription: "Plugin calling tool",
       source: "plugin",
       pluginId: "voice-call",
       optional: true,

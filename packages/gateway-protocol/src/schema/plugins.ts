@@ -510,12 +510,15 @@ export const PluginDiscoveryDetailSchema = closedObject({
       handle: Type.Optional(NonEmptyString),
       displayName: Type.Optional(NonEmptyString),
       imageUrl: Type.Optional(NonEmptyString),
+      official: Type.Optional(Type.Boolean()),
     }),
   ),
   topics: Type.Array(NonEmptyString),
   createdAt: Type.Optional(Type.Integer({ minimum: 0 })),
   updatedAt: Type.Optional(Type.Integer({ minimum: 0 })),
   readme: Type.Optional(Type.String({ maxLength: 524_288 })),
+  repositoryUrl: Type.Optional(NonEmptyString),
+  documentationUrl: Type.Optional(NonEmptyString),
   compatibility: Type.Optional(PluginDiscoveryCompatibilitySchema),
   configuration: Type.Array(PluginDiscoveryConfigFieldSchema),
   mcpServers: Type.Array(NonEmptyString),
@@ -572,6 +575,14 @@ export const PluginInstalledComponentsSchema = closedObject({
 /** Consent snapshot plus the installed-version presentation projection used by Control UI. */
 export const PluginsInspectResultSchema = closedObject({
   ok: Type.Literal(true),
+  overview: Type.Optional(
+    closedObject({
+      readme: Type.Optional(Type.String({ maxLength: 524_288 })),
+      repositoryUrl: Type.Optional(NonEmptyString),
+      documentationUrl: Type.Optional(NonEmptyString),
+      publisherName: Type.Optional(NonEmptyString),
+    }),
+  ),
   plugin: closedObject({
     id: NonEmptyString,
     name: NonEmptyString,

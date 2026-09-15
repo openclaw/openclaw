@@ -28,6 +28,7 @@ type ToolCatalogEntry = {
   id: string;
   label: string;
   description: string;
+  fullDescription?: string;
   source: "core" | "plugin";
   pluginId?: string;
   optional?: boolean;
@@ -132,6 +133,9 @@ function buildPluginGroups(params: {
           (typeof tool.description === "string" ? tool.description : undefined),
         displaySummary: tool.displaySummary,
       }),
+      fullDescription:
+        ownedMetadata?.description ??
+        (typeof tool.description === "string" ? tool.description : undefined),
       source: "plugin",
       pluginId,
       optional: meta?.optional,
@@ -170,6 +174,7 @@ function buildPluginGroups(params: {
           summarizeToolDescriptionText({
             rawDescription: ownedMetadata?.description,
           }) || `Plugin tool from ${entry.pluginName ?? entry.pluginId}`,
+        fullDescription: ownedMetadata?.description,
         source: "plugin",
         pluginId: entry.pluginId,
         optional: entry.optional,

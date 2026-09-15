@@ -10732,6 +10732,7 @@ public struct PluginsInspectParams: Codable, Sendable {
 
 public struct PluginsInspectResult: Codable, Sendable {
     public let ok: Bool
+    public let overview: [String: AnyCodable]?
     public let plugin: [String: AnyCodable]
     public let source: PluginInspectSource?
     public let declared: PluginDeclaredSurface
@@ -10743,6 +10744,7 @@ public struct PluginsInspectResult: Codable, Sendable {
 
     public init(
         ok: Bool,
+        overview: [String: AnyCodable]? = nil,
         plugin: [String: AnyCodable],
         source: PluginInspectSource? = nil,
         declared: PluginDeclaredSurface,
@@ -10753,6 +10755,7 @@ public struct PluginsInspectResult: Codable, Sendable {
         catalog: PluginsCatalogGetResult? = nil)
     {
         self.ok = ok
+        self.overview = overview
         self.plugin = plugin
         self.source = source
         self.declared = declared
@@ -10765,6 +10768,7 @@ public struct PluginsInspectResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case ok
+        case overview
         case plugin
         case source
         case declared
@@ -21595,6 +21599,7 @@ public struct ToolCatalogEntry: Codable, Sendable {
     public let optional: Bool?
     public let risk: AnyCodable?
     public let tags: [String]?
+    public let fulldescription: String?
     public let defaultprofiles: [AnyCodable]
 
     public init(
@@ -21606,6 +21611,7 @@ public struct ToolCatalogEntry: Codable, Sendable {
         optional: Bool? = nil,
         risk: AnyCodable? = nil,
         tags: [String]? = nil,
+        fulldescription: String? = nil,
         defaultprofiles: [AnyCodable])
     {
         self.id = id
@@ -21616,6 +21622,7 @@ public struct ToolCatalogEntry: Codable, Sendable {
         self.optional = optional
         self.risk = risk
         self.tags = tags
+        self.fulldescription = fulldescription
         self.defaultprofiles = defaultprofiles
     }
 
@@ -21628,6 +21635,7 @@ public struct ToolCatalogEntry: Codable, Sendable {
         case optional
         case risk
         case tags
+        case fulldescription = "fullDescription"
         case defaultprofiles = "defaultProfiles"
     }
 }

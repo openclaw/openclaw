@@ -36,7 +36,7 @@ function mount(overrides: Partial<DetailProps>) {
     hostControlsSchema: null,
     backHref: "/settings/plugins",
     backLabel: "Plugins",
-    tab: "lifecycle",
+    tab: "readme",
     onBack: vi.fn(),
     onRetryInspection: vi.fn(),
     onTabChange: vi.fn(),

@@ -3,8 +3,10 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import type { ToolsCatalogResult } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { PluginCatalogItem, PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   createClient,
   createContext,
@@ -99,14 +101,25 @@ describe("PluginsPage routing", () => {
           versions: [],
         },
       };
+      const inventory = createResult(
+        createPlugin({
+          id: "whatsapp",
+          catalogId: detail.plugin.id,
+          installed,
+        }),
+      );
       const { client, request } = createClient(async (method) =>
-        method === "plugins.catalog.get" ? detail : createResult(),
+        method === "plugins.catalog.get"
+          ? detail
+          : method === "plugins.inspect"
+            ? createInspectResult()
+            : inventory,
       );
       const harness = createGateway(client);
       const context = createContext(harness.gateway);
       const routeData = createPluginsRouteData(
         harness.gateway,
-        createResult(),
+        inventory,
         createPluginsRouteLocation("/plugins/ch_d2hhdHNhcHA?action=install"),
       );
       const { page } = await mountPage(context, routeData);
@@ -215,12 +228,13 @@ describe("PluginsPage routing", () => {
     const hero = page.querySelector(".plugin-catalog-detail__hero");
     expect(page.querySelector(".plugin-catalog-detail--no-sidebar")).not.toBeNull();
     expect(hero?.querySelector(".plugin-catalog-detail__sidebar")).toBeNull();
-    expect(hero?.querySelector(".plugin-catalog-detail__publisher-icon")).not.toBeNull();
+    expect(hero?.querySelector(".plugin-catalog-detail__icon")).not.toBeNull();
+    expect(hero?.querySelector(".plugin-catalog-detail__publisher-icon")).toBeNull();
     expect(hero?.querySelector("h1")?.textContent).toBe("Workboard");
     expect(hero?.querySelector(".plugin-catalog-detail__summary")?.textContent).toBe(
       t("subtitles.workboard"),
     );
-    expect(hero?.querySelector("wa-switch")).not.toBeNull();
+    expect(hero?.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();
     breadcrumb?.click();
     await page.updateComplete;
     expect(context.navigate).toHaveBeenCalledWith(testCase.target, {
@@ -266,7 +280,7 @@ describe("PluginsPage routing", () => {
     const routeData = createPluginsRouteData(
       harness.gateway,
       result,
-      createPluginsRouteLocation("/settings/plugins/workboard"),
+      createPluginsRouteLocation("/settings/plugins/workboard?view=settings"),
     );
     const { page } = await mountPage(context, routeData);
     await switchToSettingsSurface(page, routeData);
@@ -302,7 +316,7 @@ describe("PluginsPage routing", () => {
     const routeData = createPluginsRouteData(
       harness.gateway,
       result,
-      createPluginsRouteLocation("/settings/plugins/workboard"),
+      createPluginsRouteLocation("/settings/plugins/workboard?view=settings"),
     );
     const { page } = await mountPage(context, routeData);
     await switchToSettingsSurface(page, routeData);
@@ -459,9 +473,7 @@ describe("PluginsPage routing", () => {
       ),
     );
     await vi.waitFor(() => expect(catalogs).toBe(1));
-    const input = page.querySelector<HTMLInputElement>(
-      '.plugin-catalog-detail__panel input[type="text"]',
-    );
+    const input = page.querySelector<HTMLInputElement>('input[type="text"]');
     expect(input).not.toBeNull();
     input!.value = "After";
     input!.dispatchEvent(new Event("input", { bubbles: true }));
@@ -475,12 +487,14 @@ describe("PluginsPage routing", () => {
     configState.configAutoSaveStatus = "saved";
     runtimeConfig.notify();
     await vi.waitFor(() => expect(catalogs).toBe(2));
-    page
-      .querySelector("#plugin-installed-detail-tab-skills")!
-      .dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+    page.routeData = createPluginsRouteData(
+      harness.gateway,
+      result,
+      createPluginsRouteLocation("/settings/plugins/workboard"),
+    );
     await page.updateComplete;
     const rows = () =>
-      [...page.querySelectorAll(".plugin-catalog-detail__row h3")].map((row) => row.textContent);
+      [...page.querySelectorAll(".plugin-capability__copy strong")].map((row) => row.textContent);
     expect(rows()).toEqual(["Current skill"]);
 
     catalog.resolve(discoveryDetail(plugin));
@@ -600,83 +614,237 @@ describe("PluginsPage routing", () => {
     },
   );
 
-  it("renders local settings before optional ClawHub presentation settles", async () => {
-    const plugin = createPlugin({
-      catalogId: "ch_QG9wZW5jbGF3L3dvcmtib2FyZA",
-      clawhubPackage: "@openclaw/workboard",
-      version: "1.2.3",
-    });
-    const result = createResult(plugin);
-    const catalog = {
-      plugin: {
-        id: plugin.catalogId,
-        catalog: {
-          name: "Workboard",
-          packageName: "@openclaw/workboard",
-          official: true,
-          categories: ["tools"],
-        },
-        local: {
-          present: true,
-          installed: true,
-          enabled: false,
-          state: "disabled" as const,
-          pluginId: plugin.id,
-          action: "manage" as const,
-        },
-      },
-      detail: {
-        origin: "clawhub" as const,
-        packageName: "@openclaw/workboard",
-        topics: [],
-        configuration: [],
-        mcpServers: [],
-        skills: [],
-        versions: [],
-      },
-    };
-    let resolveCatalog!: (value: typeof catalog) => void;
-    const catalogPending = new Promise<typeof catalog>((resolve) => {
-      resolveCatalog = resolve;
-    });
-    const { client, request } = createClient(async (method) => {
-      if (method === "plugins.inspect") {
-        return createInspectResult();
-      }
-      if (method === "plugins.catalog.get") {
-        return catalogPending;
-      }
-      return result;
-    });
-    const harness = createGateway(client);
-    const context = createContext(harness.gateway);
-    const routeData = createPluginsRouteData(
-      harness.gateway,
-      result,
-      createPluginsRouteLocation("/settings/plugins/workboard"),
-    );
-    const { page } = await mountPage(context, routeData);
-    await switchToSettingsSurface(page, routeData);
-
-    await vi.waitFor(() => expect(page.querySelector("h1")?.textContent).toContain("Workboard"));
-    expect(page.querySelector(".plugins-settings-detail-actions wa-switch")).not.toBeNull();
-    expect(page.querySelector(".plugin-catalog-detail__sidebar")).toBeNull();
-    expect(request).toHaveBeenCalledWith(
-      "plugins.catalog.get",
-      {
-        id: plugin.catalogId,
+  it.each(["/settings/plugins/workboard", "/plugins/ch_QG9wZW5jbGF3L3dvcmtib2FyZA"])(
+    "renders local controls at %s while optional metadata settles independently",
+    async (route) => {
+      const plugin = createPlugin({
+        catalogId: "ch_QG9wZW5jbGF3L3dvcmtib2FyZA",
+        clawhubPackage: "@openclaw/workboard",
         version: "1.2.3",
-      },
-      undefined,
-    );
+      });
+      const result = createResult(plugin);
+      const catalog = {
+        plugin: {
+          id: plugin.catalogId,
+          catalog: {
+            name: "Workboard",
+            packageName: "@openclaw/workboard",
+            official: true,
+            categories: ["tools"],
+          },
+          local: {
+            present: true,
+            installed: true,
+            enabled: false,
+            state: "disabled" as const,
+            pluginId: plugin.id,
+            action: "manage" as const,
+          },
+        },
+        detail: {
+          origin: "clawhub" as const,
+          packageName: "@openclaw/workboard",
+          topics: [],
+          configuration: [],
+          mcpServers: [],
+          skills: [],
+          versions: [],
+        },
+      };
+      const tools = deferred<ToolsCatalogResult>();
+      let resolveCatalog!: (value: typeof catalog) => void;
+      const catalogPending = new Promise<typeof catalog>((resolve) => {
+        resolveCatalog = resolve;
+      });
+      const { client, request } = createClient(async (method) => {
+        if (method === "plugins.inspect") {
+          const inspection = createInspectResult();
+          inspection.declared.tools = ["board_create"];
+          return inspection;
+        }
+        if (method === "tools.catalog") {
+          return tools.promise;
+        }
+        if (method === "plugins.catalog.get") {
+          return catalogPending;
+        }
+        return result;
+      });
+      const harness = createGateway(client);
+      harness.emit(client, true, {
+        hello: gatewayHelloForMethods(["plugins.inspect", "plugins.setEnabled", "tools.catalog"]),
+      });
+      const context = createContext(harness.gateway);
+      const routeData = createPluginsRouteData(
+        harness.gateway,
+        result,
+        createPluginsRouteLocation(route),
+      );
+      const { page } = await mountPage(context, routeData);
+      if (route.startsWith("/settings/")) {
+        await switchToSettingsSurface(page, routeData);
+      }
 
-    resolveCatalog(catalog);
-    await vi.waitFor(() =>
-      expect(page.querySelector(".plugin-catalog-detail__sidebar")).not.toBeNull(),
-    );
-  });
+      await vi.waitFor(() => expect(page.querySelector("h1")?.textContent).toContain("Workboard"));
+      expect(page.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();
+      expect(page.querySelector(".plugin-catalog-detail__sidebar")?.textContent).toContain("1.2.3");
+      expect(request).toHaveBeenCalledWith(
+        "plugins.catalog.get",
+        {
+          id: plugin.catalogId,
+          version: "1.2.3",
+        },
+        undefined,
+      );
 
-  it("explains required setup in Configuration and blocks enabling", async () => {
+      resolveCatalog(catalog);
+      await vi.waitFor(() =>
+        expect(page.querySelector(".plugin-catalog-detail__sidebar")).not.toBeNull(),
+      );
+      tools.resolve({
+        agentId: "main",
+        profiles: [],
+        groups: [
+          {
+            id: "plugin:workboard",
+            label: "Workboard",
+            source: "plugin",
+            pluginId: plugin.id,
+            tools: [
+              {
+                id: "board_search",
+                label: "Search board",
+                description: "Summary",
+                fullDescription: "Full board search description",
+                source: "plugin",
+                pluginId: plugin.id,
+                defaultProfiles: [],
+              },
+            ],
+          },
+        ],
+      });
+      await vi.waitFor(() => expect(page.textContent).toContain("Full board search description"));
+      expect(page.textContent).toContain("board_create");
+    },
+  );
+
+  it.each([false, true])(
+    "clears installed controls on another catalog route (stale snapshot: %s)",
+    async (staleSnapshot) => {
+      const plugin = createPlugin({ catalogId: "ch_d29ya2JvYXJk" });
+      const result = createResult(plugin);
+      const { client, request } = createClient(async (method) => {
+        if (method === "plugins.inspect") {
+          return createInspectResult();
+        }
+        if (method === "plugins.catalog.get") {
+          throw new Error("ClawHub unavailable");
+        }
+        return result;
+      });
+      const harness = createGateway(client);
+      const context = createContext(harness.gateway);
+      const route = `/plugins/${plugin.catalogId}`;
+      const { page } = await mountPage(
+        context,
+        createPluginsRouteData(harness.gateway, result, createPluginsRouteLocation(route)),
+      );
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("plugins.inspect", {
+          pluginId: plugin.id,
+        }),
+      );
+      expect(page.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();
+      expect(context.replace).not.toHaveBeenCalled();
+      expect(context.navigate).not.toHaveBeenCalled();
+      const nextRoute = createPluginsRouteData(
+        harness.gateway,
+        result,
+        createPluginsRouteLocation("/plugins/ch_b3RoZXI"),
+      );
+      if (staleSnapshot) {
+        harness.emit(client, false);
+        harness.emit(client, true, {
+          hello: gatewayHelloForMethods(["plugins.list", "plugins.inspect"]),
+        });
+        await vi.waitFor(() => expect(page.loading).toBe(false));
+        await vi.waitFor(() =>
+          expect(page.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull(),
+        );
+      }
+      page.routeData = nextRoute;
+      await page.updateComplete;
+      await vi.waitFor(() => expect(page.textContent).toContain("ClawHub unavailable"));
+      expect(page.querySelector('[aria-label="Enable Workboard"]')).toBeNull();
+    },
+  );
+
+  it.each([
+    ["failed", "task"],
+    ["pending", "task"],
+    ["failed", "route"],
+    ["pending", "route"],
+  ])(
+    "uses a late local inventory while catalog metadata is %s via %s",
+    async (remoteState, producer) => {
+      const plugin = { ...createPlugin(), catalogId: "ch_d29ya2JvYXJk" };
+      const result = createResult(plugin);
+      const local = deferred<typeof result>();
+      const remote = deferred<PluginDiscoveryDetailResult>();
+      let catalogs = 0;
+      const { client, request } = createClient(async (method) => {
+        if (method === "plugins.list") {
+          return local.promise;
+        }
+        if (method === "plugins.inspect") {
+          return createInspectResult();
+        }
+        if (method === "plugins.catalog.get") {
+          if (++catalogs === 1 && remoteState === "pending") {
+            return remote.promise;
+          }
+          throw new Error("ClawHub unavailable");
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      });
+      const harness = createGateway(client);
+      const { page } = await mountPage(
+        createContext(harness.gateway),
+        createPluginsRouteData(
+          harness.gateway,
+          null,
+          createPluginsRouteLocation(`/plugins/${plugin.catalogId}`),
+        ),
+      );
+      await vi.waitFor(() => expect(catalogs).toBe(1));
+      if (producer === "task") {
+        local.resolve(result);
+      } else {
+        page.routeData = createPluginsRouteData(
+          harness.gateway,
+          result,
+          createPluginsRouteLocation(`/plugins/${plugin.catalogId}`),
+        );
+        await page.updateComplete;
+      }
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith("plugins.inspect", { pluginId: plugin.id }),
+      );
+      expect(page.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();
+      expect(page.querySelector(".plugin-catalog-detail__install")).toBeNull();
+      remote.resolve(discoveryDetail({ ...plugin, installed: false }));
+      await remote.promise;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      await page.updateComplete;
+      expect(page.querySelector('[aria-label="Enable Workboard"]')).not.toBeNull();
+      expect(page.querySelector(".plugin-catalog-detail__install")).toBeNull();
+    },
+  );
+
+  it("keeps setup in Settings and blocks enabling an incomplete plugin", async () => {
     const plugin = createPlugin({
       id: "team-reports",
       name: "Team Reports",
@@ -711,16 +879,14 @@ describe("PluginsPage routing", () => {
       expect(page.querySelector("h1")?.textContent).toContain("Team Reports");
     });
     expect(page.querySelector(".plugins-settings-detail-setup")).toBeNull();
-    const configurationTab = page.querySelector("#plugin-installed-detail-tab-configuration");
-    expect(configurationTab?.getAttribute("aria-selected")).toBe("true");
-    expect(configurationTab?.querySelector(".plugin-installed-detail__setup-dot")).not.toBeNull();
-    const alert = page.querySelector(".plugin-catalog-detail__panel .oc-banner-warning");
-    expect(alert?.textContent?.trim()).toBe(
-      "Complete the required configuration before enabling this plugin.",
-    );
-    expect(page.querySelector(".plugins-settings-detail-actions .settings-status")).toBeNull();
+    expect(page.querySelector('[role="tablist"]')).toBeNull();
+    expect(page.querySelector(".plugin-catalog-detail__panel .oc-banner-warning")).toBeNull();
+    const settings = [
+      ...page.querySelectorAll<HTMLAnchorElement>(".plugin-catalog-detail__actions a"),
+    ].find((link) => link.textContent?.includes("Settings"));
+    expect(settings?.href).toContain("view=settings");
     expect(
-      page.querySelector(".plugins-settings-detail-actions wa-switch")?.hasAttribute("disabled"),
-    ).toBe(true);
+      page.querySelector('[aria-label="Enable Team Reports"]')?.getAttribute("aria-disabled"),
+    ).toBe("true");
   });
 });

@@ -36,22 +36,22 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
       methodResponses: pluginMethodResponses(),
     });
     try {
-      await page.goto(`${server.baseUrl}settings/plugins/workboard#lifecycle`);
-      const toggle = page.getByRole("switch", { name: "Enable or disable Workboard", exact: true });
-      await toggle.waitFor();
+      await page.goto(`${server.baseUrl}settings/plugins/workboard`);
+      await page.getByRole("button", { name: "Enable Workboard", exact: true }).waitFor();
       await gateway.waitForRequest("config.get");
       const connects = (await gateway.getRequests("connect")).length;
       for (const [index, enabled] of [true, false, true].entries()) {
         const plugin = enabled ? workboardEnabled : workboardDisabled;
+        const toggle = page.getByRole("button", {
+          name: `${enabled ? "Enable" : "Disable"} Workboard`,
+          exact: true,
+        });
         const writes = (await gateway.getRequests("plugins.setEnabled")).length;
         const configReads = (await gateway.getRequests("config.get")).length;
         const listReads = (await gateway.getRequests("plugins.list")).length;
         await gateway.deferNext("plugins.setEnabled");
         await expect.poll(() => toggle.isEnabled()).toBe(true);
-        await page
-          .locator("wa-switch.settings-toggle")
-          .filter({ hasText: "Enable or disable Workboard" })
-          .click();
+        await toggle.click();
         expect(
           (await gateway.waitForRequest("plugins.setEnabled", { after: writes })).params,
         ).toEqual({
@@ -76,7 +76,9 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
         const snapshot = inventory([plugin], index + 1);
         await gateway.setMethodResponse("plugins.list", snapshot);
         await gateway.resolveDeferred("plugins.list", snapshot);
-        await expect.poll(() => toggle.isChecked()).toBe(enabled);
+        await page
+          .getByRole("button", { name: `${enabled ? "Disable" : "Enable"} Workboard`, exact: true })
+          .waitFor();
         await page
           .locator('.plugins-row-message[role="status"]')
           .getByText(`${enabled ? "Enabled" : "Disabled"} Workboard.`, { exact: true })
@@ -108,6 +110,7 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
   it("reviews staged capabilities and supports uninstalling and reinstalling on the same connection", async () => {
     const context = await newContext();
     const page = await context.newPage();
+    const installedCalendar = { ...calendarPlugin, catalogId: calendarDiscoveryPlugin.id };
     const gateway = await installMockGateway(page, {
       featureMethods: pluginMethods,
       methodResponses: pluginMethodResponses(),
@@ -150,11 +153,11 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
       });
       await gateway.setMethodResponse(
         "plugins.list",
-        inventory([...initialInventory.plugins, calendarPlugin]),
+        inventory([...initialInventory.plugins, installedCalendar]),
       );
       await gateway.resolveDeferred("plugins.install", {
         ok: true,
-        plugin: calendarPlugin,
+        plugin: installedCalendar,
         restartRequired: false,
       });
       await wizard.getByText("Plugin ready", { exact: true }).waitFor();
@@ -162,15 +165,21 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
       expect(await gateway.getRequests("connect")).toHaveLength(connects);
       expect(await gateway.getRequests("gateway.restart.request")).toHaveLength(0);
       await wizard.getByRole("button", { name: "Manage plugin", exact: true }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins/calendar-plus");
       await expect
-        .poll(() =>
-          page
-            .getByRole("switch", { name: "Enable or disable Calendar Plus", exact: true })
-            .isChecked(),
-        )
-        .toBe(true);
-      await page.getByRole("tab", { name: "Lifecycle", exact: true }).click();
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(`/plugins/${calendarDiscoveryPlugin.id}`);
+      await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
+      await page
+        .locator(".plugin-catalog-detail__actions")
+        .getByRole("link", { name: "Settings", exact: true })
+        .click();
+      await page.getByRole("heading", { name: "Calendar Plus Settings", exact: true }).waitFor();
+      expect(new URL(page.url()).searchParams.get("view")).toBe("settings");
+      await page
+        .locator(".plugins-settings-breadcrumb")
+        .getByRole("link", { name: "Calendar Plus", exact: true })
+        .click();
+      await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
       await gateway.deferNext("plugins.uninstall");
       await page.getByRole("button", { name: "Uninstall Calendar Plus", exact: true }).click();
       await page
@@ -182,11 +191,7 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
       });
       await gateway.setMethodResponse("plugins.list", initialInventory);
       await gateway.resolveDeferred("plugins.uninstall");
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/plugins");
-      await page.locator(".plugins-settings-row").first().waitFor();
-      expect(await page.locator('[data-plugin-id="calendar-plus"]').count()).toBe(0);
-      // Browser Back returns to the catalog route retained by Manage plugin.
-      await page.goBack();
+      await page.getByRole("button", { name: "Install", exact: true }).waitFor();
       await expect
         .poll(() => new URL(page.url()).pathname)
         .toBe(`/plugins/${calendarDiscoveryPlugin.id}`);
@@ -199,11 +204,11 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
       });
       await gateway.setMethodResponse(
         "plugins.list",
-        inventory([...initialInventory.plugins, calendarPlugin]),
+        inventory([...initialInventory.plugins, installedCalendar]),
       );
       await gateway.resolveDeferred("plugins.install", {
         ok: true,
-        plugin: calendarPlugin,
+        plugin: installedCalendar,
         restartRequired: false,
       });
       await wizard.getByText("Plugin ready", { exact: true }).waitFor();

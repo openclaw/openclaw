@@ -175,13 +175,13 @@ suite.define(() => {
         settingLabel: string,
         expected: boolean,
       ) => {
-        await page.goto(`${suite.server.baseUrl}settings/plugins/${pluginId}`);
+        await page.goto(`${suite.server.baseUrl}settings/plugins/${pluginId}?view=settings`);
         await waitForControlUiRoute(page, {
           pathname: `/settings/plugins/${pluginId}`,
           routeId: "plugin-settings",
         });
         const setting = page.locator(".settings-row", { hasText: settingLabel });
-        await setting.locator("xpath=ancestor::details[1]/summary").click();
+        await page.locator("summary").getByText("Session Catalog", { exact: true }).click();
         await setting.waitFor({ state: "visible" });
         expect(await setting.getByText("eligible paired nodes.", { exact: false }).count()).toBe(1);
         expect(

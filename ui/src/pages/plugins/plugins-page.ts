@@ -9,13 +9,11 @@ import {
   pluginSettingsIdFromPath,
 } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { inspectPlugin } from "../../lib/plugins/capability-consent-error.ts";
 import {
   loadPluginDiscoveryDetail,
   uninstallPlugin,
@@ -29,8 +27,11 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/plugins.css";
-import type { PluginCatalogDetailTab } from "./catalog-detail.ts";
-import { installedPluginDetailTabFromHash, type InstalledPluginDetailTab } from "./detail-tabs.ts";
+import {
+  pluginDetailLocation,
+  installedPluginDetailTabFromHash,
+  type InstalledPluginDetailTab,
+} from "./detail-tabs.ts";
 import { InstallWizardController } from "./install-wizard-controller.ts";
 import type { PluginInstallWizardState } from "./install-wizard-model.ts";
 import { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
@@ -40,6 +41,7 @@ import {
   committedMutationMessage,
   PluginsConsentController,
 } from "./plugins-consent-controller.ts";
+import { loadInstalledPluginDetail } from "./plugins-detail-loader.ts";
 import type { PluginsHubTab } from "./plugins-hub.ts";
 import { PluginsPageIcons } from "./plugins-page-icons.ts";
 import {
@@ -51,15 +53,14 @@ import {
 import { renderPluginsPage } from "./plugins-page-view.ts";
 import type { PluginsRouteData } from "./route-data.ts";
 import type { PluginSettingsTab } from "./settings-view.ts";
-
-type PluginsPageSurface = "discovery" | "settings";
+import { showPluginToolPreview } from "./tool-preview.ts";
 
 class PluginsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
   @property({ attribute: false }) routeData?: PluginsRouteData;
-  @property({ attribute: false }) surface: PluginsPageSurface = "settings";
+  @property({ attribute: false }) surface: "discovery" | "settings" = "settings";
 
   @state() private result: PluginListResult | null = null;
   @state() private error: string | null = null;
@@ -72,14 +73,13 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private catalogIconUrls: Record<string, string> = {};
   @state() private pageNotice: PluginRowMessage | null = null;
   @state() private catalogDetail: PluginsPageCatalogDetail | null = null;
-  @state() private catalogDetailTab: PluginCatalogDetailTab = "readme";
   @state() private installedDetailTab: InstalledPluginDetailTab = "readme";
   @state() private installWizard: PluginInstallWizardState | null = null;
+  private toolPreviewAbort = new AbortController();
   private configAutoSaveStatus = this.context?.runtimeConfig.state.configAutoSaveStatus ?? "idle";
   private pluginConfigEditPending = false;
   private routeDataConsumed = false;
   private pluginGeneration: number | undefined;
-  private iconAuthCandidates: string[] = [];
   private readonly icons = new PluginsPageIcons({
     getContext: () => this.context,
     isConnected: () => this.isConnected,
@@ -124,12 +124,11 @@ class PluginsPage extends OpenClawLightDomElement {
       this.pageNotice = null;
     },
     closeDetails: () => {
-      if (this.surface !== "settings") {
-        this.detail = null;
-      }
+      this.toolPreviewAbort.abort();
+      this.toolPreviewAbort = new AbortController();
     },
     applyMutationResult: (result) => this.applyMutationResult(result),
-    refreshCatalogAfterMutation: (client) => this.refreshCatalogAfterMutation(client),
+    refreshCatalogAfterMutation: (client) => this.refreshCatalog(client),
     requestUpdate: () => this.requestUpdate(),
   });
   private readonly installWizardController = new InstallWizardController({
@@ -146,6 +145,10 @@ class PluginsPage extends OpenClawLightDomElement {
     canEditConfig: () => this.canEditConfig(),
     refreshCatalog: () => this.refreshCatalog(),
     onManage: (pluginId) => {
+      if (this.surface === "discovery" && this.catalogDetail) {
+        void this.showCatalogDetail(this.catalogDetail.id);
+        return;
+      }
       this.context.navigate("plugin-settings", {
         pathname: pathForPluginSettings(pluginId, this.context.basePath),
         search: "?from=plugins",
@@ -192,6 +195,8 @@ class PluginsPage extends OpenClawLightDomElement {
 
   override willUpdate(changed: PropertyValues<this>) {
     if (changed.has("routeData")) {
+      this.toolPreviewAbort.abort();
+      this.toolPreviewAbort = new AbortController();
       if (
         !this.installWizard &&
         changed.get("routeData")?.location.pathname !== this.routeData?.location.pathname
@@ -213,6 +218,7 @@ class PluginsPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    this.toolPreviewAbort.abort();
     this.installWizardController.disconnect();
     this.discovery.disconnect();
     this.subscriptions.clear();
@@ -237,6 +243,14 @@ class PluginsPage extends OpenClawLightDomElement {
       event.stopPropagation();
       return;
     }
+    if (document.querySelector("openclaw-modal-dialog")) {
+      return;
+    }
+    if (this.catalogDetail) {
+      this.closeCatalogDetail();
+      event.stopPropagation();
+      return;
+    }
     if (this.detail) {
       this.detail = null;
       if (this.surface === "settings") {
@@ -244,11 +258,6 @@ class PluginsPage extends OpenClawLightDomElement {
           pathname: pathForRoute("plugin-settings", this.context.basePath),
         });
       }
-      event.stopPropagation();
-      return;
-    }
-    if (this.catalogDetail) {
-      this.closeCatalogDetail();
       event.stopPropagation();
     }
   };
@@ -258,17 +267,11 @@ class PluginsPage extends OpenClawLightDomElement {
     const generation = snapshot.pluginCapabilities?.generation;
     const pluginsChanged = generation !== undefined && generation !== this.pluginGeneration;
     this.pluginGeneration = generation;
-    const nextIconAuthCandidates = resolveControlUiAuthCandidates({
+    const iconAuthChanged = this.icons.updateAuth({
       hello: snapshot.hello,
       settings: { token: this.context.gateway.connection.token },
       password: this.context.gateway.connection.password,
     });
-    const iconAuthChanged =
-      nextIconAuthCandidates.length !== this.iconAuthCandidates.length ||
-      nextIconAuthCandidates.some(
-        (candidate, index) => candidate !== this.iconAuthCandidates[index],
-      );
-    this.iconAuthCandidates = nextIconAuthCandidates;
     const shouldRefreshAfterChange =
       !change.initial &&
       (change.identityChanged || change.connectionChanged || iconAuthChanged || pluginsChanged) &&
@@ -292,7 +295,6 @@ class PluginsPage extends OpenClawLightDomElement {
     }
     if (shouldRefreshAfterChange) {
       void this.refreshCatalog().then(() => this.installWizardController.resume());
-      void this.refreshDiscovery();
     } else {
       this.ensureInitialData();
     }
@@ -314,24 +316,25 @@ class PluginsPage extends OpenClawLightDomElement {
           ? "advanced"
           : "installed";
     }
-    if (detailPluginId) {
-      this.installedDetailTab = installedPluginDetailTabFromHash(data.location.hash);
+    if (detailPluginId || catalogId) {
+      this.installedDetailTab =
+        new URLSearchParams(data.location.search).get("view") === "settings"
+          ? "configuration"
+          : installedPluginDetailTabFromHash(data.location.hash);
     }
-    if (!this.gateway.isRouteDataCurrent(data)) {
-      this.ensureInitialData();
-      return;
+    if (this.gateway.isRouteDataCurrent(data)) {
+      // Route loading can complete after publication on the same connection.
+      if (
+        this.pluginGeneration !== undefined &&
+        (data.result?.generation ?? -1) < this.pluginGeneration
+      ) {
+        void this.refreshCatalog();
+      } else {
+        this.replaceResult(data.result);
+        this.error = data.error;
+      }
     }
-    // Route loading can complete after publication on the same connection.
-    if (
-      this.pluginGeneration !== undefined &&
-      (data.result?.generation ?? -1) < this.pluginGeneration
-    ) {
-      void this.refreshCatalog();
-    } else {
-      this.replaceResult(data.result);
-      this.error = data.error;
-    }
-    if (detailPluginId !== this.detail?.pluginId) {
+    if (this.surface === "settings" && detailPluginId !== this.detail?.pluginId) {
       void this.showDetails(detailPluginId);
     }
     if (catalogId !== this.catalogDetail?.id) {
@@ -345,6 +348,8 @@ class PluginsPage extends OpenClawLightDomElement {
       void this.catalogTask.run([null]);
       this.discovery.invalidate();
     }
+    this.toolPreviewAbort.abort();
+    this.toolPreviewAbort = new AbortController();
     // Inspection results belong to one connection epoch, including same-client reconnects.
     this.detail = null;
     this.catalogDetail = null;
@@ -360,6 +365,11 @@ class PluginsPage extends OpenClawLightDomElement {
     }
     this.messages = this.consentController.reconcileInstallMessages(result);
     this.result = result;
+    // Both route loading and explicit refreshes publish the installed inventory.
+    // Retire any earlier catalog request before resolving its local identity.
+    if (result && this.surface === "discovery") {
+      void this.refreshDiscovery();
+    }
   }
 
   private get loading(): boolean {
@@ -381,18 +391,14 @@ class PluginsPage extends OpenClawLightDomElement {
     if (!this.routeDataConsumed || !this.gateway.connected || !this.gateway.client) {
       return;
     }
+    // Direct links and refreshes initialize Settings through the same route
+    // lifecycle as navigation; the click handler only selects the location.
+    if (this.activeRoutePluginId && this.installedDetailTab === "configuration") {
+      void this.context.runtimeConfig.ensureLoaded();
+      void this.context.runtimeConfig.ensureSchemaLoaded();
+    }
     if (!this.loading && !this.result && !this.error) {
       void this.refreshCatalog();
-    }
-    if (this.surface === "discovery") {
-      const catalogId = this.activeRoutePluginId;
-      if (catalogId) {
-        if (catalogId !== this.catalogDetail?.id) {
-          void this.showCatalogDetail(catalogId);
-        }
-      } else {
-        this.discovery.ensureInitial();
-      }
     }
   }
 
@@ -413,14 +419,6 @@ class PluginsPage extends OpenClawLightDomElement {
       await this.showCatalogDetail(catalogId);
     } else {
       await this.discovery.refresh();
-    }
-  }
-
-  private async refreshCatalogAfterMutation(client: NonNullable<GatewayPageController["client"]>) {
-    const scope = this.gateway.capture();
-    await this.refreshCatalog(client);
-    if (scope && scope.client === client && this.gateway.isCurrent(scope)) {
-      await this.refreshDiscovery();
     }
   }
 
@@ -491,42 +489,43 @@ class PluginsPage extends OpenClawLightDomElement {
     if (!plugin?.installed || !detail || !scope) {
       return;
     }
-    try {
-      const inspection = await inspectPlugin(scope.client, plugin.id);
-      if (!this.gateway.isCurrent(scope) || this.detail !== detail) {
-        return;
-      }
-      detail = { ...detail, inspection };
-      this.detail = detail;
-      if (!plugin.catalogId) {
-        return;
-      }
-      try {
-        const catalog = await loadPluginDiscoveryDetail(
-          scope.client,
-          plugin.catalogId,
-          undefined,
-          plugin.version,
-        );
-        if (this.gateway.isCurrent(scope) && this.detail === detail) {
-          this.detail = { ...detail, inspection: { ...inspection, catalog } };
-        }
-      } catch {
-        // ClawHub presentation is optional; local capabilities and controls are already visible.
-      }
-    } catch (error) {
-      if (this.gateway.isCurrent(scope) && this.detail === detail) {
-        this.detail = { ...detail, error: formatUiError(error) };
-      }
-    }
+    await loadInstalledPluginDetail({
+      plugin,
+      client: scope.client,
+      catalog: this.catalogDetail?.result ?? undefined,
+      includeTools:
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "tools.catalog") === true,
+      isCurrent: () => this.gateway.isCurrent(scope) && this.detail === detail,
+      onChange: (next) => {
+        detail = next;
+        this.detail = next;
+      },
+    });
   }
 
   private async showCatalogDetail(id: string | null) {
     const detail = id ? { id, result: null, error: null } : null;
     this.catalogDetail = detail;
-    this.catalogDetailTab = "readme";
+    if (this.surface === "discovery") {
+      this.detail = null;
+    }
     const scope = this.gateway.capture();
     if (!detail || !scope) {
+      return;
+    }
+    const installed = this.result?.plugins.find(
+      (plugin) => plugin.installed && plugin.catalogId === id,
+    );
+    if (installed) {
+      // Installed identity and availability belong to the local inventory. Its
+      // detail loader enriches the overview without waiting on ClawHub.
+      if (new URLSearchParams(this.routeData?.location.search).get("action") === "install") {
+        this.context.replace("plugins", {
+          pathname: this.routeData?.location.pathname,
+          search: "",
+        });
+      }
+      await this.showDetails(installed.id);
       return;
     }
     try {
@@ -534,6 +533,10 @@ class PluginsPage extends OpenClawLightDomElement {
       if (this.gateway.isCurrent(scope) && this.catalogDetail === detail) {
         this.catalogDetail = { ...detail, result };
         this.syncCatalogIcons();
+        const installedId = result.plugin.local.installed
+          ? result.plugin.local.pluginId
+          : undefined;
+        void this.showDetails(installedId ?? null);
         if (new URLSearchParams(this.routeData?.location.search).get("action") === "install") {
           // A chat-card link opens review only; the existing wizard owns install consent.
           this.context.replace("plugins", {
@@ -576,7 +579,7 @@ class PluginsPage extends OpenClawLightDomElement {
 
   private closeCatalogDetail() {
     this.catalogDetail = null;
-    this.catalogDetailTab = "readme";
+    this.detail = null;
     this.context.navigate("plugins", {
       pathname: pathForRoute("plugins", this.context.basePath),
     });
@@ -603,7 +606,7 @@ class PluginsPage extends OpenClawLightDomElement {
             });
           }
         }
-        await this.refreshCatalogAfterMutation(client);
+        await this.refreshCatalog(client);
       },
       { confirm: () => confirmPluginUninstall(name) },
     );
@@ -628,7 +631,6 @@ class PluginsPage extends OpenClawLightDomElement {
       iconUrls: this.iconUrls,
       catalogIconUrls: this.catalogIconUrls,
       catalogDetail: this.catalogDetail,
-      catalogDetailTab: this.catalogDetailTab,
       installedDetailTab: this.installedDetailTab,
       installWizard: this.installWizard,
       canMutate: this.canMutate(),
@@ -647,8 +649,11 @@ class PluginsPage extends OpenClawLightDomElement {
         closeCatalogDetail: () => this.closeCatalogDetail(),
         retryCatalogDetail: () => void this.showCatalogDetail(this.catalogDetail?.id ?? null),
         installCatalogEntry: (id) => void this.installCatalogEntry(id),
-        selectCatalogDetailTab: (tab) => {
-          this.catalogDetailTab = tab;
+        openTool: (name) => {
+          const tool = this.detail?.tools?.find((entry) => entry.name === name) ?? { name };
+          this.toolPreviewAbort.abort();
+          this.toolPreviewAbort = new AbortController();
+          void showPluginToolPreview(tool, this.toolPreviewAbort.signal);
         },
         setQuery: (query) => {
           this.query = query;
@@ -701,13 +706,10 @@ class PluginsPage extends OpenClawLightDomElement {
         retrySettingsDetail: (pluginId) => void this.showDetails(pluginId),
         selectInstalledDetailTab: (tab) => {
           this.installedDetailTab = tab;
-          this.context.replace("plugin-settings", {
-            pathname: this.detail
-              ? pathForPluginSettings(this.detail.pluginId, this.context.basePath)
-              : this.routeData?.location.pathname,
-            search: this.routeData?.location.search,
-            hash: `#${tab}`,
-          });
+          this.context.navigate(
+            this.surface === "discovery" ? "plugins" : "plugin-settings",
+            pluginDetailLocation(this.routeData?.location, tab === "configuration"),
+          );
         },
         selectSettingsTab: (tab) => {
           this.settingsTab = tab;

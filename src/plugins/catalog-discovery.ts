@@ -261,8 +261,15 @@ export function joinLocalPluginDetail(params: {
       origin: "local",
       ...(params.plugin.packageName ? { packageName: params.plugin.packageName } : {}),
       topics: [],
+      ...(inspection?.overview?.readme ? { readme: inspection.overview.readme } : {}),
+      ...(inspection?.overview?.repositoryUrl
+        ? { repositoryUrl: inspection.overview.repositoryUrl }
+        : {}),
+      ...(inspection?.overview?.documentationUrl
+        ? { documentationUrl: inspection.overview.documentationUrl }
+        : {}),
       configuration: [],
-      mcpServers: inspection?.declared.mcpServers ?? [],
+      mcpServers: inspection?.components.mcpServers ?? [],
       skills: (inspection?.components.skills ?? []).map((name) => ({ name })),
       versions: [],
     },
@@ -285,6 +292,8 @@ export function joinClawHubPluginDetail(params: {
     ...(params.remote.createdAt !== undefined ? { createdAt: params.remote.createdAt } : {}),
     ...(params.remote.updatedAt !== undefined ? { updatedAt: params.remote.updatedAt } : {}),
     ...(params.remote.readme ? { readme: params.remote.readme } : {}),
+    ...(params.remote.repositoryUrl ? { repositoryUrl: params.remote.repositoryUrl } : {}),
+    ...(params.remote.documentationUrl ? { documentationUrl: params.remote.documentationUrl } : {}),
     ...(params.remote.compatibility ? { compatibility: params.remote.compatibility } : {}),
     configuration: params.remote.configFields,
     mcpServers: params.remote.mcpServers,

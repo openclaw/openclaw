@@ -214,15 +214,6 @@ export class PluginDiscoveryController {
     return intent === "all" && category === null && !query;
   }
 
-  ensureInitial(): void {
-    if (!this.gateway.isConnected() || !this.gateway.getClient()) {
-      return;
-    }
-    if (this.browseTask.status === TaskStatus.INITIAL && !this.result && !this.error) {
-      void this.refresh();
-    }
-  }
-
   invalidate(): void {
     void this.browseTask.run([null, this.intent, this.category, this.committedQuery]);
     this.result = null;

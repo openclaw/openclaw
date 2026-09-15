@@ -1399,6 +1399,7 @@ export const ToolCatalogEntrySchema = closedObject({
     Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
   ),
   tags: Type.Optional(Type.Array(NonEmptyString)),
+  fullDescription: Type.Optional(Type.String()),
   defaultProfiles: Type.Array(
     Type.Union([
       Type.Literal("minimal"),

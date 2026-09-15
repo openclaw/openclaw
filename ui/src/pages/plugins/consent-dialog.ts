@@ -292,9 +292,9 @@ const PLUGIN_ORIGIN_LABELS: Readonly<Record<string, string>> = {
   official: "pluginsPage.official",
 };
 
-export function pluginOriginLabel(origin: string, official?: boolean): string;
-export function pluginOriginLabel(origin: string | undefined, official?: boolean): string | null;
-export function pluginOriginLabel(origin: string | undefined, official?: boolean): string | null {
+function pluginOriginLabel(origin: string, official?: boolean): string;
+function pluginOriginLabel(origin: string | undefined, official?: boolean): string | null;
+function pluginOriginLabel(origin: string | undefined, official?: boolean): string | null {
   if (official) {
     return t("pluginsPage.official");
   }

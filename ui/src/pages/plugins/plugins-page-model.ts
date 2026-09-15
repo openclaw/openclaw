@@ -10,6 +10,7 @@ import type {
 registerPluginManagementEnglish();
 
 export type PluginsPageDetail = {
+  tools?: Array<{ name: string; description?: string }>;
   pluginId: string;
   inspection: PluginsInspectResult | null;
   error: string | null;

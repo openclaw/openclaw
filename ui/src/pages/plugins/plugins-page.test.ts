@@ -67,6 +67,54 @@ describe("PluginsPage", () => {
     },
   );
 
+  it.each(["missing", "older generation"])(
+    "waits for the initial installed inventory before browsing discovery (%s)",
+    async (routeInventory) => {
+      const current = { ...createResult(), generation: 7 };
+      const inventory = deferred<typeof current>();
+      const { client, request } = createClient(async (method) => {
+        if (method === "plugins.list") {
+          return inventory.promise;
+        }
+        if (method === "plugins.catalog.browse") {
+          return { items: [] };
+        }
+        throw new Error(`Unexpected method ${method}`);
+      });
+      const harness = createGateway(client);
+      harness.emit(client, true, {
+        pluginCapabilities: {
+          ok: true,
+          generation: 7,
+          descriptors: [],
+          methods: [],
+          controlUiTabs: [],
+          controlUiWidgetKinds: [],
+          pluginSurfaceUrls: {},
+        },
+      });
+      const { page } = await mountPage(
+        createContext(harness.gateway),
+        createPluginsRouteData(
+          harness.gateway,
+          routeInventory === "missing" ? null : { ...createResult(), generation: 6 },
+          createPluginsRouteLocation("/plugins"),
+        ),
+      );
+      try {
+        expect(request.mock.calls.map(([method]) => method)).toEqual(["plugins.list"]);
+      } finally {
+        inventory.resolve(current);
+      }
+      await waitForFast(() => expect(page.result).toBe(current));
+      await page.updateComplete;
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "plugins.list",
+        "plugins.catalog.browse",
+      ]);
+    },
+  );
+
   it("surfaces a route catalog load failure without retrying it", async () => {
     const { client, request } = createClient(async () => createResult());
     const harness = createGateway(client);
