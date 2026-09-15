@@ -63,6 +63,7 @@ function verifyUploadedArtifact(
     env?: NodeJS.ProcessEnv;
     runAttempt?: string;
     runId?: string;
+    timeoutMs?: number;
   } = {},
 ) {
   return spawnSync(
@@ -80,6 +81,38 @@ function verifyUploadedArtifact(
     {
       encoding: "utf8",
       env: { ...fixture.env, ...params.env },
+      timeout: params.timeoutMs,
+    },
+  );
+}
+
+// The deployed request deadline is a fixed production value, so the timeout boundary is
+// driven directly by sourcing the helper and passing short deadlines for the fixture.
+// Sourcing runs under /bin/bash: the script's macOS Bash 5.3+ guard re-execs only when
+// it is executed by a modern Bash, so the system shell keeps the helpers in-process.
+function runDeadlineHelper(params: {
+  env: NodeJS.ProcessEnv;
+  killGrace?: string;
+  requestTimeout?: string;
+  timeoutMs?: number;
+}) {
+  return spawnSync(
+    "/bin/bash",
+    [
+      "-c",
+      'source "$1"; shift; gh_api_get_with_retry "$@"',
+      "shared-image-artifact-deadline",
+      HELPER,
+      "Docker E2E image artifact metadata",
+      `repos/openclaw/openclaw/actions/artifacts/${ARTIFACT_ID}`,
+      "retry-fresh-artifact",
+      params.requestTimeout ?? "1s",
+      params.killGrace ?? "1s",
+    ],
+    {
+      encoding: "utf8",
+      env: params.env,
+      timeout: params.timeoutMs,
     },
   );
 }
@@ -87,16 +120,35 @@ function verifyUploadedArtifact(
 function createFixture() {
   const root = mkdtempSync(join(tmpdir(), "openclaw-shared-image-artifact-"));
   const bin = join(root, "bin");
+  const timeoutShimDir = join(root, "bin-timeout-shim");
   const artifactDir = join(root, "artifact");
   const dockerLog = join(root, "docker.log");
   const ghLog = join(root, "gh.log");
   const ghState = join(root, "gh-state");
   const sleepLog = join(root, "sleep.log");
+  const timeoutLog = join(root, "timeout.log");
   mkdirSync(bin);
+  mkdirSync(timeoutShimDir);
   mkdirSync(ghState);
   writeFileSync(dockerLog, "");
   writeFileSync(ghLog, "");
   writeFileSync(sleepLog, "");
+  writeFileSync(timeoutLog, "");
+
+  // Records the deadline the helper applies and runs the wrapped command without
+  // waiting, so the fixed production bounds stay assertable in a fast test.
+  writeExecutable(
+    join(timeoutShimDir, "timeout"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$FAKE_TIMEOUT_LOG"
+while [[ "$1" == --* ]]; do
+  shift
+done
+shift
+exec "$@"
+`,
+  );
 
   writeExecutable(
     join(bin, "docker"),
@@ -231,6 +283,18 @@ case "$path" in
       printf '%s\\n' "\${FAKE_GH_ARTIFACT_ERROR:-gh: request failed}" >&2
       exit 1
     fi
+    if [[ "$count" -le "\${FAKE_GH_ARTIFACT_HANGS:-0}" ]]; then
+      # Simulate a stalled connection: accepts the request but never responds.
+      if [[ "\${FAKE_GH_ARTIFACT_TERM_RESISTANT:-0}" == "1" ]]; then
+        # exec removes this shell: a plain child sleep would die to the
+        # process-group TERM and end the script via set -e without ever
+        # reaching --kill-after. The replacement survives TERM, so only KILL
+        # escalation (status 137) can stop the request.
+        exec term-resistant-hang
+      fi
+      # Absolute path bypasses the fake sleep shim so the request really hangs.
+      /bin/sleep 30
+    fi
     if [[ -n "\${FAKE_ARTIFACT_JSON:-}" ]]; then
       printf '%s\\n' "$FAKE_ARTIFACT_JSON"
       exit 0
@@ -267,6 +331,18 @@ printf '%s\\n' "$*" >> "$FAKE_SLEEP_LOG"
 `,
   );
 
+  writeExecutable(
+    join(bin, "term-resistant-hang"),
+    `#!/usr/bin/env bash
+# Survive SIGTERM and record its delivery; only SIGKILL escalation stops this
+# process. No set -e: the TERM-killed sleep below must not end the loop.
+trap 'echo term-survived >> "$FAKE_GH_STATE/term-deliveries"' TERM
+while :; do
+  /bin/sleep 1
+done
+`,
+  );
+
   const env = {
     ...process.env,
     FAKE_ARTIFACT_DIGEST: ARTIFACT_DIGEST,
@@ -280,6 +356,7 @@ printf '%s\\n' "$*" >> "$FAKE_SLEEP_LOG"
     FAKE_GH_LOG: ghLog,
     FAKE_GH_STATE: ghState,
     FAKE_SLEEP_LOG: sleepLog,
+    FAKE_TIMEOUT_LOG: timeoutLog,
     GH_TOKEN: "test-token",
     GITHUB_REPOSITORY: "openclaw/openclaw",
     GITHUB_RUN_ATTEMPT: "2",
@@ -288,7 +365,7 @@ printf '%s\\n' "$*" >> "$FAKE_SLEEP_LOG"
     RUNNER_TEMP: root,
     OPENCLAW_SHARED_IMAGE_PACKAGE_SHA256: PACKAGE_SHA256,
   };
-  return { artifactDir, dockerLog, env, ghLog, root, sleepLog };
+  return { artifactDir, dockerLog, env, ghLog, root, sleepLog, timeoutLog, timeoutShimDir };
 }
 
 function expectedArchiveEnv(fixture: ReturnType<typeof createFixture>): NodeJS.ProcessEnv {
@@ -371,6 +448,108 @@ describe("shared Docker image artifacts", () => {
       const calls = readFileSync(fixture.ghLog, "utf8");
       expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
       expect(calls.match(/actions\/runs/g)).toHaveLength(1);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("applies the fixed production request deadline and kill grace by default", () => {
+    const fixture = createFixture();
+    try {
+      const applied = spawnSync(
+        "/bin/bash",
+        [
+          "-c",
+          'source "$1"; shift; gh_api_get_with_retry "$@"',
+          "shared-image-artifact-deadline",
+          HELPER,
+          "Docker E2E image artifact metadata",
+          `repos/openclaw/openclaw/actions/artifacts/${ARTIFACT_ID}`,
+          "retry-fresh-artifact",
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...fixture.env,
+            PATH: `${fixture.timeoutShimDir}:${fixture.env.PATH ?? ""}`,
+          },
+        },
+      );
+      expect(applied.status, `${applied.stdout}\n${applied.stderr}`).toBe(0);
+      expect(readFileSync(fixture.timeoutLog, "utf8")).toBe(
+        `--signal=TERM --kill-after=10s 30s gh api --method GET repos/openclaw/openclaw/actions/artifacts/${ARTIFACT_ID}\n`,
+      );
+      expect(applied.stdout).toContain(`"id":${ARTIFACT_ID}`);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("retries a stalled gh api request past the request deadline and then succeeds", () => {
+    const fixture = createFixture();
+    try {
+      const verified = runDeadlineHelper({
+        env: { ...fixture.env, FAKE_GH_ARTIFACT_HANGS: "1" },
+        timeoutMs: 20_000,
+      });
+      expect(verified.error).toBeUndefined();
+      expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
+      expect(verified.stdout).toContain(`"id":${ARTIFACT_ID}`);
+      expect(verified.stderr).toContain("request deadline");
+      expect(verified.stderr).toContain(
+        "artifact metadata GitHub API GET failed transiently on attempt 1/3; retrying in 2s",
+      );
+      expect(readFileSync(fixture.sleepLog, "utf8")).toBe("2\n");
+      const calls = readFileSync(fixture.ghLog, "utf8");
+      expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("retries a TERM-resistant stalled gh api request after KILL escalation and then succeeds", () => {
+    const fixture = createFixture();
+    try {
+      const verified = runDeadlineHelper({
+        env: {
+          ...fixture.env,
+          FAKE_GH_ARTIFACT_HANGS: "1",
+          FAKE_GH_ARTIFACT_TERM_RESISTANT: "1",
+        },
+        timeoutMs: 30_000,
+      });
+      expect(verified.error).toBeUndefined();
+      expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
+      expect(verified.stderr).toContain("request deadline");
+      expect(verified.stderr).toContain(
+        "artifact metadata GitHub API GET failed transiently on attempt 1/3; retrying in 2s",
+      );
+      // The fake recorded a survived TERM, so the retry could only have come
+      // from --kill-after KILL escalation (status 137): without it, timeout
+      // would wait forever on the surviving process instead of retrying.
+      expect(readFileSync(join(fixture.root, "gh-state", "term-deliveries"), "utf8").trim()).toBe(
+        "term-survived",
+      );
+      const calls = readFileSync(fixture.ghLog, "utf8");
+      expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("fails after every gh api request stalls past the request deadline", () => {
+    const fixture = createFixture();
+    try {
+      const failed = runDeadlineHelper({
+        env: { ...fixture.env, FAKE_GH_ARTIFACT_HANGS: "3" },
+        timeoutMs: 20_000,
+      });
+      expect(failed.error).toBeUndefined();
+      expect(failed.status).toBe(1);
+      expect(failed.stderr).toContain("request deadline");
+      expect(failed.stderr).toContain("GitHub API GET failed after 3 attempt(s)");
+      const calls = readFileSync(fixture.ghLog, "utf8");
+      expect(calls.match(/actions\/artifacts/g)).toHaveLength(3);
     } finally {
       rmSync(fixture.root, { force: true, recursive: true });
     }
