@@ -134,7 +134,11 @@ describe("listSessionCatalogEntries", () => {
     );
     expect(listSessionCatalogEntries({ agentId: "beta", config, runtime })).toEqual([]);
     expect(listSessionEntries).toHaveBeenCalledOnce();
-    expect(listSessionEntries).toHaveBeenCalledWith({ agentId: "beta", readOnly: true });
+    expect(listSessionEntries).toHaveBeenCalledWith({
+      agentId: "beta",
+      projection: "list",
+      readOnly: true,
+    });
   });
 });
 

@@ -216,7 +216,11 @@ export function validateAcpResumeSessionOwnership(params: {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.targetAgentId,
   });
-  for (const { sessionKey, entry } of listSessionEntriesReadOnly({ storePath, clone: false })) {
+  for (const { sessionKey, entry } of listSessionEntriesReadOnly({
+    storePath,
+    clone: false,
+    projection: "list",
+  })) {
     const acp = readAcpSessionMeta({ sessionKey, cfg: params.cfg });
     // Resume identifiers are backend-local; requester ownership cannot authorize another backend.
     if (
