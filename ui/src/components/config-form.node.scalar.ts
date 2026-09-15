@@ -262,7 +262,7 @@ export function renderTextInput(
   const { schema, value, path, hints, disabled, onPatch, inputType } = params;
   const showLabel = params.showLabel ?? true;
   const hint = hintForPath(path, hints);
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help } = resolveFieldMeta(path, schema, hints);
   const helpId = showLabel && help ? configFieldId(path, "description") : undefined;
   const sensitiveState = getSensitiveRenderState(params);
   const isStructuredValue =
@@ -489,7 +489,6 @@ export function renderTextInput(
     helpId,
     defaultDescription:
       effectiveRedacted || masked ? nothing : renderSchemaDefaultDescription(schema, value),
-    tags,
     showLabel,
     control: presentedInput,
   });
@@ -498,7 +497,7 @@ export function renderTextInput(
 export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResult {
   const { schema, value, path, hints, disabled, onPatch } = params;
   const showLabel = params.showLabel ?? true;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help } = resolveFieldMeta(path, schema, hints);
   const helpId = showLabel && help ? configFieldId(path, "description") : undefined;
   const displayValue = value ?? "";
   const effectiveValue = value !== undefined ? value : schema.default;
@@ -625,7 +624,6 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
     help,
     helpId,
     defaultDescription: renderSchemaDefaultDescription(schema, value),
-    tags,
     showLabel,
     control,
   });
@@ -636,7 +634,7 @@ export function renderSelect(
 ): TemplateResult {
   const { schema, value, path, hints, disabled, options, onPatch } = params;
   const showLabel = params.showLabel ?? true;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help } = resolveFieldMeta(path, schema, hints);
   const helpId = showLabel && help ? configFieldId(path, "description") : undefined;
   const usingDefault = value === undefined && schema.default !== undefined;
   const resolvedValue = usingDefault ? schema.default : value;
@@ -719,7 +717,6 @@ export function renderSelect(
     help,
     helpId,
     defaultDescription: renderSchemaDefaultDescription(schema, value),
-    tags,
     showLabel,
     control,
   });

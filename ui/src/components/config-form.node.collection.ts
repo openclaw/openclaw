@@ -30,7 +30,6 @@ import { renderMapField } from "./config-form.node.collection-map.ts";
 import {
   renderCollectionDefaultDescription,
   renderFieldRow,
-  renderTags,
   schemaWithDefault,
   type ConfigNodeRenderer,
   type ConfigNodeRenderParams,
@@ -66,7 +65,7 @@ export function renderObject(
     onToggleSensitivePath,
     onRemove,
   } = params;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help } = resolveFieldMeta(path, schema, hints);
   const selfMatched =
     searchCriteria && hasSearchCriteria(searchCriteria)
       ? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
@@ -191,7 +190,6 @@ export function renderObject(
         <div class="settings-row__text">
           <span class="settings-row__title">${label}</span>
           ${help ? html`<span class="settings-row__desc">${help}</span>` : nothing}
-          ${renderTags(tags)}
         </div>
         <div class="settings-row__control">
           <span class="settings-row__chevron cfg-object__chevron">${icons.chevronRight}</span>
@@ -246,7 +244,7 @@ function renderArrayContent(
   } = params;
   const showLabel = params.showLabel ?? true;
   const showHeaderMeta = params.showHeaderMeta ?? showLabel;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help } = resolveFieldMeta(path, schema, hints);
   const selfMatched =
     searchCriteria && hasSearchCriteria(searchCriteria)
       ? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
@@ -258,7 +256,6 @@ function renderArrayContent(
   if (!itemsSchema) {
     return renderFieldRow({
       label,
-      tags: [],
       showLabel: true,
       control: nothing,
       error: t("configForm.unsupportedArray"),
@@ -361,7 +358,6 @@ function renderArrayContent(
               ? html`<span class="settings-row__desc">${defaultDescription}</span>`
               : nothing
           }
-          ${renderTags(tags)}
         </div>
         <div class="settings-row__control">
           <span class="settings-row__value"

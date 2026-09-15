@@ -208,7 +208,6 @@ export function renderMapField(
                       anySchema
                         ? renderFieldRow({
                             label: key,
-                            tags: [],
                             showLabel: false,
                             stacked: true,
                             control: renderJsonTextareaControl({
