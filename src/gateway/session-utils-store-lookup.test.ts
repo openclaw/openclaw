@@ -12,7 +12,7 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareCurrentGitHubPublicationIdentity } from "./github-publication-availability.js";
+import { prepareCurrentGitHubPublicationOptionsIdentity } from "./github-publication-availability.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
@@ -49,7 +49,7 @@ import {
 } from "./session-utils.js";
 
 vi.mock("./github-publication-availability.js", () => ({
-  prepareCurrentGitHubPublicationIdentity: vi.fn(async (agentId: string) => ({
+  prepareCurrentGitHubPublicationOptionsIdentity: vi.fn(async (agentId: string) => ({
     source: "system",
     account: { accountId: `account-${agentId}`, login: `synthetic-${agentId}` },
   })),
@@ -413,7 +413,7 @@ describe("global session lookup ownership", () => {
             login: `synthetic-${agentId}`,
           },
         });
-        expect(prepareCurrentGitHubPublicationIdentity).toHaveBeenLastCalledWith(agentId);
+        expect(prepareCurrentGitHubPublicationOptionsIdentity).toHaveBeenLastCalledWith(agentId);
         expect(latestShared).toHaveBeenLastCalledWith(
           expect.objectContaining({
             agentId,

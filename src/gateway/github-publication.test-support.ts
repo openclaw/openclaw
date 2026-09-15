@@ -45,6 +45,7 @@ vi.mock("../agents/github-tool-identity.js", async (importOriginal) => {
     ...actual,
     matchesPreparedGitHubPublicationIdentity: mocks.matchesIdentity,
     prepareGitHubPublicationIdentity: mocks.prepareIdentity,
+    prepareGitHubPublicationOptionsIdentity: mocks.prepareIdentity,
   };
 });
 
