@@ -419,10 +419,11 @@ function findRun(repo: string, sha: string, after?: number, pr?: number) {
 }
 const readRun = (repo: string, runId: number, deadline?: number) =>
   RunStatusSchema.parse(
-    execGhJson(
-      `run view ${runId} --repo ${repo} --json status,conclusion`.split(" "),
-      ghReadOptions(deadline),
-    ),
+    execGhJson(`run view ${runId} --repo ${repo} --json status,conclusion`.split(" "), {
+      ...ghReadOptions(deadline),
+      // Revalidate changing run status instead of reusing a cached snapshot.
+      env: { ...process.env, OCTOPOOL_FRESH: "1" },
+    }),
   );
 
 function readQueuedPlaceholderEvidence(
