@@ -281,6 +281,20 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
         itemLifecycle,
       }),
     );
+    // External source sends retain target receipts, not internal-UI mirror payloads.
+    // A progress receipt must not suppress the later tool-free recovered answer.
+    attempt.didSendViaMessagingTool = true;
+    attempt.didDeliverSourceReplyViaMessageTool = true;
+    attempt.messagingToolSentTexts = ["Saving the note."];
+    attempt.messagingToolSentTargets = [
+      {
+        tool: "message",
+        provider: "telegram",
+        to: "synthetic-source",
+        text: "Saving the note.",
+        sourceReplyFinal: false,
+      },
+    ];
     expect(attempt).toMatchObject({
       terminal: { kind: "ok" },
       settledTurnFinalizationContext: { source: "openclaw-transcript" },
