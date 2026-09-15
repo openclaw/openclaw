@@ -12,6 +12,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
@@ -51,6 +52,7 @@ export function createLegacyDatabaseFixture(params: {
   try {
     database.exec("PRAGMA foreign_keys = ON;");
     if (schemaVersion < OPENCLAW_AGENT_SCHEMA_VERSION) {
+      removeCanonicalValidationFromHistoricalAgentFixture(database);
       database.exec("DROP TABLE session_participants;");
     }
     database.exec(`PRAGMA user_version = ${schemaVersion};`);
