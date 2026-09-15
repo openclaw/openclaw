@@ -40,6 +40,7 @@ import {
 } from "./openai-completions-replay.js";
 import {
   flattenCompletionMessagesToStringContent,
+  flattenUnsupportedCompletionsToolHistory,
   stripCompletionMessagesToRoleContent,
 } from "./openai-completions-string-content.js";
 import {
@@ -369,6 +370,11 @@ export function buildOpenAICompletionsRequest(
     if (managedCompat.requiresStringContent) {
       messages = flattenCompletionMessagesToStringContent(messages);
     }
+  }
+  // Documented `compat.supportsTools: false` already omits `tools`. Replay must
+  // also drop Chat Completions tool protocol or no-tools backends still 400.
+  if (!supportsModelTools(model)) {
+    messages = flattenUnsupportedCompletionsToolHistory(messages);
   }
   const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
   const params: CompletionsRequest = {

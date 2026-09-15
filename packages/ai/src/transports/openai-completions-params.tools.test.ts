@@ -283,12 +283,26 @@ describe("openai completions params", () => {
             isError: false,
             timestamp: Date.now(),
           },
+          {
+            role: "user",
+            content: [{ type: "text", text: "hello" }],
+            timestamp: Date.now(),
+          },
         ],
       } as never,
       undefined,
-    ) as { tools?: unknown };
+    ) as {
+      tools?: unknown;
+      messages: Array<{ role?: string; content?: unknown; tool_calls?: unknown }>;
+    };
 
     expect(params).not.toHaveProperty("tools");
+    expect(params.messages.some((message) => message.role === "tool")).toBe(false);
+    expect(params.messages.some((message) => message.tool_calls !== undefined)).toBe(false);
+    const replayedAssistant = params.messages.find((message) => message.role === "assistant");
+    expect(String(replayedAssistant?.content ?? "")).toContain("noop");
+    expect(String(replayedAssistant?.content ?? "")).toContain("ok");
+    expect(params.messages.some((message) => message.role === "user")).toBe(true);
   });
 
   it("fails locally when required Chat Completions has no usable tools", () => {
