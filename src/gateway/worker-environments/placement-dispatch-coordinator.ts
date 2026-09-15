@@ -9,7 +9,9 @@ import type { WorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
   WorkerPlacementAdmissionTargetError,
+  composeWorkerPlacementAuthorization,
   type WorkerPlacementDispatchAdmission,
+  type WorkerPlacementAuthorization,
   type WorkerPlacementCancellationTarget,
 } from "./service-contract.js";
 
@@ -51,13 +53,20 @@ export function coordinateWorkerPlacementDispatch(
   service: WorkerPlacementDispatchService,
   admitDispatch: WorkerPlacementDispatchAdmission,
   recoverInitialPlacement?: (placement: WorkerProvisioningDispatchPlacement) => Promise<void>,
-): WorkerPlacementDispatchService & {
+): Omit<WorkerPlacementDispatchService, "resumeProvisioning"> & {
+  resumeProvisioning(
+    placement: Parameters<WorkerPlacementDispatchService["resumeProvisioning"]>[0],
+    reconcile: Parameters<WorkerPlacementDispatchService["resumeProvisioning"]>[1],
+    authorize?: WorkerPlacementAuthorization,
+  ): ReturnType<WorkerPlacementDispatchService["resumeProvisioning"]>;
   isPlacementOperationInFlight(sessionId: string): boolean;
   getPendingDeviceDispatchCount(deviceId: string, excludeSessionId?: string): number;
+  hasInitialRecoveryRequest(placement: WorkerDispatchPlacement): boolean;
   waitForInitialPlacement(
     this: void,
     placement: WorkerDispatchPlacement,
     signal?: AbortSignal,
+    authorize?: WorkerPlacementAuthorization,
   ): Promise<WorkerDispatchPlacement>;
 } {
   type MaintenanceAdmission = { admitted: boolean; reclaims: Set<Promise<void>> };
@@ -263,7 +272,26 @@ export function coordinateWorkerPlacementDispatch(
         : unknown);
   }[keyof OperationServices];
   const operationsInFlight = new Map<string, Set<PlacementOperation>>();
-  const setupWaiters = new Map<string, Set<(operation: PlacementOperation) => void>>();
+  const setupWaiters = new Map<
+    string,
+    Map<
+      (operation: PlacementOperation) => void,
+      {
+        placement: WorkerDispatchPlacement;
+        authorize?: WorkerPlacementAuthorization;
+        fail: (error: unknown) => void;
+      }
+    >
+  >();
+  const recoveryRequest = (placement: WorkerDispatchPlacement) =>
+    [...(setupWaiters.get(placement.sessionId)?.values() ?? [])].find(
+      (waiter) =>
+        waiter.authorize &&
+        waiter.placement.sessionKey === placement.sessionKey &&
+        waiter.placement.agentId === placement.agentId &&
+        waiter.placement.executionMode === placement.executionMode &&
+        matchesWorkerPlacementTarget(waiter.placement, placement),
+    );
   const pendingOperations = (sessionId: string) => [...(operationsInFlight.get(sessionId) ?? [])];
   const registerOperation = (record: PlacementOperation) => {
     const pending = operationsInFlight.get(record.request.sessionId) ?? new Set();
@@ -276,7 +304,7 @@ export function coordinateWorkerPlacementDispatch(
     }
     pending.add(record);
     operationsInFlight.set(record.request.sessionId, pending);
-    for (const observe of setupWaiters.get(record.request.sessionId) ?? []) {
+    for (const observe of setupWaiters.get(record.request.sessionId)?.keys() ?? []) {
       observe(record);
     }
     const release = () => {
@@ -314,8 +342,10 @@ export function coordinateWorkerPlacementDispatch(
       }
       return count;
     },
-    async waitForInitialPlacement(placement, signal) {
+    hasInitialRecoveryRequest: (placement) => recoveryRequest(placement) !== undefined,
+    async waitForInitialPlacement(placement, signal, authorize) {
       signal?.throwIfAborted();
+      authorize?.();
       const pending = pendingOperations(placement.sessionId);
       const matchesOwner = (owner: PlacementOperation) =>
         (owner.kind === "dispatch" || owner.kind === "recovery") &&
@@ -331,7 +361,10 @@ export function coordinateWorkerPlacementDispatch(
         );
       const initialOwner = pending.length === 1 ? pending[0] : undefined;
       const recover =
-        recoverInitialPlacement && placement.state === "provisioning" && placement.environmentId
+        authorize &&
+        recoverInitialPlacement &&
+        placement.state === "provisioning" &&
+        placement.environmentId
           ? () => recoverInitialPlacement(placement)
           : undefined;
       if (pending.length ? !initialOwner || !matchesOwner(initialOwner) : !recover) {
@@ -340,6 +373,15 @@ export function coordinateWorkerPlacementDispatch(
       const superseded = new AbortController();
       let recoveryFailure: { error: unknown } | undefined;
       const waitSignal = signal ? AbortSignal.any([signal, superseded.signal]) : superseded.signal;
+      let waiting = true;
+      const assertWaiting = authorize
+        ? composeWorkerPlacementAuthorization(authorize, () => {
+            waitSignal.throwIfAborted();
+            if (!waiting) {
+              throw new Error("Initial worker setup request is closed");
+            }
+          })
+        : undefined;
       let nextOwner = createDeferredCore<PlacementOperation>();
       const observe = (owner: PlacementOperation) => {
         // A restart can leave a gap between provider recovery passes. Stop, Move, or
@@ -350,8 +392,16 @@ export function coordinateWorkerPlacementDispatch(
           nextOwner.resolve(owner);
         }
       };
-      const waiters = setupWaiters.get(placement.sessionId) ?? new Set();
-      waiters.add(observe);
+      const waiters = setupWaiters.get(placement.sessionId) ?? new Map();
+      const failRecovery = (error: unknown) => {
+        recoveryFailure = { error };
+        superseded.abort(error);
+      };
+      waiters.set(observe, {
+        placement: { ...placement },
+        authorize: assertWaiting,
+        fail: failRecovery,
+      });
       setupWaiters.set(placement.sessionId, waiters);
       try {
         if (initialOwner) {
@@ -359,10 +409,7 @@ export function coordinateWorkerPlacementDispatch(
         } else if (recover) {
           // Subscribe before waking the existing guarded recovery owner. Its environment
           // coordinator deduplicates concurrent waiters and owns subsequent provider passes.
-          void recover().catch((error: unknown) => {
-            recoveryFailure = { error };
-            superseded.abort(error);
-          });
+          void recover().catch(failRecovery);
         }
         for (;;) {
           const owner = await racePromiseWithAbortSignal(nextOwner.promise, waitSignal);
@@ -370,6 +417,7 @@ export function coordinateWorkerPlacementDispatch(
           const ownerSignal = AbortSignal.any([waitSignal, owner.superseded.signal]);
           const completed = await racePromiseWithAbortSignal(owner.operation, ownerSignal);
           ownerSignal.throwIfAborted();
+          authorize?.();
           if (completed && matchesWorkerPlacementTarget(owner.completedPlacement(), completed)) {
             return completed;
           }
@@ -388,6 +436,7 @@ export function coordinateWorkerPlacementDispatch(
       } catch (error) {
         throw recoveryFailure ? recoveryFailure.error : error;
       } finally {
+        waiting = false;
         waiters.delete(observe);
         if (waiters.size === 0) {
           setupWaiters.delete(placement.sessionId);
@@ -517,14 +566,27 @@ export function coordinateWorkerPlacementDispatch(
       environmentId === undefined
         ? runReconciliation(() => service.reconcileActive())
         : runReconciliation(() => service.reconcileActive(environmentId), false),
-    resumeProvisioning: (placement, reconcileEnvironmentCore) => {
+    resumeProvisioning: async (placement, reconcileEnvironmentCore, explicitAuthority) => {
+      // A durable placement is not permission to replay provisioning. Capture one
+      // explicit waiting caller, and never replace its authority during this pass.
+      const requester = explicitAuthority ? undefined : recoveryRequest(placement);
+      const authorize = explicitAuthority ?? requester?.authorize;
+      if (!authorize) {
+        return undefined;
+      }
+      try {
+        authorize();
+      } catch (error) {
+        requester?.fail(error);
+        throw error;
+      }
       const inFlight = pendingOperations(placement.sessionId).find(
         (pending) => pending.kind === "recovery" && isDeepStrictEqual(pending.request, placement),
       );
       if (inFlight?.kind === "recovery") {
         // A timed-out provider retains admission after foreground recovery has finished.
         // Reuse that pass until it settles; a later sweep can then resume the same owner.
-        return inFlight.foreground;
+        return joinOperation(inFlight.foreground, authorize);
       }
       // Insertion order matters: a later queued sweep must not steal a provisioning join
       // from the earlier sweep already awaiting that environment pass.
@@ -563,39 +625,48 @@ export function coordinateWorkerPlacementDispatch(
         // Recovery joins its captured sweep, never a later Stop which awaits that sweep.
         return await service.resumeProvisioning(
           placement,
-          async (signal) => {
-            await reconcileEnvironmentCore(signal, (settled) => {
-              providerSettlement = settled;
-              providerPending = true;
-              const markSettled = () => {
-                if (providerSettlement === settled) {
-                  providerPending = false;
-                }
-              };
-              void settled.then(markSettled, markSettled);
-            });
+          async (signal, _retainProviderSettlement, assertCurrent) => {
+            await reconcileEnvironmentCore(
+              signal,
+              (settled) => {
+                providerSettlement = settled;
+                providerPending = true;
+                const markSettled = () => {
+                  if (providerSettlement === settled) {
+                    providerPending = false;
+                  }
+                };
+                void settled.then(markSettled, markSettled);
+              },
+              assertCurrent,
+            );
           },
+          authorize,
           report,
           (runRecovery) =>
-            admitDispatch(placement, async (signal) => {
-              try {
-                await racePromiseWithAbortSignal(ready.promise, signal);
-                signal?.throwIfAborted();
-                const recovered = await runRecovery(signal);
-                if (providerPending) {
-                  foreground.resolve(recovered);
+            admitDispatch(
+              placement,
+              async (signal) => {
+                try {
+                  await racePromiseWithAbortSignal(ready.promise, signal);
+                  signal?.throwIfAborted();
+                  const recovered = await runRecovery(signal);
+                  if (providerPending) {
+                    foreground.resolve(recovered);
+                  }
+                  return recovered;
+                } catch (error) {
+                  if (providerPending) {
+                    foreground.reject(error);
+                  }
+                  throw error;
+                } finally {
+                  // Caller timeouts finish the sweep, not the real provider or its Stop owner.
+                  await providerSettlement;
                 }
-                return recovered;
-              } catch (error) {
-                if (providerPending) {
-                  foreground.reject(error);
-                }
-                throw error;
-              } finally {
-                // Caller timeouts finish the sweep, not the real provider or its Stop owner.
-                await providerSettlement;
-              }
-            }).catch(async (error: unknown) => {
+              },
+              authorize,
+            ).catch(async (error: unknown) => {
               if (error instanceof WorkerPlacementAdmissionTargetError) {
                 // The failed reservation is released. Cleanup still follows its captured
                 // predecessor, never a later Stop or the sweep that this recovery joins.
@@ -618,3 +689,7 @@ export function coordinateWorkerPlacementDispatch(
     },
   };
 }
+
+export type CoordinatedWorkerPlacementDispatchService = ReturnType<
+  typeof coordinateWorkerPlacementDispatch
+>;

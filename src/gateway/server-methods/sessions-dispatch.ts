@@ -38,6 +38,7 @@ import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/s
 import type { WorkerSessionWorkspace } from "../worker-environments/session-workspace.js";
 import { listGatewayEnvironments } from "./environments.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { sessionWorkerAuthorization } from "./session-mutation-guards.js";
 import {
   isWorkerDispatchInputError,
   loadAccessorSessionEntryForGatewayTarget,
@@ -250,6 +251,8 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
+    const authorize = sessionWorkerAuthorization(client, context, sessionMutationAuthorization);
+    authorize?.();
     const dispatchService = context.workerPlacementDispatchService;
     const placementReader = context.workerSessionPlacementService;
     if (!dispatchService || !placementReader) {
@@ -478,7 +481,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
               sessionKey: target.canonicalKey,
             });
           },
-          sessionMutationAuthorization?.assertCurrent,
+          authorize,
         );
         respondWorkerPlacement({
           respond,
@@ -522,7 +525,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       respond,
     );
   },
-  "sessions.move": async ({ params, respond, context, sessionMutationAuthorization }) => {
+  "sessions.move": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
     if (!assertValidParams(params, validateSessionsMoveParams, "sessions.move", respond)) {
       return;
     }
@@ -530,6 +533,8 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
+    const authorize = sessionWorkerAuthorization(client, context, sessionMutationAuthorization);
+    authorize?.();
     const placementService = context.workerPlacementDispatchService;
     const placementReader = context.workerSessionPlacementService;
     if (!placementService?.move || !placementReader) {
@@ -590,7 +595,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
             reason: "move",
             sessionKey: target.canonicalKey,
           }),
-        sessionMutationAuthorization?.assertCurrent,
+        authorize,
       );
       respondWorkerMove({
         respond,

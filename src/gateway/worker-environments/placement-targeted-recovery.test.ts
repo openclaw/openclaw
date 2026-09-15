@@ -41,9 +41,10 @@ function createDispatch(
       runnerAvailability: { read: () => undefined, version: () => 0 },
       workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
       runLocalBarrier: async ({ startDispatch }) => startDispatch(),
+
+      runActivationBarrier: async ({ activate }) => activate(),
       runRecoveryBarrier: async ({ run }) =>
         await run({ kind: "local", path: support.testState.root }),
-      runActivationBarrier: async ({ activate }) => activate(),
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
       runReclaimPreparation: async ({ run, authorize }) => await run(authorize),

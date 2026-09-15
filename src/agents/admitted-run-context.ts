@@ -49,6 +49,21 @@ type DelegatedAuthorityLease = {
 };
 
 const delegatedAuthorityLeases = new WeakMap<AdmittedRunContext, DelegatedAuthorityLease>();
+const preparedExecutionAssertions = new WeakMap<PreparedAgentRunAdmission, () => void>();
+
+/** Preparation may authorize new work only while its exact execution owner remains open. */
+export function resolvePreparedRunActiveAssertion(
+  prepared: PreparedAgentRunAdmission,
+  signal?: AbortSignal,
+): (() => void) | undefined {
+  const assertCurrent = preparedExecutionAssertions.get(prepared);
+  return assertCurrent
+    ? () => {
+        signal?.throwIfAborted();
+        assertCurrent();
+      }
+    : undefined;
+}
 const activeNativeHookRecoveryLeases = new Map<string, DelegatedAuthorityLease>();
 
 function bindAdmittedRunDelegatedAuthority(
@@ -244,7 +259,7 @@ export function prepareAgentRunAdmission(params: {
   let admitted: Promise<AdmittedRunContext> | undefined;
   let admittedContext: AdmittedRunContext | undefined;
   let closed = false;
-  return Object.freeze({
+  const prepared: PreparedAgentRunAdmission = Object.freeze({
     operationalRunInstance,
     assertSourceCurrent: () => assertSourceCurrent?.(),
     close: () => {
@@ -293,6 +308,13 @@ export function prepareAgentRunAdmission(params: {
       return admitted;
     },
   });
+  preparedExecutionAssertions.set(prepared, () => {
+    if (closed || (admittedContext && !getAdmittedRunDelegatedAuthority(admittedContext))) {
+      throw new Error("prepared execution authority is no longer active");
+    }
+    assertSourceCurrent?.();
+  });
+  return prepared;
 }
 
 /** Resolves a host-only continuation or validates an already-admitted internal caller. */

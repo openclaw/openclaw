@@ -182,10 +182,16 @@ export async function reconcileWorkspaceAfterTurn(params: {
   let workspaceConflict: WorkspaceConflictReport | undefined;
   try {
     await params.workspaceOperations.run(currentPlacement.environmentId, async () => {
-      if (!params.placements.validateTurnClaim(params.turnClaim)) {
-        throw new Error("Cloud worker workspace result lost its turn claim");
-      }
-      const quiescence = await params.tunnel.quiesceWorkspace(currentPlacement.remoteWorkspaceDir);
+      const assertCurrent = () => {
+        if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
+          throw new Error("Cloud worker workspace result lost its placement owner");
+        }
+      };
+      assertCurrent();
+      const quiescence = await params.tunnel.quiesceWorkspace(
+        currentPlacement.remoteWorkspaceDir,
+        assertCurrent,
+      );
       let resumed = false;
       try {
         const stagedResultRef = workerWorkspaceResultRef(params.turnClaim.claimId);
@@ -206,11 +212,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
                     : undefined,
                 ),
             },
-            assertCurrent: () => {
-              if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
-                throw new Error("Cloud worker workspace result lost its placement owner");
-              }
-            },
+            assertCurrent,
           }),
         );
         const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
@@ -326,6 +328,7 @@ export async function executeRemoteExecTurn(params: {
   workspace: WorkerSessionWorkspace;
   runLocal: () => Promise<EmbeddedAgentRunResult>;
   assertRunCurrent?: () => void;
+  assertExecutionCurrent?: () => void;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 }): Promise<EmbeddedAgentRunResult> {
@@ -341,11 +344,20 @@ export async function executeRemoteExecTurn(params: {
     throw new Error("Active remote-exec placement does not match its attached environment");
   }
   await recoverWorkspaceBeforeTurn(params);
-  params.assertRunCurrent?.();
+  const assertTurnClaimCurrent = () => {
+    params.assertExecutionCurrent?.();
+    params.assertRunCurrent?.();
+    params.turn.abortSignal?.throwIfAborted();
+    if (!params.placements.validateTurnClaim(params.turnClaim)) {
+      throw new Error("Remote-exec turn authority changed during tunnel startup");
+    }
+  };
+  assertTurnClaimCurrent();
   const tunnel = await waitForTurnOperation({
     operation: params.environments.startTunnel({
       environmentId: params.placement.environmentId,
       ownerEpoch: params.placement.activeOwnerEpoch,
+      authorize: assertTurnClaimCurrent,
     }),
     ...(params.turn.abortSignal ? { signal: params.turn.abortSignal } : {}),
     timeoutMs: params.turn.timeoutMs,
@@ -355,14 +367,14 @@ export async function executeRemoteExecTurn(params: {
     turn: params.turn,
     tunnel,
     remoteWorkspaceDir: params.placement.remoteWorkspaceDir,
-    assertRunCurrent: params.assertRunCurrent,
+    assertRunCurrent: assertTurnClaimCurrent,
     assertCurrent: () => {
       if (!params.placements.validateTurnClaim(params.turnClaim)) {
         throw new Error("Cloud attachment transfer lost its turn claim");
       }
     },
   });
-  params.assertRunCurrent?.();
+  assertTurnClaimCurrent();
   params.placements.markWorkspaceResultPending(params.turnClaim);
   params.onHandoff();
   let execution: Result<EmbeddedAgentRunResult, unknown>;
@@ -378,7 +390,7 @@ export async function executeRemoteExecTurn(params: {
       tunnel,
       remoteWorkspaceDir: params.placement.remoteWorkspaceDir,
       signal: params.turn.abortSignal,
-      assertRunCurrent: params.assertRunCurrent,
+      assertRunCurrent: assertTurnClaimCurrent,
       assertCurrent: () => {
         const current = params.environments.get(environment.environmentId);
         if (
@@ -391,9 +403,9 @@ export async function executeRemoteExecTurn(params: {
         }
       },
     });
-    params.assertRunCurrent?.();
+    assertTurnClaimCurrent();
     computer = await params.environments.prepareComputer?.(params.turnClaim);
-    params.assertRunCurrent?.();
+    assertTurnClaimCurrent();
     const sandboxToolPolicy = resolveSandboxToolPolicyForAgent(
       params.turn.config,
       params.placement.agentId,
@@ -410,6 +422,7 @@ export async function executeRemoteExecTurn(params: {
         isWebchatConnect: () => false,
         ...getPluginRuntimeGatewayRequestScope(),
         assertNodeExecutionCurrent: (request) => {
+          params.assertExecutionCurrent?.();
           params.assertRunCurrent?.();
           const placement = params.placements.get(params.placement.sessionId);
           const currentEnvironment = params.environments.get(environment.environmentId);

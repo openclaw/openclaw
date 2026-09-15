@@ -162,6 +162,40 @@ export function workerDisappearanceError(
   );
 }
 
+export function requireProvisionedEnvironment(
+  environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
+  expectedEnvironmentId: string,
+  executionMode: WorkerPlacementExecutionMode,
+  environments: Pick<WorkerDispatchEnvironmentService, "supportsProviderExecutionMode">,
+): { environmentId: string; ownerEpoch: number; bundleHash: string } {
+  if (
+    (environment.state !== "ready" && environment.state !== "idle") ||
+    environment.environmentId !== expectedEnvironmentId ||
+    environment.destroyRequestedAtMs !== null ||
+    !environment.bootstrapReceipt ||
+    !supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
+  ) {
+    throw new Error(
+      `Worker environment is not dispatchable with the current execution-context contract: ${environment.state}`,
+    );
+  }
+  if (
+    (environment.profileSnapshot.executionMode !== undefined &&
+      environment.profileSnapshot.executionMode !== executionMode) ||
+    (executionMode === "worker-turn" &&
+      environment.profileSnapshot.executionMode !== undefined &&
+      !environment.nodeDeviceId) ||
+    !environments.supportsProviderExecutionMode(environment.providerId, executionMode)
+  ) {
+    throw new Error("Worker environment does not support the placement's exact execution mode");
+  }
+  return {
+    environmentId: environment.environmentId,
+    ownerEpoch: environment.ownerEpoch,
+    bundleHash: environment.bootstrapReceipt.bundleHash,
+  };
+}
+
 export function isUnavailableEnvironment(
   environment: NonNullable<ReturnType<WorkerEnvironmentService["get"]>>,
 ): boolean {
@@ -263,7 +297,7 @@ export function createPlacementFailureActions(deps: {
     placement: WorkerDispatchPlacement | undefined,
     expected: WorkerDispatchPlacement | undefined,
   ): WorkerDispatchPlacement => {
-    // Idle recovery has no admission to interrupt. Its Stop must claim only the captured
+    // Interrupted provisioning has no admission to interrupt. Stop claims only the captured
     // provisioning tuple before using the ordinary failed-environment cleanup path.
     if (expected?.state !== "provisioning" || !matchesWorkerPlacementTarget(placement, expected)) {
       throw new Error("Provisioning cloud worker placement changed during reclaim");

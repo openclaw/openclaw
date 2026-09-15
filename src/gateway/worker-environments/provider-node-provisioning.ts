@@ -69,6 +69,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     provider: WorkerProvider,
     signal?: AbortSignal,
     beforeProvision?: () => void,
+    authorize?: () => void,
   ) => {
     if (!provider.requiresNodeEnrollment || !options.prepareNodeBootstrap) {
       return undefined;
@@ -77,8 +78,11 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     let installation: WorkerInstallationArtifact | undefined;
     // Replay also identifies the requested bytes; it must not relabel a previously enrolled node.
     try {
-      const nodeBootstrapSha256 = await options.prepareNodeBootstrap(record, signal);
+      signal?.throwIfAborted();
+      authorize?.();
+      const nodeBootstrapSha256 = await options.prepareNodeBootstrap(record, signal, authorize);
       if (record.profileSnapshot.project) {
+        authorize?.();
         installation = await prepareBundle(undefined, signal);
       }
       const preparation = readWorkerProjectPreparation(record.profileSnapshot.project);
@@ -98,8 +102,12 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
           ? { workerBundleSha256: installation.tarballSha256 }
           : {}),
       };
+      signal?.throwIfAborted();
+      authorize?.();
     } catch (error) {
       signal?.throwIfAborted();
+      // Lost initiating-turn authority must leave the still-requested intent cancelable.
+      authorize?.();
       const current = options.store.get(record.environmentId);
       if (
         current?.provisionOperationId === record.provisionOperationId &&
@@ -142,6 +150,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     preparedInstallation?: WorkerInstallationArtifact,
     identity?: WorkerNodeRuntimeIdentity,
     beforeProvision?: () => void,
+    authorize?: () => void,
   ) => {
     if (provider.requiresNodeEnrollment !== true) {
       return undefined;
@@ -182,6 +191,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     }
     const assertCurrent = () => {
       beforeProvision?.();
+      authorize?.();
       const current = options.store.get(record.environmentId);
       if (
         !open ||
@@ -228,7 +238,12 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
                 controller.signal,
               );
               assertRuntimeCurrent();
-              const prepared = await prepareNodeRuntime(record, artifact, controller.signal);
+              const prepared = await prepareNodeRuntime(
+                record,
+                artifact,
+                controller.signal,
+                assertRuntimeCurrent,
+              );
               try {
                 assertRuntimeCurrent();
                 assertRuntimeIdentity(prepared);
@@ -248,18 +263,20 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
           options.closeNodeRuntime?.(runtime);
           runtime = undefined;
         }
-        pending ??= prepareNodeEnrollment(record, controller.signal).then((prepared) => {
-          // A provider timeout can close this operation during artifact preparation.
-          try {
-            assertCurrent();
-            assertRuntimeIdentity(prepared);
-          } catch (error) {
-            options.closeNodeEnrollment?.(prepared);
-            throw error;
-          }
-          enrollment = prepared;
-          return prepared;
-        });
+        pending ??= prepareNodeEnrollment(record, controller.signal, assertCurrent).then(
+          (prepared) => {
+            // A provider timeout can close this operation during artifact preparation.
+            try {
+              assertCurrent();
+              assertRuntimeIdentity(prepared);
+            } catch (error) {
+              options.closeNodeEnrollment?.(prepared);
+              throw error;
+            }
+            enrollment = prepared;
+            return prepared;
+          },
+        );
         const prepared = await pending;
         assertCurrent();
         // Enrollment overlaps process-owned packaging; failure stays with lease bootstrap.
@@ -281,6 +298,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       ReturnType<typeof createWorkerProjectPreparation>["getPreparedWorkspace"]
     >,
     beforeProvision?: () => void,
+    authorize?: () => void,
   ): Promise<WorkerEnvironmentRecord> => {
     const nodePatch = {
       ...patch,
@@ -292,6 +310,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
     const assertCurrent = () => {
       cancellation?.assertActive();
       beforeProvision?.();
+      authorize?.();
       const current = options.store.get(record.environmentId);
       if (current?.preparation?.consumedAtMs === null && current.preparation.expiresAtMs <= now()) {
         options.store.requestDestroy({
@@ -333,6 +352,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         // Remote execution uses its harness runtime; unspecified mode retains worker prewarming.
         prewarm: record.profileSnapshot.executionMode !== "remote-exec",
         signal: cancellation?.signal,
+        assertCurrent,
       });
       assertCurrent();
       if (preparation) {

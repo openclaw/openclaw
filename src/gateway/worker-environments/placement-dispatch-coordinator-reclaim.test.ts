@@ -65,7 +65,11 @@ it.each(["full sweep", "targeted sweep", "recovery"] as const)(
         ? coordinated.reconcile()
         : maintenance === "targeted sweep"
           ? coordinated.reconcileActive("worker-other")
-          : coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {});
+          : coordinated.resumeProvisioning(
+              PROVISIONING_PLACEMENT,
+              async () => {},
+              () => {},
+            );
     const firstStop = coordinated.reclaim(stopped);
     const secondStop = coordinated.reclaim({
       ...stopped,
@@ -167,7 +171,11 @@ it.each([false, true])(
     await dispatchEntered.promise;
     const sweep = coordinated.reconcile();
     const reclaim = coordinated.reclaim(REQUEST).catch((error: unknown) => error);
-    const recovery = coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {});
+    const recovery = coordinated.resumeProvisioning(
+      PROVISIONING_PLACEMENT,
+      async () => {},
+      () => {},
+    );
     try {
       await setImmediatePromise();
       expect([...events]).toEqual(["reclaim:start"]);
@@ -277,7 +285,11 @@ it.each(["sweep", "recovery"] as const)(
     const maintaining =
       maintenance === "sweep"
         ? coordinated.reconcile()
-        : coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {});
+        : coordinated.resumeProvisioning(
+            PROVISIONING_PLACEMENT,
+            async () => {},
+            () => {},
+          );
     await entered.promise;
     const stopping = coordinated.reclaim(REQUEST);
     try {

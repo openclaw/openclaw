@@ -279,7 +279,7 @@ describe("initial worker setup admission", () => {
     }
   });
 
-  it.each(["source", "admitted"] as const)(
+  it.each(["source", "admitted", "execution"] as const)(
     "rejects %s authority revoked during setup before workspace IO",
     async (kind) => {
       const fixture = await setup("remote-exec");
@@ -324,7 +324,10 @@ describe("initial worker setup admission", () => {
       void run.catch(() => undefined);
       try {
         await setImmediate();
-        if (admitted) {
+        if (kind === "execution") {
+          admission.close();
+          expect(() => admission.assertSourceCurrent()).not.toThrow();
+        } else if (admitted) {
           closeAdmittedRunDelegatedAuthority(admitted);
         } else {
           sourceLive = false;

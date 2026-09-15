@@ -6,7 +6,7 @@ import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner
 import type {
   WorkerNodeEnrollment,
   WorkerNodeRuntimePreparation,
-  WorkerProvider,
+  WorkerProviderV1,
 } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type {
@@ -249,6 +249,7 @@ describe("node worker provider provisioning", () => {
       if (!enrolled.nodeSetupId) {
         throw new Error("expected persisted cloud enrollment ownership");
       }
+      const setupId = enrolled.nodeSetupId;
       return {
         mode: "connect" as const,
         setupCode: "setup-code",
@@ -256,19 +257,28 @@ describe("node worker provider provisioning", () => {
         openclawVersion: "2026.8.1",
         nodeBootstrap: support.NODE_BOOTSTRAP,
         displayName: "Cloud worker test",
-        waitForDeviceId: async () => "cloud-device-1",
+        waitForDeviceId: async () => {
+          bindCloudWorkerSetupCompletion({
+            db: support.testState.stateDb.db,
+            completion: { setupId, deviceId: "cloud-device-1", completedAtMs: 1_000 },
+          });
+          return "cloud-device-1";
+        },
       };
     });
     const closeNodeEnrollment = vi.fn();
     const retireNodeEnrollment = vi.fn(async () => {});
     let begin: (() => Promise<WorkerNodeEnrollment>) | undefined;
-    const provision = vi.fn<WorkerProvider["provision"]>(
+    const provision = vi.fn<WorkerProviderV1["provision"]>(
       async (_profile, _operationId, options) => {
         begin = options?.beginNodeEnrollment;
-        await expect(options?.beginNodeEnrollment?.()).resolves.toMatchObject({
-          mode: "connect",
-          setupId: expect.any(String),
-        });
+        const enrollment = await options.beginNodeEnrollment?.();
+        expect(enrollment).toMatchObject({ mode: "connect", setupId: expect.any(String) });
+        if (enrollment?.mode !== "connect") {
+          throw new Error("expected connect enrollment");
+        }
+        await enrollment.waitForDeviceId();
+        options.assertCurrent();
         return {
           leaseId: "cloud-lease-1",
           node: { deviceId: "cloud-device-1" },

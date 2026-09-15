@@ -1,4 +1,7 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createWorkerSshRunner } from "./tunnel-ssh-runner.js";
@@ -100,6 +103,54 @@ describe("worker tunnel manager", () => {
     await handle.stop();
     expect(manager.status("worker:one")).toBe("stopped");
   });
+
+  it.each(["connected", "initializing"] as const)(
+    "rejects a revoked caller reusing a %s tunnel without stopping its owner",
+    async (phase) => {
+      const identity = deferred<Awaited<ReturnType<typeof resolveIdentity>>>();
+      const entered = deferred<void>();
+      const fake = fakeRunner();
+      const manager = createWorkerTunnelManager({ runner: fake.runner });
+      const request = {
+        environmentId: "worker:shared-authority",
+        ownerEpoch: 1,
+        bundleHash: "a".repeat(64),
+        ssh: SSH,
+        resolveIdentity: () => {
+          entered.resolve();
+          return identity.promise;
+        },
+      };
+      const first = manager.start(request);
+      await entered.promise;
+      if (phase === "connected") {
+        identity.resolve(await resolveIdentity());
+        await first;
+      }
+      let authorized = phase === "initializing";
+      const closed = new Error("joining source closed");
+      const joining = manager.start({
+        ...request,
+        authorize: () => {
+          if (!authorized) {
+            throw closed;
+          }
+        },
+      });
+      const rejected = expect(joining).rejects.toBe(closed);
+      authorized = false;
+      identity.resolve(await resolveIdentity());
+      try {
+        const handle = await first;
+        await rejected;
+        expect(manager.status(request.environmentId)).toBe("connected");
+        await expect(handle.runWorkspaceCommand(PWD_COMMAND)).resolves.toEqual(success());
+      } finally {
+        await Promise.allSettled([first, joining]);
+        await manager.stopAll();
+      }
+    },
+  );
 
   it("renews a workspace quiescence lease while reconciliation is still running", async () => {
     const nonce = "a".repeat(32);
@@ -361,6 +412,46 @@ describe("worker tunnel manager", () => {
       await Promise.all([running, shutdown, rejected]);
     }
     expect(fake.runs).toHaveLength(1);
+  });
+
+  it("does not materialize identity when authority closes during resolution", async () => {
+    const prefix = "openclaw-worker-workspace-";
+    const fake = fakeRunner();
+    const manager = createWorkerTunnelManager({ runner: fake.runner });
+    let authorized = true;
+
+    await expect(
+      manager.start({
+        environmentId: "worker:revoked-after-prepare",
+        ownerEpoch: 1,
+        bundleHash: "a".repeat(64),
+        ssh: SSH,
+        resolveIdentity: async () => {
+          authorized = false;
+          return { kind: "material", contents: "private-test-key" };
+        },
+        authorize: () => {
+          if (!authorized) {
+            throw new Error("worker turn authority closed");
+          }
+        },
+      }),
+    ).rejects.toThrow("worker turn authority closed");
+
+    expect(fake.runs).toHaveLength(0);
+    expect(fake.starts).toHaveLength(0);
+    expect(
+      fsSync
+        .readdirSync(os.tmpdir())
+        .filter(
+          (entry) =>
+            entry.startsWith(prefix) &&
+            fsSync.existsSync(path.join(os.tmpdir(), entry, "identity")) &&
+            fsSync.readFileSync(path.join(os.tmpdir(), entry, "identity"), "utf8") ===
+              "private-test-key\n",
+        ),
+    ).toEqual([]);
+    expect(manager.status("worker:revoked-after-prepare")).toBe("stopped");
   });
 });
 

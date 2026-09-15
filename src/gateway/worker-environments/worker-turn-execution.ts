@@ -82,13 +82,26 @@ export async function executeWorkerTurn(
     );
   }
   await recoverWorkspaceBeforeTurn(params);
+  const assertTurnClaimCurrent = () => {
+    params.assertExecutionCurrent?.();
+    params.assertRunCurrent?.();
+    turn.abortSignal?.throwIfAborted();
+    if (!params.placements.validateTurnClaim(params.turnClaim)) {
+      throw new Error("Worker turn authority changed during tunnel startup");
+    }
+  };
+  assertTurnClaimCurrent();
   const github = await prepareWorkerGitHubBinding({
     sessionId: placement.sessionId,
     sessionKey: placement.sessionKey,
     agentId: placement.agentId,
-    assertCurrent: () => params.placements.validateTurnClaim(params.turnClaim),
+    assertCurrent: () => {
+      assertTurnClaimCurrent();
+      return true;
+    },
   });
 
+  assertTurnClaimCurrent();
   const startedAt = Date.now();
   turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
   turn.onExecutionPhase?.({ phase: "runner_entered", backend: "cloud-worker" });
@@ -104,7 +117,7 @@ export async function executeWorkerTurn(
       ? SessionManager.openModelContext(transcriptTarget)
       : SessionManager.open(transcriptTarget);
   if (readAsynchronously) {
-    params.assertRunCurrent?.();
+    assertTurnClaimCurrent();
     turn.abortSignal?.throwIfAborted();
     if (!params.placements.validateTurnClaim(params.turnClaim)) {
       throw new Error("Worker turn claim changed during context preparation");
@@ -146,15 +159,19 @@ export async function executeWorkerTurn(
     model: modelRef.model,
   });
 
+  assertTurnClaimCurrent();
   const credential = await params.environments.acquireTurnCredential(params.turnClaim);
+  assertTurnClaimCurrent();
   const tunnel = await waitForTurnOperation({
     operation: params.environments.startTunnel({
       environmentId: placement.environmentId,
       ownerEpoch: placement.activeOwnerEpoch,
+      authorize: assertTurnClaimCurrent,
     }),
     ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
     timeoutMs: turn.timeoutMs,
   });
+  assertTurnClaimCurrent();
   const portalAvailable =
     Boolean(environment.nodeDeviceId) &&
     environment.sshEndpoint === null &&
@@ -162,6 +179,7 @@ export async function executeWorkerTurn(
       placement.environmentId,
       placement.activeOwnerEpoch,
     )) === true;
+  assertTurnClaimCurrent();
   const reasoning = mapThinkingLevelForProvider(turn.thinkLevel);
   const { browser, computer, preparedComputer, toolAuthority } =
     await prepareWorkerDesktopLaunchPlan({
@@ -172,6 +190,7 @@ export async function executeWorkerTurn(
       turn,
       portalAvailable,
     });
+  assertTurnClaimCurrent();
   params.placements.authorizeWorkerTurnTools(params.turnClaim, toolAuthority.allowedToolNames);
   const { operationalRunInstance, runtimeIdentity, assertActive, takeFinishingOutcome } =
     await prepareWorkerAgentRuntimeIdentity({
@@ -182,6 +201,7 @@ export async function executeWorkerTurn(
       turn,
       turnClaim: params.turnClaim,
     });
+  assertTurnClaimCurrent();
   preparedComputer?.bind(operationalRunInstance);
   const authority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
   const authorityAbort = new AbortController();

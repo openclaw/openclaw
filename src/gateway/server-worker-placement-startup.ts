@@ -598,7 +598,7 @@ export function createGatewayWorkerPlacementRuntime(
         }
         if (!stopped) {
           stopped = true;
-          // Cancel enrollment; admitted recovery keeps its own bootstrap owner.
+          // Cancel enrollment before draining the environment service.
           params.environments.stopNodeEnrollmentWaits?.();
           clearInterval(placementReconcileInterval);
           placementReconcileInterval = undefined;

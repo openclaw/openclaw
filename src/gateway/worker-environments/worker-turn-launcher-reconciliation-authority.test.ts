@@ -20,6 +20,7 @@ import {
   OWNER_EPOCH,
   SESSION_ID,
   attachedEnvironment,
+  credential,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   placements,
@@ -44,6 +45,10 @@ describe("reconciliation continuation authority", () => {
     { mode: "remote-exec", authority: "source", revokeAt: "workspace" },
     { mode: "remote-exec", authority: "admitted", revokeAt: "workspace" },
     { mode: "remote-exec", authority: "source", revokeAt: "tunnel" },
+    { mode: "remote-exec", authority: "execution", revokeAt: "tunnel" },
+    { mode: "worker-turn", authority: "source", revokeAt: "tunnel" },
+    { mode: "worker-turn", authority: "admitted", revokeAt: "tunnel" },
+    { mode: "worker-turn", authority: "execution", revokeAt: "tunnel" },
     { mode: "remote-exec", authority: "admitted", revokeAt: "tunnel" },
     { mode: "remote-exec", authority: "source", revokeAt: "dispatch" },
     { mode: "remote-exec", authority: "admitted", revokeAt: "dispatch" },
@@ -95,7 +100,9 @@ describe("reconciliation continuation authority", () => {
       });
       const admitted = authority === "admitted" ? await admission.admit("embedded") : undefined;
       const revoke = () => {
-        if (admitted) {
+        if (authority === "execution") {
+          admission.close();
+        } else if (admitted) {
           closeAdmittedRunDelegatedAuthority(admitted);
         } else {
           sourceLive = false;
@@ -143,13 +150,18 @@ describe("reconciliation continuation authority", () => {
         syncWorkspace: vi.fn(),
         stop: async () => {},
       };
+      let tunnelEffects = 0;
       const environments = {
         ...unusedEnvironments(),
         get: vi.fn(attachedEnvironment),
-        startTunnel: vi.fn(async () => {
+        acquireTurnCredential: vi.fn(async () => credential()),
+        startTunnel: vi.fn<ReturnType<typeof unusedEnvironments>["startTunnel"]>(async (owner) => {
+          await Promise.resolve();
           if (revokeAt === "tunnel") {
             revoke();
           }
+          owner.authorize?.();
+          tunnelEffects += 1;
           return tunnel;
         }),
       };
@@ -207,6 +219,9 @@ describe("reconciliation continuation authority", () => {
         } else {
           await expect(run).rejects.toThrow(/authority/);
           expect(abort.signal.aborted).toBe(false);
+          if (revokeAt === "tunnel") {
+            expect(tunnelEffects).toBe(0);
+          }
           const transferred = revokeAt === "init" || revokeAt === "write";
           expect(environments.startTunnel).toHaveBeenCalledTimes(
             transferred || revokeAt === "tunnel" || revokeAt === "dispatch" ? 1 : 0,

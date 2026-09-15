@@ -25,9 +25,14 @@ import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { getWorkerTurnExecutionIdentityCapability } from "./placement-turn-claim-events.js";
-import type { WorkerPlacementDispatchContract } from "./service-contract.js";
+import {
+  bindWorkerSourceAuthorization,
+  deriveEnvironmentIntent,
+  type WorkerPlacementDispatchContract,
+} from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
   createWorkerPortalToolExecutor,
@@ -122,7 +127,7 @@ export function createWorkerSessionToolExecutor(params: {
           ...(operation.signal ? { approvalSignals: [operation.signal] } : {}),
         },
         async () => {
-          const assertSource = () => {
+          const assertSource = bindWorkerSourceAuthorization(() => {
             operation.signal?.throwIfAborted();
             owner.receiptAuthority();
             const source = exactSource({
@@ -132,7 +137,7 @@ export function createWorkerSessionToolExecutor(params: {
             if (source.agentId !== owner.agentId || source.sessionKey !== owner.sessionKey) {
               throw new Error("Worker source turn owner changed");
             }
-          };
+          });
           const callGateway = async <R = Record<string, unknown>>(
             request: Parameters<AgentToolGatewayRequestCaller>[0],
             sessionSpawnContext?: ReturnType<typeof buildSubagentExecutionSessionSpawnContext>,
@@ -282,7 +287,7 @@ export function createWorkerSessionToolExecutor(params: {
         const error = new Error("Cloud child session creation did not persist an incarnation");
         throw creationAttempted ? new WorkerSessionToolOutcomeUnknownError(error) : error;
       }
-      try {
+      const assertChild = () =>
         assertExactChild({
           childSessionKey: operation.childSessionKey,
           childSessionId,
@@ -290,27 +295,86 @@ export function createWorkerSessionToolExecutor(params: {
           sourceSessionId: operation.source.sessionId,
           targetAgentId,
         });
+      try {
+        assertChild();
       } catch (error) {
         if (creationAttempted) {
           throw new WorkerSessionToolOutcomeUnknownError(error);
         }
         throw error;
       }
+      const allocationKey = operationKey(operation.operationSeed, "child-placement");
+      const coldAllocation = deriveEnvironmentIntent(allocationKey);
+      let allocationIdentity = coldAllocation;
+      let allocationObserved = false;
+      let allocationBindingFailed = false;
+      const observeChildAllocation = (placement: WorkerSessionPlacementRecord) => {
+        if (placement.state !== "provisioning" || allocationObserved) {
+          return;
+        }
+        allocationObserved = true;
+        // Transition observers cannot throw through dispatch. Poison the handoff
+        // before reading, and never relearn an allocation from a later active row.
+        allocationBindingFailed = true;
+        const current = params.placements.get(childSessionId);
+        if (
+          placement.sessionId !== childSessionId ||
+          placement.sessionKey !== operation.childSessionKey ||
+          placement.agentId !== targetAgentId ||
+          placement.executionMode !== "worker-turn" ||
+          !placement.environmentId ||
+          current?.state !== "provisioning" ||
+          current.generation !== placement.generation ||
+          current.environmentId !== placement.environmentId ||
+          current.sessionKey !== placement.sessionKey ||
+          current.agentId !== placement.agentId ||
+          current.executionMode !== placement.executionMode
+        ) {
+          return;
+        }
+        if (placement.environmentId !== coldAllocation.environmentId) {
+          const environment = params.environments.get(placement.environmentId);
+          if (
+            environment?.environmentId !== placement.environmentId ||
+            environment.state !== "ready" ||
+            !environment.preparation ||
+            environment.preparation.consumedAtMs === null
+          ) {
+            return;
+          }
+          // The consumption owner checked eligibility atomically. Consumption
+          // closes reserve expiry; retain its exact immutable E/full-P selection.
+          allocationIdentity = {
+            environmentId: environment.environmentId,
+            provisionOperationId: environment.provisionOperationId,
+          };
+        }
+        allocationBindingFailed = false;
+      };
       try {
         const assertActiveChildPlacement = () => {
           const placement = params.placements.get(childSessionId);
-          if (placement?.state !== "active" || placement.sessionKey !== operation.childSessionKey) {
+          if (
+            allocationBindingFailed ||
+            placement?.state !== "active" ||
+            placement.sessionKey !== operation.childSessionKey ||
+            placement.environmentId !== allocationIdentity.environmentId
+          ) {
             throw new Error("Cloud child placement did not become active");
           }
           const environment = params.environments.get(placement.environmentId);
           if (
             environment?.state !== "attached" ||
+            environment.provisionOperationId !== allocationIdentity.provisionOperationId ||
             environment.ownerEpoch !== placement.activeOwnerEpoch ||
             environment.attachedSessionIds.length !== 1 ||
             environment.attachedSessionIds[0] !== childSessionId ||
             environment.profileId !== sourceEnvironment.profileId ||
             environment.providerId !== sourceEnvironment.providerId ||
-            !isDeepStrictEqual(environment.profileSnapshot, sourceEnvironment.profileSnapshot)
+            !isDeepStrictEqual(
+              { ...environment.profileSnapshot, project: undefined },
+              { ...sourceEnvironment.profileSnapshot, project: undefined },
+            )
           ) {
             throw new Error("Cloud child placement does not match its parent profile");
           }
@@ -326,12 +390,14 @@ export function createWorkerSessionToolExecutor(params: {
                 agentId: targetAgentId,
                 profileId: sourceEnvironment.profileId,
                 executionMode: "worker-turn",
+                // Reset can reuse a session ID and generation; allocation belongs to this operation.
+                idempotencyKey: allocationKey,
                 inheritedProfile: {
                   providerId: sourceEnvironment.providerId,
                   profileSnapshot: sourceEnvironment.profileSnapshot,
                 },
               },
-              undefined,
+              observeChildAllocation,
               assertSource,
             );
           } catch (error) {
@@ -344,13 +410,7 @@ export function createWorkerSessionToolExecutor(params: {
         }
         assertActiveChildPlacement();
         assertSource();
-        assertExactChild({
-          childSessionKey: operation.childSessionKey,
-          childSessionId,
-          sourceSessionKey: operation.source.sessionKey,
-          sourceSessionId: operation.source.sessionId,
-          targetAgentId,
-        });
+        assertChild();
         const childRunId = operationKey(operation.operationSeed, "initial-task");
         const config = getRuntimeConfig();
         const sessionSpawnContext = collectExecutionIdentity
@@ -380,13 +440,7 @@ export function createWorkerSessionToolExecutor(params: {
             for (let attempt = 0; attempt < 2; attempt += 1) {
               try {
                 assertSource();
-                assertExactChild({
-                  childSessionKey: operation.childSessionKey,
-                  childSessionId,
-                  sourceSessionKey: operation.source.sessionKey,
-                  sourceSessionId: operation.source.sessionId,
-                  targetAgentId,
-                });
+                assertChild();
                 assertActiveChildPlacement();
                 const request = {
                   method: "agent",

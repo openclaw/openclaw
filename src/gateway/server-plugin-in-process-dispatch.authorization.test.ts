@@ -25,6 +25,10 @@ import {
   runWithOperatorToolGatewayCleanupContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
+import {
+  bindWorkerSourceAuthorization,
+  isWorkerSourceAuthorization,
+} from "./worker-environments/service-contract.js";
 
 const startTurn = vi.hoisted(() => vi.fn());
 const waitForTurn = vi.hoisted(() => vi.fn());
@@ -462,11 +466,12 @@ describe("typed in-process agent authorization", () => {
   it("rejects a session commit after its composed caller authority closes", async () => {
     const admitted = createContext();
     let current = true;
-    const assertCallerCurrent = () => {
+    let sourceBound = false;
+    const assertCallerCurrent = bindWorkerSourceAuthorization(() => {
       if (!current) {
         throw new Error("caller authority closed");
       }
-    };
+    });
     admitted.getGatewayMethodRegistry = () =>
       createGatewayMethodRegistry([
         {
@@ -474,6 +479,7 @@ describe("typed in-process agent authorization", () => {
           scope: "operator.write",
           owner: { kind: "core", area: "sessions" },
           handler: ({ respond, sessionMutationCommitGuard }: GatewayRequestHandlerOptions) => {
+            sourceBound = isWorkerSourceAuthorization(sessionMutationCommitGuard);
             current = false;
             sessionMutationCommitGuard?.();
             respond(true, { key: "agent:main:dashboard:child" });
@@ -493,6 +499,7 @@ describe("typed in-process agent authorization", () => {
         },
       ),
     ).rejects.toThrow("caller authority closed");
+    expect(sourceBound).toBe(true);
   });
 
   it("preserves the scoped operator identity across synthetic model-initiated session creation", async () => {

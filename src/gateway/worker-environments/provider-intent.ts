@@ -15,8 +15,11 @@ import { readWorkerProjectSetupRecipe, readWorkerProjectSnapshot } from "./proje
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
-import { deriveEnvironmentIntent } from "./service-contract.js";
-import { requireInheritedWorkerProfileAuthorization } from "./service-validation.js";
+import { deriveEnvironmentIntent, isWorkerSourceAuthorization } from "./service-contract.js";
+import {
+  requireInheritedWorkerProfileAuthorization,
+  requireWorkerLiveProvisioning,
+} from "./service-validation.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { prepareWorkerProjectSnapshot, workerLocalProjectKey } from "./workspace-git-base.js";
 
@@ -37,6 +40,8 @@ type WorkerProviderIntentOptions = Pick<
     record: WorkerEnvironmentRecord,
     provider?: WorkerProvider,
     signal?: AbortSignal,
+    beforeProvision?: () => void,
+    context?: { assertCurrent: () => void },
   ) => Promise<WorkerEnvironmentRecord>;
 };
 
@@ -52,6 +57,7 @@ type WorkerProviderIntentPreparationOptions = {
   runSetupScript?: boolean;
   signal?: AbortSignal;
   setupAuthorized?: boolean;
+  context?: { assertCurrent: () => void };
 };
 
 function projectReplayIdentity(project: unknown): unknown {
@@ -98,6 +104,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     createOptions: WorkerProviderIntentPreparationOptions,
   ) => {
     createOptions.signal?.throwIfAborted();
+    createOptions.context?.assertCurrent();
     if (options.isStopping()) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
@@ -171,7 +178,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
   ): Promise<WorkerProviderPreparedIntent> => {
     const resolved = resolveProfile(profileId, createOptions);
     const { provider, providerId } = resolved;
-    const { signal, projectPath } = createOptions;
+    const { signal, projectPath, context } = createOptions;
     let profileSnapshot = resolved.profileSnapshot;
     const machineClass =
       typeof profileSnapshot.machineClass === "string" ? profileSnapshot.machineClass : undefined;
@@ -219,7 +226,10 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
             : { repository: createOptions.repository! }),
           namespace: options.projectNamespace,
           getConfig: options.getConfig,
-          assertCurrent: assertProfileCurrent,
+          assertCurrent: () => {
+            context?.assertCurrent();
+            assertProfileCurrent();
+          },
           signal,
           knownRecipe: (admittedProject) => {
             for (const record of store.list()) {
@@ -257,6 +267,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
             })
           : undefined);
       signal?.throwIfAborted();
+      context?.assertCurrent();
       if (project) {
         const target = provider.resolvePreparationTarget?.(profile, machineClass, os);
         const setupRecipe = target
@@ -265,6 +276,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
             : await readWorkerProjectSetupRecipe(project, signal)
           : undefined;
         signal?.throwIfAborted();
+        context?.assertCurrent();
         // An executable recipe does not authorize itself. Non-admin callers retain
         // ordinary checkout preparation without executing it or filling a reserve.
         if (
@@ -277,6 +289,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         ) {
           const prepared = await options.prepareNodeArtifacts(profileSnapshot, signal);
           signal?.throwIfAborted();
+          context?.assertCurrent();
           prepared.assertCurrent();
           assertArtifactsCurrent = prepared.assertCurrent;
           const preparation = createWorkerProjectPreparationIdentity({
@@ -446,8 +459,10 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
       executionMode,
       projectPath,
       signal,
+      context,
     } = createOptions;
     signal?.throwIfAborted();
+    context?.assertCurrent();
     const inherited = requestedInherited
       ? { ...requestedInherited, profileSnapshot: { ...requestedInherited.profileSnapshot } }
       : undefined;
@@ -471,6 +486,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     const { environmentId, provisionOperationId } = deriveEnvironmentIntent(idempotencyKey);
     return withLock(environmentId, async () => {
       signal?.throwIfAborted();
+      context?.assertCurrent();
       if (options.isStopping()) {
         throw serviceError("invalid_state", "Worker environment service is stopping");
       }
@@ -554,7 +570,15 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
           return existing;
         }
         if (!existing.leaseId && inState(existing, "requested", "provisioning")) {
-          return resumeProvision(existing, undefined, signal);
+          return resumeProvision(
+            existing,
+            undefined,
+            signal,
+            admittedIntent
+              ? () => assertPreparedIntentCurrent(profileId, admittedIntent)
+              : undefined,
+            context,
+          );
         }
         return existing;
       }
@@ -566,6 +590,7 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
             createOptions.setupAuthorized ?? createOptions.runSetupScript !== undefined,
         }));
       signal?.throwIfAborted();
+      context?.assertCurrent();
       assertPreparedIntentCurrent(profileId, admitted);
       const current = resolveProfile(profileId, createOptions);
       const { project: _project, ...admittedProfile } = admitted.profileSnapshot;
@@ -581,6 +606,10 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         );
       }
       const { provider } = current;
+      if (isWorkerSourceAuthorization(context?.assertCurrent)) {
+        requireWorkerLiveProvisioning(provider, serviceError);
+      }
+      context?.assertCurrent();
       const { providerId, profileSnapshot } = admitted;
       const intent = store.createIntent({
         environmentId,
@@ -589,7 +618,13 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         profileSnapshot,
         provisionOperationId,
       });
-      return resumeProvision(intent, provider, signal);
+      return resumeProvision(
+        intent,
+        provider,
+        signal,
+        () => assertPreparedIntentCurrent(profileId, admitted),
+        context,
+      );
     });
   };
   return { prepareIntent, prepareRetention, assertPreparedIntentCurrent, createWithProfile };

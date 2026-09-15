@@ -15,6 +15,7 @@ import {
 import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import {
+  bindWorkerSourceAuthorization,
   deriveEnvironmentIntent,
   WorkerPlacementAdmissionTargetError,
 } from "./service-contract.js";
@@ -23,7 +24,7 @@ import * as support from "./service.test-support.js";
 describe("worker placement shutdown replay", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("retains interrupted fresh provisioning and activates the same operation after restart", async () => {
+  it("retains interrupted provisioning after reopen until a fresh foreground recovery request", async () => {
     support.testState.prepareInstallation = async () => ({
       ...support.BUNDLE_ARTIFACT,
       protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
@@ -113,8 +114,8 @@ describe("worker placement shutdown replay", () => {
     }
     try {
       const ready = await Promise.all([
-        recovery.waitForInitialPlacement(owner),
-        recovery.waitForInitialPlacement(owner),
+        recovery.waitForInitialPlacement(owner, undefined, bindWorkerSourceAuthorization(vi.fn())),
+        recovery.waitForInitialPlacement(owner, undefined, bindWorkerSourceAuthorization(vi.fn())),
       ]);
       expect(ready).toEqual([placements.get(REQUEST.sessionId), placements.get(REQUEST.sessionId)]);
     } finally {
@@ -162,6 +163,7 @@ describe("worker placement shutdown replay", () => {
         async () => {
           throw interrupted;
         },
+        bindWorkerSourceAuthorization(vi.fn()),
         report,
       );
       if (shutdown) {
@@ -206,9 +208,11 @@ describe("worker placement shutdown replay", () => {
       bootstrapReceipt: null,
       sharedHost: null,
     });
-
-    await harness.service.resumeProvisioning(owner, async () => {});
-
+    await harness.service.resumeProvisioning(
+      owner,
+      async () => {},
+      bindWorkerSourceAuthorization(vi.fn()),
+    );
     expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
     expect(harness.environments.recordError).not.toHaveBeenCalled();

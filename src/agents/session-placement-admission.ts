@@ -10,7 +10,10 @@ import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.j
 import { retainQueuedAgentRunContext } from "../infra/agent-run-registry.js";
 import { enqueueCommandInLane, isCommandLaneTaskMarkerCurrent } from "../process/command-queue.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { resolveAdmittedRunActiveAssertion } from "./admitted-run-context.js";
+import {
+  resolveAdmittedRunActiveAssertion,
+  resolvePreparedRunActiveAssertion,
+} from "./admitted-run-context.js";
 import { resolveSessionLane } from "./embedded-agent-runner/lanes.js";
 import { resolveEmbeddedRunSessionLanePolicy } from "./embedded-agent-runner/run/lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
@@ -58,6 +61,7 @@ export type SessionPlacementAdmissionProvider = {
     runLocal: () => Promise<EmbeddedAgentRunResult>,
     onAdmitted?: () => void,
     assertCurrent?: () => void,
+    assertExecutionCurrent?: () => void,
   ) => Promise<EmbeddedAgentRunResult>;
 };
 
@@ -168,13 +172,36 @@ export async function withSessionPlacementTurnAdmission(
       throw createAbortError("session placement owner changed during turn admission");
     }
   };
-  const result = await withPlacementTurnCallerScope(params, () =>
-    withoutSessionPlacementForcedTerminalSettlement(() =>
-      provider
-        ? provider.executeTurn(claim, params, runAdmittedLocalTurn, admitTurn, assertCurrent)
-        : runAdmittedLocalTurn(),
-    ),
-  );
+  const assertPreparedCurrent = params.preparedRunAdmission
+    ? resolvePreparedRunActiveAssertion(params.preparedRunAdmission, params.abortSignal)
+    : undefined;
+  let executionOpen = true;
+  const assertExecutionCurrent = () => {
+    assertCurrent();
+    if (!executionOpen || (params.preparedRunAdmission && !assertPreparedCurrent)) {
+      throw createAbortError("placement execution authority is no longer active");
+    }
+    assertPreparedCurrent?.();
+  };
+  let result: EmbeddedAgentRunResult;
+  try {
+    result = await withPlacementTurnCallerScope(params, () =>
+      withoutSessionPlacementForcedTerminalSettlement(() =>
+        provider
+          ? provider.executeTurn(
+              claim,
+              params,
+              runAdmittedLocalTurn,
+              admitTurn,
+              assertCurrent,
+              assertExecutionCurrent,
+            )
+          : runAdmittedLocalTurn(),
+      ),
+    );
+  } finally {
+    executionOpen = false;
+  }
   if (result.meta.executionTrace?.runner === "cli") {
     settleYieldedRequesterAfterPlacementRelease(claim, result);
   }

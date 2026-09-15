@@ -8,7 +8,7 @@ import {
 import {
   WorkerProviderError,
   type WorkerProfile,
-  type WorkerProvider,
+  type WorkerProviderV1,
 } from "../../plugins/types.js";
 import type {
   NodeWorkerSupervisorNodeProof,
@@ -136,22 +136,27 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
       ...(unavailableReason ? { unavailableReason } : {}),
     };
   };
-  const provider: WorkerProvider = {
+  const provider: WorkerProviderV1 = {
     id: DEVICE_WORKER_PROVIDER_ID,
+    liveAuthorityVersion: 1,
     supportedExecutionModes: ["worker-turn", "remote-exec"],
     provisionBeforeInstallation: true,
     resolveAllocation: async (profile, operationId) => ({
       leaseId: deviceLeaseId(requireDeviceId(profile), operationId),
       sharedHost: true,
     }),
-    provision: async (profile, operationId) => {
+    provision: async (profile, operationId, context) => {
+      context.assertCurrent();
       const deviceId = requireDeviceId(profile);
       const availability = await resolveAvailability(deviceId);
+      context.assertCurrent();
       if (!availability.available) {
         throw new WorkerProviderError(deviceUnavailableText(deviceId, availability));
       }
+      const allocation = await provider.resolveAllocation(profile, operationId);
+      context.assertCurrent();
       return {
-        ...(await provider.resolveAllocation(profile, operationId)),
+        ...allocation,
         node: { deviceId },
       };
     },

@@ -25,6 +25,7 @@ import type {
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
+import { composeWorkerPlacementAuthorization } from "./service-contract.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 
 type WorkerMoveBeginResult = {
@@ -92,12 +93,10 @@ export function createWorkerPlacementMoveService(options: {
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
   ): Promise<WorkerMovePlacement> => {
-    const assertCurrent = signal
-      ? () => {
-          signal.throwIfAborted();
-          authorize?.();
-        }
-      : authorize;
+    const assertCurrent = composeWorkerPlacementAuthorization(
+      () => signal?.throwIfAborted(),
+      authorize,
+    );
     let intent: WorkerPlacementMoveIntent | undefined;
     let local: WorkerReclaimPlacement | undefined;
     try {

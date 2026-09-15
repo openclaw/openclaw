@@ -62,6 +62,20 @@ export function createWorkerProviderOwnerLifecycle(
     profile: requireWorkerProfile(record.profileSnapshot.settings),
   });
 
+  // Provisioning owns an operation, so its own node enrollment may advance the record.
+  const requireCurrentProvisioningOwner = (record: WorkerEnvironmentRecord) => {
+    const current = store.get(record.environmentId);
+    if (
+      !current ||
+      current.state !== record.state ||
+      current.provisionOperationId !== record.provisionOperationId ||
+      current.ownerEpoch !== record.ownerEpoch
+    ) {
+      throw new Error("Worker provisioning operation is closed");
+    }
+    return current;
+  };
+
   const requireCurrentOwner = (record: WorkerEnvironmentRecord): WorkerEnvironmentRecord => {
     const current = store.get(record.environmentId);
     if (
@@ -385,6 +399,7 @@ export function createWorkerProviderOwnerLifecycle(
 
   return {
     requireCurrentOwner,
+    requireCurrentProvisioningOwner,
     stopOwner,
     destroyLease,
     beginDrain,

@@ -102,16 +102,22 @@ async function hasGitAdminPath(root: string): Promise<boolean> {
   }
 }
 
-async function ensureWorkerWorkspaceResultRepository(root: string): Promise<string> {
+async function ensureWorkerWorkspaceResultRepository(
+  root: string,
+  assertCurrent?: () => void,
+): Promise<string> {
+  assertCurrent?.();
   const resolved = await fs.realpath(root);
+  assertCurrent?.();
   const probe = await runCommandWithTimeout(gitCommand(resolved, ["rev-parse", "--git-dir"]), {
     timeoutMs: PATCH_TIMEOUT_MS,
     maxOutputBytes: 1024 * 1024,
   });
+  assertCurrent?.();
   if (probe.termination === "exit" && probe.code === 0) {
     return resolved;
   }
-  await requireGit(resolved, ["init", "--quiet", "--object-format=sha1"]);
+  await requireGit(resolved, ["init", "--quiet", "--object-format=sha1"], { assertCurrent });
   return resolved;
 }
 
@@ -160,6 +166,7 @@ export async function hasWorkerWorkspaceResultRef(params: {
 
 async function stageWorkerWorkspaceResult(params: {
   root: string;
+  assertCurrent?: () => void;
   stagingRoot: string;
   stagedResultRef: string;
   baseManifestRef: string;
@@ -167,21 +174,26 @@ async function stageWorkerWorkspaceResult(params: {
   baseManifestRaw: string;
   currentManifestRaw: string;
 }): Promise<string> {
-  const root = await ensureWorkerWorkspaceResultRepository(params.root);
+  const root = await ensureWorkerWorkspaceResultRepository(params.root, params.assertCurrent);
   const stagedResultRef = requireWorkerResultStorageRef(params.stagedResultRef);
   const input = await prepareWorkspaceStageInput(params);
-  const imported = await withWorkspaceResultRefMutation(root, (baseEnv) =>
-    runCommandBuffered(gitCommand(root, ["fast-import", "--quiet"]), {
+  params.assertCurrent?.();
+  const imported = await withWorkspaceResultRefMutation(root, (baseEnv) => {
+    params.assertCurrent?.();
+    return runCommandBuffered(gitCommand(root, ["fast-import", "--quiet"]), {
       baseEnv,
       input,
       timeoutMs: PATCH_TIMEOUT_MS,
       maxOutputBytes: { stdout: 1024 * 1024, stderr: 1024 * 1024 },
-    }),
-  );
+    });
+  });
+  params.assertCurrent?.();
   if (imported.termination !== "exit" || imported.code !== 0) {
     throw new Error(imported.stderr.toString("utf8").trim() || "git fast-import failed");
   }
-  return await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`]);
+  return await requireGit(root, ["rev-parse", `${stagedResultRef}^{commit}`], {
+    assertCurrent: params.assertCurrent,
+  });
 }
 
 async function materializeStagedEntry(params: {

@@ -575,8 +575,6 @@ describe("worker placement dispatch coordinator", () => {
           first = false;
           fullSweepStarted.resolve();
           await releaseFullSweep.promise;
-        } else {
-          await coordinated.resumeProvisioning({} as never, async () => {});
         }
       });
       const service = {
@@ -585,7 +583,6 @@ describe("worker placement dispatch coordinator", () => {
         reclaim: vi.fn(),
         reconcile: vi.fn(),
         reconcileActive,
-        resumeProvisioning: admittedRecovery(vi.fn(async (_placement, core) => await core())),
       } as unknown as DispatchService;
       const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
 
@@ -639,13 +636,13 @@ describe("worker placement dispatch coordinator", () => {
     } as unknown as DispatchService;
     const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
     reconcile.mockImplementation(async () => {
-      await coordinated.resumeProvisioning({} as never, async () => {});
+      await coordinated.resumeProvisioning({} as never, async () => {}, vi.fn());
     });
 
     const dispatching = coordinated.dispatch(REQUEST);
     await dispatchStarted.promise;
     const recoveryCore = vi.fn(async () => {});
-    const recovering = coordinated.resumeProvisioning({} as never, recoveryCore);
+    const recovering = coordinated.resumeProvisioning({} as never, recoveryCore, vi.fn());
     await Promise.resolve();
     expect(resumeProvisioning).not.toHaveBeenCalled();
     releaseDispatch.resolve();
@@ -680,7 +677,7 @@ describe("worker placement dispatch coordinator", () => {
           environmentPassStarted.resolve();
           await releaseEnvironmentGuard.promise;
           environmentGuardEntered.resolve();
-          await coordinated.resumeProvisioning({} as never, recoveryCore);
+          await coordinated.resumeProvisioning({} as never, recoveryCore, vi.fn());
         })().finally(() => {
           environmentPass = undefined;
         }));
@@ -732,7 +729,7 @@ describe("worker placement dispatch coordinator", () => {
       const reconcile = vi.fn(async () => {
         environmentPassStarted.resolve();
         await releaseEnvironmentGuard.promise;
-        await coordinated.resumeProvisioning({} as never, recoveryCore);
+        await coordinated.resumeProvisioning({} as never, recoveryCore, vi.fn());
       });
       const service = {
         dispatch: vi.fn(),
@@ -776,11 +773,15 @@ describe("worker placement dispatch coordinator", () => {
     });
     let outcome: unknown;
     const recovery = coordinated
-      .resumeProvisioning(REQUEST as never, async (_signal, retain) => {
-        retain?.(providerSettled.promise);
-        providerEntered.resolve();
-        throw failure;
-      })
+      .resumeProvisioning(
+        REQUEST as never,
+        async (_signal, retain) => {
+          retain?.(providerSettled.promise);
+          providerEntered.resolve();
+          throw failure;
+        },
+        vi.fn(),
+      )
       .catch((error: unknown) => {
         outcome = error;
       });
@@ -818,7 +819,7 @@ describe("worker placement dispatch coordinator", () => {
     } as unknown as DispatchService;
     const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
 
-    const recovering = coordinated.resumeProvisioning({} as never, async () => {});
+    const recovering = coordinated.resumeProvisioning({} as never, async () => {}, vi.fn());
     await recoveryStarted.promise;
     const fullSweep = coordinated.reconcile();
     expect(reconcile).not.toHaveBeenCalled();
@@ -848,7 +849,7 @@ describe("worker placement dispatch coordinator", () => {
     const reconcile = vi.fn(async () => {
       environmentPassStarted.resolve();
       await releaseEnvironmentGuard.promise;
-      await coordinated.resumeProvisioning({} as never, async () => {});
+      await coordinated.resumeProvisioning({} as never, async () => {}, vi.fn());
     });
     const service = {
       dispatch: vi.fn(),
@@ -914,7 +915,7 @@ describe("worker placement dispatch coordinator", () => {
       await sweepStarted.promise;
       const destroying = coordinated.forceDestroyEnvironment("worker-exclusive");
       const recoveryOutcome = coordinated
-        .resumeProvisioning({} as never, async () => {})
+        .resumeProvisioning({} as never, async () => {}, vi.fn())
         .then(
           () => undefined,
           (error: unknown) => error,
@@ -968,10 +969,14 @@ describe("worker placement dispatch coordinator", () => {
     const fullSweep = coordinated.reconcile();
     await sweepStarted.promise;
     const destroying = coordinated.forceDestroyEnvironment("worker-exclusive");
-    const joinedRecovery = coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {
-      joinedRecoveryStarted.resolve();
-      await releaseJoinedRecovery.promise;
-    });
+    const joinedRecovery = coordinated.resumeProvisioning(
+      PROVISIONING_PLACEMENT,
+      async () => {
+        joinedRecoveryStarted.resolve();
+        await releaseJoinedRecovery.promise;
+      },
+      vi.fn(),
+    );
     await joinedRecoveryStarted.promise;
     releaseSweep.resolve();
     await setImmediatePromise();
@@ -984,6 +989,7 @@ describe("worker placement dispatch coordinator", () => {
         environmentId: "worker-late",
       },
       async () => {},
+      vi.fn(),
     );
     await setImmediatePromise();
     expect(resumeProvisioning).toHaveBeenCalledOnce();
@@ -1034,7 +1040,7 @@ describe("worker placement dispatch coordinator", () => {
             : coordinated.forceDestroyEnvironment("worker-exclusive");
       await barrierStarted.promise;
 
-      const recovering = coordinated.resumeProvisioning({} as never, async () => {});
+      const recovering = coordinated.resumeProvisioning({} as never, async () => {}, vi.fn());
       await Promise.resolve();
       expect(resumeProvisioning).not.toHaveBeenCalled();
       releaseBarrier.resolve();

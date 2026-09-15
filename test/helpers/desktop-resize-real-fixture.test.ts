@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as desktopFilter from "../../src/gateway/desktop/rfb-view-only-filter.js";
 import { createWorkerEnvironmentStore } from "../../src/gateway/worker-environments/store.js";
-import type { WorkerProvider } from "../../src/plugins/types.js";
+import type { WorkerProvider } from "../../src/plugin-sdk/plugin-entry.js";
 import * as processExec from "../../src/process/exec.js";
 import { closeOpenClawStateDatabaseByPath } from "../../src/state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";

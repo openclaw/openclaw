@@ -13,12 +13,15 @@ export function admittedRecovery(
     core: Parameters<DispatchService["resumeProvisioning"]>[1],
   ) => Promise<void>,
 ): DispatchService["resumeProvisioning"] {
-  return async (placement, core, _onTransition, admit) => {
+  return async (placement, core, authorize, _onTransition, admit) => {
     if (!admit) {
       throw new Error("Recovery fixture requires the coordinator admission owner");
     }
+    authorize();
     return await admit(async (signal) => {
-      await run(placement, async () => await core(signal));
+      authorize();
+      await run(placement, async () => await core(signal, undefined, authorize));
+      authorize();
       return undefined;
     });
   };
@@ -74,7 +77,7 @@ export const PROVISIONING_PLACEMENT = {
   state: "provisioning",
   sessionId: "cloud",
   environmentId: "worker-cloud",
-} satisfies Parameters<DispatchService["resumeProvisioning"]>[0];
+} satisfies WorkerDispatchPlacement;
 
 export const ACTIVE_PLACEMENT = {
   ...LOCAL_PLACEMENT,

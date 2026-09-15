@@ -21,14 +21,16 @@ export function workspaceResultGitCommand(cwd: string, args: string[]): string[]
 export async function requireWorkspaceResultGit(
   cwd: string,
   args: string[],
-  options: { input?: Uint8Array; baseEnv?: NodeJS.ProcessEnv } = {},
+  options: { input?: Uint8Array; baseEnv?: NodeJS.ProcessEnv; assertCurrent?: () => void } = {},
 ): Promise<string> {
+  options.assertCurrent?.();
   const result = await runCommandWithTimeout(workspaceResultGitCommand(cwd, args), {
     timeoutMs: WORKSPACE_RESULT_GIT_TIMEOUT_MS,
     maxOutputBytes: 1024 * 1024,
     baseEnv: options.baseEnv,
     input: options.input,
   });
+  options.assertCurrent?.();
   if (result.termination !== "exit" || result.code !== 0) {
     throw new Error((result.stderr || result.stdout || `git ${args[0]} failed`).trim());
   }

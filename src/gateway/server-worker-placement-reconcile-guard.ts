@@ -1,5 +1,5 @@
+import type { CoordinatedWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch-coordinator.js";
 import type { WorkerProvisioningDispatchPlacement } from "./worker-environments/placement-dispatch-failure.js";
-import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 import { matchesWorkerPlacementTarget } from "./worker-environments/placement-reclaim-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
@@ -29,7 +29,10 @@ export function createWorkerPlacementInitialRecovery(params: {
 export function installWorkerPlacementReconcileGuard(params: {
   placements: WorkerSessionPlacementStore;
   environments: WorkerEnvironmentService;
-  dispatch: Pick<WorkerPlacementDispatchService, "resumeProvisioning">;
+  dispatch: Pick<
+    CoordinatedWorkerPlacementDispatchService,
+    "isPlacementOperationInFlight" | "hasInitialRecoveryRequest" | "resumeProvisioning"
+  >;
   isStopping: () => boolean;
 }) {
   return params.environments.installReconcileEnvironmentGuard(
@@ -45,7 +48,30 @@ export function installWorkerPlacementReconcileGuard(params: {
       }
       const owner = references[0];
       if (owner?.state === "provisioning") {
-        await params.dispatch.resumeProvisioning(owner, reconcileEnvironmentCore);
+        const environment = params.environments.get(environmentId);
+        if (environment && environment.destroyRequestedAtMs !== null) {
+          // Teardown has its own durable owner; refusing forward recovery must not strand it.
+          await reconcileEnvironmentCore();
+        } else if (environment && !params.dispatch.isPlacementOperationInFlight(owner.sessionId)) {
+          if (params.dispatch.hasInitialRecoveryRequest(owner)) {
+            await params.dispatch.resumeProvisioning(owner, reconcileEnvironmentCore);
+            return;
+          }
+          // Placement identity cannot revive the initiating turn after a restart or failed dispatch.
+          // Activation is the existing resource handoff; unfinished placements need fresh authority.
+          const reason =
+            "Interrupted worker placement retained; Stop the unfinished worker and retry with fresh authority.";
+          if (!environment.lastError?.startsWith(reason)) {
+            params.environments.recordError(
+              environment,
+              new Error(
+                environment.lastError
+                  ? `${reason} Previous failure: ${environment.lastError}`
+                  : reason,
+              ),
+            );
+          }
+        }
         return;
       }
       const environment = params.environments.get(environmentId);

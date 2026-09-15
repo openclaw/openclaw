@@ -41,7 +41,10 @@ import type {
   WorkerPlacementReclaimRequest,
   WorkerPlacementReclaimSourceCheck,
 } from "./service-contract.js";
-import { deriveEnvironmentIntent } from "./service-contract.js";
+import {
+  composeWorkerPlacementAuthorization,
+  deriveEnvironmentIntent,
+} from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
@@ -110,10 +113,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
   ): Promise<WorkerActiveDispatchPlacement> => {
-    const assertCurrent = () => {
-      signal?.throwIfAborted();
-      authorize?.();
-    };
+    const assertCurrent = composeWorkerPlacementAuthorization(
+      () => signal?.throwIfAborted(),
+      authorize,
+    );
     let placement: WorkerDispatchPlacement | undefined;
     try {
       signal?.throwIfAborted();
@@ -187,6 +190,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
                 }
               : {}),
             inherited: request.inheritedProfile,
+            context: { assertCurrent },
             signal,
             os: request.os,
             runSetupScript:
@@ -239,6 +243,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
               request.os,
               request.runSetupScript,
               preparedIntent,
+              { assertCurrent },
             )
           : await environments.create(
               request.profileId,
@@ -250,6 +255,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
               request.os,
               request.runSetupScript,
               preparedIntent,
+              { assertCurrent },
             );
       return await startup.continueProvisionedDispatch({
         request,
@@ -487,9 +493,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     forceDestroyEnvironment: abandonment.forceDestroyEnvironment,
     move: moveService.move,
     reclaim,
+    resumeProvisioning: startup.resumeProvisioning,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,
-    resumeProvisioning: startup.resumeProvisioning,
   };
 }
 

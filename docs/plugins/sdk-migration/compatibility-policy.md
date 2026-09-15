@@ -66,6 +66,20 @@ offsets for `isInsideCode`. Regions returned by `findCodeRegions` additionally
 include parser-owned `block` metadata; callers supplying their own ranges do not
 need to provide it.
 
+### Worker provider live authority
+
+To support new delegated provisioning, type the provider as `WorkerProvider<1>`, declare `liveAuthorityVersion: 1`, and honor `options.assertCurrent` in the existing `provision` and `prepareProvision` flow. Core supplies one invocation-bound assertion; call it before external effects and after awaits before the next effect or return. The allocation function returned by `prepareProvision` must retain the same assertion. A provider-owned `resolveSshIdentity` must likewise honor `request.assertCurrent` during delegated startup.
+
+An optional assertion that the implementation ignores is not compliance. Do not declare version 1 until allocation, setup-profile materialization, readiness, enrollment, and dynamic identity paths have the checks. Test revocation with the abort signal still live and retained callbacks after the invocation closes. Already-dispatched remote work may still finish; the assertion prevents new dispatches and commits after authority is lost.
+
+The unparameterized `WorkerProvider` retains the legacy call signature; version 1 requires the live assertion. Derive its option types from `Parameters<WorkerProvider<1>["provision"]>[2]` rather than maintaining a separate optional-authority shape.
+
+Legacy providers remain registered: direct lifecycle calls, advertised modes, and independent lease cleanup/renewal are not removed. New authority-dependent provisioning is refused until the provider migrates; there is no unsafe fallback. Already accepted children retain their own authority rather than inheriting a completed parent turn. Restoring an existing allocation's SSH tunnel does not require the new declaration; core still checks the current lease and initializing tunnel before using the resolved identity.
+
+After a restart or failed dispatch, placement/environment identity alone does not authorize automatic forward provisioning. Without a live requesting caller, core retains an unfinished, nonactivated placement with Stop/retry guidance. A foreground retry may resume the exact setup only while its captured run, session, and waiting-operation authority remain live; it cannot revive the prior caller or borrow a replacement caller during a pass. An existing durable destroy request still proceeds. Activation already transfers resource ownership to the child/session, so independent active reconnect, cleanup, and normal registered-run recovery remain intact. Activation is not proof of initial-task acceptance. An activated resource with an unknown initial-task outcome may remain until explicit Stop or configured/provider cleanup; this is not exact automatic orphan classification.
+
+Keep cleanup independent of initiating provisioning authority. Only after the provider confirms cleanup, report `WorkerProviderError.cleanupComplete(leaseId, originalError)` so core can finish local teardown for that exact allocation. Preserve the original failure in `provisionError` and `cause`. If cleanup is uncertain, use `WorkerProviderError.cleanupIndeterminate(leaseId, originalError, cleanupError)` and retain the exact cleanup target. These results report observed cleanup outcomes; they do not grant authority for another operation.
+
 ### Harness attempt result migration
 
 In OpenClaw 2026.8.1, `EmbeddedRunAttemptResult` from

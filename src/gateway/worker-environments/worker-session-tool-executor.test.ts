@@ -16,7 +16,9 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { readAgentRuntimeExecutionLineage } from "../agent-runtime-execution-lineage.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createHarness } from "./placement-dispatch-test-harness.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as environmentServiceModule from "./service.js";
 const {
   workerSessionToolTestMocks,
@@ -42,6 +44,7 @@ const {
 
 describe("worker session tool topology", () => {
   const getFixture = installWorkerSessionToolTestFixture(fixtureMocks);
+  let database: ReturnType<typeof getFixture>["database"];
   let placements: ReturnType<typeof getFixture>["placements"];
   let identity: ReturnType<typeof getFixture>["identity"];
   let execute: ReturnType<typeof getFixture>["execute"];
@@ -55,6 +58,7 @@ describe("worker session tool topology", () => {
   beforeEach(() => {
     resetGlobalHookRunner();
     ({
+      database,
       placements,
       identity,
       execute,
@@ -68,6 +72,85 @@ describe("worker session tool topology", () => {
   });
 
   afterEach(() => resetGlobalHookRunner());
+
+  it("keeps reset generation reuse separate from the original spawn allocation", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    const harness = createHarness(database, placements);
+    vi.mocked(harness.environments.get).mockReturnValue(undefined);
+    vi.mocked(harness.environments.createFromProfileSnapshot).mockRejectedValue(
+      new Error("profile unavailable before allocation"),
+    );
+    dispatchChild.mockImplementation((request, observer, authorize) =>
+      harness.service.dispatch(request, observer, authorize),
+    );
+    const result = await spawn("spawn-before-reset");
+    expect(result.resultJson).toContain("outcome is unknown");
+    const interrupted = placements.get(CHILD.sessionId);
+    if (interrupted?.state !== "failed" || !interrupted.environmentId) {
+      throw new Error("Expected a failed child allocation intent");
+    }
+    placements.retireSessionPlacement({
+      sessionId: interrupted.sessionId,
+      expectedState: "failed",
+      expectedGeneration: interrupted.generation,
+    });
+    const replacement = placements.startDispatch({
+      sessionId: interrupted.sessionId,
+      sessionKey: interrupted.sessionKey,
+      agentId: interrupted.agentId,
+      executionMode: "worker-turn",
+    });
+    const defaultKey = "session-dispatch:" + replacement.sessionId + ":" + replacement.generation;
+    expect(deriveEnvironmentIntent(defaultKey).environmentId).not.toBe(interrupted.environmentId);
+    expect(dispatchChild.mock.calls[0]?.[0].idempotencyKey).toBeTypeOf("string");
+    expect((await spawn("spawn-before-reset")).resultJson).toContain(
+      "prior operation outcome is unknown",
+    );
+    expect(dispatchChild).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a same-profile active replacement owned by another allocation", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    dispatchChild.mockImplementationOnce(async (request) => {
+      activate({ ...CHILD, sessionKey: request.sessionKey });
+      return placements.get(CHILD.sessionId);
+    });
+    const result = await spawn("replacement-allocation");
+    expect(result.resultJson).toContain("outcome is unknown");
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
+
+  it("requires the full provision operation as well as the environment id", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    const dispatch = dispatchChild.getMockImplementation();
+    if (!dispatch) {
+      throw new Error("Missing fixture dispatch");
+    }
+    dispatchChild.mockImplementationOnce(async (...args) => {
+      const result = await dispatch(...args);
+      CHILD.provisionOperationId = "different-provision-operation";
+      return result;
+    });
+    const result = await spawn("mismatched-provision-operation");
+    expect(result.resultJson).toContain("outcome is unknown");
+    expect(gatewayRequest).not.toHaveBeenCalled();
+  });
+
+  it("keeps an accepted child active when the source closes before receiving its reply", async () => {
+    setEntry(SOURCE.sessionKey, SOURCE.sessionId);
+    const call = gatewayRequest.getMockImplementation();
+    if (!call) {
+      throw new Error("Missing fixture Gateway call");
+    }
+    gatewayRequest.mockImplementationOnce(async (...args) => {
+      const accepted = await call(...args);
+      getFixture().closeSourceRun();
+      return accepted;
+    });
+    await spawn("source-closes-after-child-acceptance");
+    expect(gatewayRequest).toHaveBeenCalledOnce();
+    expect(placements.get(CHILD.sessionId)?.state).toBe("active");
+  });
 
   it("blocks a worker spawn before child effects and replays the decision", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
@@ -180,13 +263,14 @@ describe("worker session tool topology", () => {
           sessionKey: spawnState.childSessionKey,
           agentId: CHILD.agentId,
           executionMode: "worker-turn",
+          idempotencyKey: expect.any(String),
           profileId: "cloud-profile",
           inheritedProfile: {
             providerId: "fake",
             profileSnapshot: { install: "bundle", settings: { region: "source" } },
           },
         },
-        undefined,
+        expect.any(Function),
         expect.any(Function),
       );
       expect(gatewayRequest).toHaveBeenLastCalledWith(
@@ -328,14 +412,17 @@ describe("worker session tool topology", () => {
 
   it("recovers an active placement when cloud dispatch loses its response", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
-    dispatchChild.mockImplementationOnce(async (request: { sessionKey: string }) => {
-      spawnState.order.push("dispatch");
-      activate({
-        ...CHILD,
-        sessionKey: request.sessionKey,
-      });
-      throw new Error("cloud dispatch response was lost");
-    });
+    dispatchChild.mockImplementationOnce(
+      async (request: { sessionKey: string; idempotencyKey: string }) => {
+        Object.assign(CHILD, deriveEnvironmentIntent(request.idempotencyKey));
+        spawnState.order.push("dispatch");
+        activate({
+          ...CHILD,
+          sessionKey: request.sessionKey,
+        });
+        throw new Error("cloud dispatch response was lost");
+      },
+    );
     gatewayRequest.mockImplementation(
       async (request: { method: string; params: Record<string, unknown> }) => {
         if (request.method === "agent") {
@@ -439,10 +526,13 @@ describe("worker session tool topology", () => {
         };
       },
     );
-    dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
-      activate({ ...GRANDCHILD, sessionKey: request.sessionKey });
-      return placements.get(GRANDCHILD.sessionId);
-    });
+    dispatchChild.mockImplementation(
+      async (request: { sessionKey: string; idempotencyKey: string }) => {
+        Object.assign(GRANDCHILD, deriveEnvironmentIntent(request.idempotencyKey));
+        activate({ ...GRANDCHILD, sessionKey: request.sessionKey });
+        return placements.get(GRANDCHILD.sessionId);
+      },
+    );
     gatewayRequest.mockImplementation(
       async (request: { method: string; params: Record<string, unknown> }) => {
         if (request.method === "agent") {
@@ -596,6 +686,8 @@ describe("worker spawn startup composition", () => {
               providerId: "fake",
               profileId: "cloud-profile",
               profileSnapshot: { install: "bundle", settings: { region: "source" } },
+              provisionOperationId:
+                owner === CHILD ? CHILD.provisionOperationId : base.provisionOperationId,
               state: "attached",
               leaseId: `lease-${environmentId}`,
               ownerEpoch: owner.ownerEpoch,
@@ -608,6 +700,10 @@ describe("worker spawn startup composition", () => {
             provisioning.resolve();
             await finishProvisioning.promise;
             authorize?.();
+            if (!request.idempotencyKey) {
+              throw new Error("Spawn fixture requires its allocation key");
+            }
+            Object.assign(CHILD, deriveEnvironmentIntent(request.idempotencyKey));
             activate({ ...CHILD, sessionKey: request.sessionKey });
             const placement = placements.get(CHILD.sessionId);
             if (placement?.state !== "active") {

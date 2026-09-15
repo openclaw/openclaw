@@ -311,6 +311,7 @@ test("preserves ordered fallback through restart, workspace sync, and safe sessi
   const events = runner.events;
   const provider: WorkerProvider = {
     id: "ordered-fallback",
+    liveAuthorityVersion: 1,
     resolveAllocation: async () => ({ leaseId: "lease-original-order", sharedHost: false }),
     supportedExecutionModes: ["remote-exec"],
     provision: async () => {

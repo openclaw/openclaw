@@ -54,6 +54,7 @@ type WorkerTurnLauncherOptions = {
   waitForInitialPlacement?: (
     placement: WorkerSessionPlacementRecord,
     signal?: AbortSignal,
+    authorize?: () => void,
   ) => Promise<WorkerSessionPlacementRecord>;
   redispatchReclaimed: (
     placement: ReclaimedWorkerPlacement,
@@ -144,7 +145,14 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
     async executeLocalTurn<T>(claim: LocalTurnPlacementClaim, runLocal: () => Promise<T>) {
       return await executeLocalTurn({ claim, placements: options.placements, runLocal });
     },
-    async executeTurn(claim, inputTurn, runLocal, onAdmitted, assertRunCurrent) {
+    async executeTurn(
+      claim,
+      inputTurn,
+      runLocal,
+      onAdmitted,
+      assertRunCurrent,
+      assertExecutionCurrent,
+    ) {
       const current = options.placements.get(claim.sessionId);
       if (!current && inputTurn.modelRun === true && !claim.sessionKey?.trim()) {
         return await runLocal();
@@ -168,6 +176,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         assertRunCurrent?.();
         assertInitialSetupCurrent?.();
       };
+      const assertForwardCurrent = () => {
+        assertAdmissionCurrent();
+        assertExecutionCurrent?.();
+      };
       let placement: ActiveWorkerPlacement;
       let turnClaim: WorkerSessionTurnClaim;
       let recoveredStaleBuild = false;
@@ -176,7 +188,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       for (;;) {
         // Remote-exec temporarily updates the caller's prompt for attachments.
         let turn = inputTurn;
-        assertAdmissionCurrent();
+        assertForwardCurrent();
         if (
           ["requested", "provisioning", "syncing", "starting"].includes(routablePlacement.state)
         ) {
@@ -197,6 +209,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             turn,
             wait: options.waitForInitialPlacement,
             assertRunCurrent,
+            assertExecutionCurrent,
           });
           routablePlacement = ready.placement;
           assertInitialSetupCurrent = ready.assertCurrent;
@@ -209,10 +222,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             agentId: identity.agentId,
           });
           routablePlacement = await options.redispatchReclaimed(routablePlacement, {
-            assertCurrent: assertAdmissionCurrent,
+            assertCurrent: assertForwardCurrent,
             signal: inputTurn.abortSignal,
           });
-          assertAdmissionCurrent();
+          assertForwardCurrent();
           identity = resolvePlacementIdentity(
             { ...claim, agentId: identity.agentId, sessionKey: identity.sessionKey },
             routablePlacement,
@@ -224,7 +237,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             sessionId: identity.sessionId,
             ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
           });
-          assertAdmissionCurrent();
+          assertForwardCurrent();
           const refreshed = options.placements.get(identity.sessionId);
           if (!refreshed) {
             throw new Error("Cloud worker placement disappeared after workspace reconciliation");
@@ -256,7 +269,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               sessionId: identity.sessionId,
               ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
             });
-            assertAdmissionCurrent();
+            assertForwardCurrent();
             const refreshed = options.placements.get(identity.sessionId);
             if (!refreshed) {
               throw new Error("Cloud worker placement disappeared after workspace reconciliation", {
@@ -284,7 +297,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
           });
           if (!admitted) {
-            assertAdmissionCurrent();
+            assertForwardCurrent();
             const refreshed = options.placements.get(identity.sessionId);
             if (!refreshed) {
               throw new Error("Cloud worker placement disappeared after workspace reconciliation");
@@ -301,9 +314,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         // Placement and session storage own the workspace; caller paths may be stale.
         let workspace: WorkerSessionWorkspace;
         try {
-          assertAdmissionCurrent();
+          assertForwardCurrent();
           workspace = await options.resolveWorkspace(identity);
-          assertAdmissionCurrent();
+          assertForwardCurrent();
         } catch (error) {
           await releaseClaimIfOwned(options.placements, turnClaim);
           throw error;
@@ -332,7 +345,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             : (await loadWorkerTurnExecution()).executeWorkerTurn;
           // Loading retains the admitted claim; it cannot admit a replacement or
           // register a run owner after the caller or placement has been revoked.
-          assertAdmissionCurrent();
+          assertForwardCurrent();
           if (
             !matchesWorkerPlacementTarget(options.placements.get(turnClaim.sessionId), placement) ||
             !options.placements.validateTurnClaim(turnClaim)
@@ -388,6 +401,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             ...executionParams,
             runLocal,
             assertRunCurrent: remoteExec ? assertRunCurrent : assertAdmissionCurrent,
+            assertExecutionCurrent: assertForwardCurrent,
           });
         } catch (error) {
           if (error instanceof StaleWorkerBuildError) {
@@ -401,12 +415,12 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               // This claim never launched work. Release it so runtime refresh does not
               // mistake admission for an executing turn that must finish first.
               try {
-                assertAdmissionCurrent();
+                assertForwardCurrent();
                 turn.abortSignal?.throwIfAborted();
               } finally {
                 await releaseClaimIfOwned(options.placements, turnClaim);
               }
-              assertAdmissionCurrent();
+              assertForwardCurrent();
               turn.abortSignal?.throwIfAborted();
               // Reconciliation may supersede the placement captured by initial setup.
               assertInitialSetupCurrent = undefined;
@@ -414,7 +428,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             await options.reconcileActivePlacement(placement.environmentId);
             const reconciled = options.placements.get(placement.sessionId);
             if (canRecoverBuild) {
-              assertAdmissionCurrent();
+              assertForwardCurrent();
               turn.abortSignal?.throwIfAborted();
             }
             const refreshedInPlace =
@@ -436,7 +450,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               reconciled.agentId === identity.agentId &&
               reconciled.sessionKey === identity.sessionKey
             ) {
-              assertAdmissionCurrent();
+              assertForwardCurrent();
               recoveredStaleBuild = true;
               routablePlacement = reconciled;
               continue;

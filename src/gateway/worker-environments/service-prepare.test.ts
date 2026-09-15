@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
-import type { WorkerProvider } from "../../plugins/types.js";
+import type { WorkerProviderV1 } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.js";
 import * as support from "./service.test-support.js";
@@ -24,7 +24,7 @@ describe("on-demand prepared worker admission", () => {
     });
     await requireGit(projectPath, ["add", "."]);
     await requireGit(projectPath, ["commit", "--quiet", "-m", "base"]);
-    const provision = vi.fn<WorkerProvider["provision"]>(async () => {
+    const provision = vi.fn<WorkerProviderV1["provision"]>(async () => {
       throw new Error("Synthetic provider unavailable");
     });
     const provider = support.createProvider({

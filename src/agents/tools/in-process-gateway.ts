@@ -18,6 +18,10 @@ import {
   runWithOperatorToolGatewayCleanupContext,
 } from "../../gateway/server-plugins.js";
 import {
+  bindWorkerSourceAuthorization,
+  composeWorkerPlacementAuthorization,
+} from "../../gateway/worker-environments/service-contract.js";
+import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
@@ -180,10 +184,7 @@ async function callAgentToolGatewayRequestBound<T>(
   const assertDispatchCurrent = request.assertDispatchCurrent;
   const assertCurrent =
     assertCallerCurrent || assertDispatchCurrent
-      ? () => {
-          assertCallerCurrent?.();
-          assertDispatchCurrent?.();
-        }
+      ? composeWorkerPlacementAuthorization(assertCallerCurrent, assertDispatchCurrent)
       : undefined;
   assertCurrent?.();
   const boundGateway = resolveGatewayContext
@@ -270,7 +271,10 @@ export function bindAgentToolGatewayRequest(options?: {
     : admitted
       ? () => admitted
       : undefined;
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const callerAssertion = captureGatewayToolCallerAssertion();
+  const assertCallerCurrent = callerAssertion
+    ? bindWorkerSourceAuthorization(callerAssertion)
+    : undefined;
   const runInCallerContext = AsyncLocalStorage.snapshot();
   return async <T>(request: AgentToolGatewayRequest): Promise<T> =>
     await runInCallerContext(() =>
@@ -297,7 +301,10 @@ async function callInProcessGatewayToolBound<T>(
   },
   fallback: (scopes: ReturnType<typeof resolveLeastPrivilegeOperatorScopesForMethod>) => Promise<T>,
 ): Promise<T> {
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const callerAssertion = captureGatewayToolCallerAssertion();
+  const assertCallerCurrent = callerAssertion
+    ? bindWorkerSourceAuthorization(callerAssertion)
+    : undefined;
   const caller = getGatewayToolCallerIdentity();
   const agentToolCaller =
     options.sessionCreation?.via === "spawn" && caller && assertCallerCurrent
@@ -309,10 +316,7 @@ async function callInProcessGatewayToolBound<T>(
       : undefined;
   assertCallerCurrent?.();
   const sessionMutationCommitGuard = assertCallerCurrent
-    ? () => {
-        assertCallerCurrent();
-        options.sessionMutationCommitGuard?.();
-      }
+    ? composeWorkerPlacementAuthorization(assertCallerCurrent, options.sessionMutationCommitGuard)
     : options.sessionMutationCommitGuard;
   const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method, params);
   const resolveGatewayContext = callerGatewayContextResolver(options.resolveGatewayContext);

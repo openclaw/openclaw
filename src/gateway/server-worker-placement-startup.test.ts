@@ -1,24 +1,16 @@
-import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startup.test-harness.js";
 
 // Install the shared module mocks before any source imports can load the runtime.
-const { runtimeFactoryMocks, moveDestinationMocks } = getWorkerPlacementStartupMocks();
+const { runtimeFactoryMocks } = getWorkerPlacementStartupMocks();
 
 import {
   beginGatewayRestartSignalAdmission,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import {
-  beginSessionWorkAdmission,
-  runExclusiveSessionLifecycleMutation,
-  startSessionWorkAdmissionInterruption,
-} from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
-import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
-import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 
 describe("worker placement startup health lifetime", () => {
   it("samples disk on schedule while reconciliation is stuck and drains both on stop", async () => {
@@ -336,7 +328,7 @@ describe("worker placement startup health lifetime", () => {
     expect(environments.stop).toHaveBeenCalledTimes(2);
   });
 
-  it("routes environment reconciliation through one exact provisioning owner", async () => {
+  it("fences interrupted provisioning while permitting unowned reconciliation", async () => {
     type ReconcileGuard = (
       environmentId: string,
       reconcileCore: () => Promise<void>,
@@ -347,18 +339,6 @@ describe("worker placement startup health lifetime", () => {
       state: "active" | "provisioning";
       environmentId: string;
     }> = [];
-    const resumeProvisioning = vi.fn<WorkerPlacementDispatchService["resumeProvisioning"]>(
-      async (placement, reconcileCore, onTransition, runAdmitted) => {
-        if (!runAdmitted) {
-          throw new Error("Recovery fixture requires the coordinator admission owner");
-        }
-        return await runAdmitted(async (signal) => {
-          onTransition?.(placement);
-          await reconcileCore(signal);
-          return undefined;
-        });
-      },
-    );
     const reconcile = vi.fn(async () => {
       expect(installedGuard).toBeDefined();
     });
@@ -373,10 +353,14 @@ describe("worker placement startup health lifetime", () => {
       reclaim: vi.fn(),
       reconcile,
       reconcileActive: vi.fn().mockResolvedValue(undefined),
-      resumeProvisioning,
     });
     const environments = {
-      get: vi.fn((environmentId: string) => ({ environmentId, state: "provisioning" })),
+      get: vi.fn((environmentId: string) => ({
+        environmentId,
+        state: "provisioning",
+        destroyRequestedAtMs: null,
+      })),
+      recordError: vi.fn(),
       subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn((guard: ReconcileGuard) => {
         installedGuard = guard;
@@ -423,14 +407,10 @@ describe("worker placement startup health lifetime", () => {
     };
     try {
       placementRows = [provisioning];
-      const exactCore = vi.fn(async (signal?: AbortSignal) => {
-        expect(signal).toBeInstanceOf(AbortSignal);
-        expect(signal?.aborted).toBe(false);
-      });
+      const exactCore = vi.fn(async () => {});
       await guard(provisioning.environmentId, exactCore);
-      expect(resumeProvisioning).toHaveBeenCalledOnce();
-      expect(resumeProvisioning.mock.calls[0]?.[0]).toBe(provisioning);
-      expect(exactCore).toHaveBeenCalledOnce();
+      expect(exactCore).not.toHaveBeenCalled();
+      expect(environments.recordError).toHaveBeenCalledOnce();
 
       placementRows = [];
       const unrelatedCore = vi.fn(async () => {});
@@ -455,13 +435,12 @@ describe("worker placement startup health lifetime", () => {
         "provisioning owner is active",
       );
       expect(mismatchedCore).not.toHaveBeenCalled();
-      expect(resumeProvisioning).toHaveBeenCalledOnce();
     } finally {
       await sidecar.stop();
     }
   });
 
-  it("publishes shutdown before enrollment cancellation and drains guarded recovery", async () => {
+  it("publishes shutdown before enrollment cancellation and drains guarded reconciliation", async () => {
     type ReconcileGuard = (
       environmentId: string,
       reconcileCore: () => Promise<void>,
@@ -488,16 +467,13 @@ describe("worker placement startup health lifetime", () => {
       reclaim: vi.fn(),
       reconcile: vi.fn().mockResolvedValue(undefined),
       reconcileActive: vi.fn().mockResolvedValue(undefined),
-      resumeProvisioning: vi.fn(async (_placement, reconcileCore) => {
-        events.push("recovery:start");
-        recoveryStarted.resolve();
-        await releaseRecovery.promise;
-        await reconcileCore();
-        events.push("recovery:end");
-      }),
     });
     const environments = {
-      get: vi.fn((environmentId: string) => ({ environmentId, state: "provisioning" })),
+      get: vi.fn((environmentId: string) => ({
+        environmentId,
+        state: "provisioning",
+        destroyRequestedAtMs: 1,
+      })),
       subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
       installReconcileEnvironmentGuard: vi.fn((guard: ReconcileGuard) => {
         installedGuard = guard;
@@ -567,7 +543,11 @@ describe("worker placement startup health lifetime", () => {
       throw new Error("worker placement reconcile guard was not installed");
     }
     const reconcileCore = vi.fn(async () => {
+      events.push("recovery:start");
+      recoveryStarted.resolve();
+      await releaseRecovery.promise;
       events.push("reconcile:core");
+      events.push("recovery:end");
     });
     const guardedRecovery = guard(placement.environmentId, reconcileCore);
     await recoveryStarted.promise;
@@ -589,141 +569,5 @@ describe("worker placement startup health lifetime", () => {
       "recovery:end",
       "guard:uninstall",
     ]);
-  });
-});
-
-describe("worker placement startup recovery authority", () => {
-  it("holds exact session authority through async recovery work after cancellation", async () => {
-    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-      read: vi.fn(),
-      version: vi.fn(() => 0),
-      sweep: vi.fn().mockResolvedValue(undefined),
-    });
-    runtimeFactoryMocks.createDispatch.mockReturnValue({
-      dispatch: vi.fn(),
-      forceDestroyEnvironment: vi.fn(),
-      move: vi.fn(),
-      reclaim: vi.fn(),
-      reconcile: vi.fn(),
-      reconcileActive: vi.fn(),
-    });
-    const placement = {
-      state: "provisioning",
-      generation: 7,
-      environmentId: "worker-recovery",
-    };
-    createGatewayWorkerPlacementRuntime({
-      cancelSessionWork: vi.fn(async () => {}),
-      placements: {
-        workspaceResultInstanceId: () => "gateway-test",
-        get: () => placement,
-      } as never,
-      environments: {} as never,
-      gatewayNamespace: "gateway-test",
-      revokeSessionAuthority: vi.fn(),
-      warn: vi.fn(),
-    });
-    const dispatchOptions = runtimeFactoryMocks.createDispatch.mock.calls.at(-1)?.[0] as
-      | {
-          runRecoveryBarrier: (request: {
-            sessionId: string;
-            sessionKey: string;
-            agentId: string;
-            executionMode: "remote-exec";
-            environmentId: string;
-            expectedGeneration: number;
-            signal?: AbortSignal;
-            run: (workspace: WorkerSessionWorkspace) => Promise<void>;
-          }) => Promise<void>;
-        }
-      | undefined;
-    if (!dispatchOptions) {
-      throw new Error("worker placement recovery barrier was not captured");
-    }
-    const request = {
-      sessionId: "session-recovery",
-      sessionKey: "agent:main:move-source",
-      agentId: "main",
-      executionMode: "remote-exec" as const,
-      environmentId: placement.environmentId,
-      expectedGeneration: placement.generation,
-    };
-    const releaseRecovery = createDeferredCore();
-    const events: string[] = [];
-    const controller = new AbortController();
-    const identity = {
-      scope: "/tmp/openclaw-worker-placement-session.sqlite",
-      identities: [request.sessionKey, request.sessionId],
-    };
-    const admission = await beginSessionWorkAdmission({
-      ...identity,
-      assertAllowed: () => {},
-      onInterrupt: (reason) => controller.abort(reason),
-    });
-    const recovery = admission
-      .run(() =>
-        dispatchOptions.runRecoveryBarrier({
-          ...request,
-          signal: controller.signal,
-          run: async (workspace) => {
-            if (workspace.kind !== "local") {
-              throw new Error("recovery fixture requires a local workspace");
-            }
-            events.push(`recovery:${workspace.path}`);
-            await releaseRecovery.promise;
-            events.push("recovery:done");
-          },
-        }),
-      )
-      .finally(() => admission.release());
-    await vi.waitFor(() => expect(events).toEqual(["recovery:/gateway/workspace"]));
-    const contender = runExclusiveSessionLifecycleMutation({
-      scope: "/tmp/openclaw-worker-placement-session.sqlite",
-      identities: [
-        request.sessionKey,
-        "agent:main:move-source",
-        "agent:main:move-source",
-        request.sessionId,
-      ],
-      run: async () => {
-        events.push("contender");
-      },
-    });
-    const interruption = startSessionWorkAdmissionInterruption(identity);
-    const admissionReleased = vi.fn();
-    void interruption.released.then(admissionReleased);
-    try {
-      expect(controller.signal.aborted).toBe(true);
-      await setImmediate();
-      expect(admission.isActive()).toBe(true);
-      expect(events).toEqual(["recovery:/gateway/workspace"]);
-      expect(admissionReleased).not.toHaveBeenCalled();
-    } finally {
-      releaseRecovery.resolve();
-      await Promise.all([recovery, contender, interruption.released]);
-    }
-    expect(admissionReleased).toHaveBeenCalledOnce();
-    expect(events).toEqual(["recovery:/gateway/workspace", "recovery:done", "contender"]);
-
-    moveDestinationMocks.resolveExecutionMode.mockReturnValueOnce("worker-turn");
-    await expect(
-      dispatchOptions.runRecoveryBarrier({ ...request, run: async () => {} }),
-    ).rejects.toThrow("runtime changed");
-
-    await expect(
-      dispatchOptions.runRecoveryBarrier({
-        ...request,
-        expectedGeneration: 8,
-        run: async () => {},
-      }),
-    ).rejects.toThrow("placement changed");
-
-    moveDestinationMocks.resolveCanonicalSession.mockReturnValueOnce({
-      sessionId: "session-replaced",
-      worktree: { id: "worktree-recovery" },
-    });
-    await expect(
-      dispatchOptions.runRecoveryBarrier({ ...request, run: async () => {} }),
-    ).rejects.toThrow("changed before cloud worker recovery");
   });
 });

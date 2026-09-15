@@ -54,6 +54,7 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
 
 describe("node worker tunnel manager", () => {
   it.each([
@@ -61,12 +62,16 @@ describe("node worker tunnel manager", () => {
     ["published-origin", false],
     ["prepared-project", false],
   ])("preserves the Gateway Git author through %s workspaces", async (syncPath, dirty) => {
+    // Scope the synthetic repository to its own author config, not injected host identity.
+    vi.stubEnv("GIT_CONFIG_COUNT", "0");
     const localPath = tempDirs.make("node-worker-git-author-gateway-");
     const remoteWorkspaceDir = path.join(tempDirs.make("node-worker-git-author-remote-"), "worker");
     const gitEnv: NodeJS.ProcessEnv = {
       ...process.env,
       GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
       GIT_CONFIG_NOSYSTEM: "1",
+      // This synthetic repository proves persisted Git config, not host-injected identity.
+      GIT_CONFIG_COUNT: "0",
     };
     delete gitEnv.GIT_AUTHOR_NAME;
     delete gitEnv.GIT_AUTHOR_EMAIL;
@@ -200,31 +205,6 @@ describe("node worker tunnel manager", () => {
     ).toBe("Configured Gateway Author <gateway-author@example.invalid>");
 
     await handle.stop();
-  });
-
-  it("joins same-owner starts while workspace binding resolution is pending", async () => {
-    const record = environment();
-    const workspaceBinding = createDeferred<undefined>();
-    const resolveWorkspaceBinding = vi.fn(async () => await workspaceBinding.promise);
-    const manager = createNodeWorkerTunnelManager({
-      gatewayDeviceId: "gateway-device-1",
-      getEnvironment: () => record,
-      listEnvironments: () => [record],
-      getTransport: transport,
-      launchNodeWorker: vi.fn(),
-      validateWorkerTurn: () => true,
-      workspaceTransfer: workspaceTransfer(),
-    });
-    manager.bindWorkspaceBindingResolver(resolveWorkspaceBinding);
-
-    const first = manager.start(startRequest());
-    await vi.waitFor(() => expect(resolveWorkspaceBinding).toHaveBeenCalledOnce());
-    const second = manager.start(startRequest());
-    workspaceBinding.resolve(undefined);
-
-    const [firstHandle, secondHandle] = await Promise.all([first, second]);
-    expect(resolveWorkspaceBinding).toHaveBeenCalledOnce();
-    expect(secondHandle).toBe(firstHandle);
   });
 
   it.each(["stop", "stopAll"] as const)(

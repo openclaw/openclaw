@@ -571,14 +571,18 @@ export async function prepareGitHubReadIdentity(
       throw new GitHubIdentityError("changed");
     }
   };
-  const caller = { assertCurrent: assertSelected, startCurrent: params.startActive };
+  const assertPreparing = () => {
+    params.assertPreparing?.();
+    assertSelected();
+  };
+  const caller = { assertCurrent: assertPreparing, startCurrent: params.startActive };
   await startGitHubIdentityOperation(params.refresh, caller);
-  assertSelected();
+  assertPreparing();
   const { token, readToken, prepared } = await prepareSharedGitHubIdentity({
     ...params,
     ...caller,
   });
-  assertSelected();
+  assertPreparing();
   return createGitHubReadIdentity({
     assertSelected,
     startActive: params.startActive,

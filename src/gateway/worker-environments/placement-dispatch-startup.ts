@@ -11,14 +11,15 @@ import {
   resolveDevicePlacementEligibility,
 } from "./device-placement-eligibility.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
-import type {
-  PlacementFailureActions,
-  WorkerActivationBarrier,
-  WorkerActiveDispatchPlacement,
-  WorkerDispatchEnvironmentService,
-  WorkerDispatchPlacement,
-  WorkerDispatchPlacementStore,
-  WorkerProvisioningDispatchPlacement,
+import {
+  requireProvisionedEnvironment,
+  type WorkerActivationBarrier,
+  type WorkerActiveDispatchPlacement,
+  type WorkerDispatchEnvironmentService,
+  type WorkerDispatchPlacement,
+  type WorkerDispatchPlacementStore,
+  type WorkerProvisioningDispatchPlacement,
+  type PlacementFailureActions,
 } from "./placement-dispatch-failure.js";
 import {
   readWorkerProjectPreparation,
@@ -28,6 +29,7 @@ import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import {
   WorkerPlacementAdmissionTargetError,
+  composeWorkerPlacementAuthorization,
   type WorkerPlacementAuthorization,
   type WorkerPlacementDispatchRequest,
 } from "./service-contract.js";
@@ -73,40 +75,6 @@ function isPendingProvisioningEnvironment(
       environment.state === "provisioning" ||
       environment.state === "bootstrapping")
   );
-}
-
-function requireProvisionedEnvironment(
-  environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
-  expectedEnvironmentId: string,
-  executionMode: WorkerPlacementDispatchRequest["executionMode"],
-  environments: Pick<WorkerDispatchEnvironmentService, "supportsProviderExecutionMode">,
-): { environmentId: string; ownerEpoch: number; bundleHash: string } {
-  if (
-    (environment.state !== "ready" && environment.state !== "idle") ||
-    environment.environmentId !== expectedEnvironmentId ||
-    environment.destroyRequestedAtMs !== null ||
-    !environment.bootstrapReceipt ||
-    !supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt)
-  ) {
-    throw new Error(
-      `Worker environment is not dispatchable with the current execution-context contract: ${environment.state}`,
-    );
-  }
-  if (
-    (environment.profileSnapshot.executionMode !== undefined &&
-      environment.profileSnapshot.executionMode !== executionMode) ||
-    (executionMode === "worker-turn" &&
-      environment.profileSnapshot.executionMode !== undefined &&
-      !environment.nodeDeviceId) ||
-    !environments.supportsProviderExecutionMode(environment.providerId, executionMode)
-  ) {
-    throw new Error("Worker environment does not support the placement's exact execution mode");
-  }
-  return {
-    environmentId: environment.environmentId,
-    ownerEpoch: environment.ownerEpoch,
-    bundleHash: environment.bootstrapReceipt.bundleHash,
-  };
 }
 
 export function createWorkerPlacementDispatchStartup(options: {
@@ -308,8 +276,8 @@ export function createWorkerPlacementDispatchStartup(options: {
     onTransition?: (placement: WorkerDispatchPlacement) => void;
     authorize?: WorkerPlacementAuthorization;
     signal?: AbortSignal;
-    recovery?: true;
     admittedNode?: WorkerNodePlacementAdmission;
+    recovery?: true;
   }): Promise<WorkerActiveDispatchPlacement> => {
     if (params.placement.state !== "provisioning") {
       throw new Error("Worker dispatch continuation requires a provisioning placement");
@@ -379,6 +347,7 @@ export function createWorkerPlacementDispatchStartup(options: {
             },
           }
         : {}),
+      authorize: params.authorize,
     });
     params.signal?.throwIfAborted();
     params.authorize?.();
@@ -394,6 +363,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       const tunnel = await environments.startTunnel({
         environmentId: provisioned.environmentId,
         ownerEpoch,
+        ...(params.authorize ? { authorize: params.authorize } : {}),
       });
       params.signal?.throwIfAborted();
       params.authorize?.();
@@ -477,6 +447,7 @@ export function createWorkerPlacementDispatchStartup(options: {
               sessionKey: request.sessionKey,
               generation: placement.generation,
               ...(gitAuthor ? { gitAuthor } : {}),
+              authorize: assertSyncOwner,
             });
       assertSyncOwner();
       params.signal?.throwIfAborted();
@@ -500,6 +471,8 @@ export function createWorkerPlacementDispatchStartup(options: {
       );
       requireAttachedEnvironment();
       const activate = (): WorkerActiveDispatchPlacement => {
+        params.signal?.throwIfAborted();
+        params.authorize?.();
         requireAttachedEnvironment();
         if (
           admittedNode &&
@@ -525,7 +498,7 @@ export function createWorkerPlacementDispatchStartup(options: {
         options.reportTransition(params.onTransition, active);
         return active;
       };
-      // Recovery retains the exact session/placement lifecycle fence through activation.
+      // Recovery already owns the same lifecycle fence; activation still checks its source.
       const activePlacement = params.recovery
         ? activate()
         : await options.runActivationBarrier({
@@ -562,11 +535,18 @@ export function createWorkerPlacementDispatchStartup(options: {
   const resumeProvisioning = async (
     placement: WorkerProvisioningDispatchPlacement,
     reconcileEnvironmentCore: WorkerEnvironmentReconcileCore,
+    authorize: WorkerPlacementAuthorization,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
     runAdmitted: (
       run: (signal?: AbortSignal) => Promise<WorkerDispatchPlacement | undefined>,
     ) => Promise<WorkerDispatchPlacement | undefined> = (run) => run(),
   ): Promise<WorkerDispatchPlacement | undefined> => {
+    if (!authorize) {
+      throw new WorkerPlacementAdmissionTargetError(
+        "Worker provisioning recovery requires live initiating authority",
+      );
+    }
+    authorize();
     const environmentId = placement.environmentId;
     let recoveryRunStarted = false;
     let interruptedByShutdown = false;
@@ -636,16 +616,29 @@ export function createWorkerPlacementDispatchStartup(options: {
           run: async (workspace) => {
             recoveryRunStarted = true;
             try {
-              signal?.throwIfAborted();
-              const initialEnvironment = environments.get(environmentId);
-              if (initialEnvironment?.environmentId !== environmentId) {
-                throw new Error("Provisioning worker environment record is missing");
-              }
-              if (initialEnvironment.destroyRequestedAtMs !== null) {
-                throw new Error("Provisioning worker environment destruction was requested");
-              }
-              await reconcileEnvironmentCore(signal);
-              signal?.throwIfAborted();
+              const assertRecoveryCurrent = composeWorkerPlacementAuthorization(authorize, () => {
+                signal?.throwIfAborted();
+                const current = placements.get(placement.sessionId);
+                const environment = environments.get(environmentId);
+                if (
+                  !current ||
+                  current.state !== recoveryOwnedPlacement.state ||
+                  current.generation !== recoveryOwnedPlacement.generation ||
+                  current.environmentId !== environmentId ||
+                  current.sessionKey !== placement.sessionKey ||
+                  current.agentId !== placement.agentId ||
+                  current.executionMode !== placement.executionMode ||
+                  environment?.environmentId !== environmentId ||
+                  environment.destroyRequestedAtMs !== null
+                ) {
+                  throw new Error(
+                    "Worker placement authority changed during provisioning recovery",
+                  );
+                }
+              });
+              assertRecoveryCurrent();
+              await reconcileEnvironmentCore(signal, undefined, assertRecoveryCurrent);
+              assertRecoveryCurrent();
               const current = placements.get(placement.sessionId);
               if (
                 current?.state !== "provisioning" ||
@@ -693,6 +686,7 @@ export function createWorkerPlacementDispatchStartup(options: {
                 onTransition: report,
                 signal,
                 recovery: true,
+                authorize: assertRecoveryCurrent,
               });
             } catch (error) {
               // Keep teardown under the same session lifecycle fence that admitted recovery.

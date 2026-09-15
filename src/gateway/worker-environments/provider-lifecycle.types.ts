@@ -40,7 +40,10 @@ export type WorkerProviderLifecycleInputOptions = {
     operationId: string;
     sshEndpoint: WorkerSshEndpoint;
     installation: WorkerInstallationArtifact;
-    resolveIdentity: (keyRef: SecretRef) => Promise<WorkerSshIdentity>;
+    resolveIdentity: (
+      keyRef: SecretRef,
+      context: { assertCurrent: () => void },
+    ) => Promise<WorkerSshIdentity>;
     signal: AbortSignal;
     assertCurrent?: () => void;
   }) => Promise<WorkerAdmissionHandshake>;
@@ -49,6 +52,7 @@ export type WorkerProviderLifecycleInputOptions = {
     leaseId: string;
     profile: WorkerProfile;
     keyRef: SecretRef;
+    assertAuthorized: () => void;
   }) => Promise<WorkerSshIdentity>;
   ensureNodeWorkerBundle?: (params: {
     deviceId: string;
@@ -57,11 +61,16 @@ export type WorkerProviderLifecycleInputOptions = {
     signal?: AbortSignal;
     assertCurrent?: () => void;
   }) => Promise<WorkerAdmissionHandshake>;
-  prepareNodeBootstrap?: (record: WorkerEnvironmentRecord, signal?: AbortSignal) => Promise<string>;
+  prepareNodeBootstrap?: (
+    record: WorkerEnvironmentRecord,
+    signal?: AbortSignal,
+    authorize?: () => void,
+  ) => Promise<string>;
   prepareNodeRuntime?: (
     record: WorkerEnvironmentRecord,
     bundle: Extract<WorkerInstallationArtifact, { install: "bundle" }>,
     signal?: AbortSignal,
+    authorize?: () => void,
   ) => Promise<WorkerNodeRuntimePreparation>;
   closeNodeRuntime?: (preparation: WorkerNodeRuntimePreparation) => void;
   prepareNodeArtifacts?: (
@@ -90,6 +99,7 @@ export type WorkerProviderLifecycleInputOptions = {
   prepareNodeEnrollment?: (
     record: WorkerEnvironmentRecord,
     signal?: AbortSignal,
+    authorize?: () => void,
   ) => Promise<WorkerNodeEnrollment>;
   closeNodeEnrollment?: (enrollment: WorkerNodeEnrollment) => void;
   retireNodeEnrollment?: (record: WorkerEnvironmentRecord) => Promise<void>;

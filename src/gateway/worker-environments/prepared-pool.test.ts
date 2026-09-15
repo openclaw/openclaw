@@ -547,6 +547,7 @@ describe("prepared worker reserve lifecycle", () => {
   ] as const)(
     "rechecks reserve intent and capacity after the provider queue (%s)",
     async (_scenario, changed, cleanupScope) => {
+      fixture.provider.liveAuthorityVersion = 1;
       let previous: WorkerEnvironmentRecord | undefined;
       if (cleanupScope === "later-global") {
         fixture.config.cloudWorkers!.preparedPool = { maxTotal: 1 };

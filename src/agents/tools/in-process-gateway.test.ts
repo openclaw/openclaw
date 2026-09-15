@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { isWorkerSourceAuthorization } from "../../gateway/worker-environments/service-contract.js";
 
 const mocks = vi.hoisted(() => ({
   hasContext: true,
@@ -602,8 +603,10 @@ describe("built-in Gateway foreground authority", () => {
       const entered = createDeferred();
       const release = createDeferred();
       let current = true;
+      let sourceBound = false;
       let committed = false;
       mocks.dispatch.mockImplementation(async (_method, _params, options) => {
+        sourceBound = isWorkerSourceAuthorization(options.sessionMutationCommitGuard);
         entered.resolve();
         await release.promise;
         options.sessionMutationCommitGuard?.();
@@ -625,6 +628,7 @@ describe("built-in Gateway foreground authority", () => {
       release.resolve();
       await rejected;
       expect(committed).toBe(false);
+      expect(sourceBound).toBe(true);
     },
   );
 

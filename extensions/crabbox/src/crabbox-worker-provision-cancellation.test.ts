@@ -87,6 +87,7 @@ describe("Crabbox provisioning cancellation", () => {
     let settled = false;
     const operation = provisionWarmProfile(provider, profile, OPERATION_ID, undefined, {
       ...(phase === "desktop setup" ? createProjectOptions([], controller).options : {}),
+      assertCurrent: () => {},
       signal: controller.signal,
       ...(phase === "enrollment diagnostics"
         ? {
@@ -149,6 +150,7 @@ describe("Crabbox provisioning cancellation", () => {
     );
     let settled = false;
     const operation = provisionWarmProfile(provider, profile, OPERATION_ID, undefined, {
+      assertCurrent: () => {},
       signal: controller.signal,
     })
       .catch((error: unknown) => error)
@@ -178,6 +180,7 @@ describe("Crabbox provisioning cancellation", () => {
     const controller = new AbortController();
     const { provider, calls } = createWarmProvider();
     const operation = provisionWarmProfile(provider, PROFILE, OPERATION_ID, undefined, {
+      assertCurrent: () => {},
       signal: controller.signal,
       beginNodeEnrollment: async () =>
         enrollment(async () => {

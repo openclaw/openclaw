@@ -35,6 +35,7 @@ import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
 } from "./subagent-completion-tool-handoff.js";
+import { composeWorkerPlacementAuthorization } from "./worker-environments/service-contract.js";
 
 type OperatorToolGatewayAuthority = {
   authenticatedUserProfile: NonNullable<
@@ -405,10 +406,10 @@ export async function dispatchGatewayMethodInProcessRaw(
       onAccepted: options?.onAccepted,
       onSignalAbort: options?.onSignalAbort,
       requestIdPrefix: "plugin-subagent",
-      sessionMutationCommitGuard: () => {
-        resolved.assertContextCurrent();
-        options?.sessionMutationCommitGuard?.();
-      },
+      sessionMutationCommitGuard: composeWorkerPlacementAuthorization(
+        resolved.assertContextCurrent,
+        options?.sessionMutationCommitGuard,
+      ),
       timeoutMs: options?.timeoutMs,
       ...(options?.signal ? { signal: options.signal } : {}),
     });

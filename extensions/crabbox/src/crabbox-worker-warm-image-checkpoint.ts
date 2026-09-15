@@ -128,6 +128,7 @@ export function parseCheckpointAvailability(stdout: string): "available" | "pend
 }
 
 export type CheckpointContext = {
+  assertAuthorized?: () => void;
   binary: string;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -138,6 +139,7 @@ export type MaintenanceContext = Omit<CheckpointContext, "binary"> & {
 
 export function createCheckpointCommands(runCommand: CrabboxCommandRunner) {
   const assertCurrent = (context: CheckpointContext | MaintenanceContext) => {
+    context.assertAuthorized?.();
     context.assertCurrent?.();
     context.signal?.throwIfAborted();
   };
@@ -159,10 +161,18 @@ export function createCheckpointCommands(runCommand: CrabboxCommandRunner) {
       ...(input === undefined ? {} : { input }),
     });
     if (result.termination !== "exit" || result.code !== 0) {
+      assertCurrent(context);
       if (action === "create") {
         throw new CrabboxCheckpointCreateError(result);
       }
       throw crabboxCommandError(action === "scrub" ? action : `checkpoint ${action}`, result);
+    }
+    // A successful native create can complete after its initiating authority
+    // closes. Its caller must record the returned checkpoint for later cleanup
+    // before the closed authority is surfaced. Other commands have no new
+    // custody to preserve and remain fenced immediately after their await.
+    if (action !== "create") {
+      assertCurrent(context);
     }
     return result.stdout;
   };

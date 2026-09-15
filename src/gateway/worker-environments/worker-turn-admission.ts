@@ -17,6 +17,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
+import { bindWorkerSourceAuthorization } from "./service-contract.js";
 import {
   projectWorkspaceResultConflict,
   type WorkerWorkspaceResultConflict,
@@ -60,8 +61,10 @@ export async function waitForInitialWorkerPlacement(params: {
   wait: (
     placement: WorkerSessionPlacementRecord,
     signal?: AbortSignal,
+    authorize?: () => void,
   ) => Promise<WorkerSessionPlacementRecord>;
   assertRunCurrent?: () => void;
+  assertExecutionCurrent?: () => void;
 }): Promise<{ placement: ActiveWorkerPlacement; assertCurrent: () => void }> {
   const identity = resolvePlacementIdentity(params.turn, params.placement);
   const target = {
@@ -85,8 +88,19 @@ export async function waitForInitialWorkerPlacement(params: {
     }
   };
   assertSessionCurrent();
-  const completed = await params.wait(params.placement, params.turn.abortSignal);
+  params.assertExecutionCurrent?.();
+  const completed = await params.wait(
+    params.placement,
+    params.turn.abortSignal,
+    params.assertExecutionCurrent
+      ? bindWorkerSourceAuthorization(() => {
+          assertSessionCurrent();
+          params.assertExecutionCurrent?.();
+        })
+      : undefined,
+  );
   // Setup completion is a notification, not authority: read the durable owner again.
+  params.assertExecutionCurrent?.();
   assertSessionCurrent();
   const assertCurrent = () => {
     assertSessionCurrent();

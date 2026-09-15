@@ -22,6 +22,7 @@ describe("prepared worker expiry during admitted work", () => {
   it.each(["enrollment", "readiness"] as const)(
     "retains capacity until cleanup and refuses late %s without aborting admitted work",
     async (boundary) => {
+      fixture.provider.liveAuthorityVersion = 1;
       const reserve = fixture.seed("admitted-reserve", { reserve: true });
       const entered = createDeferred();
       const releaseWork = createDeferred();
