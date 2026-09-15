@@ -15,6 +15,7 @@ import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateDatabase,
+  OpenClawStateSchemaReadAdmission,
 } from "./openclaw-state-db-contract.js";
 import { openOpenClawStateReadConnection } from "./openclaw-state-db-read-connection.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
@@ -279,9 +280,13 @@ function withOpenClawStateReadOnlyLocation<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   pathname: string,
   source: string | PreparedSqliteReadOnlyLocation,
+  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): T {
-  const opened = openOpenClawStateReadOnlyLocation(pathname, source);
+  const opened = openOpenClawStateReadConnection(pathname, source);
+  let closeAdmission: (() => void) | undefined;
   try {
+    closeAdmission = openStateSchemaReadAdmission?.(opened.database.db);
+    assertSupportedStateSchemaVersion(opened.database.db, pathname);
     const result = operation(opened.database);
     const location = typeof source === "string" ? source : source.location;
     if (location === pathname && isPromiseLike(result)) {
@@ -289,7 +294,11 @@ function withOpenClawStateReadOnlyLocation<T>(
     }
     return result;
   } finally {
-    opened.close();
+    try {
+      closeAdmission?.();
+    } finally {
+      opened.close();
+    }
   }
 }
 
@@ -367,7 +376,15 @@ export function withExistingOpenClawStateDatabaseReadOnly<T>(
 export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
+  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): T | undefined {
+  if (openStateSchemaReadAdmission) {
+    return withExistingOpenClawStateDatabaseCurrentReadOnly(
+      operation,
+      options,
+      openStateSchemaReadAdmission,
+    );
+  }
   return withArtifactPreservingStateReads(() =>
     withExistingOpenClawStateDatabaseReadOnly(operation, options),
   );
@@ -377,12 +394,16 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
 export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
+  openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): T | undefined {
   return stateSnapshotReads.exit(() => {
     const pathname = resolveReadOnlyPath(options);
-    const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
-    if (reused.reused) {
-      return reused.value;
+    // Maintenance admission belongs to a fresh private reader, never a cached writer.
+    if (!openStateSchemaReadAdmission) {
+      const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
+      if (reused.reused) {
+        return reused.value;
+      }
     }
     if (existingPathOrUndefined(pathname) === undefined) {
       return undefined;
@@ -395,6 +416,7 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
       operation,
       pathname,
       prepareSqliteReadOnlyLocationSync(pathname),
+      openStateSchemaReadAdmission,
     );
   });
 }

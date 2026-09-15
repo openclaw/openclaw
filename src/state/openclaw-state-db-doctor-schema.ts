@@ -18,8 +18,8 @@ export function withSqliteWritableSchema<T>(database: DatabaseSync, operation: (
     return operation();
   } finally {
     try {
-      // sqlite-allow-raw -- Always restore catalog parsing after the bounded legacy inspection.
-      database.exec("PRAGMA writable_schema = OFF;");
+      // sqlite-allow-raw -- OFF retains the schema loaded while malformed rows were ignored.
+      database.exec("PRAGMA writable_schema = RESET;");
     } finally {
       database.enableDefensive?.(true);
     }
@@ -83,7 +83,7 @@ export function openDoctorStateSchemaReadAdmission(
     open = false;
     try {
       // sqlite-allow-raw -- Restore ordinary schema parsing before releasing the read-only handle.
-      database.exec("PRAGMA writable_schema = OFF;");
+      database.exec("PRAGMA writable_schema = RESET;");
     } finally {
       database.enableDefensive?.(true);
     }

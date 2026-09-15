@@ -137,6 +137,7 @@ export async function beginDoctorMaintenance(params: {
           const runs = listUpdateRuns(
             { active: true, limit: 100, includeRunId: inheritedRunId },
             { env },
+            openDoctorStateSchemaReadAdmission,
           );
           const admission = inspectUpdateRepairDriverAdmission(runs, inheritedRunId);
           if (admission.kind === "conflict") {
