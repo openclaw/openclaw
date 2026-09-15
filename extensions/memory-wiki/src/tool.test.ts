@@ -35,11 +35,41 @@ describe("memory-wiki tools", () => {
     const opSchema = asSchemaObject(applyProperties.op);
 
     expect(unionLiteralValues(opSchema)).toEqual([
+      "concept",
+      "create_concept",
+      "create_entity",
       "create_synthesis",
+      "entity",
       "metadata",
       "synthesis",
       "update_metadata",
     ]);
+  });
+
+  it("exposes entity metadata inputs in wiki_apply schema", () => {
+    const tool = createWikiApplyTool({} as ResolvedMemoryWikiConfig);
+    const applyProperties = asSchemaObject(asSchemaObject(tool.parameters).properties);
+    const relationshipsSchema = asSchemaObject(applyProperties.relationships);
+    const relationshipProperties = asSchemaObject(
+      asSchemaObject(relationshipsSchema.items).properties,
+    );
+
+    expect(Object.keys(applyProperties)).toEqual(
+      expect.arrayContaining(["entityType", "canonicalId", "aliases", "relationships"]),
+    );
+    expect(Object.keys(relationshipProperties).toSorted()).toEqual([
+      "confidence",
+      "evidenceKind",
+      "kind",
+      "note",
+      "privacyTier",
+      "targetId",
+      "targetPath",
+      "targetTitle",
+      "updatedAt",
+      "weight",
+    ]);
+    expect(relationshipProperties.confidence).toEqual({ type: "number", minimum: 0, maximum: 1 });
   });
 
   it("allows provenance metadata in wiki_apply claim evidence", () => {
@@ -71,10 +101,10 @@ describe("memory-wiki tools", () => {
     const tool = createWikiApplyTool(config);
 
     await expect(tool.execute("malformed-null", null)).rejects.toThrow(
-      'wiki mutation op must be one of "create_synthesis", "update_metadata"',
+      'wiki mutation op must be one of "create_synthesis", "create_concept", "create_entity", "update_metadata"',
     );
     await expect(tool.execute("malformed-undefined", undefined)).rejects.toThrow(
-      'wiki mutation op must be one of "create_synthesis", "update_metadata"',
+      'wiki mutation op must be one of "create_synthesis", "create_concept", "create_entity", "update_metadata"',
     );
   });
 
@@ -131,6 +161,74 @@ describe("memory-wiki tools", () => {
       expect(page.body).toContain("Keep this human note.");
     },
   );
+
+  it.each([
+    { op: "create_concept", dir: "concepts", pageType: "concept" },
+    { op: "concept", dir: "concepts", pageType: "concept" },
+    { op: "create_entity", dir: "entities", pageType: "entity" },
+    { op: "entity", dir: "entities", pageType: "entity" },
+  ])("creates lint-clean $pageType pages via wiki_apply op $op", async ({ op, dir, pageType }) => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const tool = createWikiApplyTool(config);
+
+    const result = await tool.execute("create-page", {
+      op,
+      title: "Gamma Page",
+      body: "Gamma summary body.",
+      sourceIds: ["source.gamma"],
+      ...(pageType === "entity" ? { entityType: "project", aliases: ["gamma"] } : {}),
+    });
+    const page = parseWikiMarkdown(
+      await fs.readFile(path.join(rootDir, dir, "gamma-page.md"), "utf8"),
+    );
+
+    expect(result.details).toMatchObject({
+      changed: true,
+      operation: `create_${pageType}`,
+      pagePath: `${dir}/gamma-page.md`,
+      pageId: `${pageType}.gamma-page`,
+    });
+    expect(page.frontmatter).toMatchObject({
+      pageType,
+      id: `${pageType}.gamma-page`,
+      sourceIds: ["source.gamma"],
+      ...(pageType === "entity" ? { entityType: "project", aliases: ["gamma"] } : {}),
+    });
+
+    const lint = await lintMemoryWikiVault(config);
+    expect(lint.issues.filter((issue) => issue.path === `${dir}/gamma-page.md`)).toEqual([]);
+  });
+
+  it("clears stored entity lists through wiki_apply with explicit empty arrays", async () => {
+    const { rootDir, config } = await harness.createVault({ initialize: true });
+    const tool = createWikiApplyTool(config);
+
+    await tool.execute("create-entity", {
+      op: "create_entity",
+      title: "Delta Entity",
+      body: "Delta entity body.",
+      sourceIds: ["source.delta"],
+      aliases: ["delta-old"],
+      relationships: [{ targetId: "entity.target", kind: "relates-to", confidence: 0.5 }],
+    });
+    await tool.execute("clear-entity", {
+      op: "create_entity",
+      title: "Delta Entity",
+      body: "Delta entity body refreshed.",
+      sourceIds: ["source.delta"],
+      aliases: [],
+      relationships: [],
+    });
+
+    const page = parseWikiMarkdown(
+      await fs.readFile(path.join(rootDir, "entities", "delta-entity.md"), "utf8"),
+    );
+    expect(page.frontmatter.aliases).toEqual([]);
+    expect(page.frontmatter.relationships).toEqual([]);
+
+    const lint = await lintMemoryWikiVault(config);
+    expect(lint.issues.filter((issue) => issue.path === "entities/delta-entity.md")).toEqual([]);
+  });
 
   it.each([-0.5, 999])(
     "keeps wiki pages unchanged for out-of-range claim confidence %s",

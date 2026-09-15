@@ -27,6 +27,16 @@ const AGENT_SCOPED_WIKI_COMMANDS = [
     args: ["apply", "synthesis", "Summary", "--body", "Body", "--source-id", "source.alpha"],
   },
   {
+    label: "apply concept",
+    path: ["apply", "concept"],
+    args: ["apply", "concept", "Concept", "--body", "Body", "--source-id", "source.alpha"],
+  },
+  {
+    label: "apply entity",
+    path: ["apply", "entity"],
+    args: ["apply", "entity", "Entity", "--body", "Body", "--source-id", "source.alpha"],
+  },
+  {
     label: "apply metadata",
     path: ["apply", "metadata"],
     args: ["apply", "metadata", "entity.alpha"],

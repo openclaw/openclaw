@@ -88,9 +88,15 @@ type WikiGetCommandOptions = WikiJsonOptions & {
   corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
 };
 
-type WikiApplySynthesisCommandOptions = Omit<WikiApplyMetadataCommandOptions, "clearConfidence"> & {
+type WikiApplyPageCommandOptions = Omit<WikiApplyMetadataCommandOptions, "clearConfidence"> & {
   body?: string;
   bodyFile?: string;
+};
+
+type WikiApplyEntityCommandOptions = WikiApplyPageCommandOptions & {
+  entityType?: string;
+  canonicalId?: string;
+  alias?: string[];
 };
 
 type WikiApplyMetadataCommandOptions = WikiJsonOptions & {
@@ -317,14 +323,18 @@ function parseWikiSearchEnumOption<T extends string>(
   throw new Error(`Invalid ${label}: ${value}. Expected one of: ${allowed.join(", ")}`);
 }
 
-async function resolveWikiApplyBody(params: { body?: string; bodyFile?: string }): Promise<string> {
+async function resolveWikiApplyBody(params: {
+  command: string;
+  body?: string;
+  bodyFile?: string;
+}): Promise<string> {
   if (params.body?.trim()) {
     return params.body;
   }
   if (params.bodyFile?.trim()) {
     return await fs.readFile(params.bodyFile, "utf8");
   }
-  throw new Error("wiki apply synthesis requires --body or --body-file.");
+  throw new Error(`wiki apply ${params.command} requires --body or --body-file.`);
 }
 
 function formatJsonOrText<T>(
@@ -598,9 +608,16 @@ async function runWikiGet(params: {
   return result;
 }
 
-async function runWikiApplySynthesis(params: {
+const WIKI_APPLY_PAGE_OPS = {
+  synthesis: "create_synthesis",
+  concept: "create_concept",
+  entity: "create_entity",
+} as const;
+
+async function runWikiApplyPage(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
+  command: keyof typeof WIKI_APPLY_PAGE_OPS;
   title: string;
   body?: string;
   bodyFile?: string;
@@ -609,30 +626,48 @@ async function runWikiApplySynthesis(params: {
   questions?: string[];
   confidence?: number;
   status?: string;
+  entityType?: string;
+  canonicalId?: string;
+  aliases?: string[];
   json?: boolean;
 }) {
   const sourceIds = normalizeCliStringList(params.sourceIds);
   if (!sourceIds) {
-    throw new Error("wiki apply synthesis requires at least one --source-id.");
+    throw new Error(`wiki apply ${params.command} requires at least one --source-id.`);
   }
-  const body = await resolveWikiApplyBody({ body: params.body, bodyFile: params.bodyFile });
+  const body = await resolveWikiApplyBody({
+    command: params.command,
+    body: params.body,
+    bodyFile: params.bodyFile,
+  });
   await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
+  const fields = {
+    title: params.title,
+    body,
+    sourceIds,
+    ...(normalizeCliStringList(params.contradictions)
+      ? { contradictions: normalizeCliStringList(params.contradictions) }
+      : {}),
+    ...(normalizeCliStringList(params.questions)
+      ? { questions: normalizeCliStringList(params.questions) }
+      : {}),
+    ...(typeof params.confidence === "number" ? { confidence: params.confidence } : {}),
+    ...(params.status?.trim() ? { status: params.status.trim() } : {}),
+  };
   const result = await applyMemoryWikiMutation({
     config: params.config,
-    mutation: {
-      op: "create_synthesis",
-      title: params.title,
-      body,
-      sourceIds,
-      ...(normalizeCliStringList(params.contradictions)
-        ? { contradictions: normalizeCliStringList(params.contradictions) }
-        : {}),
-      ...(normalizeCliStringList(params.questions)
-        ? { questions: normalizeCliStringList(params.questions) }
-        : {}),
-      ...(typeof params.confidence === "number" ? { confidence: params.confidence } : {}),
-      ...(params.status?.trim() ? { status: params.status.trim() } : {}),
-    },
+    mutation:
+      params.command === "entity"
+        ? {
+            op: WIKI_APPLY_PAGE_OPS.entity,
+            ...fields,
+            ...(params.entityType?.trim() ? { entityType: params.entityType.trim() } : {}),
+            ...(params.canonicalId?.trim() ? { canonicalId: params.canonicalId.trim() } : {}),
+            ...(normalizeCliStringList(params.aliases)
+              ? { aliases: normalizeCliStringList(params.aliases) }
+              : {}),
+          }
+        : { op: WIKI_APPLY_PAGE_OPS[params.command], ...fields },
   });
   writeOutput(formatJsonOrText(result, params.json, renderWikiMutationSummary));
   return result;
@@ -1025,32 +1060,64 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     });
 
   const apply = wiki.command("apply").description("Apply narrow wiki mutations");
-  addWikiApplyMutationOptions(
+  const addWikiApplyPageOptions = (command: Command) =>
+    addWikiApplyMutationOptions(
+      command
+        .option("--agent <id>", "Agent id (default: configured default agent)")
+        .option("--body <text>", "Summary body text")
+        .option("--body-file <path>", "Read summary body text from a file"),
+    ).option("--json", "Print JSON");
+  const runWikiApplyPageCommand = async (
+    command: keyof typeof WIKI_APPLY_PAGE_OPS,
+    title: string,
+    opts: WikiApplyEntityCommandOptions,
+  ) => {
+    const { appConfig, config } = requireCommandContext();
+    await runWikiApplyPage({
+      config,
+      appConfig,
+      command,
+      title,
+      body: opts.body,
+      bodyFile: opts.bodyFile,
+      sourceIds: opts.sourceId,
+      contradictions: opts.contradiction,
+      questions: opts.question,
+      confidence: opts.confidence,
+      status: opts.status,
+      entityType: opts.entityType,
+      canonicalId: opts.canonicalId,
+      aliases: opts.alias,
+      json: opts.json,
+    });
+  };
+  addWikiApplyPageOptions(
     apply
       .command("synthesis")
       .description("Create or refresh a synthesis page with managed summary content")
-      .argument("<title>", "Synthesis title")
-      .option("--agent <id>", "Agent id (default: configured default agent)")
-      .option("--body <text>", "Summary body text")
-      .option("--body-file <path>", "Read summary body text from a file"),
-  )
-    .option("--json", "Print JSON")
-    .action(async (title: string, opts: WikiApplySynthesisCommandOptions) => {
-      const { appConfig, config } = requireCommandContext();
-      await runWikiApplySynthesis({
-        config,
-        appConfig,
-        title,
-        body: opts.body,
-        bodyFile: opts.bodyFile,
-        sourceIds: opts.sourceId,
-        contradictions: opts.contradiction,
-        questions: opts.question,
-        confidence: opts.confidence,
-        status: opts.status,
-        json: opts.json,
-      });
-    });
+      .argument("<title>", "Synthesis title"),
+  ).action(async (title: string, opts: WikiApplyPageCommandOptions) => {
+    await runWikiApplyPageCommand("synthesis", title, opts);
+  });
+  addWikiApplyPageOptions(
+    apply
+      .command("concept")
+      .description("Create or refresh a concept page with managed summary content")
+      .argument("<title>", "Concept title"),
+  ).action(async (title: string, opts: WikiApplyPageCommandOptions) => {
+    await runWikiApplyPageCommand("concept", title, opts);
+  });
+  addWikiApplyPageOptions(
+    apply
+      .command("entity")
+      .description("Create or refresh an entity page with managed summary content")
+      .argument("<title>", "Entity title")
+      .option("--entity-type <type>", "Entity type (for example person, team, system, project)")
+      .option("--canonical-id <id>", "Stable identity key across aliases and imports")
+      .option("--alias <name>", "Alias that resolves to this entity", collectCliValues),
+  ).action(async (title: string, opts: WikiApplyEntityCommandOptions) => {
+    await runWikiApplyPageCommand("entity", title, opts);
+  });
   addWikiApplyMutationOptions(
     apply
       .command("metadata")

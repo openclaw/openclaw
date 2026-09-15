@@ -20,7 +20,9 @@ import {
   slugifyWikiSegment,
   normalizeSourceIds,
   normalizeWikiClaims,
+  normalizeWikiRelationships,
   type WikiClaim,
+  type WikiRelationship,
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import {
@@ -35,8 +37,7 @@ const GENERATED_END = "<!-- openclaw:wiki:generated:end -->";
 const HUMAN_START = "<!-- openclaw:human:start -->";
 const HUMAN_END = "<!-- openclaw:human:end -->";
 
-type CreateSynthesisMemoryWikiMutation = {
-  op: "create_synthesis";
+type CreatePageMemoryWikiMutationFields = {
   title: string;
   body: string;
   sourceIds: string[];
@@ -45,6 +46,38 @@ type CreateSynthesisMemoryWikiMutation = {
   questions?: string[];
   confidence?: number;
   status?: string;
+};
+
+type CreateSynthesisMemoryWikiMutation = CreatePageMemoryWikiMutationFields & {
+  op: "create_synthesis";
+};
+
+type CreateConceptMemoryWikiMutation = CreatePageMemoryWikiMutationFields & {
+  op: "create_concept";
+};
+
+type CreateEntityMemoryWikiMutation = CreatePageMemoryWikiMutationFields & {
+  op: "create_entity";
+  entityType?: string;
+  canonicalId?: string;
+  aliases?: string[];
+  relationships?: WikiRelationship[];
+};
+
+type CreatePageMemoryWikiMutation =
+  | CreateSynthesisMemoryWikiMutation
+  | CreateConceptMemoryWikiMutation
+  | CreateEntityMemoryWikiMutation;
+
+// Each create op owns one page directory, pageType, and id prefix; the
+// directory is also how scans infer the page kind, so these must stay aligned.
+const CREATE_PAGE_TARGETS: Record<
+  CreatePageMemoryWikiMutation["op"],
+  { dir: string; pageType: "synthesis" | "concept" | "entity" }
+> = {
+  create_synthesis: { dir: "syntheses", pageType: "synthesis" },
+  create_concept: { dir: "concepts", pageType: "concept" },
+  create_entity: { dir: "entities", pageType: "entity" },
 };
 
 type UpdateMetadataMemoryWikiMutation = {
@@ -58,7 +91,7 @@ type UpdateMetadataMemoryWikiMutation = {
   status?: string;
 };
 
-type ApplyMemoryWikiMutation = CreateSynthesisMemoryWikiMutation | UpdateMetadataMemoryWikiMutation;
+type ApplyMemoryWikiMutation = CreatePageMemoryWikiMutation | UpdateMetadataMemoryWikiMutation;
 
 type ApplyMemoryWikiMutationResult = {
   changed: boolean;
@@ -108,12 +141,33 @@ function normalizeMemoryWikiMutationOp(op: unknown): ApplyMemoryWikiMutation["op
   if (op === "synthesis" || op === "create_synthesis") {
     return "create_synthesis";
   }
+  if (op === "concept" || op === "create_concept") {
+    return "create_concept";
+  }
+  if (op === "entity" || op === "create_entity") {
+    return "create_entity";
+  }
   if (op === "metadata" || op === "update_metadata") {
     return "update_metadata";
   }
   throw new Error(
-    'wiki mutation op must be one of "create_synthesis", "update_metadata" (aliases: "synthesis", "metadata").',
+    'wiki mutation op must be one of "create_synthesis", "create_concept", "create_entity", "update_metadata" (aliases: "synthesis", "concept", "entity", "metadata").',
   );
+}
+
+// Relationship reads stay tolerant like claims; mutations reject out-of-range
+// confidence before it can be written into entity frontmatter.
+function normalizeMutationRelationships(relationships: unknown[]): WikiRelationship[] {
+  const normalized = normalizeWikiRelationships(relationships);
+  for (const [index, relationship] of normalized.entries()) {
+    const confidence = relationship.confidence;
+    if (confidence !== undefined && (confidence < 0 || confidence > 1)) {
+      throw new Error(
+        `relationships[${index}].confidence must be a number between 0 and 1; received ${confidence}.`,
+      );
+    }
+  }
+  return normalized;
 }
 
 export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemoryWikiMutation {
@@ -128,23 +182,26 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     questions?: string[];
     confidence?: number | null;
     status?: string;
+    entityType?: string;
+    canonicalId?: string;
+    aliases?: string[];
+    relationships?: WikiRelationship[];
   };
   const op = normalizeMemoryWikiMutationOp(params.op);
-  if (op === "create_synthesis") {
+  if (op !== "update_metadata") {
     if (!params.title?.trim()) {
-      throw new Error("wiki mutation requires title for create_synthesis.");
+      throw new Error(`wiki mutation requires title for ${op}.`);
     }
     if (!params.body?.trim()) {
-      throw new Error("wiki mutation requires body for create_synthesis.");
+      throw new Error(`wiki mutation requires body for ${op}.`);
     }
     if (!params.sourceIds || params.sourceIds.length === 0) {
-      throw new Error("wiki mutation requires at least one sourceId for create_synthesis.");
+      throw new Error(`wiki mutation requires at least one sourceId for ${op}.`);
     }
     const confidence = normalizeMutationConfidence(params as Record<string, unknown>, {
       allowNull: false,
     });
-    return {
-      op: "create_synthesis",
+    const fields: CreatePageMemoryWikiMutationFields = {
       title: params.title,
       body: params.body,
       sourceIds: params.sourceIds,
@@ -153,6 +210,19 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
       ...(params.questions ? { questions: params.questions } : {}),
       ...(typeof confidence === "number" ? { confidence } : {}),
       ...(params.status ? { status: params.status } : {}),
+    };
+    if (op !== "create_entity") {
+      return { op, ...fields };
+    }
+    return {
+      op,
+      ...fields,
+      ...(params.entityType?.trim() ? { entityType: params.entityType.trim() } : {}),
+      ...(params.canonicalId?.trim() ? { canonicalId: params.canonicalId.trim() } : {}),
+      ...(params.aliases ? { aliases: params.aliases } : {}),
+      ...(Array.isArray(params.relationships)
+        ? { relationships: normalizeMutationRelationships(params.relationships) }
+        : {}),
     };
   }
   if (!params.lookup?.trim()) {
@@ -189,7 +259,7 @@ function ensureHumanNotesBlock(body: string): string {
   return `${prefix}## Notes\n${HUMAN_START}\n${HUMAN_END}\n`;
 }
 
-function buildSynthesisBody(params: {
+function buildManagedPageBody(params: {
   title: string;
   originalBody?: string;
   generatedBody: string;
@@ -257,27 +327,44 @@ async function resolveWritablePage(params: {
   return resolveQueryableWikiPageByLookup(pages, params.lookup);
 }
 
-async function applyCreateSynthesisMutation(params: {
+function buildEntityFrontmatter(mutation: CreatePageMemoryWikiMutation): Record<string, unknown> {
+  if (mutation.op !== "create_entity") {
+    return {};
+  }
+  const aliases = normalizeUniqueStrings(mutation.aliases);
+  return {
+    ...(mutation.entityType ? { entityType: mutation.entityType } : {}),
+    ...(mutation.canonicalId ? { canonicalId: mutation.canonicalId } : {}),
+    // Omitted entity lists preserve stored frontmatter; supplied lists replace
+    // them, so an explicit empty array clears stale aliases/relationships.
+    ...(mutation.aliases ? { aliases: aliases ?? [] } : {}),
+    ...(mutation.relationships ? { relationships: mutation.relationships } : {}),
+  };
+}
+
+async function applyCreatePageMutation(params: {
   config: ResolvedMemoryWikiConfig;
-  mutation: CreateSynthesisMemoryWikiMutation;
+  mutation: CreatePageMemoryWikiMutation;
 }): Promise<{ changed: boolean; pagePath: string; pageId: string }> {
+  const target = CREATE_PAGE_TARGETS[params.mutation.op];
   const slug = slugifyWikiSegment(params.mutation.title);
   const pageStem = slugifyWikiPageStem(params.mutation.title);
-  const pagePath = path.join("syntheses", `${pageStem}.md`).replace(/\\/g, "/");
+  const pagePath = path.join(target.dir, `${pageStem}.md`).replace(/\\/g, "/");
   const root = await fsRoot(params.config.vault.path);
   const existing = await readExistingWikiPage(root, pagePath);
   const parsed = parseWikiMarkdown(existing);
   const pageId =
     (typeof parsed.frontmatter.id === "string" && parsed.frontmatter.id.trim()) ||
-    `synthesis.${slug}`;
+    `${target.pageType}.${slug}`;
   const changed = await writeWikiPage({
     rootDir: params.config.vault.path,
     relativePath: pagePath,
     frontmatter: {
       ...parsed.frontmatter,
-      pageType: "synthesis",
+      pageType: target.pageType,
       id: pageId,
       title: params.mutation.title,
+      ...buildEntityFrontmatter(params.mutation),
       sourceIds: normalizeSourceIds(params.mutation.sourceIds),
       ...(params.mutation.claims ? { claims: normalizeWikiClaims(params.mutation.claims) } : {}),
       ...(normalizeUniqueStrings(params.mutation.contradictions)
@@ -292,7 +379,7 @@ async function applyCreateSynthesisMutation(params: {
       status: params.mutation.status?.trim() || "active",
       updatedAt: new Date().toISOString(),
     },
-    body: buildSynthesisBody({
+    body: buildManagedPageBody({
       title: params.mutation.title,
       originalBody: parsed.body,
       generatedBody: params.mutation.body.trim(),
@@ -386,12 +473,12 @@ async function applyMemoryWikiMutationUnlocked(params: {
   );
   params.signal?.throwIfAborted();
   const result =
-    params.mutation.op === "create_synthesis"
-      ? await applyCreateSynthesisMutation({
+    params.mutation.op === "update_metadata"
+      ? await applyUpdateMetadataMutation({
           config: params.config,
           mutation: params.mutation,
         })
-      : await applyUpdateMetadataMutation({
+      : await applyCreatePageMutation({
           config: params.config,
           mutation: params.mutation,
         });
