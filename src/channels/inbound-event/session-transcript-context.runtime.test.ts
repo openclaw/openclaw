@@ -389,7 +389,12 @@ describe("session transcript inbound context", () => {
             relation: "selected_for_current_message",
             messages: [
               { message_id: "101", sender: "Pat", body: "retained", timestamp_ms: 1_000 },
-              { message_id: "102", sender: "Pat", body: "same id, other chat", timestamp_ms: 2_000 },
+              {
+                message_id: "102",
+                sender: "Pat",
+                body: "same id, other chat",
+                timestamp_ms: 2_000,
+              },
             ],
           },
         },

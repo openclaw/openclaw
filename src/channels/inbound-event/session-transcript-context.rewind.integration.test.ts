@@ -7,13 +7,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
+import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   rewindSessionToMessage,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
