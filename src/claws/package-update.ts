@@ -215,7 +215,12 @@ export async function applyClawPackageUpdate(
                 !previous.independentOwner &&
                 previous.version === preflight.installedVersion &&
                 target.version === preflight.expectedVersion
-                ? { ok: true, action: "install", request: preflight.request }
+                ? {
+                    ok: true,
+                    action: "install",
+                    request: preflight.request,
+                    ...(preflight.installedPath ? { installedPath: preflight.installedPath } : {}),
+                  }
                 : preflight;
             },
             persistPackageRef: (_plan, _pkg, persistOptions) => {

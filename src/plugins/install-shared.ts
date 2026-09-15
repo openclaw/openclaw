@@ -382,6 +382,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     installedDir: string,
   ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
   nameEncoder?: (pluginId: string) => string;
+  onPluginArtifactInspect?: PluginInstallArtifactConsentHandler;
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   beforePersistentApply?: () => void;
 }): Promise<InstallPluginResult> {
@@ -409,6 +410,12 @@ export async function installPluginDirectoryIntoExtensions(params: {
   }
 
   if (params.dryRun) {
+    await params.onPluginArtifactInspect?.({
+      pluginId: params.pluginId,
+      ...(params.mode === "update" ? { currentArtifactDir: targetDir } : {}),
+      stagedArtifactDir: params.sourceDir,
+      mode: params.mode,
+    });
     return buildDirectoryInstallResult({
       pluginId: params.pluginId,
       targetDir,

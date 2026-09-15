@@ -12,6 +12,27 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { installClawPackages } from "./packages.js";
 import { packageInstallPlan } from "./packages.test-support.js";
 
+const inspectPluginCapabilities = () => ({
+  declared: {
+    channels: [],
+    providers: [],
+    tools: [],
+    contracts: [],
+    hooks: [],
+    mcpServers: [],
+    cliCommands: [],
+    cliBackends: [],
+    skills: [],
+    dangerousConfigFlags: [],
+  },
+  grants: {
+    hooks: {
+      allowPromptInjection: { effective: false },
+      allowConversationAccess: { effective: false },
+    },
+  },
+});
+
 const installOwner = vi.hoisted(() => ({
   install: vi.fn(),
   failure: new Error("artifact owner rejected the installation"),
@@ -65,6 +86,7 @@ describe("Claw committed plugin requirement handoff", () => {
                 integrity,
               },
             }),
+            inspectPluginCapabilities,
             persistPackageRef: () => ({
               schemaVersion: "openclaw.clawPackageRef.v1",
               agentId: "incident-2",
@@ -158,6 +180,7 @@ describe("Claw committed plugin requirement handoff", () => {
                 integrity,
               },
             }),
+            inspectPluginCapabilities,
             persistPackageRef: (plan, pkg, persistOptions) => ({
               schemaVersion: "openclaw.clawPackageRef.v1",
               agentId: plan.agent.finalId,

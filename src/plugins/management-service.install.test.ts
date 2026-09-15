@@ -14,6 +14,7 @@ import { invokePluginArtifactInstallMock } from "./test-helpers/install-fixtures
 
 const mocks = vi.hoisted(() => ({
   clawhubInstall: vi.fn(),
+  artifactSourceRecord: vi.fn(),
   installRecords: vi.fn(),
   metadata: vi.fn(),
   npmInstall: vi.fn(),
@@ -75,6 +76,8 @@ vi.mock("./install.js", () => ({
   installPluginFromNpmSpec: (params: Parameters<typeof invokePluginArtifactInstallMock>[1]) =>
     invokePluginArtifactInstallMock(mocks.npmInstall, params, {
       manifest: { providers: [], channels: [], channelConfigs: {}, providerAuthChoices: [] },
+      packageName: "@openclaw/diffs",
+      sourceRecord: mocks.artifactSourceRecord(),
     }),
 }));
 
@@ -142,6 +145,7 @@ describe("managed plugin installation", () => {
     });
     mocks.slotSelection.mockImplementation((config) => ({ config, warnings: [] }));
     mocks.installRecords.mockResolvedValue({});
+    mocks.artifactSourceRecord.mockReturnValue(undefined);
     mockHostedOfficialCatalog([]);
   });
 
@@ -270,6 +274,58 @@ describe("managed plugin installation", () => {
       );
     },
   );
+
+  it("rejects an otherwise consent-exempt official install when the Claw owner denies it", async () => {
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    mockHostedOfficialCatalog([
+      {
+        name: "@openclaw/diffs",
+        openclaw: {
+          plugin: { id: "diffs" },
+          install: { npmSpec: "@openclaw/diffs", defaultChoice: "npm" },
+        },
+      },
+    ]);
+    mocks.npmInstall.mockResolvedValue({
+      ok: true,
+      pluginId: "diffs",
+      targetDir: "/tmp/npm/diffs",
+      extensions: ["index.js"],
+      packageName: "@openclaw/diffs",
+    });
+    mocks.artifactSourceRecord.mockReturnValue({
+      source: "npm",
+      spec: "@openclaw/diffs@1.0.0",
+      resolvedName: "@openclaw/diffs",
+      resolvedSpec: "@openclaw/diffs@1.0.0",
+    });
+    mocks.persistInstall.mockResolvedValue({});
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
+    );
+    const onCapabilityConsent = vi.fn(async () => undefined);
+
+    await expect(
+      installManagedPlugin({
+        request: { source: "official", pluginId: "diffs" },
+        env: {},
+        onCapabilityConsent,
+      }),
+    ).resolves.toBeDefined();
+    expect(onCapabilityConsent).not.toHaveBeenCalled();
+    mocks.persistInstall.mockClear();
+
+    const failure = await installManagedPlugin({
+      request: { source: "official", pluginId: "diffs" },
+      env: {},
+      clawManaged: true,
+      onCapabilityConsent,
+    }).catch((error: unknown) => error);
+
+    expect(onCapabilityConsent).toHaveBeenCalledOnce();
+    expect(failure).toMatchObject({ capabilityConsent: { pluginId: "diffs" } });
+    expect(mocks.persistInstall).not.toHaveBeenCalled();
+  });
 
   it.each([
     { code: "incompatible_plugin_api", error: "incompatible artifact" },

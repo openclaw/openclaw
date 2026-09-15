@@ -15,6 +15,7 @@ describe("preflightPluginInstall", () => {
           source: "clawhub",
           clawhubPackage: "@acme/audit",
           resolvedVersion: "1.2.3",
+          installPath: "/tmp/extensions/audit",
           installedAt: "2026-07-17T00:00:00.000Z",
         },
       }),
@@ -23,6 +24,7 @@ describe("preflightPluginInstall", () => {
       ok: true,
       action: "reuse",
       installedVersion: "1.2.3",
+      installedPath: "/tmp/extensions/audit",
       installedAt: "2026-07-17T00:00:00.000Z",
     });
   });
@@ -33,13 +35,19 @@ describe("preflightPluginInstall", () => {
       rawSpec: "clawhub:@acme/audit@1.2.3",
       expectedVersion: "1.2.3",
       loadInstallRecords: vi.fn().mockResolvedValue({
-        audit: { source: "clawhub", clawhubPackage: "@acme/audit", resolvedVersion: "1.1.0" },
+        audit: {
+          source: "clawhub",
+          clawhubPackage: "@acme/audit",
+          resolvedVersion: "1.1.0",
+          installPath: "/tmp/extensions/audit",
+        },
       }),
     });
     expect(result).toMatchObject({
       ok: false,
       code: "plugin_version_conflict",
       installedVersion: "1.1.0",
+      installedPath: "/tmp/extensions/audit",
     });
   });
 });

@@ -44,6 +44,24 @@ const extension = {
   ref: "@acme/market-data",
   version: "2.0.1",
 } as const;
+const declaredCapabilities = {
+  channels: [],
+  providers: ["market-data"],
+  tools: ["market-data.search"],
+  contracts: [],
+  hooks: [],
+  mcpServers: [],
+  cliCommands: [],
+  cliBackends: [],
+  skills: [],
+  dangerousConfigFlags: [],
+};
+const capabilityGrants = {
+  hooks: {
+    allowPromptInjection: { effective: true },
+    allowConversationAccess: { effective: false },
+  },
+};
 
 describe("Claw application schema v1", () => {
   it("accepts strict native extension assertions without a schema bump", () => {
@@ -179,6 +197,8 @@ describe("Claw application planning v1", () => {
           mapped: ["commands", "skills"],
           unavailable: ["agents"],
           adapterIdentity: "openclaw/test",
+          declaredCapabilities,
+          capabilityGrants,
         }),
       },
     });
@@ -199,6 +219,8 @@ describe("Claw application planning v1", () => {
         id: "plugin:@acme/market-data",
         blocked: false,
         details: expect.objectContaining({
+          declaredCapabilities,
+          capabilityGrants,
           extension: expect.objectContaining({
             id: "market-data",
             adapterIdentity: "openclaw/test",
@@ -235,6 +257,8 @@ describe("Claw application planning v1", () => {
           mapped: ["skills"],
           unavailable: [],
           adapterIdentity: "openclaw/test",
+          declaredCapabilities,
+          capabilityGrants,
           requirements: [prerequisite],
         }),
       },
@@ -311,6 +335,8 @@ describe("Claw application planning v1", () => {
           mapped: ["skills"],
           unavailable: [],
           adapterIdentity: "openclaw/test",
+          declaredCapabilities,
+          capabilityGrants,
         }),
       },
     });
@@ -344,6 +370,8 @@ describe("Claw application planning v1", () => {
           mapped: ["skills"],
           unavailable: [],
           adapterIdentity: "openclaw/test",
+          declaredCapabilities,
+          capabilityGrants,
         }),
       },
     });
@@ -355,6 +383,45 @@ describe("Claw application planning v1", () => {
         path: "$.profiles.openclaw.extensions[0].format",
       }),
     );
+  });
+
+  it("invalidates plan consent when the plugin-declared surface changes", async () => {
+    const { source, workspace } = await createPlanSource();
+    const build = async (tool: string, allowConversationAccess = false) =>
+      await buildClawAddPlan({
+        manifest: requireManifest({ schemaVersion: 1, agent: { id: "market-analyst" } }),
+        openClawProfile: { schemaVersion: 1, agent: {}, extensions: [extension] },
+        source,
+        context: {
+          workspace,
+          packagePreflight: async () => ({
+            ok: true,
+            action: "install",
+            integrity: `sha256:${"b".repeat(64)}`,
+            installId: "market-data",
+            detectedFormat: "claude",
+            mapped: ["skills"],
+            unavailable: [],
+            adapterIdentity: "openclaw/test",
+            declaredCapabilities: { ...declaredCapabilities, tools: [tool] },
+            capabilityGrants: {
+              ...capabilityGrants,
+              hooks: {
+                ...capabilityGrants.hooks,
+                allowConversationAccess: { effective: allowConversationAccess },
+              },
+            },
+          }),
+        },
+      });
+
+    const first = await build("market-data.search");
+    const second = await build("market-data.publish");
+    const third = await build("market-data.search", true);
+    expect(first.planIntegrity).not.toBe(second.planIntegrity);
+    expect(first.capabilityChanges[0]?.digest).not.toBe(second.capabilityChanges[0]?.digest);
+    expect(first.planIntegrity).not.toBe(third.planIntegrity);
+    expect(first.capabilityChanges[0]?.digest).not.toBe(third.capabilityChanges[0]?.digest);
   });
 });
 

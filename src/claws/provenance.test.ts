@@ -10,6 +10,7 @@ import { applyClawAddPlan, ClawAddMutationError } from "./add.js";
 import { ClawCronInstallError } from "./cron.js";
 import { replaceClawPackageRefExpected } from "./package-update-provenance.js";
 import { ClawPackageInstallError } from "./packages.js";
+import { emptyPluginCapabilityEvidence } from "./packages.test-support.js";
 import {
   clawInstallRecordMatchesPlan,
   persistClawInstallRecord,
@@ -43,6 +44,13 @@ const extensionFixture = Object.freeze({
   mapped: ["commands", "skills"],
   unavailable: ["agents"],
   adapterIdentity: "openclaw/test",
+});
+const successfulPluginPreflight = async () => ({
+  ok: true as const,
+  action: "install" as const,
+  integrity: `sha256:${"a".repeat(64)}`,
+  installId: "audit",
+  ...emptyPluginCapabilityEvidence,
 });
 
 describe("Claw root install provenance", () => {
@@ -360,12 +368,7 @@ describe("applyClawAddPlan", () => {
         ],
       },
       {
-        packagePreflight: async () => ({
-          ok: true,
-          action: "install",
-          integrity: `sha256:${"a".repeat(64)}`,
-          installId: "audit",
-        }),
+        packagePreflight: successfulPluginPreflight,
       },
     );
     const order: string[] = [];
@@ -403,12 +406,7 @@ describe("applyClawAddPlan", () => {
         ],
       },
       {
-        packagePreflight: async () => ({
-          ok: true,
-          action: "install",
-          integrity: `sha256:${"a".repeat(64)}`,
-          installId: "audit",
-        }),
+        packagePreflight: successfulPluginPreflight,
       },
     );
     const requirement = {
@@ -473,7 +471,9 @@ describe("applyClawAddPlan", () => {
           action: "install",
           integrity:
             pkg.kind === "plugin" ? `sha256:${"a".repeat(64)}` : `sha256:${"b".repeat(64)}`,
-          ...(pkg.kind === "plugin" ? { installId: "audit" } : {}),
+          ...(pkg.kind === "plugin"
+            ? { installId: "audit", ...emptyPluginCapabilityEvidence }
+            : {}),
         }),
       },
     );
@@ -545,12 +545,7 @@ describe("applyClawAddPlan", () => {
         ],
       },
       {
-        packagePreflight: async () => ({
-          ok: true,
-          action: "install",
-          integrity: `sha256:${"a".repeat(64)}`,
-          installId: "audit",
-        }),
+        packagePreflight: successfulPluginPreflight,
       },
     );
     const commitConfig = vi.fn();
@@ -589,12 +584,7 @@ describe("applyClawAddPlan", () => {
         ],
       },
       {
-        packagePreflight: async () => ({
-          ok: true,
-          action: "install",
-          integrity: `sha256:${"a".repeat(64)}`,
-          installId: "audit",
-        }),
+        packagePreflight: successfulPluginPreflight,
       },
     );
     await mkdir(plan.agent.workspace, { recursive: true });
@@ -830,12 +820,7 @@ describe("applyClawAddPlan", () => {
         ],
       },
       {
-        packagePreflight: async () => ({
-          ok: true,
-          action: "install",
-          integrity: `sha256:${"a".repeat(64)}`,
-          installId: "audit",
-        }),
+        packagePreflight: successfulPluginPreflight,
       },
     );
     const installPackages = vi.fn();

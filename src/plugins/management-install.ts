@@ -231,6 +231,7 @@ type ManagedPluginSourceInstallParams = {
   invalidateRuntimeCache?: boolean;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  requireCapabilityConsent?: boolean;
   applyRuntime?: PluginLifecycleRuntimeApply;
   deferRuntime?: PluginInstallRuntimeDeferral;
   beforePersistentApply?: () => void;
@@ -240,7 +241,7 @@ type ManagedPluginSourceInstallParams = {
 
 export type ManagedPluginInstallOptions = Omit<
   ManagedPluginSourceInstallParams,
-  "request" | "snapshot" | "acknowledgeCapabilities"
+  "request" | "snapshot" | "acknowledgeCapabilities" | "requireCapabilityConsent"
 > & {
   /** The enclosing Claw coordinator owns its package lease and adoption record. */
   clawManaged?: boolean;
@@ -384,6 +385,7 @@ async function installResolvedManagedPluginSource(
           : {}),
         acknowledgeCapabilities: params.acknowledgeCapabilities,
         onCapabilityConsent: params.onCapabilityConsent,
+        requireCapabilityConsent: params.requireCapabilityConsent,
       });
 
   const common = requestDeferredPluginInstall(

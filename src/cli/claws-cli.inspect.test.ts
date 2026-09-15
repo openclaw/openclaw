@@ -3,6 +3,25 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
+const declaredCapabilities = {
+  channels: [],
+  providers: [],
+  tools: [],
+  contracts: [],
+  hooks: [],
+  mcpServers: [],
+  cliCommands: [],
+  cliBackends: [],
+  skills: [],
+  dangerousConfigFlags: [],
+};
+const capabilityGrants = {
+  hooks: {
+    allowPromptInjection: { effective: false },
+    allowConversationAccess: { effective: false },
+  },
+};
+
 const mocks = vi.hoisted(() => ({
   preflightClawPackage: vi.fn(),
 }));
@@ -63,6 +82,8 @@ describe("claws inspect extensions", () => {
       mapped: ["commands", "skills"],
       unavailable: ["agents"],
       adapterIdentity: "openclaw/test",
+      declaredCapabilities,
+      capabilityGrants,
     });
     const values: unknown[] = [];
     const runtime = {
@@ -147,6 +168,8 @@ describe("claws inspect extensions", () => {
       mapped: ["skills"],
       unavailable: [],
       adapterIdentity: "openclaw/test",
+      declaredCapabilities,
+      capabilityGrants,
     });
     const values: unknown[] = [];
     const runtime = {

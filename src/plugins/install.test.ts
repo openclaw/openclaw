@@ -1074,6 +1074,37 @@ describe("installPluginFromArchive", () => {
     });
   });
 
+  it("exposes an extracted archive artifact during dry-run inspection", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    const archivePath = await ensureDynamicArchiveTemplate({
+      outName: "archive-artifact-inspection.tgz",
+      packageJson: {
+        name: "archive-artifact-inspection",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js"] },
+      },
+      withDistIndex: true,
+    });
+    let inspectedPluginId: string | undefined;
+
+    const result = await installPluginFromArchive({
+      archivePath,
+      extensionsDir,
+      dryRun: true,
+      onPluginArtifactInspect: async ({ pluginId, stagedArtifactDir }) => {
+        inspectedPluginId = pluginId;
+        expect(fs.existsSync(path.join(stagedArtifactDir, "package.json"))).toBe(true);
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(inspectedPluginId).toBe("archive-artifact-inspection");
+    if (result.ok) {
+      expect(fs.existsSync(result.targetDir)).toBe(false);
+    }
+  });
+
   it("rejects native plugin zip archives without openclaw.plugin.json", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const archivePath = getArchiveFixturePath({

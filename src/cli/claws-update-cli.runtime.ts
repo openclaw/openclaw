@@ -148,7 +148,7 @@ export async function runClawsUpdateCommand(
     targetSource: loaded.source,
     config,
     sourceMcpServers: listedMcpServers.mcpServers,
-    packagePreflight: preflightClawPackage,
+    packagePreflight: (pkg, workspace) => preflightClawPackage(pkg, workspace, { config }),
     diagnostics: loaded.diagnostics,
   });
   if (opts.dryRun || plan.blockers.length > 0 || plan.actions.some((action) => action.blocked)) {
@@ -182,7 +182,7 @@ export async function runClawsUpdateCommand(
         reloadPlugins: await resolvePluginBatchReload(),
         sourceMcpServers: listedMcpServers.mcpServers,
         consentPlanIntegrity: opts.planIntegrity,
-        packagePreflight: preflightClawPackage,
+        packagePreflight: (pkg, workspace) => preflightClawPackage(pkg, workspace, { config }),
         runtime: opts.json ? { ...runtime, log: () => undefined } : runtime,
         cronGateway: {
           waitUntilAgentAvailable: waitUntilGatewayAgentAvailable,

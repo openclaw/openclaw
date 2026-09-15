@@ -152,6 +152,8 @@ function extensionCapabilityChange(params: {
     mapped: params.preflight.mapped ?? [],
     unavailable: params.preflight.unavailable ?? [],
     adapterIdentity: params.preflight.adapterIdentity ?? "unresolved",
+    declaredCapabilities: params.preflight.declaredCapabilities ?? {},
+    capabilityGrants: params.preflight.capabilityGrants ?? {},
     ...(params.preflight.installId ? { installId: params.preflight.installId } : {}),
     ...(params.preflight.warning ? { riskWarning: params.preflight.warning } : {}),
   };
@@ -209,7 +211,9 @@ export async function planClawExtensions(params: {
         preflight.installId &&
         preflight.action &&
         preflight.detectedFormat &&
-        preflight.adapterIdentity,
+        preflight.adapterIdentity &&
+        preflight.declaredCapabilities &&
+        preflight.capabilityGrants,
       );
     const incompleteProvenance =
       preflight.ok && !completeProvenance
@@ -253,6 +257,10 @@ export async function planClawExtensions(params: {
       ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
       ...(preflight.installId ? { installId: preflight.installId } : {}),
       ...(preflight.action ? { ownerAction: preflight.action } : {}),
+      ...(preflight.declaredCapabilities
+        ? { declaredCapabilities: preflight.declaredCapabilities }
+        : {}),
+      ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
       requirementState,
       mapped: preflight.mapped ?? [],
       unavailable: preflight.unavailable ?? [],
@@ -274,6 +282,10 @@ export async function planClawExtensions(params: {
         ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
         ...(preflight.installId ? { installId: preflight.installId } : {}),
         ...(preflight.action ? { ownerAction: preflight.action } : {}),
+        ...(preflight.declaredCapabilities
+          ? { declaredCapabilities: preflight.declaredCapabilities }
+          : {}),
+        ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
         requirementState,
         ...(preflight.requirements ? { prerequisites: preflight.requirements } : {}),
         ...(completeProvenance

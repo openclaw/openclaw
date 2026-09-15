@@ -1,5 +1,30 @@
 import type { ClawAddPlan, ResolvedClawPackage } from "./types.js";
 
+const emptyPluginDeclaredCapabilities = {
+  channels: [],
+  providers: [],
+  tools: [],
+  contracts: [],
+  hooks: [],
+  mcpServers: [],
+  cliCommands: [],
+  cliBackends: [],
+  skills: [],
+  dangerousConfigFlags: [],
+};
+
+const emptyPluginCapabilityGrants = {
+  hooks: {
+    allowPromptInjection: { effective: false },
+    allowConversationAccess: { effective: false },
+  },
+};
+
+export const emptyPluginCapabilityEvidence = {
+  declaredCapabilities: emptyPluginDeclaredCapabilities,
+  capabilityGrants: emptyPluginCapabilityGrants,
+};
+
 export function packageInstallPlan(
   packages: ResolvedClawPackage[],
   ownerAction: "install" | "reuse" = "install",
@@ -46,7 +71,12 @@ export function packageInstallPlan(
       details: {
         ...pkg,
         ownerAction,
-        ...(pkg.kind === "plugin" ? { installId: pkg.ref.split("/").at(-1) } : {}),
+        ...(pkg.kind === "plugin"
+          ? {
+              installId: pkg.ref.split("/").at(-1),
+              ...emptyPluginCapabilityEvidence,
+            }
+          : {}),
       },
       blocked: false,
     })),

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   PluginAcceptedDeclaredSurface,
   PluginInstallRecord,
@@ -504,6 +504,46 @@ describe("plugin capability consent", () => {
       );
     },
   );
+
+  it("requires an owner review even when ordinary update consent remains current", async () => {
+    const rootDir = createArtifactFixture({
+      "package.json": { openclaw: { extensions: ["./index.js"] } },
+      "index.js": "export {};",
+      "openclaw.plugin.json": {
+        id: "plugin",
+        contracts: { tools: ["read"] },
+        configSchema: { type: "object" },
+      },
+    });
+    const acceptedSurface = resolvePluginArtifactDeclaredSurface(rootDir);
+    const onCapabilityConsent = vi.fn(async (review) => ({
+      reviewToken: review.reviewToken,
+    }));
+    const consent = createManagedPluginArtifactConsentHandler({
+      config: {},
+      source: "npm",
+      previousRecords: {
+        plugin: {
+          source: "npm",
+          installPath: rootDir,
+          integrity: "sha512-current",
+          acceptedSurface,
+          acceptedSurfaceHash: computeDeclaredSurfaceHash(acceptedSurface),
+          acceptedSurfaceIntegrity: "sha512-current",
+        },
+      },
+      onCapabilityConsent,
+      requireCapabilityConsent: true,
+    });
+
+    await consent.onBeforePluginArtifactCommit({
+      pluginId: "plugin",
+      stagedArtifactDir: rootDir,
+      mode: "update",
+    });
+
+    expect(onCapabilityConsent).toHaveBeenCalledOnce();
+  });
 
   it("rejects reinstall without capability consent even when the plugin is disabled", async () => {
     const rootDir = createArtifactFixture({

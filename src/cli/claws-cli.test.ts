@@ -423,6 +423,10 @@ describe("claws cli", () => {
   it("applies a minimal Claw only after explicit consent", async () => {
     const manifestPath = await writeManifest();
     const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+    const config = {
+      plugins: { entries: { audit: { hooks: { allowPromptInjection: false } } } },
+    };
+    mocks.loadConfig.mockReturnValue(config);
     await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
     const plan = JSON.parse(mocks.logs[0] ?? "{}");
     mocks.logs.length = 0;
@@ -440,7 +444,7 @@ describe("claws cli", () => {
 
     expect(mocks.applyClawAddPlan).toHaveBeenCalledWith(
       expect.objectContaining({ planIntegrity: plan.planIntegrity }),
-      expect.objectContaining({ consentPlanIntegrity: plan.planIntegrity }),
+      expect.objectContaining({ config, consentPlanIntegrity: plan.planIntegrity }),
     );
     expect(mocks.logs[0]).toBe(
       "Experimental: Claws contracts may change while RFC 0016 is under review.",

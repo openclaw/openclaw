@@ -297,7 +297,8 @@ export async function runClawsAddCommand(
     existingWorkspacePaths,
     existingMcpServers: listedMcpServers.mcpServers,
     existingCronJobIds: cronStore.store.jobs.map((job) => job.id),
-    packagePreflight: preflightClawPackage,
+    packagePreflight: (pkg: Parameters<typeof preflightClawPackage>[0], workspace: string) =>
+      preflightClawPackage(pkg, workspace, { config }),
   };
   let plan = await buildClawAddPlan({
     manifest: result.manifest,
@@ -345,7 +346,7 @@ export async function runClawsAddCommand(
       pkg: Parameters<typeof preflightClawPackage>[0],
       workspace: string,
     ) => {
-      const preflight = await preflightClawPackage(pkg, workspace);
+      const preflight = await preflightClawPackage(pkg, workspace, { config });
       return findResumableIntroducedPluginRequirement({
         agentId: resumeRecord.agentId,
         pkg,
@@ -475,6 +476,7 @@ export async function runClawsAddCommand(
   try {
     addResult = await applyClawAddPlan(plan, {
       reloadPlugins: await resolvePluginBatchReload(),
+      config,
       consentPlanIntegrity: opts.planIntegrity,
       resumeRecord: resumableInstallRecord,
       resumePlan: legacyResumePlan,

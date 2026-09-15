@@ -234,6 +234,12 @@ export async function applyClawUpdatePlan(
               ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
               ...(preflight.installId ? { installId: preflight.installId } : {}),
               ...(preflight.warning ? { warning: preflight.warning } : {}),
+              ...(preflight.declaredCapabilities
+                ? { declaredCapabilities: preflight.declaredCapabilities }
+                : {}),
+              ...(preflight.capabilityGrants
+                ? { capabilityGrants: preflight.capabilityGrants }
+                : {}),
               ...(preflight.requirements ? { requirements: preflight.requirements } : {}),
               ...(preflight.detectedFormat ? { detectedFormat: preflight.detectedFormat } : {}),
               ...(preflight.mapped ? { mapped: preflight.mapped } : {}),
@@ -293,6 +299,10 @@ export async function applyClawUpdatePlan(
           installId: details?.installId,
           riskWarning: details?.riskWarning,
           prerequisites: details?.prerequisites,
+          ...(details?.declaredCapabilities
+            ? { declaredCapabilities: details.declaredCapabilities }
+            : {}),
+          ...(details?.capabilityGrants ? { capabilityGrants: details.capabilityGrants } : {}),
           extension: details?.extension,
         })
     ) {

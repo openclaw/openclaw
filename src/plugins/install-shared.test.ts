@@ -1,11 +1,43 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { installPluginDirectoryIntoExtensions } from "./install-shared.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "./install-types.js";
 import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 
 describe("installPluginDirectoryIntoExtensions", () => {
+  it("exposes the extracted artifact for read-only dry-run inspection", async () => {
+    const fixtureRoot = tempRoots.makeTempDir();
+    const sourceDir = path.join(fixtureRoot, "source");
+    const targetDir = path.join(fixtureRoot, "extensions", "demo");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, "index.js"), "export default {};\n");
+    const inspect = vi.fn(async ({ stagedArtifactDir }) => {
+      expect(stagedArtifactDir).toBe(sourceDir);
+      expect(fs.readFileSync(path.join(stagedArtifactDir, "index.js"), "utf8")).toContain(
+        "default",
+      );
+    });
+
+    const result = await installPluginDirectoryIntoExtensions({
+      sourceDir,
+      targetDir,
+      pluginId: "demo",
+      extensions: ["index.js"],
+      logger: {},
+      timeoutMs: 1_000,
+      mode: "install",
+      dryRun: true,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: false,
+      depsLogMessage: "",
+      onPluginArtifactInspect: inspect,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(inspect).toHaveBeenCalledOnce();
+    expect(fs.existsSync(targetDir)).toBe(false);
+  });
   const tempRoots = createSyncSuiteTempRootTracker("openclaw-install-shared");
 
   afterAll(() => tempRoots.cleanup());

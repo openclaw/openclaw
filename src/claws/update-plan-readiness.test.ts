@@ -181,6 +181,24 @@ describe("buildClawUpdatePlan readiness", () => {
         mapped: ["skills"],
         unavailable: ["agents"],
         adapterIdentity: "openclaw/test",
+        declaredCapabilities: {
+          channels: [],
+          providers: [],
+          tools: ["obsolete.read"],
+          contracts: [],
+          hooks: [],
+          mcpServers: [],
+          cliCommands: [],
+          cliBackends: [],
+          skills: [],
+          dangerousConfigFlags: [],
+        },
+        capabilityGrants: {
+          hooks: {
+            allowPromptInjection: { effective: true },
+            allowConversationAccess: { effective: false },
+          },
+        },
         message: "The Claw owns the installed previous version.",
       }),
     });

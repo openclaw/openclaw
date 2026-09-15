@@ -190,6 +190,7 @@ export async function installManagedPlugin(
         env,
         logger: params.logger ?? { warn: (message) => warnings.push(message) },
         onCapabilityConsent: params.onCapabilityConsent,
+        requireCapabilityConsent: params.clawManaged === true,
         beforePersistentEffect: params.beforePersistentEffect,
         ...(params.request.acknowledgeCapabilities
           ? { acknowledgeCapabilities: params.request.acknowledgeCapabilities }

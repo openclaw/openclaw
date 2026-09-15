@@ -505,6 +505,8 @@ export function packageCapabilityChange(params: {
   integrity?: string;
   installId?: string;
   riskWarning?: string;
+  desiredDeclaredCapabilities?: unknown;
+  desiredCapabilityGrants?: unknown;
   currentExtension?: unknown;
   desiredExtension?: unknown;
 }): ClawUpdateCapabilityChange | undefined {
@@ -529,6 +531,12 @@ export function packageCapabilityChange(params: {
       ...(params.integrity ? { integrity: params.integrity } : {}),
       ...(params.installId ? { installId: params.installId } : {}),
       ...(params.riskWarning ? { riskWarning: params.riskWarning } : {}),
+      ...(params.desiredDeclaredCapabilities
+        ? { declaredCapabilities: params.desiredDeclaredCapabilities }
+        : {}),
+      ...(params.desiredCapabilityGrants
+        ? { capabilityGrants: params.desiredCapabilityGrants }
+        : {}),
       ...(params.desiredExtension ? { extension: params.desiredExtension } : {}),
     },
     ...(params.currentVersion
@@ -548,6 +556,8 @@ export function packageCapabilityChange(params: {
             `version ${params.desiredVersion}${params.desiredExtension ? "; extension mapping updated" : ""}`,
             {
               version: params.desiredVersion,
+              declaredCapabilities: params.desiredDeclaredCapabilities,
+              capabilityGrants: params.desiredCapabilityGrants,
               extension: params.desiredExtension,
             },
           ),

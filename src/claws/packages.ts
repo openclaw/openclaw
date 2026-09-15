@@ -1,11 +1,13 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { resolveClawHubInstallConfirmation } from "../cli/clawhub-install-confirmation.js";
-import { resolvePluginCapabilityConsentCliOptions } from "../cli/plugin-capability-consent.js";
 import { createPluginInstallLogger } from "../cli/plugins-command-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginAcceptedDeclaredSurface } from "../config/types.plugins.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
+import {
+  buildPluginCapabilitySummary,
+  computeDeclaredSurfaceHash,
+} from "../plugins/capability-summary.js";
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
 import { installManagedPlugin } from "../plugins/management-mutations.js";
@@ -25,7 +27,12 @@ import {
   findResumableIntroducedPluginRequirement,
   ownerInstallIsNewerThanRefs,
 } from "./package-resume.js";
-import { resolveClawPluginSetupRequirements } from "./package-setup-requirements.js";
+import {
+  inspectClawPluginCapabilities,
+  preflightClawPluginPackage,
+  probeClawPluginArtifact,
+  type ClawPluginProbeDeps,
+} from "./plugin-capability-probe.js";
 import { runClawPluginBatch, type ClawPluginRuntimeOptions } from "./plugin-runtime.js";
 import {
   persistClawPackageRef,
@@ -65,12 +72,15 @@ type PackageInstallerDeps = {
   readPackageRefs?: typeof readClawPackageRefs;
   acquirePackageLease?: typeof acquireClawPackageLifecycleLease;
   resolvePlugin?: typeof resolveInstalledClawHubPlugin;
+  inspectPluginCapabilities?: typeof inspectClawPluginCapabilities;
 };
 
 type PlannedClawPackage = ResolvedClawPackage & {
   ownerAction: "install" | "reuse";
   installId?: string;
   riskWarning?: string;
+  declaredCapabilities?: PluginAcceptedDeclaredSurface;
+  capabilityGrants?: ReturnType<typeof buildPluginCapabilitySummary>["grants"];
 };
 function packageFromAction(action: ClawAddPlanAction): PlannedClawPackage {
   const details = action.details as
@@ -78,6 +88,8 @@ function packageFromAction(action: ClawAddPlanAction): PlannedClawPackage {
         ownerAction?: "install" | "reuse";
         installId?: string;
         riskWarning?: string;
+        declaredCapabilities?: PluginAcceptedDeclaredSurface;
+        capabilityGrants?: ReturnType<typeof buildPluginCapabilitySummary>["grants"];
       })
     | undefined;
   if (details?.kind !== "skill" && details?.kind !== "plugin") {
@@ -110,40 +122,9 @@ function packageFromAction(action: ClawAddPlanAction): PlannedClawPackage {
     ...(details.extension ? { extension: details.extension } : {}),
     ...(details.installId ? { installId: details.installId } : {}),
     ...(details.riskWarning ? { riskWarning: details.riskWarning } : {}),
+    ...(details.declaredCapabilities ? { declaredCapabilities: details.declaredCapabilities } : {}),
+    ...(details.capabilityGrants ? { capabilityGrants: details.capabilityGrants } : {}),
   };
-}
-
-type ClawPluginProbeDeps = {
-  probePlugin?: typeof installPluginFromClawHub;
-  createProbeExtensionsDir?: () => Promise<string>;
-  removeProbeExtensionsDir?: (path: string) => Promise<void>;
-};
-
-async function probeClawPluginArtifact(
-  pkg: ClawPackage,
-  isolateFromLiveExtensions: boolean,
-  deps: ClawPluginProbeDeps,
-): Promise<Awaited<ReturnType<typeof installPluginFromClawHub>>> {
-  const probePlugin = deps.probePlugin ?? installPluginFromClawHub;
-  const request = {
-    spec: `clawhub:${pkg.ref}@${pkg.version}`,
-    dryRun: true,
-  } as const;
-  if (!isolateFromLiveExtensions) {
-    return await probePlugin(request);
-  }
-  const probeExtensionsDir = await (deps.createProbeExtensionsDir?.() ??
-    mkdtemp(join(tmpdir(), "openclaw-claw-plugin-probe-")));
-  try {
-    return await probePlugin({ ...request, extensionsDir: probeExtensionsDir });
-  } finally {
-    try {
-      await (deps.removeProbeExtensionsDir?.(probeExtensionsDir) ??
-        rm(probeExtensionsDir, { recursive: true, force: true }));
-    } catch {
-      // Temporary probe cleanup must not replace the canonical preflight result.
-    }
-  }
 }
 
 export async function preflightClawPackage(
@@ -151,6 +132,7 @@ export async function preflightClawPackage(
   workspaceDir: string,
   options: {
     env?: NodeJS.ProcessEnv;
+    config?: OpenClawConfig;
     deps?: Pick<PackageInstallerDeps, "preflightPlugin"> & ClawPluginProbeDeps;
   } = {},
 ): Promise<ClawPackagePreflightResult> {
@@ -162,102 +144,11 @@ export async function preflightClawPackage(
     });
     return result.ok ? result : { ok: false, code: result.code, message: result.error };
   }
-  const result = await (options.deps?.preflightPlugin ?? preflightPluginInstall)({
-    clawhubPackage: pkg.ref,
-    rawSpec: `clawhub:${pkg.ref}@${pkg.version}`,
-    expectedVersion: pkg.version,
-  });
-  if (!result.ok && result.code !== "plugin_version_conflict") {
-    return {
-      ok: false,
-      code: result.code,
-      message: result.error,
-    };
-  }
-  const probe = await probeClawPluginArtifact(
-    pkg,
-    !(result.ok && result.action === "install"),
-    options.deps ?? {},
-  );
-  if (!probe.ok) {
-    return { ok: false, code: probe.code ?? "plugin_preflight_failed", message: probe.error };
-  }
-  if (!probe.artifactInspection) {
-    return {
-      ok: false,
-      code: "plugin_artifact_inspection_unavailable",
-      message: `Plugin ${pkg.ref}@${pkg.version} did not return canonical artifact inspection.`,
-    };
-  }
-  if (probe.artifactInspection.format === "agent") {
-    return {
-      ok: false,
-      code: "plugin_artifact_format_unsupported",
-      message: `Plugin ${pkg.ref}@${pkg.version} uses unsupported Claw extension format agent.`,
-    };
-  }
-  const integrity = probe.clawhub.integrity
-    ? normalizeClawHubSha256Integrity(probe.clawhub.integrity)
-    : null;
-  if (!integrity) {
-    return {
-      ok: false,
-      code: "plugin_integrity_unavailable",
-      message: `Plugin ${pkg.ref}@${pkg.version} did not resolve an artifact integrity.`,
-    };
-  }
-  const requirements = resolveClawPluginSetupRequirements({
-    pluginId: probe.pluginId,
-    setup: probe.setup,
-    env: options.env ?? process.env,
-  });
-  if (!result.ok) {
-    return {
-      ok: false,
-      code: result.code,
-      installedVersion: result.installedVersion,
-      integrity,
-      installId: probe.pluginId,
-      ...(requirements.length > 0 ? { requirements } : {}),
-      detectedFormat: probe.artifactInspection.format,
-      mapped: probe.artifactInspection.mapped,
-      unavailable: probe.artifactInspection.unavailable,
-      adapterIdentity: PLUGIN_ARTIFACT_ADAPTER_IDENTITY,
-      ...(probe.warning ? { warning: probe.warning } : {}),
-      message: `Plugin ${pkg.ref}@${pkg.version} conflicts with installed version ${result.installedVersion}.`,
-    };
-  }
-  if (
-    result.action === "reuse" &&
-    (result.installedId !== probe.pluginId ||
-      !result.installedIntegrity ||
-      normalizeClawHubSha256Integrity(result.installedIntegrity) !== integrity)
-  ) {
-    return {
-      ok: false,
-      code: "plugin_integrity_conflict",
-      message: `Plugin ${pkg.ref}@${pkg.version} is installed as ${result.installedId} with integrity ${result.installedIntegrity ?? "unknown"}, expected ${probe.pluginId} with ${integrity}.`,
-    };
-  }
-  return {
-    ok: true,
-    action: result.action,
-    integrity,
-    installId: probe.pluginId,
-    ...(result.action === "reuse" && result.installedIntegrity
-      ? { installedIntegrity: result.installedIntegrity }
-      : {}),
-    ...(result.action === "reuse" && result.installedAt ? { installedAt: result.installedAt } : {}),
-    ...(requirements.length > 0 ? { requirements } : {}),
-    detectedFormat: probe.artifactInspection.format,
-    mapped: probe.artifactInspection.mapped,
-    unavailable: probe.artifactInspection.unavailable,
-    adapterIdentity: PLUGIN_ARTIFACT_ADAPTER_IDENTITY,
-    ...(probe.warning ? { warning: probe.warning } : {}),
-  };
+  return preflightClawPluginPackage(pkg, options);
 }
 
 type InstallClawPackagesOptions = ClawPluginRuntimeOptions & {
+  config?: OpenClawConfig;
   deps?: PackageInstallerDeps;
   pluginInstallMode?: "install" | "update";
   nowMs?: number;
@@ -454,6 +345,10 @@ async function installClawPackagesUnlocked(
       }
       const probe = await probeClawPluginArtifact(pkg, true, {
         probePlugin: deps.probePlugin,
+        inspectPluginCapabilities: deps.inspectPluginCapabilities ?? inspectClawPluginCapabilities,
+        env: options.env,
+        config: options.config,
+        currentArtifactDir: preflight.installedPath,
       });
       packageLease.assertCurrent();
       if (!probe.ok) {
@@ -482,6 +377,10 @@ async function installClawPackagesUnlocked(
         probe.pluginId !== pkg.installId ||
         probeIntegrity !== normalizeClawHubSha256Integrity(pkg.integrity) ||
         probe.warning !== pkg.riskWarning ||
+        !pkg.declaredCapabilities ||
+        stableStringify(probe.declaredCapabilities) !== stableStringify(pkg.declaredCapabilities) ||
+        !pkg.capabilityGrants ||
+        stableStringify(probe.capabilityGrants) !== stableStringify(pkg.capabilityGrants) ||
         (plannedExtensionInspection &&
           stableStringify(probedExtensionInspection) !==
             stableStringify(plannedExtensionInspection))
@@ -492,6 +391,7 @@ async function installClawPackagesUnlocked(
           installedPackages,
         );
       }
+      const capabilityReviewToken = computeDeclaredSurfaceHash(pkg.declaredCapabilities);
       if (preflight.action === "reuse") {
         if (
           preflight.installedId !== pkg.installId ||
@@ -568,7 +468,19 @@ async function installClawPackagesUnlocked(
         beforePersistentApply: packageLease.assertCurrent,
         logger: createPluginInstallLogger(runtime),
         confirmInstall: resolveClawHubInstallConfirmation(),
-        ...resolvePluginCapabilityConsentCliOptions({ action: "install", runtime }),
+        onCapabilityConsent: async (review) => {
+          if (review.reviewToken !== capabilityReviewToken) {
+            throw new Error(
+              `Plugin ${pkg.ref}@${pkg.version} declared capabilities changed after planning; run add --dry-run again.`,
+            );
+          }
+          if (stableStringify(review.grants) !== stableStringify(pkg.capabilityGrants)) {
+            throw new Error(
+              `Plugin ${pkg.ref}@${pkg.version} effective capability grants changed after planning; run add --dry-run again.`,
+            );
+          }
+          return { reviewToken: capabilityReviewToken };
+        },
         invalidateRuntimeCache: false,
         clawManaged: true,
         deferRuntime: options.runtimeBatch?.install(),

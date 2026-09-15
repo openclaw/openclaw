@@ -1,6 +1,7 @@
 // Plugin install fixture helpers build generated bundle layouts for install tests.
 import fs from "node:fs";
 import path from "node:path";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import type { PluginInstallArtifactConsentHandler } from "../install-types.js";
 import { createColdPluginFixture } from "./cold-plugin-fixtures.js";
@@ -21,7 +22,11 @@ export async function invokePluginArtifactInstallMock<
 >(
   mock: unknown,
   params: PluginArtifactInstallMockParams,
-  fixture?: { manifest?: Record<string, unknown> },
+  fixture?: {
+    manifest?: Record<string, unknown>;
+    packageName?: string;
+    sourceRecord?: PluginInstallRecord;
+  },
 ): Promise<TResult> {
   const result = await (mock as (params: PluginArtifactInstallMockParams) => Promise<TResult>)(
     params,
@@ -42,6 +47,7 @@ export async function invokePluginArtifactInstallMock<
     createColdPluginFixture({
       rootDir: stagedArtifactDir,
       pluginId,
+      ...(fixture?.packageName ? { packageName: fixture.packageName } : {}),
       ...(result.version ? { packageVersion: result.version } : {}),
       ...(fixture?.manifest ? { manifest: fixture.manifest } : {}),
     });
@@ -49,6 +55,7 @@ export async function invokePluginArtifactInstallMock<
       pluginId,
       stagedArtifactDir,
       mode: params.mode ?? "install",
+      sourceRecord: fixture?.sourceRecord,
     });
     return result;
   });

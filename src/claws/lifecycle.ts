@@ -471,13 +471,19 @@ export async function buildClawAddPlan(params: {
           code: "package_install_unavailable",
           message: "Package preflight is unavailable.",
         };
-    const diagnostic = preflight.ok
-      ? undefined
-      : blocker(
+    const diagnostic = !preflight.ok
+      ? blocker(
           preflight.code ?? "package_install_unavailable",
           `$.packages[${index}]`,
           preflight.message ?? "Package preflight failed.",
-        );
+        )
+      : pkg.kind === "plugin" && (!preflight.declaredCapabilities || !preflight.capabilityGrants)
+        ? blocker(
+            "plugin_capability_provenance_incomplete",
+            `$.packages[${index}]`,
+            `Plugin ${JSON.stringify(pkg.ref)} did not resolve its declared capability surface.`,
+          )
+        : undefined;
     if (diagnostic) {
       blockers.push(diagnostic);
     }
@@ -494,6 +500,10 @@ export async function buildClawAddPlan(params: {
         ...pkg,
         ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
         ...(preflight.installId ? { installId: preflight.installId } : {}),
+        ...(preflight.declaredCapabilities
+          ? { declaredCapabilities: preflight.declaredCapabilities }
+          : {}),
+        ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
         ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
         ...(preflight.requirements ? { prerequisites: preflight.requirements } : {}),
         expectedState: !preflight.ok
@@ -530,6 +540,10 @@ export async function buildClawAddPlan(params: {
           version: pkg.version,
           integrity: preflight.integrity ?? "unresolved",
           ...(preflight.installId ? { installId: preflight.installId } : {}),
+          ...(preflight.declaredCapabilities
+            ? { declaredCapabilities: preflight.declaredCapabilities }
+            : {}),
+          ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
           ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
         },
       }),

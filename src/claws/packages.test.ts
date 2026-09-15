@@ -2,12 +2,51 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
 import { installClawPackages, preflightClawPackage } from "./packages.js";
-import { packageInstallPlan as plan } from "./packages.test-support.js";
+import { packageInstallPlan } from "./packages.test-support.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
+import type { ClawAddPlan, ResolvedClawPackage } from "./types.js";
+
+// The reviewed capability flow binds the declared surface and effective grants into
+// each plugin action's details at plan time; layer that onto the shared plan builder.
+function plan(
+  packages: ResolvedClawPackage[],
+  ownerAction: "install" | "reuse" = "install",
+): ClawAddPlan {
+  const base = packageInstallPlan(packages, ownerAction);
+  for (const action of base.actions) {
+    if (action.kind === "package" && action.details?.kind === "plugin") {
+      Object.assign(action.details, { declaredCapabilities, capabilityGrants });
+    }
+  }
+  return base;
+}
 
 const integrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const declaredCapabilities = {
+  channels: [],
+  providers: [],
+  tools: ["audit.read"],
+  contracts: [],
+  hooks: [],
+  mcpServers: [],
+  cliCommands: [],
+  cliBackends: [],
+  skills: [],
+  dangerousConfigFlags: [],
+};
+const capabilityGrants = {
+  hooks: {
+    allowPromptInjection: { effective: true },
+    allowConversationAccess: { effective: false },
+  },
+};
+const inspectPluginCapabilities = vi.fn(() => ({
+  declared: declaredCapabilities,
+  grants: capabilityGrants,
+}));
 const pluginPackage = {
   kind: "plugin",
   source: "clawhub",
@@ -80,6 +119,7 @@ describe("preflightClawPackage plugin setup requirements", () => {
   const probePluginSetup = vi.fn().mockResolvedValue({
     ok: true,
     pluginId: "evidence",
+    targetDir: "/tmp/evidence",
     setup,
     artifactInspection,
     clawhub: { integrity },
@@ -89,7 +129,7 @@ describe("preflightClawPackage plugin setup requirements", () => {
     await expect(
       preflightClawPackage(pluginPackage, "/tmp/workspace", {
         env: {},
-        deps: { preflightPlugin, probePlugin: probePluginSetup },
+        deps: { preflightPlugin, probePlugin: probePluginSetup, inspectPluginCapabilities },
       }),
     ).resolves.toEqual(
       expect.objectContaining({
@@ -110,7 +150,7 @@ describe("preflightClawPackage plugin setup requirements", () => {
     await expect(
       preflightClawPackage(pluginPackage, "/tmp/workspace", {
         env: { EVIDENCE_TOKEN: "configured" },
-        deps: { preflightPlugin, probePlugin: probePluginSetup },
+        deps: { preflightPlugin, probePlugin: probePluginSetup, inspectPluginCapabilities },
       }),
     ).resolves.not.toHaveProperty("requirements");
   });
@@ -119,6 +159,7 @@ describe("preflightClawPackage plugin setup requirements", () => {
     probePluginSetup.mockResolvedValueOnce({
       ok: true,
       pluginId: "evidence",
+      targetDir: "/tmp/evidence",
       setup: {
         providers: [
           { id: "first", envVars: ["FIRST_API_KEY"] },
@@ -132,7 +173,7 @@ describe("preflightClawPackage plugin setup requirements", () => {
     await expect(
       preflightClawPackage(pluginPackage, "/tmp/workspace", {
         env: { SECOND_API_KEY: "configured" },
-        deps: { preflightPlugin, probePlugin: probePluginSetup },
+        deps: { preflightPlugin, probePlugin: probePluginSetup, inspectPluginCapabilities },
       }),
     ).resolves.not.toHaveProperty("requirements");
   });
@@ -141,6 +182,7 @@ describe("preflightClawPackage plugin setup requirements", () => {
     probePluginSetup.mockResolvedValueOnce({
       ok: true,
       pluginId: "evidence",
+      targetDir: "/tmp/evidence",
       setup: {
         providers: [{ id: "oauth-only", authMethods: ["oauth"] }],
       },
@@ -151,7 +193,7 @@ describe("preflightClawPackage plugin setup requirements", () => {
     await expect(
       preflightClawPackage(pluginPackage, "/tmp/workspace", {
         env: {},
-        deps: { preflightPlugin, probePlugin: probePluginSetup },
+        deps: { preflightPlugin, probePlugin: probePluginSetup, inspectPluginCapabilities },
       }),
     ).resolves.not.toHaveProperty("requirements");
   });
@@ -163,6 +205,7 @@ describe("preflightClawPackage plugin setup requirements", () => {
     probePluginSetup.mockResolvedValueOnce({
       ok: true,
       pluginId: "evidence",
+      targetDir: "/tmp/evidence",
       setup: {
         providers: [
           {
@@ -189,7 +232,7 @@ describe("preflightClawPackage plugin setup requirements", () => {
             EVIDENCE_CREDENTIALS: credentialsPath,
             EVIDENCE_PROJECT: "project",
           },
-          deps: { preflightPlugin, probePlugin: probePluginSetup },
+          deps: { preflightPlugin, probePlugin: probePluginSetup, inspectPluginCapabilities },
         }),
       ).resolves.not.toHaveProperty("requirements");
     } finally {
@@ -229,6 +272,7 @@ describe("preflightClawPackage isolated plugin inspection", () => {
             request: {} as never,
           })),
           probePlugin: probeAgentBundle,
+          inspectPluginCapabilities,
         },
       }),
     ).resolves.toEqual({
@@ -301,6 +345,7 @@ describe("preflightClawPackage isolated plugin inspection", () => {
             request: {} as never,
           })),
           probePlugin: probePluginConflict,
+          inspectPluginCapabilities,
           createProbeExtensionsDir: vi.fn(async () => "/tmp/claw-plugin-probe"),
           removeProbeExtensionsDir: vi.fn(async () => undefined),
         },
@@ -355,6 +400,7 @@ describe("preflightClawPackage isolated plugin inspection", () => {
             installedAt: "2026-08-06T00:00:00.000Z",
           })),
           probePlugin: isolatedProbe,
+          inspectPluginCapabilities,
           createProbeExtensionsDir: vi.fn(async () => "/tmp/claw-plugin-probe"),
           removeProbeExtensionsDir,
         },
@@ -457,6 +503,7 @@ describe("installClawPackages", () => {
       deps: {
         installPlugin,
         probePlugin,
+        inspectPluginCapabilities,
         preflightPlugin,
         persistPackageRef,
         completePackageRef,
@@ -475,10 +522,21 @@ describe("installClawPackages", () => {
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           expectedPluginId: "audit",
         },
+        onCapabilityConsent: expect.any(Function),
         invalidateRuntimeCache: false,
         clawManaged: true,
       }),
     );
+    const consent = installPlugin.mock.calls[0]?.[0].onCapabilityConsent;
+    await expect(consent?.({ reviewToken: "changed" })).rejects.toThrow(
+      "declared capabilities changed after planning",
+    );
+    await expect(
+      consent?.({
+        reviewToken: computeDeclaredSurfaceHash(declaredCapabilities),
+        grants: capabilityGrants,
+      }),
+    ).resolves.toEqual({ reviewToken: computeDeclaredSurfaceHash(declaredCapabilities) });
     expect(persistPackageRef).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -506,6 +564,7 @@ describe("installClawPackages", () => {
       deps: {
         installPlugin,
         probePlugin,
+        inspectPluginCapabilities,
         preflightPlugin: vi.fn().mockResolvedValue({
           ok: true,
           action: "reuse",
@@ -575,6 +634,7 @@ describe("installClawPackages", () => {
       deps: {
         installPlugin,
         probePlugin: probePluginForExtension,
+        inspectPluginCapabilities,
         preflightPlugin,
         persistPackageRef,
         completePackageRef,
@@ -636,6 +696,7 @@ describe("installClawPackages", () => {
               integrity,
             },
           }),
+          inspectPluginCapabilities,
           preflightPlugin: vi.fn().mockResolvedValue({
             ok: true,
             action: "reuse",
@@ -667,6 +728,7 @@ describe("installClawPackages", () => {
       deps: {
         installPlugin: vi.fn(),
         probePlugin,
+        inspectPluginCapabilities,
         preflightPlugin: vi.fn().mockResolvedValue({
           ok: true,
           action: "reuse",
@@ -704,6 +766,7 @@ describe("installClawPackages", () => {
       deps: {
         installPlugin: vi.fn(),
         probePlugin,
+        inspectPluginCapabilities,
         preflightPlugin: vi.fn().mockResolvedValue({
           ok: true,
           action: "reuse",
@@ -743,6 +806,7 @@ describe("installClawPackages", () => {
         deps: {
           installPlugin: vi.fn().mockRejectedValue(new Error("registry unavailable")),
           probePlugin,
+          inspectPluginCapabilities,
           preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
           persistPackageRef,
           completePackageRef,
@@ -797,6 +861,7 @@ describe("installClawPackages", () => {
             installPlugin,
             uninstallPlugin,
             probePlugin,
+            inspectPluginCapabilities,
             preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
             persistPackageRef,
             completePackageRef,
@@ -866,6 +931,7 @@ describe("installClawPackages", () => {
             installPlugin,
             uninstallPlugin,
             probePlugin,
+            inspectPluginCapabilities,
             preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
             persistPackageRef: vi.fn().mockReturnValueOnce(refs[0]).mockReturnValueOnce(refs[1]),
             completePackageRef,
@@ -900,6 +966,7 @@ describe("installClawPackages", () => {
         deps: {
           installPlugin: vi.fn().mockRejectedValue(new Error("registry unavailable")),
           probePlugin,
+          inspectPluginCapabilities,
           preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
           persistPackageRef: vi.fn().mockReturnValue(pending),
           completePackageRef: failingCompletePackageRef,
@@ -924,6 +991,7 @@ describe("installClawPackages", () => {
         deps: {
           installPlugin,
           probePlugin,
+          inspectPluginCapabilities,
           preflightPlugin,
           persistPackageRef,
           completePackageRef,
@@ -973,9 +1041,11 @@ describe("installClawPackages", () => {
           probePlugin: vi.fn().mockResolvedValue({
             ok: true,
             pluginId: "audit",
+            targetDir: "/tmp/plugin",
             warning: "review warning two",
             clawhub: { integrity },
           }),
+          inspectPluginCapabilities,
           acquirePackageLease,
         },
       }),

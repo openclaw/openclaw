@@ -533,6 +533,24 @@ describe("applyClawUpdatePlan", () => {
       integrity: `sha256:${"a".repeat(64)}`,
       installId: "github",
       warning: "Review @acme/github before installation.",
+      declaredCapabilities: {
+        channels: [],
+        providers: [],
+        tools: ["github.read"],
+        contracts: [],
+        hooks: [],
+        mcpServers: [],
+        cliCommands: [],
+        cliBackends: [],
+        skills: [],
+        dangerousConfigFlags: [],
+      },
+      capabilityGrants: {
+        hooks: {
+          allowPromptInjection: { effective: true },
+          allowConversationAccess: { effective: false },
+        },
+      },
     };
     const desiredDigest = `sha256:${createHash("sha256")
       .update(
@@ -542,6 +560,8 @@ describe("applyClawUpdatePlan", () => {
           installId: resolved.installId,
           riskWarning: resolved.warning,
           prerequisites: undefined,
+          declaredCapabilities: resolved.declaredCapabilities,
+          capabilityGrants: resolved.capabilityGrants,
           extension: undefined,
         }),
       )

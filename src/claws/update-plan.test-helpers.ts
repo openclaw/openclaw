@@ -13,7 +13,29 @@ export const packagePreflight = async (pkg: { kind: "skill" | "plugin"; ref: str
   ok: true as const,
   action: "install" as const,
   integrity: `sha256:${"a".repeat(64)}`,
-  ...(pkg.kind === "plugin" ? { installId: pkg.ref } : {}),
+  ...(pkg.kind === "plugin"
+    ? {
+        installId: pkg.ref,
+        declaredCapabilities: {
+          channels: [],
+          providers: [],
+          tools: [`${pkg.ref}.read`],
+          contracts: [],
+          hooks: [],
+          mcpServers: [],
+          cliCommands: [],
+          cliBackends: [],
+          skills: [],
+          dangerousConfigFlags: [],
+        },
+        capabilityGrants: {
+          hooks: {
+            allowPromptInjection: { effective: true },
+            allowConversationAccess: { effective: false },
+          },
+        },
+      }
+    : {}),
 });
 
 export async function createUpdatePlanFixture(
