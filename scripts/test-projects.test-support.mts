@@ -3381,6 +3381,9 @@ function resolveToolingTestTargets(changedPath: string, cwd = process.cwd()) {
       ? resolveDirectToolingReferenceTests(implementationPath, cwd)
       : [];
   const targets = [
+    ...(!hasDirectOwner && isRoutableChangedTarget(changedPath) && isTestFileTarget(changedPath)
+      ? [changedPath]
+      : []),
     ...exactTargets,
     ...(explicitTargets ?? []),
     ...semanticTargets,
@@ -4212,9 +4215,10 @@ export function buildVitestRunPlans(
     }
     groupedTargets.set("uiIsolated", current);
   }
-  const cliTargets = groupedTargets.get("cli") ?? [];
+  // Source-child ownership can cross shared suites (for example state tests).
+  // Match every active target so broad selections cannot silently omit excluded children.
   const impliedCliProcessTargets = cliProcessTestFiles.filter((file) =>
-    cliTargets.some((targetArg) =>
+    activeTargetArgs.some((targetArg) =>
       includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
     ),
   );

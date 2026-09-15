@@ -35,6 +35,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { projectDoctorSecretRuntimeDegradations } from "../commands/doctor-secret-runtime-degradation.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { collectUnavailableAgentSkills } from "../commands/doctor-skills-core.js";
+import { isUpdateDoctorLintPass } from "../commands/doctor/shared/update-phase.js";
 import {
   GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
   gatewayConnectErrorWasRateLimited,
@@ -1178,9 +1179,14 @@ function isAcpRuntimeAgent(cfg: OpenClawConfig, agentId: string): boolean {
 
 export async function collectRuntimeToolSchemaFindings(
   cfg: OpenClawConfig,
-  options?: { runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner },
+  options?: {
+    env?: NodeJS.ProcessEnv;
+    runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+  },
 ): Promise<readonly HealthFinding[]> {
   const findings: HealthFinding[] = [];
+  const deferMcpProbes = isUpdateDoctorLintPass(options?.env ?? process.env);
+  const deferredServers = new Set<string>();
   const bundleRuntimeByContext = new Map<string, BundleMcpToolRuntime>();
   const bundleRuntimeLoadErrorsByContext = new Map<string, HealthFinding>();
   const reportedBundleRuntimeDiagnostics = new Set<string>();
@@ -1231,6 +1237,21 @@ export async function collectRuntimeToolSchemaFindings(
           cfg,
           logDiagnostics: false,
         });
+        if (deferMcpProbes) {
+          for (const serverName of Object.keys(fullMcpConfig.loaded.mcpServers)) {
+            if (deferredServers.has(serverName)) {
+              continue;
+            }
+            deferredServers.add(serverName);
+            findings.push({
+              checkId: "core/doctor/runtime-tool-schemas",
+              severity: "warning",
+              message: `MCP server "${sanitizeTerminalText(serverName)}" was not started for update validation. Run \`openclaw doctor --lint --only core/doctor/runtime-tool-schemas\` after the update to inspect its tools.`,
+              path: `mcp.servers.${serverName}`,
+            });
+          }
+          return;
+        }
         const safeServerNamesByServer = assignSafeServerNames(
           Object.keys(fullMcpConfig.loaded.mcpServers),
         );

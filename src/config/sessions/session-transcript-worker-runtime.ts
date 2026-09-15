@@ -1,11 +1,17 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import type { SessionHistoryWorkerResult } from "./session-history-types.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import {
   resolveSessionTranscriptReadFence,
@@ -38,7 +44,7 @@ const sessionEntries = new WorkerTaskPool<
 const historyPages = new WorkerTaskPool<
   SessionTranscriptHistoryWorkerInput,
   SessionTranscriptWorkerReply<"history-page">
->({ workerUrl, maxWorkers: 1 });
+>({ workerUrl, maxWorkers: 1, idleTimeoutMs: 0 });
 
 // Branch scans share background compute admission without delaying foreground history or context.
 const branchSummaries = new WorkerTaskPool<
@@ -105,13 +111,168 @@ export async function prepareSessionEntryInWorker(
   );
 }
 
-export async function runSessionHistoryWorkerRequest(
-  prepare: () => SessionTranscriptHistoryWorkerInput,
-  inputBytes: number,
-) {
-  return unwrapReply<"history-page">(
-    await historyPages.run(prepare, { inputBytes, timeoutMs: 60_000 }),
+type HistoryDatabaseResource = {
+  database: { agentId: string; path: string };
+  generation: number;
+  pending: number;
+  revoked: boolean;
+  nativeSequence?: number;
+  closing?: Promise<void>;
+  unregister: () => void;
+};
+
+export type SessionHistoryWorkerDatabase = {
+  generation: number;
+  run: (
+    prepare: () => Omit<SessionTranscriptHistoryWorkerInput, "database">,
+    inputBytes: number,
+  ) => Promise<SessionHistoryWorkerResult>;
+};
+
+const historyDatabases = new Map<string, HistoryDatabaseResource>();
+const runInHistoryOwnerContext = AsyncLocalStorage.snapshot();
+const historySetTimeout = setTimeout;
+const historyClearTimeout = clearTimeout;
+let historyIdleTimer: NodeJS.Timeout | undefined;
+let historyGeneration = 0;
+let historyNativeSequence = 0;
+
+function pruneHistoryDatabases(): void {
+  for (const [key, resource] of historyDatabases) {
+    if (resource.pending === 0 && resource.nativeSequence === undefined && !resource.closing) {
+      resource.unregister();
+      historyDatabases.delete(key);
+    }
+  }
+}
+
+function rotateHistoryWorkers(): Promise<void> {
+  const through = historyNativeSequence;
+  // rotate pauses dispatch synchronously; later factories receive a greater sequence.
+  return historyPages.rotate().then(() => {
+    for (const resource of historyDatabases.values()) {
+      if (resource.nativeSequence !== undefined && resource.nativeSequence <= through) {
+        resource.nativeSequence = undefined;
+      }
+    }
+    pruneHistoryDatabases();
+  });
+}
+
+function armHistoryIdleRetirement(): void {
+  historyClearTimeout(historyIdleTimer);
+  if (
+    !historyDatabases.size ||
+    [...historyDatabases.values()].some((resource) => resource.pending)
+  ) {
+    return;
+  }
+  historyIdleTimer = runInHistoryOwnerContext(() =>
+    historySetTimeout(() => {
+      void rotateHistoryWorkers().catch((error: unknown) => {
+        process.emitWarning(`Session history worker retirement failed: ${String(error)}`);
+      });
+    }, 30 * 60_000),
   );
+  historyIdleTimer.unref();
+}
+
+/** Capture database custody before restoration or queueing can await. */
+export async function withSessionHistoryWorkerDatabase<T>(
+  options: OpenClawAgentDatabaseOptions,
+  operation: (owner: SessionHistoryWorkerDatabase) => Promise<T>,
+): Promise<T> {
+  const database = {
+    agentId: normalizeAgentId(options.agentId),
+    path: resolveOpenClawAgentSqlitePath(options),
+  };
+  const key = JSON.stringify(database);
+  let resource = historyDatabases.get(key);
+  if (!resource || resource.revoked) {
+    const owned: HistoryDatabaseResource = {
+      database,
+      generation: ++historyGeneration,
+      pending: 0,
+      revoked: false,
+      unregister: () => {},
+    };
+    const close = () => {
+      if (!owned.closing) {
+        owned.closing = rotateHistoryWorkers().finally(() => {
+          owned.closing = undefined;
+          pruneHistoryDatabases();
+          armHistoryIdleRetirement();
+        });
+        void owned.closing.catch(() => {});
+      }
+      return owned.closing;
+    };
+    owned.unregister = registerOpenClawAgentDatabaseAsyncResource({
+      ...database,
+      revoke: () => {
+        owned.revoked = true;
+        void close();
+      },
+      close,
+    });
+    historyDatabases.set(key, owned);
+    resource = owned;
+  }
+  const owned = resource;
+  const assertCurrent = () => {
+    if (owned.revoked) {
+      throw new WorkerTaskError("Session history database read was revoked", "unavailable");
+    }
+  };
+  historyClearTimeout(historyIdleTimer);
+  owned.pending++;
+  try {
+    assertCurrent();
+    const result = await operation({
+      generation: owned.generation,
+      run: async (prepare, inputBytes) => {
+        assertCurrent();
+        let sequence = 0;
+        try {
+          const reply = await historyPages.run(
+            () => {
+              assertCurrent();
+              const input = prepare();
+              assertCurrent();
+              sequence = ++historyNativeSequence;
+              owned.nativeSequence = sequence;
+              return { ...input, database };
+            },
+            { inputBytes, timeoutMs: 60_000 },
+          );
+          const value = unwrapReply<"history-page">(reply);
+          // The worker closes the previous database before entering this request's scope.
+          for (const other of historyDatabases.values()) {
+            if (
+              other !== owned &&
+              other.nativeSequence !== undefined &&
+              other.nativeSequence < sequence
+            ) {
+              other.nativeSequence = undefined;
+            }
+          }
+          assertCurrent();
+          return value;
+        } catch (error) {
+          if (sequence > 0) {
+            await rotateHistoryWorkers();
+          }
+          throw error;
+        }
+      },
+    });
+    assertCurrent();
+    return result;
+  } finally {
+    owned.pending--;
+    pruneHistoryDatabases();
+    armHistoryIdleRetirement();
+  }
 }
 
 export async function runSessionBranchSummaryWorkerRequest(

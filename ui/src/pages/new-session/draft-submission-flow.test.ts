@@ -32,6 +32,47 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow", () => {
+  it.each(["navigation", "reconnect"])("retires only the captured draft after %s", async (mode) => {
+    const { context, flow } = createDraftFixture();
+    let accept!: (value: { key: string; initialRun: { status: "started"; runId: string } }) => void;
+    vi.mocked(context.sessions.createResult).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          accept = resolve;
+        }),
+    );
+    const clear = vi.spyOn(flow.draftPersistence, "clearSubmittedDraft");
+    flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+    flow.draftPersistence.selectRoute("original-route");
+    flow.setMessage("  @Alex submitted prompt  ", [{ profileId: "alex", start: 2, end: 7 }]);
+    stubObjectUrls("blob:submitted-file");
+    const attachment = registerTextPayload("submitted-file");
+    flow.attachmentDraft.replace([attachment]);
+    const pending = flow.submit();
+    await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledOnce());
+    flow.invalidate("gateway-changed");
+    if (mode === "navigation") {
+      flow.disconnect();
+      flow.resetDraft();
+      flow.draftPersistence.selectRoute("replacement-route");
+      flow.setMessage("a newer prompt");
+    }
+    accept({ key: "agent:main:created", initialRun: { status: "started", runId: "created-run" } });
+    await pending;
+    expect(flow.message).toBe(mode === "navigation" ? "a newer prompt" : "");
+    expect(flow.submitting).toBe(false);
+    expect(flow.pendingMessage).toBeNull();
+    expect(clear).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        scope: expect.objectContaining({ scopeKey: "original-route" }),
+        writeIds: expect.any(Set),
+      }),
+      expect.any(Function),
+    );
+    expect(context.navigateAndWait).not.toHaveBeenCalled();
+    flow.disconnect();
+  });
+
   it.each(["navigation", "reconnect"] as const)(
     "consumes an accepted draft before asynchronous cleanup and %s",
     async (next) => {
@@ -45,12 +86,14 @@ describe("DraftSubmissionFlow", () => {
         throw new Error("Chat route failed to load");
       });
       let finishCleanup!: () => void;
-      const cleanup = vi.spyOn(flow.draftPersistence, "clearSubmittedDraft").mockImplementation(
-        () =>
-          new Promise<void>((resolve) => {
+      const cleanup = vi
+        .spyOn(flow.draftPersistence, "clearSubmittedDraft")
+        .mockImplementation((_submitted, consume) => {
+          consume?.();
+          return new Promise<void>((resolve) => {
             finishCleanup = resolve;
-          }),
-      );
+          });
+        });
       flow.setMessage("@Alex keep the accepted prompt", [
         { profileId: "profile-alex", start: 0, end: 5 },
       ]);
@@ -800,7 +843,7 @@ describe("DraftSubmissionFlow", () => {
       {
         requestUpdate: vi.fn(),
         onError: (error) => flow?.setError(error),
-        onClearError: (error) => flow?.clearErrorIf(error),
+        onClearError: (error) => flow?.clearError(error),
       },
     );
     const flow = new DraftSubmissionFlow(

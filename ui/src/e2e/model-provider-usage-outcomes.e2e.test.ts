@@ -291,7 +291,7 @@ suite.define(() => {
         }
         await openaiCard.getByLabel("API key").fill("synthetic-main-provider-key");
 
-        const agentPicker = page.locator(".agent-scope-control openclaw-agent-select");
+        const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
         await agentPicker.locator(".agent-select__trigger").click();
         await agentPicker.locator('wa-dropdown-item[aria-label="Writer"]').click();
         await expect.poll(async () => openaiCard.textContent()).toContain("Credentials for Writer");

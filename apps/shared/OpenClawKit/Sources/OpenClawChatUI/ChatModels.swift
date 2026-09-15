@@ -135,6 +135,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let preview: OpenClawChatCanvasPreview?
 
     // Tool-call fields (when `type == "toolCall"` or similar)
+    public let runId: String?
     public let id: String?
     public let name: String?
     public let arguments: AnyCodable?
@@ -198,8 +199,10 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         name: String? = nil,
         arguments: AnyCodable? = nil,
         details: AnyCodable? = nil,
-        isError: Bool? = nil)
+        isError: Bool? = nil,
+        runId: String? = nil)
     {
+        self.runId = runId
         self.type = type
         self.text = text
         self.textSignature = textSignature
@@ -248,6 +251,11 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case id
         case name
         case arguments
+        case runId
+        case toolUseId
+        case tool_use_id
+        case toolCallId
+        case tool_call_id
         case details
         case isError
         case is_error
@@ -277,7 +285,13 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         self.durationSeconds = try container.decodeIfPresent(Double.self, forKey: .durationSeconds)
             ?? container.decodeIfPresent(Double.self, forKey: .durationMs).map { $0 / 1000 }
         self.playback = try container.decodeIfPresent(OpenClawChatPlaybackMode.self, forKey: .playback)
-        self.id = try container.decodeIfPresent(String.self, forKey: .id)
+        self.runId = try container.decodeIfPresent(String.self, forKey: .runId)
+        self.id = try [CodingKeys.id, .tool_call_id, .toolCallId, .tool_use_id, .toolUseId]
+            .compactMap { key in
+                try container.decodeIfPresent(String.self, forKey: key)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            .first { !$0.isEmpty }
         self.name = try container.decodeIfPresent(String.self, forKey: .name)
         self.arguments = try container.decodeIfPresent(AnyCodable.self, forKey: .arguments)
         self.details = try container.decodeIfPresent(AnyCodable.self, forKey: .details)
@@ -317,6 +331,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         try container.encodeIfPresent(self.id, forKey: .id)
         try container.encodeIfPresent(self.name, forKey: .name)
         try container.encodeIfPresent(self.arguments, forKey: .arguments)
+        try container.encodeIfPresent(self.runId, forKey: .runId)
         try container.encodeIfPresent(self.details, forKey: .details)
         try container.encodeIfPresent(self.isError, forKey: .isError)
     }

@@ -232,6 +232,14 @@ export const COMMAND_PALETTE_ELEMENT = {
   loadModule: () => import("../components/command-palette.ts"),
 } satisfies OptionalCustomElement;
 
+export const DEBUG_OVERLAY_ELEMENT = {
+  tagName: "openclaw-debug-overlay",
+  get label() {
+    return t("debug.overlay.title");
+  },
+  loadModule: () => import("../pages/debug/debug-overlay.ts"),
+} satisfies OptionalCustomElement;
+
 const KEYBOARD_SHORTCUTS_TAG = "openclaw-keyboard-shortcuts-dialog";
 
 export const KEYBOARD_SHORTCUTS_ELEMENT = {

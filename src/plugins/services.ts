@@ -87,19 +87,7 @@ type PluginServicesOwner = {
 };
 const serviceOwners = new WeakMap<PluginServicesHandle, PluginServicesOwner>();
 
-// Long-lived callbacks must not capture the startup-only predecessor and publication callback.
-export async function startPluginServices({
-  registry,
-  config: initialConfig,
-  workspaceDir,
-  startupTrace,
-  broadcastPluginEvent,
-  getCronService,
-  oneShotStopTimeouts,
-  previous: previousHandle,
-  onHandle,
-  throwOnStartError,
-}: {
+type StartPluginServicesParams = {
   registry: PluginRegistry;
   config: OpenClawConfig;
   workspaceDir?: string;
@@ -111,7 +99,12 @@ export async function startPluginServices({
 } & (
   | { throwOnStartError: true; onHandle: (handle: PluginServicesHandle) => void }
   | { throwOnStartError?: false; onHandle?: (handle: PluginServicesHandle) => void }
-)): Promise<PluginServicesHandle> {
+);
+
+function preparePluginServicesOwner(
+  registry: PluginRegistry,
+  previousHandle: PluginServicesHandle | null | undefined,
+): { ownedServices: OwnedPluginService[]; owner: PluginServicesOwner } {
   // Failed starts still own their cleanup and remain selectable for a later retry.
   const ownedServices: OwnedPluginService[] = [];
   const previous = previousHandle && serviceOwners.get(previousHandle);
@@ -146,6 +139,52 @@ export async function startPluginServices({
       ownedServices.push(entry);
     }
   }
+  return { ownedServices, owner };
+}
+
+// Long-lived callbacks must not capture the startup-only predecessor and publication callback.
+export function startPluginServices(
+  params: StartPluginServicesParams,
+): Promise<PluginServicesHandle> {
+  const preparedOwner = preparePluginServicesOwner(params.registry, params.previous);
+  return startPreparedPluginServices({
+    registry: params.registry,
+    initialConfig: params.config,
+    workspaceDir: params.workspaceDir,
+    startupTrace: params.startupTrace,
+    broadcastPluginEvent: params.broadcastPluginEvent,
+    getCronService: params.getCronService,
+    oneShotStopTimeouts: params.oneShotStopTimeouts,
+    throwOnStartError: params.throwOnStartError,
+    preparedOwner,
+    publication: { callback: params.onHandle },
+  });
+}
+
+async function startPreparedPluginServices({
+  registry,
+  initialConfig,
+  workspaceDir,
+  startupTrace,
+  broadcastPluginEvent,
+  getCronService,
+  oneShotStopTimeouts,
+  throwOnStartError,
+  preparedOwner,
+  publication,
+}: {
+  registry: PluginRegistry;
+  initialConfig: OpenClawConfig;
+  workspaceDir?: string;
+  startupTrace?: NonNullable<OpenClawPluginServiceContext["startupTrace"]>;
+  broadcastPluginEvent?: GatewayPluginEventBroadcastFn;
+  getCronService?: () => PluginServiceCronHost | null | undefined;
+  oneShotStopTimeouts?: { eventDrainMs: number; serviceStopMs: number };
+  throwOnStartError?: boolean;
+  preparedOwner: { ownedServices: OwnedPluginService[]; owner: PluginServicesOwner };
+  publication: { callback: ((handle: PluginServicesHandle) => void) | undefined };
+}): Promise<PluginServicesHandle> {
+  const { ownedServices, owner } = preparedOwner;
   const canStart = (registration: PluginServiceRegistration) =>
     !owner.closed && owner.registrations.has(registration) && !owner.stopped.has(registration);
   const runBeforeDeadline = async (
@@ -391,7 +430,8 @@ export async function startPluginServices({
   };
   serviceOwners.set(handle, owner);
   // The issued handle keeps retained services and failed cleanup even when startup rejects.
-  onHandle?.(handle);
+  publication.callback?.(handle);
+  publication.callback = undefined;
 
   const startService = async (
     entry: PluginServiceRegistration,

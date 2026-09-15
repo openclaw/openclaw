@@ -17,10 +17,8 @@ import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
-import {
-  closeOpenClawAgentDatabaseByPath,
-  listOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import {

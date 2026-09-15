@@ -45,7 +45,7 @@ import type {
   ChatStartupProjectionReadParams,
   ChatStartupProjectionResult,
 } from "./chat-startup-projection-contract.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayModelCatalogContext } from "./models-list-context.js";
 
 type PreparedAgentMetadata = PreparedAgentFacts & {
   commands?: unknown[];
@@ -127,7 +127,7 @@ function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerati
 
 export function createGatewayChatMetadataRuntime(params: {
   getConfig: () => OpenClawConfig;
-  getContext: () => GatewayRequestContext;
+  getContext: () => GatewayModelCatalogContext;
   beforeRefresh?: () => Promise<void>;
   onChanged?: () => void;
   refreshOnRead?: boolean;
@@ -398,78 +398,66 @@ export function createGatewayChatMetadataRuntime(params: {
     if (stoppedError) {
       return Promise.reject(stoppedError);
     }
-    const trackRefresh = (
-      promise: Promise<void>,
-      facts?: PreparedGenerationFacts,
-    ): Promise<void> => {
-      refreshTail = promise;
-      const generationReady = createDeferredCore();
-      pending = {
-        ...(facts ? { facts } : {}),
-        promise,
-        generationReady,
-      };
-      void promise.then(
-        () => {
-          generationReady.resolve();
-          if (pending?.promise !== promise) {
-            return;
-          }
-          pending = undefined;
-          // Only the current generation may settle its replacement wait.
-          if (current?.epoch !== invalidationEpoch) {
-            return;
-          }
-          lastError = undefined;
-          const committedReplacement = replacement;
-          replacement = undefined;
-          committedReplacement?.resolve();
-          if (lastSettlement !== current) {
-            lastSettlement = current;
-            params.onChanged?.();
-          }
-        },
-        (error: unknown) => {
-          generationReady.resolve();
-          if (pending?.promise !== promise) {
-            return;
-          }
-          pending = undefined;
-          fail(error);
-        },
-      );
-      return promise;
-    };
+    let facts: PreparedGenerationFacts | undefined;
     if (params.beforeRefresh) {
       if (pending) {
         return pending.promise;
       }
-      const version = ++refreshVersion;
-      const promise = refreshTail.catch(() => {}).then(() => runRefresh(version));
-      return trackRefresh(promise);
-    }
-    let facts: PreparedGenerationFacts;
-    try {
-      facts = captureGenerationFacts(deps);
-    } catch (error) {
-      const refreshError = error instanceof Error ? error : new Error(formatErrorMessage(error));
-      fail(refreshError);
-      return Promise.reject(refreshError);
-    }
-    if (current && generationFactsMatch(current.facts, facts)) {
-      return Promise.resolve();
-    }
-    if (pending?.facts && generationFactsMatch(pending.facts, facts)) {
-      return pending.promise;
-    }
-    if (current || pending) {
-      // Fence reads synchronously only after proving the published facts changed. A suspended
-      // session projection must not return its old success or failure while replacement builds.
-      invalidate();
+    } else {
+      try {
+        facts = captureGenerationFacts(deps);
+      } catch (error) {
+        const refreshError = error instanceof Error ? error : new Error(formatErrorMessage(error));
+        fail(refreshError);
+        return Promise.reject(refreshError);
+      }
+      if (current && generationFactsMatch(current.facts, facts)) {
+        return Promise.resolve();
+      }
+      if (pending?.facts && generationFactsMatch(pending.facts, facts)) {
+        return pending.promise;
+      }
+      if (current || pending) {
+        // Fence reads synchronously only after proving the published facts changed. A suspended
+        // session projection must not return its old success or failure while replacement builds.
+        invalidate();
+      }
     }
     const version = ++refreshVersion;
     const promise = refreshTail.catch(() => {}).then(() => runRefresh(version));
-    return trackRefresh(promise, facts);
+    refreshTail = promise;
+    const generationReady = createDeferredCore();
+    pending = { ...(facts ? { facts } : {}), promise, generationReady };
+    void promise.then(
+      () => {
+        generationReady.resolve();
+        if (pending?.promise !== promise) {
+          return;
+        }
+        pending = undefined;
+        // Only the current generation may settle its replacement wait.
+        if (current?.epoch !== invalidationEpoch) {
+          return;
+        }
+        lastError = undefined;
+        const committedReplacement = replacement;
+        replacement = undefined;
+        committedReplacement?.resolve();
+        if (lastSettlement !== current) {
+          lastSettlement = current;
+          params.onChanged?.();
+        }
+      },
+      (error: unknown) => {
+        generationReady.resolve();
+        if (pending?.promise !== promise) {
+          return;
+        }
+        pending = undefined;
+        fail(error);
+      },
+    );
+    return promise;
   };
 
   const authStoresCurrent = (generation: PreparedMetadataGeneration) =>

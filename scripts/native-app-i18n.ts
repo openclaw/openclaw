@@ -1289,17 +1289,27 @@ export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
       stopOnError: true,
     },
   );
-  const typedSources: Array<{
+  return collectNativeI18nEntriesFromSources(sources);
+}
+
+export function collectNativeI18nEntriesFromSources(
+  sources: ReadonlyArray<{
     repoPath: string;
     source: string;
     surface: NativeI18nSurface;
-  }> = sources;
-  const uiCallNames = new Set([...APPLE_BUILTIN_UI_CALLS, ...ANDROID_BUILTIN_UI_CALLS]);
-  for (const { source, surface } of typedSources) {
+  }>,
+): NativeI18nEntry[] {
+  // Learned UI helpers belong to their platform. A Swift View helper named
+  // header must not enroll Kotlin HTTP header names in translation resources.
+  const uiCallNames: Record<NativeI18nSurface, Set<string>> = {
+    android: new Set([...APPLE_BUILTIN_UI_CALLS, ...ANDROID_BUILTIN_UI_CALLS]),
+    apple: new Set([...APPLE_BUILTIN_UI_CALLS, ...ANDROID_BUILTIN_UI_CALLS]),
+  };
+  for (const { source, surface } of sources) {
     if (surface === "android") {
       for (const match of source.matchAll(ANDROID_COMPOSABLE_FUNCTION)) {
         if (match[1]) {
-          uiCallNames.add(match[1]);
+          uiCallNames[surface].add(match[1]);
         }
       }
       continue;
@@ -1307,13 +1317,13 @@ export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
     for (const pattern of [APPLE_VIEW_TYPE, APPLE_VIEW_FUNCTION, APPLE_ALERT_FUNCTION]) {
       for (const match of source.matchAll(pattern)) {
         if (match[1]) {
-          uiCallNames.add(match[1]);
+          uiCallNames[surface].add(match[1]);
         }
       }
     }
   }
-  const entries = typedSources.flatMap(({ repoPath, source, surface }) =>
-    extractNativeI18nCandidates(surface, repoPath, source, uiCallNames),
+  const entries = sources.flatMap(({ repoPath, source, surface }) =>
+    extractNativeI18nCandidates(surface, repoPath, source, uiCallNames[surface]),
   );
   return assignNativeI18nIds(entries);
 }

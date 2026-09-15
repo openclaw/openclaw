@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
@@ -43,6 +44,18 @@ export interface PluginCache
   instances: Set<PluginInstanceResource>;
   retirement?: Promise<PluginHostCleanupResult>;
   [Symbol.asyncDispose](): Promise<void>;
+}
+
+const PLUGIN_CACHE_FACT_INVALIDATED = "PLUGIN_CACHE_FACT_INVALIDATED";
+
+/** Explicit fact invalidation cancels its preparation. */
+export class PluginCacheFactInvalidatedError extends Error {
+  readonly code = PLUGIN_CACHE_FACT_INVALIDATED;
+}
+
+export function isPluginCacheFactInvalidatedError(error: unknown): boolean {
+  // Shared fact promises can originate in another source/require module graph.
+  return extractErrorCode(error) === PLUGIN_CACHE_FACT_INVALIDATED;
 }
 
 type PluginCacheScope = { cache: PluginCache; parent?: PluginCacheScope };
@@ -243,27 +256,40 @@ export async function preparePluginCacheFact<T>(
             if (published && "value" in published) {
               return published;
             }
-            throw new Error("Plugin state changed during preparation; retry the operation.");
+            throw new PluginCacheFactInvalidatedError(
+              "Plugin state changed during preparation; retry the operation.",
+            );
           }
           const ready = { value };
           facts.set(key, ready);
           return ready;
         })
+        .catch((error: unknown) => {
+          const published = facts.get(key);
+          if (published === pending) {
+            facts.delete(key);
+          }
+          signal.throwIfAborted();
+          if (published !== pending && !isPluginCacheFactInvalidatedError(error)) {
+            throw new PluginCacheFactInvalidatedError(
+              "Plugin state changed during preparation; retry the operation.",
+              { cause: error },
+            );
+          }
+          throw error;
+        })
         .finally(release),
     };
     facts.set(key, pending);
-    void pending.pending.catch(() => {
-      if (facts.get(key) === pending) {
-        facts.delete(key);
-      }
-    });
     current = pending;
   }
   const ready = "pending" in current ? await current.pending : current;
   const assertCurrent = () => {
     signal.throwIfAborted();
     if (facts.get(key) !== ready) {
-      throw new Error("Plugin state changed during preparation; retry the operation.");
+      throw new PluginCacheFactInvalidatedError(
+        "Plugin state changed during preparation; retry the operation.",
+      );
     }
   };
   assertCurrent();

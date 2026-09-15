@@ -2,6 +2,7 @@ import path from "node:path";
 import type { Route } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   controlUiSessionUrl,
   createControlUiMockSameOriginGatewayScript,
@@ -27,14 +28,8 @@ suite.define(() => {
           let metadataRequests = 0;
           let outgoingRequests = 0;
           let probes = 0;
-          let releaseMedia!: () => void;
-          let releaseProbe!: () => void;
-          const mediaGate = new Promise<void>((resolve) => {
-            releaseMedia = resolve;
-          });
-          const probeGate = new Promise<void>((resolve) => {
-            releaseProbe = resolve;
-          });
+          const mediaGate = createDeferred();
+          const probeGate = createDeferred();
           const image = Buffer.from(
             await page.evaluate(() => {
               const canvas = document.createElement("canvas");
@@ -97,7 +92,7 @@ suite.define(() => {
               return;
             }
             probes += 1;
-            await probeGate;
+            await probeGate.promise;
             await route.fulfill(
               expired
                 ? { status: 302, headers: { location: "https://sign-in.example.test/login" } }
@@ -116,7 +111,7 @@ suite.define(() => {
           );
           await context.route("**/api/chat/media/outgoing/**", async (route) => {
             outgoingRequests += 1;
-            await mediaGate;
+            await mediaGate.promise;
             await route.fulfill(
               expired
                 ? { status: 302, headers: { location: "https://sign-in.example.test/login" } }
@@ -128,7 +123,7 @@ suite.define(() => {
             if (metadata) {
               metadataRequests += 1;
             }
-            await mediaGate;
+            await mediaGate.promise;
             if (expired) {
               await route.fulfill({
                 status: 302,
@@ -173,13 +168,13 @@ suite.define(() => {
           const originalUrl = page.url();
           const initialConnects = (await gateway.getRequests("connect")).length;
           expect(initialConnects).toBe(1);
-          releaseMedia();
+          mediaGate.resolve();
           await page.getByRole("button", { name: "Retry", exact: true }).first().waitFor();
           await page.screenshot({
             animations: "disabled",
             path: path.join(artifactDir, "01-image-unavailable.png"),
           });
-          releaseProbe();
+          probeGate.resolve();
           const modal = page
             .locator("openclaw-modal-dialog")
             .filter({ hasText: "Sign in to continue loading content" });

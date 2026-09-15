@@ -147,21 +147,16 @@ export const resumeAncestorCleanup = (
     }
     requesterSessionKey = entry.requesterSessionKey;
     const { runId } = entry;
-    if (typeof entry.execution.endedAt !== "number") {
-      continue;
-    }
-    if (entry.cleanupCompletedAt || entry.cleanupHandled) {
-      continue;
-    }
     // A failed cleanup belongs to its retry timer or exhausted process-local
     // budget; even descendant settlement must not reopen that attempt early.
-    if (context.hasCleanupFailure(entry)) {
-      continue;
-    }
-    if (isDeliverySuspended(entry)) {
-      continue;
-    }
-    if (params.suppressAnnounceForSteerRestart(entry)) {
+    if (
+      typeof entry.execution.endedAt !== "number" ||
+      entry.cleanupCompletedAt ||
+      entry.cleanupHandled ||
+      context.hasCleanupFailure(entry) ||
+      isDeliverySuspended(entry) ||
+      params.suppressAnnounceForSteerRestart(entry)
+    ) {
       continue;
     }
     const endedAgo = now - (entry.execution.endedAt ?? now);
@@ -174,13 +169,12 @@ export const resumeAncestorCleanup = (
         runId,
         entry,
         cleanupGeneration,
-        run: async () => {
-          await finalizeResumedAnnounceGiveUp(context, {
+        run: () =>
+          finalizeResumedAnnounceGiveUp(context, {
             runId,
             entry,
             reason: "expiry",
-          });
-        },
+          }),
       });
       continue;
     }
@@ -223,8 +217,7 @@ const finalizeSubagentCleanup = async (
       entry.suppressCompletionDelivery = undefined;
     }
     entry.wakeOnDescendantSettle = undefined;
-    const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
-    if (shouldDeleteAttachments) {
+    if (cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
       await safeRemoveAttachmentsDir(entry);
     }
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
@@ -276,15 +269,10 @@ const finalizeSubagentCleanup = async (
       delivery.attemptCount = undefined;
       delivery.nextAttemptAt = undefined;
     }
-    if (shouldCreditDelivery && !options?.skipDeliveryStatus) {
+    if (!options?.skipDeliveryStatus) {
       safeSetSubagentTaskDeliveryStatus(params, {
         entry,
-        deliveryStatus: "delivered",
-      });
-    } else if (announceOutcome === "intentional_non_delivery" && !options?.skipDeliveryStatus) {
-      safeSetSubagentTaskDeliveryStatus(params, {
-        entry,
-        deliveryStatus: terminalNonDelivery ? "failed" : "pending",
+        deliveryStatus: delivery.status,
         deliveryError: terminalNonDelivery ? getDeliveryLastError(entry) : undefined,
       });
     }
@@ -293,8 +281,7 @@ const finalizeSubagentCleanup = async (
     completion.fallbackResultText = undefined;
     completion.fallbackCapturedAt = undefined;
     const completionReason = resolveCleanupCompletionReason(entry);
-    const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
-    if (shouldDeleteAttachments) {
+    if (cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
       await safeRemoveAttachmentsDir(entry);
     }
     if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
@@ -366,21 +353,29 @@ const finalizeSubagentCleanup = async (
     return;
   }
 
-  markPendingFinalDelivery({
-    entry,
-    error: "announce deferred or direct delivery failed",
-  });
+  const requesterTurnPending = announceOutcome === "requester_turn_pending";
+  if (!requesterTurnPending) {
+    markPendingFinalDelivery({
+      entry,
+      error: "announce deferred or direct delivery failed",
+    });
+  }
   const delivery = ensureDeliveryState(entry);
+  delivery.status = "pending";
+  delivery.payload ??= loadPendingFinalDeliveryPayload(entry);
   delivery.windowStartedAt ??= entry.execution.endedAt ?? now;
   delivery.deadlineAt ??= delivery.windowStartedAt + ANNOUNCE_COMPLETION_HARD_EXPIRY_MS;
-  delivery.nextAttemptAt = now + (deferredDecision.resumeDelayMs ?? 0);
+  // An admitted requester still owns this delivery; observation is not another failed attempt.
+  const resumeDelayMs = requesterTurnPending
+    ? Math.min(MIN_ANNOUNCE_RETRY_DELAY_MS, delivery.deadlineAt - now)
+    : deferredDecision.resumeDelayMs;
+  delivery.nextAttemptAt = now + (resumeDelayMs ?? 0);
   entry.cleanupHandled = false;
   params.resumedRuns.delete(runId);
   params.persist(runId);
-  if (deferredDecision.resumeDelayMs == null) {
-    return;
+  if (resumeDelayMs != null) {
+    scheduleResumeSubagentRun(context, runId, entry, resumeDelayMs);
   }
-  scheduleResumeSubagentRun(context, runId, entry, deferredDecision.resumeDelayMs);
 };
 
 export const startSubagentAnnounceCleanupFlow = (
@@ -429,11 +424,10 @@ export const startSubagentAnnounceCleanupFlow = (
       runId,
       entry,
       cleanupGeneration,
-      run: async () => {
-        await finalizeSubagentCleanup(context, runId, cleanup, "delivered", cleanupGeneration, {
+      run: () =>
+        finalizeSubagentCleanup(context, runId, cleanup, "delivered", cleanupGeneration, {
           skipAnnounce: true,
-        });
-      },
+        }),
     });
     return true;
   }
@@ -602,6 +596,7 @@ export const startSubagentAnnounceCleanupFlow = (
     isChildSessionEffectsAllowed: childSessionEffectsAllowed,
     isCompletionDeliveryAllowed: () =>
       entry.suppressCompletionDelivery !== true &&
+      !isDeliverySuspended(entry) &&
       (entry.delivery?.status !== "delivered" || entry.delivery === committedDelivery) &&
       context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration),
     isCompletionOwnedByRequesterYield: () =>
@@ -675,10 +670,29 @@ export const startSubagentAnnounceCleanupFlow = (
         return;
       }
       const deliveryState = ensureDeliveryState(entry);
+      if (delivery.reason === "requester_turn_pending") {
+        latestDeliveryError = undefined;
+        return;
+      }
       if (delivery.reason === "delivery_suppressed") {
         deliveryState.status = "failed";
       }
       latestDeliveryError = formatAnnounceDeliveryError(delivery);
+      if (
+        delivery.reason === "message_tool_delivery_missing" &&
+        delivery.disposition === "permanent_failure" &&
+        shouldSuspendPendingFinalDelivery(entry)
+      ) {
+        // Commit the recoverable block at the execution-result edge, before
+        // best-effort mirrors or the detached announce tail can stall.
+        suspendPendingFinalDelivery(context, {
+          runId,
+          entry,
+          reason: "permanent_failure",
+          error: latestDeliveryError,
+        });
+        return;
+      }
       if (
         deliveryState.lastError !== latestDeliveryError ||
         deliveryState.lastDropReason !== previousDropReason

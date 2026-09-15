@@ -180,19 +180,27 @@ If a checkout's `.git` link points to missing administrative files, OpenClaw pre
 
 ## Snapshots, cleanup, and restore
 
-Removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Ignored files never enter the repository object database. OpenClaw stores only the ignored files it actually provisioned in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Automatic cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, removal stops unless an explicit force delete discards snapshot safety.
+Removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Ignored files never enter the repository object database. OpenClaw stores only the ignored files it actually provisioned in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Automatic cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, removal stops unless `--force` explicitly permits snapshot loss.
+
+Ordinary removal is archival: after a successful snapshot it uses Git's forced checkout removal so dirty files can be restored later. The CLI's `--force` option permits snapshot loss; omitting it does **not** select non-force Git removal. Use `openclaw worktrees remove <id> --if-lossless` when deletion must be non-force. This uses the same owner as run-end cleanup, retains dirty or unpublished work, and never retries a Git refusal with force. It cannot be combined with `--force`.
+
+Removal requires HEAD to remain on the recorded managed branch. Switching branches or detaching HEAD preserves the checkout and recorded branch. Branch deletion uses native `git branch -d` against the completed snapshot, so a tip advanced beyond that snapshot remains intact. Without a snapshot, the branch stays retained. Removal deletes only its own Git worktree registration and never runs repository-wide `git worktree prune`.
 
 Nested Git repositories and linked worktrees are separate ownership boundaries. Automatic cleanup preserves the outer worktree even when a nested linked worktree shares its Git common directory. A nested OpenClaw-managed worktree is cleaned only through its own managed-worktree record.
 
 OpenClaw applies these cleanup rules:
 
-- At run end, it removes a worktree only when `git status --porcelain` is empty and `git log HEAD --not --remotes --oneline` finds no unpushed commits. Otherwise it only releases the activity lock.
+- At run end, it removes a worktree without Git force only when `git status --porcelain` is empty and `git log HEAD --not --remotes --oneline` finds no unpushed commits. It also checks the captured contents for edits hidden by index flags. Otherwise it retains the checkout and records why.
 - Startup and hourly cleanup snapshot and remove unlocked Workboard- and session-owned worktrees idle for more than 7 days, even when dirty. Session worktrees whose owner is archived or absent are eligible immediately. Failed owner lookups preserve the checkout.
 - Cleanup also removes the least recently active eligible run-owned worktrees above the default target of 100. Manual worktrees are never automatically removed, and protected worktrees can keep the total above the target until they are released or explicitly cleaned up.
 - Snapshot records remain restorable for 30 days. Cleanup then deletes the snapshot ref and registry row.
 - A live OpenClaw process lock and any foreign or unrecognized git worktree lock protect a worktree from garbage collection.
 
+Each collection shares one preliminary lock inventory per repository across idle and limit checks. Removal rereads the current lock under its allocation lease before changing the checkout; preliminary inventories never authorize removal or stale-lock recovery.
+
 Run-end cleanup records its outcome on the worktree record: lossless removal, retention because the checkout is busy, dirty, unpushed, or has provisioned-file drift, or failure with an error reason. Inspect the recorded outcome with `openclaw worktrees list --json` or `worktrees.list`.
+
+If checkout deletion fails or is interrupted, OpenClaw preserves the completed capture at `refs/openclaw/removals/<id>`. A later removal refuses to replace that capture with files from a possibly partial checkout. Preserve the remaining files, recorded branch, snapshot refs, and shared-state database for recovery. Inspect the original removal error and Git worktree registration before attempting cleanup; do not repeatedly force removal or prune registrations. A normal completed removal, successful restore, or snapshot expiry clears this recovery ref. A failure after checkout removal can leave its branch retained and require operator reconciliation before restore can recreate that branch.
 
 Restore recreates `openclaw/<name>` at the original pre-snapshot commit, reusing its clean source template when available. Git applies the saved differences as unstaged modifications and untracked files without replacing the template with snapshot contents. Without a reusable template, Git materializes the snapshot directly. Disk admission includes space for changed and added files alongside clone metadata, or the full snapshot for an ordinary checkout. If the snapshot changes `.gitattributes` or its diff exceeds the bounded inventory size, Git rematerializes all snapshot files with a full-copy space allowance. This applies the snapshot's line endings and filters even to unchanged blobs. The synthetic snapshot stays out of branch history; its ref remains recorded as provenance.
 
@@ -203,12 +211,14 @@ A branch at a shallow history boundary can still be snapshotted and restored. If
 ```bash
 openclaw worktrees list [--json]
 openclaw worktrees create <repo-root> [--name <name>] [--base-ref <ref>] [--json]
-openclaw worktrees remove <id> [--force] [--json]
+openclaw worktrees remove <id> [--force | --if-lossless] [--json]
 openclaw worktrees restore <id> [--json]
 openclaw worktrees gc [--json]
 ```
 
 The Control UI **Worktrees** page under Settings provides the same actions plus creation with a base-branch picker, shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
+
+`--if-lossless --json` returns `removed` plus the recorded `cleanup` outcome. A retained checkout returns `removed: false`; it is not a successful deletion. The explicit `--if-lossless` option is CLI-only; Gateway removal retains its archival behavior and result format.
 
 ## Gateway methods
 

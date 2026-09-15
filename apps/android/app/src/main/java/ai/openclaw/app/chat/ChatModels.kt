@@ -17,7 +17,18 @@ internal fun normalizeVisibleChatMessageRole(role: String?): String? =
   role
     ?.trim()
     ?.lowercase(Locale.US)
+    ?.let { if (it == "tool" || it == "tool_result") "toolresult" else it }
     ?.takeIf(visibleChatMessageRoles::contains)
+
+/** Shares the transcript tool error contract across activity display and source evidence. */
+internal fun isChatToolError(value: JsonObject): Boolean = (value["isError"]?.takeUnless { it is JsonNull } ?: value["is_error"]) == JsonPrimitive(true)
+
+internal fun normalizeChatToolContentType(type: String?): String? =
+  when (type?.lowercase(Locale.US)) {
+    "toolcall", "tool_call", "tooluse", "tool_use" -> "toolCall"
+    "toolresult", "tool_result", "tool_result_block" -> "toolResult"
+    else -> null
+  }
 
 /**
  * Chat transcript item as delivered by gateway chat history and live chat events.
@@ -47,6 +58,8 @@ data class ChatMessage(
   /** Display phase supplied by the Gateway, including signed text blocks. */
   val phase: String? = null,
   val isError: Boolean = false,
+  /** Derived from current history; not retained by the offline transcript cache. */
+  val sourceTools: List<ChatSourceTool> = emptyList(),
 ) {
   // Synthetic mirrors and commentary borrow a transcript ID, not its canonical text.
   // Keep the ID for timeline actions, but never use it to recover or retain full text.

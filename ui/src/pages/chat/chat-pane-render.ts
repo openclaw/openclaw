@@ -4,7 +4,10 @@ import { findInlineApproval } from "../../app/approval-presentation.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
-import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
+import {
+  markdownSessionPublicOrigin,
+  navigateMarkdownSession,
+} from "../../components/markdown-session-links.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
@@ -679,6 +682,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
       resolveArtifactDownload: (params) => resolveChatArtifactDownload(state, params),
       basePath: state.basePath,
+      sessionPublicOrigin: markdownSessionPublicOrigin(this.context),
       resourceBasePath: state.resourceBasePath,
     };
     return this.renderChatPaneLayout({

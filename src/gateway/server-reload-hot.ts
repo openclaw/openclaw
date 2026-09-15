@@ -22,7 +22,7 @@ import {
 } from "./config-reload-recovery.js";
 import type { GatewayHotReloadApplication } from "./config-reload-status.types.js";
 import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
-import { buildGatewayCronService, type GatewayCronExitWatcherHandoff } from "./server-cron.js";
+import type { GatewayCronExitWatcherHandoff } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import { restartGatewayChannels } from "./server-reload-channel-restart.js";
@@ -131,10 +131,21 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     await publication?.checkpoint?.();
     assertReloadPublicationCurrent(publication?.isCurrent() ?? true, isRestartRetryStopped());
 
+    // Cron preparation can outlive its reload owner while loading, handing off
+    // watchers, or awaiting publication. Recheck before construction and commit.
+    const assertCronReloadCurrent = () =>
+      assertReloadPublicationCurrent(
+        publication?.isCurrent() ?? true,
+        isRestartRetryStopped() ||
+          !isCurrentGatewayReloadGeneration(myGeneration) ||
+          isGatewayReloadGenerationAborted(myGeneration),
+      );
     let cronExitWatcherHandoff:
       | { previous: GatewayCronExitWatcherHandoff; next: GatewayCronExitWatcherHandoff }
       | undefined;
     if (plan.restartCron) {
+      const { buildGatewayCronService } = await import("./server-cron.js");
+      assertCronReloadCurrent();
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
         deps: params.deps,
@@ -155,6 +166,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           state.cronState.prepareExitWatcherHandoff?.(),
           nextState.cronState.prepareExitWatcherHandoff?.(),
         ]);
+        assertCronReloadCurrent();
         if (previous && next) {
           cronExitWatcherHandoff = { previous, next };
         }
@@ -259,6 +271,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       }
       let pluginNotificationFailure: { error: unknown } | undefined;
       const commit = async () => {
+        if (plan.restartCron) {
+          assertCronReloadCurrent();
+        }
         // Plugin publication can reject its prepared registry. Keep config and
         // secret rollback available until that selection succeeds.
         publication?.assertInvokerOwned?.();

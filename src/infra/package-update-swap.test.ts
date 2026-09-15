@@ -82,3 +82,73 @@ describe("retained package backup retirement", () => {
     },
   );
 });
+
+describe("launcher backup capture", () => {
+  it("cleans partial backups without moving the installation when a later launcher copy fails", async () => {
+    await withTestDir({ prefix: "openclaw-partial-launcher-backup-" }, async (base) => {
+      const { params, packageRoot, globalRoot, launcher } = await createPackageSwapFixture(base);
+      const secondLauncher = `${launcher}.cmd`;
+      await fs.writeFile(secondLauncher, "old command launcher\n");
+      await fs.writeFile(
+        path.join(params.stage.layout.binDir, "openclaw.cmd"),
+        "candidate command launcher\n",
+      );
+      const originals = await Promise.all(
+        [packageRoot, launcher, secondLauncher].map(async (entry) => (await fs.lstat(entry)).ino),
+      );
+      const copyFile = fs.copyFile.bind(fs);
+      let firstBackup: string | undefined;
+      const copy = vi.spyOn(fs, "copyFile").mockImplementation(async (...args) => {
+        if (String(args[0]) === secondLauncher) {
+          const backupDir = (await fs.readdir(globalRoot)).find((entry) =>
+            entry.startsWith(".openclaw.shim-backup-"),
+          );
+          if (!backupDir) {
+            throw new Error("missing partial launcher backup");
+          }
+          firstBackup = await fs.readFile(path.join(globalRoot, backupDir, "openclaw"), "utf8");
+          throw new Error("second launcher backup refused");
+        }
+        return copyFile(...args);
+      });
+      const beforeActivate = vi.fn();
+      const onLiveMutation = vi.fn();
+      const onTransaction = vi.fn();
+      let result;
+      try {
+        result = await swapStagedPackageInstall({
+          ...params,
+          beforeActivate,
+          onLiveMutation,
+          onTransaction,
+        });
+      } finally {
+        copy.mockRestore();
+      }
+      expect(firstBackup).toBe("old launcher\n");
+      expect(result).toMatchObject({
+        status: "failed",
+        activePackageRoot: packageRoot,
+        packageRollbackVerified: true,
+        step: {
+          exitCode: 1,
+          stderrTail: expect.stringContaining("second launcher backup refused"),
+        },
+      });
+      expect(beforeActivate).not.toHaveBeenCalled();
+      expect(onLiveMutation).not.toHaveBeenCalled();
+      expect(onTransaction).not.toHaveBeenCalled();
+      expect(
+        await Promise.all(
+          [packageRoot, launcher, secondLauncher].map(async (entry) => (await fs.lstat(entry)).ino),
+        ),
+      ).toEqual(originals);
+      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+        '"version":"1.0.0"',
+      );
+      await expect(fs.readFile(launcher, "utf8")).resolves.toBe("old launcher\n");
+      await expect(fs.readFile(secondLauncher, "utf8")).resolves.toBe("old command launcher\n");
+      expect(await fs.readdir(globalRoot)).toEqual(["openclaw"]);
+    });
+  });
+});

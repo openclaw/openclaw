@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { ConfigSnapshotReadMeasure } from "../../../config/io.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { DeferredPluginMigration } from "../../../infra/deferred-plugin-migrations.js";
 import type {
   LegacyStateMigrationStepReceipt,
   PreparedPostSessionPluginMigration,
@@ -36,6 +37,7 @@ export type DoctorConfigPreflightOptions = {
 export type DoctorConfigPreflightResult = {
   snapshot: ConfigFileSnapshot;
   baseConfig: OpenClawConfig;
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   modelBillingRouteMigrationSource?: OpenClawConfig;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   cronCodexRuntimePolicyTargets?: CronCodexRuntimePolicyTarget[];

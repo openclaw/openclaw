@@ -38,6 +38,8 @@ import { prepareSimpleCompletionModel } from "../../agents/simple-completion-run
 import { normalizeUsage, hasObservedModelUsage } from "../../agents/usage.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { emitAgentEventForRunContext } from "../../infra/agent-events.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import {
@@ -500,6 +502,7 @@ export function createWorkerInferenceExecutor(
     if (!target) {
       return inferenceError("session-not-attached");
     }
+    const runContext = getAgentRunContext(request.runId);
     const context = buildContext(request.context);
     if (!context) {
       return inferenceError("invalid-context");
@@ -641,6 +644,8 @@ export function createWorkerInferenceExecutor(
 
       const providerAbort = new AbortController();
       const providerSignal = AbortSignal.any([signal, providerAbort.signal]);
+      let currentMessage: AssistantMessage | undefined;
+      let publishedModel: string | undefined;
       try {
         const events = await stream(
           model,
@@ -652,6 +657,30 @@ export function createWorkerInferenceExecutor(
           }),
         );
         for await (const event of events) {
+          if (event.type !== "error") {
+            // Lean text deltas retain the provider's latest mutable checkpoint.
+            currentMessage =
+              event.type === "done" ? event.message : (event.partial ?? currentMessage);
+            const executingModel = currentMessage?.responseModel ?? modelIdentity.model;
+            if (
+              currentMessage &&
+              executingModel !== publishedModel &&
+              runContext?.sessionId === request.sessionId &&
+              runContext.sessionKey === target.sessionKey &&
+              (runContext.agentId === undefined || runContext.agentId === target.agentId) &&
+              executionIsCurrent()
+            ) {
+              emitAgentEventForRunContext(
+                {
+                  runId: request.runId,
+                  stream: "lifecycle",
+                  data: { phase: "model", provider: modelIdentity.provider, model: executingModel },
+                },
+                runContext,
+              );
+              publishedModel = executingModel;
+            }
+          }
           if (event.type === "done") {
             recordUsage(event.message.usage);
             if (signal.aborted || !params.isCurrent()) {

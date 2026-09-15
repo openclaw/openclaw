@@ -456,7 +456,7 @@ describe("secrets runtime provider and media surfaces", () => {
         token: "shared-audio-token",
       });
       expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-        "tools.media.models.0.request.auth.token",
+        "tools.media.models[0].request.auth.token",
       );
     } finally {
       registrySpy.mockRestore();
@@ -477,7 +477,7 @@ describe("secrets runtime provider and media surfaces", () => {
       token: sharedTokenRef,
     });
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "tools.media.models.0.request.auth.token",
+      "tools.media.models[0].request.auth.token",
     );
   });
 
@@ -528,7 +528,7 @@ describe("secrets runtime provider and media surfaces", () => {
       token: "inferred-audio-token",
     });
     expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
-      "tools.media.models.0.request.auth.token",
+      "tools.media.models[0].request.auth.token",
     );
   });
 
@@ -556,7 +556,7 @@ describe("secrets runtime provider and media surfaces", () => {
       token: inferredTokenRef,
     });
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "tools.media.models.0.request.auth.token",
+      "tools.media.models[0].request.auth.token",
     );
   });
 
@@ -593,7 +593,7 @@ describe("secrets runtime provider and media surfaces", () => {
       token: fixtureRef,
     });
     expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "tools.media.models.0.request.auth.token",
+      "tools.media.models[0].request.auth.token",
     );
   });
 
@@ -635,7 +635,7 @@ describe("secrets runtime provider and media surfaces", () => {
         ownerKind: "capability",
         ownerId: "media-model:shared:0",
         state: "unavailable",
-        paths: ["tools.media.models.0.request.auth.token"],
+        paths: ["tools.media.models[0].request.auth.token"],
       },
     ]);
   });

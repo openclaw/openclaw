@@ -8042,6 +8042,7 @@ test "$package_manager" = "pnpm@12.1.0"
     });
     expectTextToIncludeAll(buildPrivateQa.run, [
       "pnpm build qaRuntime",
+      "test -f dist/plugin-sdk/qa-channel-protocol.js",
       "test -f dist/plugin-sdk/qa-runtime.js",
       "test -f dist/extensions/qa-lab/runtime-api.js",
     ]);
@@ -8448,6 +8449,23 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(
       calls.filter(({ args }) => args.some((value) => value.endsWith("/runs/101"))),
     ).toHaveLength(60);
+  });
+
+  it("reports a child startup failure immediately without reposting", () => {
+    const child = fullReleaseChild("artifact-candidate");
+    const { calls, result } = runFullReleaseChildDispatch(child, {
+      MOCK_GH_CONCLUSION: "startup_failure",
+      MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
+      MOCK_GH_RUN_TITLES: JSON.stringify([child.runName]),
+      MOCK_GH_STATUSES: '["completed"]',
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("before any jobs started (startup_failure)");
+    expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
+    expect(
+      calls.filter(({ args }) => args.some((value) => value.endsWith("/runs/101"))),
+    ).toHaveLength(1);
   });
 
   it("refuses an immutable child mismatch immediately without reposting", () => {

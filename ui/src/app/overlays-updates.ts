@@ -615,10 +615,7 @@ export function createApplicationUpdateOverlays(
       }
       const generation = updateRunGeneration;
       const revision = updateStatusRevision;
-      const isCurrent = () =>
-        generation === updateRunGeneration &&
-        isCurrentClient(client) &&
-        readGatewayOperatorAccess(gateway.snapshot).canAdmin;
+      const isCurrent = () => generation === updateRunGeneration && isCurrentClient(client);
       updateHoldInFlight = true;
       try {
         const response = await client.request<UpdateHoldResult>("update.hold", {});
@@ -645,8 +642,7 @@ export function createApplicationUpdateOverlays(
         return response.ok;
       } catch (error) {
         if (isCurrent() && revision === updateStatusRevision) {
-          const message = formatUiError(error);
-          publishError(message);
+          publishError(error);
         }
         return false;
       } finally {

@@ -27,6 +27,10 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "../flows/health-checks.js";
+import {
+  readDeferredPluginMigrations,
+  type DeferredPluginMigration,
+} from "../infra/deferred-plugin-migrations.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import {
   resolvePluginInstallRoots,
@@ -132,31 +136,35 @@ async function prepareDoctorLintExecution(
   const updateReadiness = isPostCoreConvergencePass(sourceEnv) ? "post-plugin" : undefined;
   const effectiveOpts: DoctorLintCliOptions = updateReadiness ? { ...opts, updateReadiness } : opts;
   const pluginStateMode = resolveBundledHealthCheckPluginStateMode(effectiveOpts);
+  const readConfigSnapshot = (deferredPluginMigrations?: readonly DeferredPluginMigration[]) =>
+    pluginStateMode === "direct"
+      ? readConfigFileSnapshot({ observe: false })
+      : createConfigIO({
+          env: sourceEnv,
+          configPath: resolveConfigPath(sourceEnv, resolveStateDir(sourceEnv)),
+          observe: false,
+          pluginValidation: pluginStateMode === "deferred" ? "core-only" : undefined,
+          deferredPluginMigrations,
+        }).readConfigFileSnapshot();
   const stateView: DoctorLintStateView = {
     pluginMetadataEnv: sourceEnv,
     sourceEnv,
-    readConfigSnapshot: () =>
-      pluginStateMode === "direct"
-        ? readConfigFileSnapshot({ observe: false })
-        : createConfigIO({
-            env: sourceEnv,
-            configPath: resolveConfigPath(sourceEnv, resolveStateDir(sourceEnv)),
-            observe: false,
-            pluginValidation: pluginStateMode === "deferred" ? "core-only" : undefined,
-          }).readConfigFileSnapshot(),
+    readConfigSnapshot,
     runWithPluginStateSnapshot: async (run) => withReadOnlyPluginStateSnapshot(sourceEnv, run),
   };
   if (pluginStateMode !== "isolated") {
     return await executeDoctorLint(runtime, effectiveOpts, sevMin, stateView);
   }
   try {
-    return await withReadOnlyPluginStateSnapshot(sourceEnv, async (pluginMetadataEnv) =>
-      executeDoctorLint(runtime, effectiveOpts, sevMin, {
+    return await withReadOnlyPluginStateSnapshot(sourceEnv, async (pluginMetadataEnv) => {
+      const pending = readDeferredPluginMigrations({ env: pluginMetadataEnv });
+      return executeDoctorLint(runtime, effectiveOpts, sevMin, {
         ...stateView,
         pluginMetadataEnv,
+        readConfigSnapshot: () => readConfigSnapshot(pending),
         runWithPluginStateSnapshot: async (run) => run(pluginMetadataEnv),
-      }),
-    );
+      });
+    });
   } catch (error) {
     if (!(error instanceof DoctorLintStateSnapshotError)) {
       throw error;

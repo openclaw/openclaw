@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import * as musicGenerationRuntime from "../../music-generation/runtime.js";
+import type { MusicGenerationProvider } from "../../music-generation/types.js";
 import * as fetchTimeout from "../../utils/fetch-timeout.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
@@ -648,6 +649,79 @@ describe("createMusicGenerateTool", () => {
       timeoutMs: 180_000,
     });
     expect(detailsOf(result).timeoutMs).toBe(180_000);
+  });
+
+  it.each([
+    { edit: { enabled: false }, images: ["data:image/png;base64,Zmlyc3Q="] },
+    {
+      edit: { enabled: true, maxInputImages: 1 },
+      images: ["data:image/png;base64,Zmlyc3Q=", "data:image/png;base64,bGFzdA=="],
+    },
+  ])("uses a capable music fallback for reference images ($edit)", async ({ edit, images }) => {
+    const primaryGenerate = vi.fn(async () => ({
+      tracks: [{ buffer: Buffer.from("wrong"), mimeType: "audio/mpeg" }],
+    }));
+    const fallbackGenerate = vi.fn(async () => ({
+      tracks: [{ buffer: generatedWav, mimeType: "audio/wav" }],
+    }));
+    const providers: MusicGenerationProvider[] = [
+      {
+        id: "primary-music",
+        capabilities: { edit },
+        generateMusic: primaryGenerate,
+      },
+      {
+        id: "fallback-music",
+        capabilities: { edit: { enabled: true, maxInputImages: 2 } },
+        generateMusic: fallbackGenerate,
+      },
+    ];
+    musicGenerationRuntimeMocks.listRuntimeMusicGenerationProviders.mockReturnValue(providers);
+    const actualRuntime = await vi.importActual<typeof import("../../music-generation/runtime.js")>(
+      "../../music-generation/runtime.js",
+    );
+    musicGenerationRuntimeMocks.generateMusic.mockImplementation(
+      (params: Parameters<typeof actualRuntime.generateMusic>[0]) =>
+        actualRuntime.generateMusic(params, {
+          getProvider: (id) => providers.find((provider) => provider.id === id),
+          listProviders: () => providers,
+        }),
+    );
+    mediaStoreMocks.saveMediaBuffer.mockResolvedValue({
+      path: "/tmp/reference-score.wav",
+      id: "reference-score.wav",
+      size: generatedWav.byteLength,
+      contentType: "audio/wav",
+    });
+    const tool = expectMusicGenerateTool(
+      createMusicGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              mediaModels: {
+                music: { primary: "primary-music/score", fallbacks: ["fallback-music/score"] },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const result = await tool.execute("call-reference-fallback", {
+      prompt: "score this cover art",
+      images,
+    });
+
+    expect(primaryGenerate).not.toHaveBeenCalled();
+    expect(fallbackGenerate).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        inputImages: images.map((_, index) => ({
+          buffer: Buffer.from(index === 0 ? "first" : "last"),
+          mimeType: "image/png",
+        })),
+      }),
+    );
+    expect(detailsOf(result).provider).toBe("fallback-music");
   });
 
   it("rejects oversized inline reference images before music generation", async () => {

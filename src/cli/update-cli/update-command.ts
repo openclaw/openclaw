@@ -12,7 +12,6 @@ import { VERSION } from "../../version.js";
 import { createUpdateProgress, type UpdateDisplayProgress } from "./progress.js";
 import {
   confirmUpdateDowngrade,
-  resolveNodeRunner,
   tryResolveInvocationCwd,
   type UpdateCommandOptions,
 } from "./shared.js";
@@ -22,6 +21,7 @@ import {
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
 import type { InitializedUpdate } from "./update-command-initialization.js";
+import { resolveManagedPackageRuntimePreflight } from "./update-command-package-runtime.js";
 import { UpdateCommandFailure, withUpdateAdmissionReporting } from "./update-command-result.js";
 import {
   admitUpdateCommandRun,
@@ -40,10 +40,6 @@ import {
   resolveUpdateTargetEnv,
   withUpdateInProgressEnv,
 } from "./update-command-service-env.js";
-import {
-  gatewayServiceCommandUsesRoot,
-  resolvePackageRuntimePreflight,
-} from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 import {
@@ -87,6 +83,7 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
       opts: inputOpts,
       root: prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
       invocationCwd,
+      pkgOwnership: prepared.pkgOwnership,
     });
     const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
     if (await updateStateNeedsInitialization(env)) {
@@ -108,6 +105,7 @@ async function runAdmittedUpdate(
     root: prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
     invocationCwd,
     initialization,
+    pkgOwnership: prepared.pkgOwnership,
   });
   const opts = { ...inputOpts, run };
   prepared.controlPlaneUpdateSentinelMeta = {
@@ -287,15 +285,12 @@ async function initializeAndRunUpdate(
                 controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
               });
               initialization.downgradeConfirmed = true;
-              const canRefreshManagedServiceNode =
-                prepared.shouldRestart &&
-                target.managedServiceNodeRunner !== undefined &&
-                (await gatewayServiceCommandUsesRoot({ root: target.root })) === true;
-              const runtime = await resolvePackageRuntimePreflight({
+              const runtime = await resolveManagedPackageRuntimePreflight({
+                root: target.root,
+                shouldRestart: prepared.shouldRestart,
                 target: target.packageRuntimeTarget,
                 timeoutMs,
                 nodeRunner: target.managedServiceNodeRunner,
-                fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
               });
               if (!runtime.ok) {
                 const { error, failureFacts } = runtime;
@@ -550,17 +545,12 @@ async function updateCommandInternal(
   }
 
   if (updateInstallKind === "package") {
-    // Changing runners is safe only when this update owns and will rewrite the
-    // service; otherwise the unchanged unit could still restart on the stale Node.
-    const canRefreshManagedServiceNode =
-      shouldRestart &&
-      managedServiceNodeRunner !== undefined &&
-      (await gatewayServiceCommandUsesRoot({ root })) === true;
-    const runtimePreflight = await resolvePackageRuntimePreflight({
+    const runtimePreflight = await resolveManagedPackageRuntimePreflight({
+      root,
+      shouldRestart,
       target: packageRuntimeTarget,
       timeoutMs: updateStepTimeoutMs,
       nodeRunner: managedServiceNodeRunner,
-      fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
     });
     if (!runtimePreflight.ok) {
       const { error, failureFacts } = runtimePreflight;

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
   normalizePluginsConfig,
@@ -22,10 +23,19 @@ import {
 import { validatePluginSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
 import { isRecord, resolveUserPath } from "../utils.js";
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
+import { formatRawChannelConfigIssueMessage } from "./validation-channel-rules.js";
 
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
+
+export function formatChannelConfigIssueMessage(message: string, pluginId?: string): string {
+  const safePluginId = pluginId ? sanitizeForLog(pluginId).trim() : "";
+  return safePluginId
+    ? `invalid config for plugin ${safePluginId}: ${message}`
+    : formatRawChannelConfigIssueMessage(message);
+}
 
 type ExplicitPluginReferences = {
   entries: Set<string>;
@@ -34,7 +44,7 @@ type ExplicitPluginReferences = {
   slots: Map<string, string>;
 };
 
-export function collectExplicitPluginReferences(raw: unknown): ExplicitPluginReferences {
+function collectExplicitPluginReferences(raw: unknown): ExplicitPluginReferences {
   const references: ExplicitPluginReferences = {
     entries: new Set(),
     allow: new Set(),
@@ -84,7 +94,7 @@ export function collectExplicitPluginReferences(raw: unknown): ExplicitPluginRef
   return references;
 }
 
-export function resolveExplicitPluginReferencePath(
+function resolveExplicitPluginReferencePath(
   references: ExplicitPluginReferences,
   pluginId: string,
 ): string | undefined {
@@ -103,6 +113,60 @@ export function resolveExplicitPluginReferencePath(
   }
   const slotId = references.slots.get(normalized);
   return slotId ? `plugins.slots.${slotId}` : undefined;
+}
+
+/** Classify one registry generation against its authored plugin references and deferred owners. */
+export function createPluginRegistryConfigValidator(params: {
+  raw: unknown;
+  deferredPluginIds: ReadonlySet<string>;
+  issues: ConfigValidationIssue[];
+  warnings: ConfigValidationIssue[];
+}): (registry: PluginManifestRegistry) => void {
+  const references = collectExplicitPluginReferences(params.raw);
+  let checked = false;
+  return (registry) => {
+    if (checked) {
+      return;
+    }
+    checked = true;
+    for (const diagnostic of registry.diagnostics) {
+      const explicitPath = diagnostic.pluginId
+        ? resolveExplicitPluginReferencePath(references, diagnostic.pluginId)
+        : undefined;
+      const issuePath =
+        !diagnostic.pluginId && diagnostic.message.includes("plugin path not found")
+          ? "plugins.load.paths"
+          : (explicitPath ?? "plugins");
+      const pluginLabel = diagnostic.pluginId ? `plugin ${diagnostic.pluginId}` : "plugin";
+      const issue = { path: issuePath, message: `${pluginLabel}: ${diagnostic.message}` };
+      const deferred =
+        diagnostic.pluginId && params.deferredPluginIds.has(normalizePluginId(diagnostic.pluginId));
+      (diagnostic.level === "error" && (explicitPath || !diagnostic.pluginId) && !deferred
+        ? params.issues
+        : params.warnings
+      ).push(issue);
+    }
+  };
+}
+
+/** Deferred channel settings remain authored inputs until their owning plugin can validate them. */
+export function resolveDeferredChannelConfigWarning(params: {
+  channelId: string;
+  schemaPluginId: string | undefined;
+  deferredPluginIds: ReadonlySet<string>;
+  registry: PluginManifestRegistry;
+}): ConfigValidationIssue | undefined {
+  const pluginId =
+    params.schemaPluginId ??
+    GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find((entry) => entry.channelId === params.channelId)
+      ?.pluginId ??
+    params.registry.plugins.find((record) => record.channels.includes(params.channelId))?.id;
+  return pluginId && params.deferredPluginIds.has(normalizePluginId(pluginId))
+    ? {
+        path: `channels.${params.channelId}`,
+        message: `Plugin "${pluginId}" channel config validation is deferred while its state migration is pending; existing settings are preserved.`,
+      }
+    : undefined;
 }
 
 function formatRemovedPluginConfigWarning(pluginId: string): string {
@@ -138,6 +202,7 @@ export function validateExplicitPluginConfig(params: {
   registry: PluginManifestRegistry;
   knownIds: Set<string>;
   normalizedPlugins: ReturnType<typeof normalizePluginsConfig>;
+  deferredPluginIds?: ReadonlySet<string>;
   ensureCompatPluginIds: () => ReadonlySet<string>;
   ensureOverriddenPluginIds: () => Set<string>;
   replacePluginEntryConfig: (pluginId: string, nextValue: Record<string, unknown>) => void;
@@ -235,6 +300,21 @@ export function validateExplicitPluginConfig(params: {
       blockedDiagnosticSourceMatchesPluginId(diagnostic, pluginId),
     );
   const missingOfficialPluginWarningIds = new Set<string>();
+  const deferredPluginWarningIds = new Set<string>();
+  const noteDeferredPlugin = (pluginId: string, issuePath: string): boolean => {
+    const normalized = normalizePluginId(pluginId);
+    if (!params.deferredPluginIds?.has(normalized)) {
+      return false;
+    }
+    if (!deferredPluginWarningIds.has(normalized)) {
+      deferredPluginWarningIds.add(normalized);
+      warnings.push({
+        path: issuePath,
+        message: `Plugin "${pluginId}" config validation is deferred while its state migration is pending; existing settings are preserved.`,
+      });
+    }
+    return true;
+  };
   const pushMissingPluginIssue = (
     issuePath: string,
     pluginId: string,
@@ -244,6 +324,9 @@ export function validateExplicitPluginConfig(params: {
       missingMessage?: string | null;
     },
   ) => {
+    if (noteDeferredPlugin(pluginId, issuePath)) {
+      return;
+    }
     if (isRetiredPluginId(pluginId)) {
       warnings.push({ path: issuePath, message: formatRemovedPluginConfigWarning(pluginId) });
       return;
@@ -361,6 +444,9 @@ export function validateExplicitPluginConfig(params: {
       continue;
     }
     seenPlugins.add(pluginId);
+    if (noteDeferredPlugin(pluginId, `plugins.entries.${pluginId}`)) {
+      continue;
+    }
     const entry = normalizedPlugins.entries[pluginId];
     const entryHasConfig = Boolean(entry?.config);
     const activationState = resolveEffectivePluginActivationState({

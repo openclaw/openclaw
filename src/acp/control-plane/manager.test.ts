@@ -1,7 +1,7 @@
 /** Tests ACP session manager resolution, turn execution, state transitions, and cleanup. */
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime/types";
+import type { AcpRuntimeEvent, AcpRuntimeTurnInput } from "@openclaw/acp-core/runtime/types";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
@@ -617,7 +617,7 @@ describe("AcpSessionManager", () => {
     });
   }, 300_000);
 
-  it("rejects a queued turn promptly when its caller aborts before the actor is free", async () => {
+  it("cancels a queued turn promptly when its caller aborts before the actor is free", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
       id: "acpx",
@@ -658,6 +658,7 @@ describe("AcpSessionManager", () => {
     );
 
     const abortController = new AbortController();
+    const events: AcpRuntimeEvent[] = [];
     const second = manager.runTurn({
       provenance: "system",
       cfg: baseCfg,
@@ -666,6 +667,9 @@ describe("AcpSessionManager", () => {
       mode: "prompt",
       requestId: "r2",
       signal: abortController.signal,
+      onEvent: (event) => {
+        events.push(event);
+      },
     });
     abortController.abort();
 
@@ -689,15 +693,8 @@ describe("AcpSessionManager", () => {
       { interval: 1 },
     );
 
-    expect(secondOutcome.status).toBe("rejected");
-    if (secondOutcome.status !== "rejected") {
-      return;
-    }
-    expect(secondOutcome.error).toBeInstanceOf(AcpRuntimeError);
-    expectRecordFields(secondOutcome.error, {
-      code: "ACP_TURN_FAILED",
-      message: "ACP operation aborted.",
-    });
+    expect(secondOutcome).toEqual({ status: "resolved" });
+    expect(events).toEqual([{ type: "done", status: "cancelled", stopReason: "cancel" }]);
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
   });
 

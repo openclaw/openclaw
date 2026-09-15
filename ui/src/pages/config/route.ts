@@ -17,19 +17,32 @@ function loadConfigRoute(
   location: RouteLocation,
   pageId: ConfigPageId,
 ) {
+  const agentSelectionIntent =
+    pageId === "memory"
+      ? {
+          owner: context.settingsAgentSelection,
+          revision: context.settingsAgentSelection.intentRevision,
+        }
+      : undefined;
   const primaryLoad = context.runtimeConfig.ensureLoaded();
   if (pageId !== "updates") {
     void primaryLoad.then(() => context.runtimeConfig.ensureSchemaLoaded()).catch(() => undefined);
   }
-  return configRouteData(location);
+  return {
+    ...configRouteData(location),
+    ...(agentSelectionIntent ? { agentSelectionIntent } : {}),
+  };
 }
 
 function configPage(id: ConfigPageId) {
   return definePage({
     ...routePageSpec(id),
-    loaderDeps: (_context: ApplicationContext, location: RouteLocation) => {
+    loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
       const route = configRouteData(location);
-      return `${route.pathname}\u0000${route.search}\u0000${route.hash}`;
+      const locationKey = `${route.pathname}\u0000${route.search}\u0000${route.hash}`;
+      return id === "memory"
+        ? `${locationKey}\u0000${context.settingsAgentSelection.intentRevision}`
+        : locationKey;
     },
     loader: (context: ApplicationContext, { location }) => loadConfigRoute(context, location, id),
     component: () =>

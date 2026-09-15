@@ -446,7 +446,10 @@ suite.define(() => {
         const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
         expect(response?.status()).toBe(200);
         await gateway.deferNext("wizard.next", { answer: { stepId: "scope" } });
-        await page.getByRole("button", { name: "Pair" }).click();
+        await page
+          .locator('[data-auth-choice="provider-device-code"]')
+          .getByRole("button", { name: "Set up & verify", exact: true })
+          .click();
         const start = await gateway.waitForRequest("openclaw.setup.auth.start");
         expect(start.params).toMatchObject({ authChoice: "provider-device-code" });
         await gateway.waitForRequest("wizard.next", { match: { answer: { stepId: "scope" } } });

@@ -82,7 +82,7 @@ const VideoGenerateToolProperties = {
   imageRoles: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "`image` + `images` roles by index after de-dupe. Values: first_frame, last_frame, reference_image; empty string leaves unset.",
+        "`image` + `images` roles by index. Values: first_frame, last_frame, reference_image; empty string leaves unset.",
     }),
   ),
   video: Type.Optional(
@@ -98,7 +98,7 @@ const VideoGenerateToolProperties = {
   videoRoles: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "`video` + `videos` roles by index after de-dupe. Value: reference_video; empty string leaves unset.",
+        "`video` + `videos` roles by index. Value: reference_video; empty string leaves unset.",
     }),
   ),
   audioRef: Type.Optional(
@@ -114,7 +114,7 @@ const VideoGenerateToolProperties = {
   audioRoles: Type.Optional(
     Type.Array(Type.String(), {
       description:
-        "`audioRef` + `audioRefs` roles by index after de-dupe. Value: reference_audio; empty string leaves unset.",
+        "`audioRef` + `audioRefs` roles by index. Value: reference_audio; empty string leaves unset.",
     }),
   ),
   model: Type.Optional(

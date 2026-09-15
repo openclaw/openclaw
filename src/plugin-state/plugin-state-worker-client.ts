@@ -63,6 +63,27 @@ export function registerPluginStateInWorker(params: Input<"pluginState.register"
   );
 }
 
+export function observePluginStateInWorker(params: Input<"pluginState.observe">) {
+  const { env, ...input } = params;
+  return execute(env, "pluginState.observe", (scope) =>
+    scope.execute({ type: "pluginState.observe", input }),
+  );
+}
+
+export function comparePluginStateUpdateInWorker(params: Input<"pluginState.compareUpdate">) {
+  const { env, ...input } = params;
+  return execute(env, "pluginState.compareUpdate", (scope) =>
+    scope.execute({ type: "pluginState.compareUpdate", input }),
+  );
+}
+
+export function comparePluginStateDeleteInWorker(params: Input<"pluginState.compareDelete">) {
+  const { env, ...input } = params;
+  return execute(env, "pluginState.compareDelete", (scope) =>
+    scope.execute({ type: "pluginState.compareDelete", input }),
+  );
+}
+
 export function registerPluginStateIfAbsentInWorker(
   params: Input<"pluginState.registerIfAbsent">,
 ): Promise<boolean> {
@@ -147,5 +168,22 @@ export function countPluginStateInWorker(params: Input<"pluginState.count">): Pr
     "pluginState.count",
     (scope) => scope.execute({ type: "pluginState.count", input }),
     () => 0,
+  );
+}
+
+export function registerPluginStateJournalInWorker(params: Input<"pluginState.appendJournal">) {
+  const { env, ...input } = params;
+  return execute(env, "pluginState.appendJournal", (scope) =>
+    scope.execute({ type: "pluginState.appendJournal", input }),
+  );
+}
+
+export function listPluginStateInKeyRangeInWorker(params: Input<"pluginState.entriesInKeyRange">) {
+  const { env, ...input } = params;
+  return execute(
+    env,
+    "pluginState.entriesInKeyRange",
+    (scope) => scope.execute({ type: "pluginState.entriesInKeyRange", input }),
+    () => [],
   );
 }

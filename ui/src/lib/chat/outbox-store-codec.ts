@@ -11,6 +11,7 @@ import type {
 } from "./chat-types.ts";
 import { isChatGoalDraftMode } from "./goal-draft.ts";
 import { readHumanMentions } from "./human-mentions.ts";
+import { readChatSelectionAnnotation } from "./selection-annotation.ts";
 import { normalizeSenderIdentity } from "./sender-label.ts";
 
 export const MAX_STORED_SESSIONS = 20;
@@ -62,6 +63,10 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
     return null;
   }
   const restored: ChatAttachment = { id, mimeType };
+  const selectionAnnotation = readChatSelectionAnnotation(entry.selectionAnnotation);
+  if (selectionAnnotation) {
+    restored.selectionAnnotation = selectionAnnotation;
+  }
   const fileName = normalizeOptionalString(entry.fileName);
   if (fileName) {
     restored.fileName = fileName;

@@ -250,16 +250,20 @@ describe("update plugin lifecycle lease boundaries", () => {
     "reports the admitted Doctor failure (interactive=%s)",
     async (interactive) => {
       mocks.interactive = interactive;
+      vi.mocked(readPackageVersion).mockResolvedValue("2026.9.4");
       const message =
         "Doctor could not enter maintenance. Error: The update parent owns Gateway activation.";
       vi.mocked(runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(
-        new UpdateDoctorError(message, [{ check: "doctor", code: "doctor-failed", message }]),
+        new UpdateDoctorError(message, [{ check: "doctor", code: "doctor-failed", message }], {
+          exitCode: 23,
+        }),
       );
       mocks.triage.mockImplementationOnce(async () => {
         expect(listUpdateRuns()[0]).toMatchObject({
           status: "failed",
           reason: "doctor-failed",
-          target: { kind: "package" },
+          target: { kind: "package", version: "2026.9.4" },
+          after: { version: "2026.9.4" },
         });
         return { status: "completed", hint: "fixture" };
       });
@@ -273,7 +277,9 @@ describe("update plugin lifecycle lease boundaries", () => {
           .join("\n");
         expect(body).toContain("Reason code: doctor-failed");
         expect(body).toContain("Update mode: package");
-        expect(body).toContain(`Failed phase finalize:doctor: ${message}`);
+        expect(body).toContain("Update target: 2026.9.4");
+        expect(body).toContain("Failed phase finalize:doctor: exit 23");
+        expect(body).toContain(`Failing check doctor (doctor-failed): ${message}`);
         expect(body).toContain(
           "Recovery outcome: package rollback not needed: no package mutation",
         );
@@ -282,6 +288,10 @@ describe("update plugin lifecycle lease boundaries", () => {
         expect(mocks.triage).toHaveBeenCalledOnce();
       }
       expect(listUpdateRuns()).toHaveLength(1);
+      closeOpenClawStateDatabaseForTest();
+      expect(listUpdateRuns()[0]?.steps).toContainEqual(
+        expect.objectContaining({ step: "finalize:doctor", status: "failed", exitCode: 23 }),
+      );
       expect(listUpdateRuns()[0]?.steps).toContainEqual(
         expect.objectContaining({
           step: "finalize:package-rollback-not-needed",

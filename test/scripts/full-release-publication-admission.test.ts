@@ -498,15 +498,25 @@ function fixture(
     rmSync(join(target, "extensions/demo-plugin/README.md"));
     symlinkSync("package.json", join(target, "extensions/demo-plugin/README.md"));
   }
-  if (options.fault === "non-utf8") {
-    const directory = Buffer.concat([
-      Buffer.from(join(target, "extensions") + "/"),
-      Buffer.from([0xff]),
-    ]);
-    mkdirSync(directory);
-    writeFileSync(Buffer.concat([directory, Buffer.from("/package.json")]), "{}");
-  }
   let targetSha = commit(target);
+  if (options.fault === "non-utf8") {
+    const blobSha = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+      cwd: target,
+      encoding: "utf8",
+      input: "{}",
+    }).trim();
+    execFileSync("git", ["update-index", "--add", "-z", "--index-info"], {
+      cwd: target,
+      input: Buffer.concat([
+        Buffer.from(`100644 ${blobSha}\t`),
+        Buffer.from("extensions/"),
+        Buffer.from([0xff]),
+        Buffer.from("/package.json\0"),
+      ]),
+    });
+    git(target, "commit", "-qm", "non-utf8 fixture");
+    targetSha = git(target, "rev-parse", "HEAD");
+  }
   git(tooling, "init", "-q", "-b", "main");
   for (const path of toolingPaths) {
     write(tooling, path, readFileSync(join(repo, path)));

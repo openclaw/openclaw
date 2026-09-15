@@ -100,15 +100,21 @@ export function projectSystemsInventory(
     const execNode = session.execNode?.trim();
     add(execNode ? `node:${execNode}` : "gateway", execNode ? "exec-binding" : "gateway", session);
   }
-  return inventory.environments.map((environment) => {
-    const node = environment.type === "node" ? nodes.get(environment.id) : undefined;
-    return {
-      environment,
-      ...(node ? { node } : {}),
-      ...(environment.id === "gateway" && inventory.gatewaySystemInfo
-        ? { gatewaySystemInfo: inventory.gatewaySystemInfo }
-        : {}),
-      sessions: relations.get(environment.id) ?? [],
-    };
-  });
+  return inventory.environments
+    .filter((environment) => {
+      // Terminal worker records remain in Gateway history after their machine is gone.
+      return (
+        environment.type !== "worker" ||
+        (environment.worker?.state !== "destroyed" && environment.worker?.state !== "failed")
+      );
+    })
+    .map((environment) => {
+      return {
+        environment,
+        node: environment.type === "node" ? nodes.get(environment.id) : undefined,
+        gatewaySystemInfo:
+          environment.id === "gateway" ? (inventory.gatewaySystemInfo ?? undefined) : undefined,
+        sessions: relations.get(environment.id) ?? [],
+      };
+    });
 }

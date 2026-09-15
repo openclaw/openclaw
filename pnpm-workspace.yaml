@@ -12,6 +12,8 @@ minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
   # Smartquotes denial-of-service fix; remove after 2026-09-18 04:04 UTC.
   - "markdown-it@15.0.2"
+  # Reviewed Discord local-provider contract; remove after 2026-09-21.
+  - "@openclaw/crabline@0.1.24"
   # Reviewed Opus WASM stack repair; remove after 2026-09-21.
   - "libopus-wasm@0.4.0"
   # Reviewed proxy DNS/TLS controls; remove after 2026-09-15 10:08 UTC.

@@ -400,15 +400,20 @@ describe("process supervisor", () => {
       scopeKey: "scope:cancel-fenced",
       argv: createSilentIdleArgv(),
     });
+    let replacementCurrent = true;
     const replacementPromise = spawnChild(supervisor, {
       runId: "cancel-fenced-replacement",
       scopeKey: "scope:cancel-fenced",
       replaceExistingScope: true,
       argv: createSilentIdleArgv(),
+      onCancel: () => {
+        replacementCurrent = false;
+      },
     });
 
     expect(createChildAdapterMock).toHaveBeenCalledTimes(1);
     supervisor.cancelScope("scope:cancel-fenced", "manual-cancel");
+    expect(replacementCurrent).toBe(false);
 
     const laterPromise = spawnChild(supervisor, {
       runId: "cancel-fenced-later",

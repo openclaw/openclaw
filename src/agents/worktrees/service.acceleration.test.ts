@@ -6,15 +6,19 @@ import { promisify } from "node:util";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gitExec from "../../infra/git-exec.js";
+import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import * as commandExec from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import type { WorktreeFilesystemBackend } from "./filesystem-backend.types.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
-import { listTemplates } from "./template-registry.js";
+import { listTemplates, reserveTemplate, touchTemplate } from "./template-registry.js";
 
 vi.mock("./filesystem-backend.js", () => ({
   detectWorktreeFilesystemBackend: vi.fn(),
@@ -360,16 +364,107 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       const created = await service.create({ repoRoot: repo, name: "expired", baseRef: "HEAD" });
       const removed = await service.remove({ id: created.id, reason: "retention" });
       now += SNAPSHOT_RETENTION_MS + 1;
-      vi.spyOn(stateLease, "withOpenClawStateLease").mockRejectedValue(
-        new Error("allocation lease unavailable"),
-      );
+      const allocation = vi
+        .spyOn(stateLease, "withOpenClawStateLease")
+        .mockRejectedValue(new Error("allocation lease unavailable"));
 
       expect((await service.gc()).snapshotsPruned).toBe(1);
       expect(service.listRegistryRecords()).toEqual([]);
       await expect(git(repo, "show-ref", "--verify", removed.snapshotRef!)).rejects.toThrow();
       expect(listTemplates(env)).toHaveLength(enabled ? 1 : 0);
+      expect(allocation).toHaveBeenCalledTimes(enabled ? 1 : 0);
     },
   );
+
+  it("rereads template activity after waiting for the allocation lease", async () => {
+    await service.create({ repoRoot: repo, name: "retained", baseRef: "HEAD" });
+    const template = listTemplates(env)[0];
+    assert(template);
+    now += IDLE_GC_MS + 1;
+    const held = createDeferredCore<stateLease.OpenClawStateLeaseContext>();
+    const release = createDeferredCore();
+    const holder = stateLease.withOpenClawStateLease(
+      {
+        scope: "core:managed-worktrees:create",
+        key: "capacity",
+        database: { scope: "shared", options: { env } },
+        leaseMs: 60_000,
+        waitMs: 0,
+      },
+      async (lease) => {
+        held.resolve(lease);
+        await release.promise;
+      },
+    );
+    const lease = await held.promise;
+    const allocation = vi.spyOn(stateLease, "withOpenClawStateLease");
+    const pending = service.gc();
+    try {
+      await vi.waitFor(() => expect(allocation).toHaveBeenCalledTimes(1));
+      expect(touchTemplate(env, template.id, now, () => lease.assertOwned())).toBe(true);
+    } finally {
+      release.resolve();
+      await holder;
+    }
+    expect((await pending).removed).toEqual([]);
+    expect(listTemplates(env)).toEqual([{ ...template, lastUsedAt: now }]);
+    expect(await fs.readFile(path.join(template.path, "README.md"), "utf8")).toBe("base\n");
+  });
+
+  it("validates every template before retirement and releases the lease after invalid status", async () => {
+    await service.create({ repoRoot: repo, name: "preserved", baseRef: "HEAD" });
+    const template = listTemplates(env)[0];
+    assert(template);
+    const invalid = {
+      ...template,
+      cacheKey: "invalid-template",
+      id: "invalid-template",
+      path: path.join(path.dirname(template.path), "invalid-template"),
+      status: "preparing" as const,
+      lastUsedAt: template.lastUsedAt + 1,
+    };
+    reserveTemplate(env, invalid, () => {});
+    await fs.mkdir(invalid.path);
+    await fs.writeFile(path.join(invalid.path, "preserved.txt"), "preserve invalid template\n");
+    const { db } = openOpenClawStateDatabase({ env });
+    // Model a damaged row that bypassed the table's status CHECK constraint.
+    db.exec("PRAGMA ignore_check_constraints = ON");
+    try {
+      db.prepare("UPDATE worktree_templates SET status = 'invalid' WHERE id = ?").run(invalid.id);
+    } finally {
+      db.exec("PRAGMA ignore_check_constraints = OFF");
+    }
+    now += IDLE_GC_MS + 1;
+    const warnings = createWarnLogCapture("openclaw-worktree-invalid-template");
+    try {
+      expect((await service.gc()).removed).toEqual([]);
+      expect(await warnings.findText("worktree template cleanup deferred:")).toBe(
+        "worktree template cleanup deferred: Error: Invalid worktree template status: invalid",
+      );
+      expect(await fs.readFile(path.join(template.path, "README.md"), "utf8")).toBe("base\n");
+      expect(await fs.readFile(path.join(invalid.path, "preserved.txt"), "utf8")).toBe(
+        "preserve invalid template\n",
+      );
+      expect(db.prepare("SELECT id FROM worktree_templates").all()).toHaveLength(2);
+      await expect(
+        stateLease.withOpenClawStateLease(
+          {
+            scope: "core:managed-worktrees:create",
+            key: "capacity",
+            database: { scope: "shared", options: { env } },
+            leaseMs: 60_000,
+            waitMs: 0,
+          },
+          async (lease) => {
+            lease.assertOwned();
+            return "released";
+          },
+        ),
+      ).resolves.toBe("released");
+    } finally {
+      warnings.cleanup();
+    }
+  });
 
   it.each(["current", "revoked"] as const)(
     "handles %s authority when snapshot and native fallback both fail",

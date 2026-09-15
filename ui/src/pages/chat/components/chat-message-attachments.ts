@@ -8,7 +8,11 @@ import "./chat-audio-player.ts";
 import "./chat-svg-attachment.ts";
 import "./chat-video-player.ts";
 import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
-import { safeAttachmentHref, safeMediaAttachmentHref } from "./chat-attachment-href.ts";
+import {
+  isCrossOriginHttpSource,
+  safeAttachmentHref,
+  safeMediaAttachmentHref,
+} from "./chat-attachment-href.ts";
 import {
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_MAX_REFRESH_RETRIES,
   ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
@@ -40,6 +44,7 @@ import {
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
 import { renderMessageVideoPreview } from "./chat-message-video-preview.ts";
+import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { AttachmentSidebarState } from "./chat-sidebar-content-types.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 
@@ -401,8 +406,42 @@ export function renderAssistantAttachments(
   if (attachments.length === 0) {
     return nothing;
   }
+  const comments = inlinePlayback ? [] : attachments.filter(isSentCommentAttachment);
+  const files = attachments.filter((item) => inlinePlayback || !isSentCommentAttachment(item));
+  const sources = comments.map((item) => {
+    const resolved = resolveAttachmentSource(item.attachment, options);
+    return {
+      identity: item.attachment.url,
+      ...(resolved.status === "available"
+        ? {
+            src:
+              /^data:text\/plain;base64,[a-z0-9+/]*={0,2}$/i.test(resolved.source.src) ||
+              (safeAttachmentHref(resolved.source.src) &&
+                !isCrossOriginHttpSource(resolved.source.src))
+                ? resolved.source.src
+                : undefined,
+            sizeBytes: resolved.source.sizeBytes,
+          }
+        : { pending: resolved.status === "checking" }),
+      fallback: renderMessageAttachment(
+        item,
+        options,
+        onOpenSidebar,
+        onAssistantAttachmentLoaded,
+        "card",
+      ),
+    };
+  });
   return html`<div class="chat-assistant-attachments">
-    ${attachments.map((item) =>
+    ${
+      comments.length
+        ? html`<openclaw-chat-sent-comments
+            .sources=${sources}
+            .scope=${JSON.stringify([options.sessionKey, options.agentId, options.connectionEpoch, options.resourceBasePath, options.authToken, options.policyKey])}
+          ></openclaw-chat-sent-comments>`
+        : nothing
+    }
+    ${files.map((item) =>
       renderMessageAttachment(
         item,
         options,

@@ -5,6 +5,11 @@ export const doctorConfigRuntimeEntrypoints = {
     sourceWorkerName: "doctor-config-preflight",
     distWorkerPath: "commands/doctor-config-preflight.js",
   },
+  checkpoint: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/startup-migration-checkpoint",
+    distWorkerPath: "infra/startup-migration-checkpoint.js",
+  },
   configGuard: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../cli/program/config-guard",

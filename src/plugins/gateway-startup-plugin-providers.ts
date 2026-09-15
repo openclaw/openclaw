@@ -54,6 +54,7 @@ function collectModelProviderIds(value: unknown): ReadonlySet<string> {
 type ManifestModelProviderLookup = {
   modelApis: ReadonlyMap<string, string>;
   providerIds: ReadonlySet<string>;
+  cliBackendIds: ReadonlySet<string>;
 };
 
 function buildManifestModelProviderLookup(
@@ -77,6 +78,9 @@ function buildManifestModelProviderLookup(
   );
   return {
     modelApis,
+    cliBackendIds: new Set(
+      manifestRegistry.plugins.flatMap((plugin) => plugin.cliBackends.map(normalizeProviderId)),
+    ),
     providerIds: new Set(
       manifestRegistry.plugins.flatMap((plugin) => plugin.providers.map(normalizeProviderId)),
     ),
@@ -149,6 +153,10 @@ function configuredModelProviderNeedsRuntimePlugin(params: {
   providerId: string;
   modelId: string;
 }): boolean {
+  // A model API hint cannot replace the runtime registration of a selected CLI backend.
+  if (params.manifestModelProviders.cliBackendIds.has(params.providerId)) {
+    return true;
+  }
   const providerConfig = params.config.models?.providers?.[params.providerId];
   const configuredModel = providerConfig?.models?.find((model) => model.id === params.modelId);
   const modelApi =
@@ -170,9 +178,11 @@ export function manifestOwnsConfiguredModelProvider(params: {
   if (params.configuredModelProviderIds.size === 0) {
     return false;
   }
-  return (params.manifest?.providers ?? []).some((providerId) => {
-    return params.configuredModelProviderIds.has(normalizeProviderId(providerId));
-  });
+  return [...(params.manifest?.providers ?? []), ...(params.manifest?.cliBackends ?? [])].some(
+    (providerId) => {
+      return params.configuredModelProviderIds.has(normalizeProviderId(providerId));
+    },
+  );
 }
 
 export function collectConfiguredGenerationProviderIds(

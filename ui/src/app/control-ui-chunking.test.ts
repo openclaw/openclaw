@@ -73,6 +73,9 @@ describe("Control UI build chunking", () => {
     expect(bootGroup.test(`${repoRoot}/ui/src/styles/chat.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/components/assistant-panel-content.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-content.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-frame.ts`)).toBe(true);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/debug/debug-overlay-loading.ts`)).toBe(true);
     expect(bootGroup.test(`${repoRoot}/node_modules/ghostty-web/dist/index.js`)).toBe(false);
   });
 

@@ -53,6 +53,70 @@ describe("EmbeddedBlockChunker", () => {
     },
   );
 
+  it.each([
+    {
+      breakPreference: "paragraph",
+      text: "Aaaa\n\nBbbb\n\nCccc",
+      normal: [{ chunk: "Aaaa\n\nBbbb", sourceText: "Aaaa\n\nBbbb\n\n" }],
+      forced: [
+        { chunk: "Aaaa", sourceText: "Aaaa\n\n" },
+        { chunk: "Bbbb", sourceText: "Bbbb\n\n" },
+        { chunk: "Cccc", sourceText: "Cccc" },
+      ],
+      tail: "Cccc",
+    },
+    {
+      breakPreference: "newline",
+      text: "Aaaa\nBbbb\nCccc",
+      normal: [{ chunk: "Aaaa\nBbbb", sourceText: "Aaaa\nBbbb\n" }],
+      forced: [
+        { chunk: "Aaaa", sourceText: "Aaaa\n" },
+        { chunk: "Bbbb", sourceText: "Bbbb\n" },
+        { chunk: "Cccc", sourceText: "Cccc" },
+      ],
+      tail: "Cccc",
+    },
+    {
+      breakPreference: "sentence",
+      text: "Aaaa. Bbbb. Tail",
+      normal: [{ chunk: "Aaaa. Bbbb.", sourceText: "Aaaa. Bbbb. " }],
+      forced: [
+        { chunk: "Aaaa. Bbbb.", sourceText: "Aaaa. Bbbb. " },
+        { chunk: "Tail", sourceText: "Tail" },
+      ],
+      tail: "Tail",
+    },
+  ] as const)(
+    "preserves $breakPreference selection and source cursors across a forced tail",
+    ({ breakPreference, text, normal, forced, tail }) => {
+      for (const force of [false, true]) {
+        const prefix = force ? `${"x".repeat(20)}\n` : "";
+        const source = prefix + text;
+        const chunker = new EmbeddedBlockChunker({ minChars: 3, maxChars: 20, breakPreference });
+        const emitted: Array<{ chunk: string; sourceText: string | undefined }> = [];
+        const emit = (chunk: string, options?: { sourceText: string }) =>
+          emitted.push({ chunk, sourceText: options?.sourceText });
+        chunker.append(source);
+        chunker.drain({ force, emit });
+        expect(emitted).toEqual(
+          force ? [{ chunk: "x".repeat(20), sourceText: prefix }, ...forced] : normal,
+        );
+        expect(chunker.bufferedText).toBe(force ? "" : tail);
+        expect(chunker.hasBuffered()).toBe(!force);
+        expect(chunker.consumedLength).toBe(source.length - (force ? 0 : tail.length));
+        expect(chunker.sourceLength).toBe(source.length);
+        emitted.length = 0;
+        chunker.drain({ force: true, emit });
+        expect(emitted).toEqual(force ? [] : [{ chunk: tail, sourceText: tail }]);
+        expect(chunker.bufferedText).toBe("");
+        expect(chunker.hasBuffered()).toBe(false);
+        expect(chunker.consumedLength).toBe(source.length);
+        expect(chunker.sourceLength).toBe(source.length);
+        expect(drainChunks(chunker, true)).toEqual([]);
+      }
+    },
+  );
+
   it("balances an unfinished fence at the exact cap and retains its later continuation", () => {
     const chunker = new EmbeddedBlockChunker({
       minChars: 8,

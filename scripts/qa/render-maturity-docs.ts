@@ -3,6 +3,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  getEffectiveQaEvidenceEntries,
+  projectQaEvidenceScenarioOutcomes,
   validateQaEvidenceSummaryJson,
   type QaEvidenceScorecardJson,
   type QaEvidenceStatus,
@@ -53,6 +55,7 @@ type EvidenceSummary = {
   generatedAt: string;
   profile: string;
   entryCount: number;
+  unresolvedCount: number;
   statuses: StatusCounts;
   blockingResults: string[];
   scorecard?: QaEvidenceScorecardJson;
@@ -823,6 +826,10 @@ function resultCountsText(statuses: StatusCounts): string {
   return parts.join(", ");
 }
 
+function unresolvedInstancesText(count: number): string {
+  return `${count} unresolved scheduled ${count === 1 ? "instance" : "instances"}`;
+}
+
 function readinessStatusText(status: string): string {
   if (status === "fulfilled") {
     return "Ready";
@@ -850,14 +857,22 @@ function readEvidenceSummaries(
   const identity = qaMaturityTaxonomyIdentity(taxonomy);
   return collectQaEvidenceFiles(evidenceDir).map((filePath) => {
     const payload = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(filePath, "utf8")));
+    const entries = getEffectiveQaEvidenceEntries(payload);
+    // Rows retain diagnostics; the canonical root projection also exposes scheduled gaps.
+    const unresolved = projectQaEvidenceScenarioOutcomes(payload).filter(
+      (item) => item.status === null,
+    );
     return {
       sourcePath: filePath,
       path: path.relative(process.cwd(), filePath),
       generatedAt: payload.generatedAt,
       profile: payload.profile ?? "",
-      entryCount: payload.entries.length,
-      statuses: countStatuses(payload.entries),
-      blockingResults: blockingResultLabels(payload.entries),
+      entryCount: entries.length,
+      unresolvedCount: unresolved.length,
+      statuses: countStatuses(entries),
+      blockingResults: blockingResultLabels(entries).concat(
+        unresolved.map((item) => `${item.scenarioId} (unresolved)`),
+      ),
       scorecard: payload.scorecard,
       taxonomyStatus: !payload.profilePlan?.taxonomyIdentity
         ? "unknown"
@@ -876,11 +891,12 @@ function rejectBlockingEvidence(evidenceSummaries: EvidenceSummary[]): void {
   }
   throw new Error(
     [
-      "maturity docs require passing QA evidence; failing or blocked QA entries cannot be rendered into the scorecard.",
+      "maturity docs require passing QA evidence; failing or blocked QA entries and unresolved scheduled instances cannot be rendered into the scorecard.",
       ...blocked.map((item) => {
         const counts = [
           item.statuses.fail > 0 ? `${item.statuses.fail} failed` : undefined,
           item.statuses.blocked > 0 ? `${item.statuses.blocked} blocked` : undefined,
+          item.unresolvedCount > 0 ? unresolvedInstancesText(item.unresolvedCount) : undefined,
         ]
           .filter(Boolean)
           .join(", ");
@@ -1075,6 +1091,9 @@ function renderEvidenceSection(
       `    <span>${markdownEscape(item.generatedAt)}</span>`,
       `    <span>${item.taxonomyStatus === "current" ? "Current taxonomy evidence" : `Historical evidence: taxonomy identity ${item.taxonomyStatus}`}</span>`,
       `    <span>${item.entryCount} checks - ${markdownEscape(resultCountsText(item.statuses))}</span>`,
+      ...(item.unresolvedCount > 0
+        ? [`    <span>${unresolvedInstancesText(item.unresolvedCount)}</span>`]
+        : []),
       `    <span>${markdownEscape(countText(scorecard?.categories))} areas - ${markdownEscape(countText(scorecard?.features))} features - ${markdownEscape(countText(scorecard?.coverageIds))} coverage IDs</span>`,
       "  </div>",
     );

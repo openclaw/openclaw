@@ -40,7 +40,11 @@ export function readUpdateRunStatus() {
               {
                 runId: expired.runId,
                 reason: LEGACY_UPDATE_RUN_EXPIRED_REASON,
-                message: LEGACY_UPDATE_RUN_ADVISORY,
+                // Retain historical notices without prescribing a retry for another current run.
+                message:
+                  expired.runId === (activeRun ?? lastRun)?.runId
+                    ? LEGACY_UPDATE_RUN_ADVISORY
+                    : "Historical update: a 2026.9.2-era update never progressed past admission and was treated as abandoned after 24 h.",
               },
             ],
           }

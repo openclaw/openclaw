@@ -41,6 +41,7 @@ export type StagedPackageSwapParams = {
   packageName: string;
   postVerifyStep?: (packageRoot: string) => Promise<UpdateStepResult | null>;
   beforeActivate?: () => Promise<void>;
+  assertCurrent?: () => void;
   onLiveMutation?: () => void;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
   timeoutMs?: number;

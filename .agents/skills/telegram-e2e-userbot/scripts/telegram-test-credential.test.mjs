@@ -53,10 +53,26 @@ test("validates and restores one isolated Test Server credential", () => {
   const stateRoot = path.join(fixture, "restored");
   const restored = restoreTelegramTestCredential(payload, stateRoot);
   assert.equal(restored.groupId, "-1001");
+  assert.equal(Object.values(restored.driverEnv).includes(payload.sutToken), false);
+  assert.equal(restored.credentialsPath, path.join(stateRoot, "credentials.local.json"));
+  assert.equal(fs.statSync(restored.credentialsPath).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(stateRoot).mode & 0o777, 0o700);
   assert.equal(
     restored.driverEnv.TELEGRAM_USER_DRIVER_STATE_DIR,
     path.join(stateRoot, "user-driver"),
   );
+  const child = spawnSync(
+    process.execPath,
+    [
+      "-e",
+      `const fs = require("node:fs");
+       const path = require("node:path");
+       const { sutBotToken } = JSON.parse(fs.readFileSync(path.join(process.env.TELEGRAM_E2E_STATE_DIR, "credentials.local.json"), "utf8"));
+       process.exit(Object.values(process.env).includes(sutBotToken) ? 1 : 0);`,
+    ],
+    { env: restored.driverEnv },
+  );
+  assert.equal(child.status, 0, "user-driver child reads its token only from the credential file");
   assert.equal(restored.driverEnv.TELEGRAM_USER_DRIVER_SUT_ID, payload.sutBotId);
   assert.equal(restored.driverEnv.TELEGRAM_USER_DRIVER_SUT_USERNAME, payload.sutUsername);
   assert.equal(

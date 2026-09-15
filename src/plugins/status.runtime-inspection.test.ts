@@ -2,22 +2,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { handlePluginsCommand } from "../auto-reply/reply/commands-plugins.js";
 import { buildPluginsCommandParams } from "../auto-reply/reply/commands.test-harness.js";
 import { runPluginsDoctorCommand } from "../cli/plugins-cli.runtime.js";
 import { runPluginsInspectCommand } from "../cli/plugins-inspect-command.js";
 import * as configRuntime from "../config/config.js";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as configObserver from "../config/io.observe.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { selectInstallMutationWriteOptions } from "./install-config-mutation.js";
@@ -45,16 +45,23 @@ import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import * as statusSnapshot from "./status-snapshot.js";
 import { withPluginDiagnosticsReportForInspection, withPluginDiagnosticsReport } from "./status.js";
+import {
+  classifyConfigObservationError,
+  createDiagnosticsFixture,
+} from "./status.runtime-inspection.test-helpers.js";
 import type { OpenClawPluginService } from "./types.js";
 
 describe("plugin runtime inspection", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     clearPluginMetadataLifecycleCaches();
     resetPluginLoaderTestStateForTest();
     closeOpenClawStateDatabaseForTest();
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    // Retire async admission records before deleted fixture inodes can be reused.
+    await closeOpenClawStateDatabaseAsync();
     cleanupPluginLoaderFixturesForTest();
   });
 
@@ -799,69 +806,48 @@ module.exports = { id: ${JSON.stringify(`${pluginId}/${entry}`)}, kind: ${JSON.s
   });
 });
 
-function fixture(state: OpenClawTestState, cleanupThrows = false) {
-  const id = "diagnostics-resource";
-  const event = `diagnostics-resource-${path.basename(state.root)}`;
-  const rootDir = state.path("plugin");
-  const disposed = state.path("disposed.txt");
-  fs.mkdirSync(rootDir);
-  fs.writeFileSync(
-    path.join(rootDir, "package.json"),
-    JSON.stringify({
-      name: id,
-      version: "1.0.0",
-      type: "module",
-      openclaw: { extensions: ["./index.ts"] },
-    }),
-  );
-  fs.writeFileSync(
-    path.join(rootDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      configSchema: { type: "object", properties: {} },
-    }),
-  );
-  fs.writeFileSync(
-    path.join(rootDir, "index.ts"),
-    `
-    import fs from "node:fs";
-    export default { id: ${JSON.stringify(id)}, register(api) {
-      const listener = () => {};
-      process.on(${JSON.stringify(event)}, listener);
-      api.lifecycle.onDispose(() => {
-        process.removeListener(${JSON.stringify(event)}, listener);
-        fs.appendFileSync(${JSON.stringify(disposed)}, "disposed\\n");
-        ${cleanupThrows ? 'throw new Error("fixture cleanup rejected");' : ""}
-      });
-      api.registerService({
-        get id() { api.lifecycle.signal.throwIfAborted(); return "diagnostics-resource-service"; },
-        start() {}, stop() {},
-      });
-    } };
-  `,
-  );
-  const config: OpenClawConfig = {
-    commands: { text: true, plugins: true },
-    agents: { defaults: { workspace: state.workspaceDir } },
-    plugins: {
-      enabled: true,
-      allow: [id],
-      load: { paths: [rootDir] },
-      entries: { [id]: { enabled: true } },
-      slots: { memory: "none" },
-    },
-  };
-  return { id, event, config, disposed };
-}
-
 it("retires runtime diagnostics after each actual chat inspect reply", async () => {
   await withOpenClawTestState({ label: "diagnostics-chat" }, async (state) => {
-    const { id, event, config, disposed } = fixture(state);
+    const { id, event, config, disposed } = createDiagnosticsFixture(state);
     await state.writeConfig(config);
     const before = process.listenerCount(event);
+    const stageNames = new Set([
+      "config.snapshot.read.file",
+      "config.snapshot.read.hash",
+      "config.snapshot.read.parse",
+      "config.snapshot.read.includes",
+      "config.snapshot.read.env",
+      "config.snapshot.read.validate",
+      "config.snapshot.read.legacy-issues",
+      "config.snapshot.read.recover-suspicious",
+      "config.snapshot.read.materialize",
+      "config.snapshot.read.observe",
+    ]);
     for (const name of [id, "all"]) {
-      const configRead = vi.spyOn(configRuntime, "readConfigFileSnapshot");
+      let lastCompletedStage = "<none>";
+      let measuredFailure: { stage: string; error: unknown } | undefined;
+      const readConfigSnapshot = configRuntime.readConfigFileSnapshot;
+      const configRead = vi
+        .spyOn(configRuntime, "readConfigFileSnapshot")
+        .mockImplementation((options = {}) =>
+          readConfigSnapshot({
+            ...options,
+            measure: async (stage, run) => {
+              const safeStage = stageNames.has(stage) ? stage : "<other stage>";
+              try {
+                const value = await (options.measure ? options.measure(stage, run) : run());
+                lastCompletedStage = safeStage;
+                return value;
+              } catch (error) {
+                measuredFailure = { stage: safeStage, error };
+                throw error;
+              }
+            },
+          }),
+        );
+      let observation: MockInstance<typeof configObserver.observeConfigSnapshot> | undefined;
       try {
+        observation = vi.spyOn(configObserver, "observeConfigSnapshot");
         const result = await handlePluginsCommand(
           buildPluginsCommandParams({
             cfg: config,
@@ -877,7 +863,17 @@ it("retires runtime diagnostics after each actual chat inspect reply", async () 
         try {
           // Observe the command's existing promise only after failure; do not warm config reads.
           const read = configRead.mock.results[0];
-          const snapshot = read?.type === "return" ? await read.value : undefined;
+          let snapshot: Awaited<ReturnType<typeof readConfigSnapshot>> | undefined;
+          let readFailure: ReturnType<typeof classifyConfigObservationError> | undefined;
+          try {
+            snapshot = read?.type === "return" ? await read.value : undefined;
+          } catch (readError) {
+            // A rejected fallback observation must not hide the first observation's failure.
+            readFailure = classifyConfigObservationError(readError);
+          }
+          const observations = (observation?.mock.calls ?? []).flatMap(([, observed], index) =>
+            observed.path === state.configPath ? [{ index, observed }] : [],
+          );
           const issuePaths = new Set([
             "",
             "agents",
@@ -909,12 +905,41 @@ it("retires runtime diagnostics after each actual chat inspect reply", async () 
           console.error("diagnostics-chat config snapshot", {
             selection: name,
             readCalls: configRead.mock.calls.length,
-            fixturePath: state.configPath,
-            snapshotPath: snapshot
-              ? snapshot.path === state.configPath
-                ? snapshot.path
-                : "<outside expected fixture>"
-              : "<not captured>",
+            readFailure,
+            observationCount: observations.length,
+            omittedObservations: Math.max(0, observations.length - 4),
+            observations: observations.slice(0, 4).map(({ index, observed }) => {
+              const result = observation?.mock.results[index];
+              const settled = observation?.mock.settledResults[index];
+              return {
+                index,
+                valid: observed.valid,
+                exists: observed.exists,
+                snapshotKind: observed.valid
+                  ? "valid-snapshot"
+                  : observed.issues.some(
+                        (issue) => issue.path === "" && issue.message.startsWith("read failed:"),
+                      )
+                    ? "read-failed-fallback"
+                    : "other",
+                result: result?.type ?? "unavailable",
+                settled: settled?.type ?? "unavailable",
+                failure:
+                  result?.type === "throw"
+                    ? classifyConfigObservationError(result.value)
+                    : settled?.type === "rejected"
+                      ? classifyConfigObservationError(settled.value)
+                      : undefined,
+              };
+            }),
+            matchesFixturePath: snapshot ? snapshot.path === state.configPath : undefined,
+            lastCompletedStage,
+            measuredFailure: measuredFailure
+              ? {
+                  stage: measuredFailure.stage,
+                  ...classifyConfigObservationError(measuredFailure.error),
+                }
+              : { stage: "<outside measured callback>" },
             valid: snapshot?.valid,
             exists: snapshot?.exists,
             matchesWrittenFixture: snapshot?.raw === `${JSON.stringify(config, null, 2)}\n`,
@@ -930,7 +955,11 @@ it("retires runtime diagnostics after each actual chat inspect reply", async () 
         }
         throw error;
       } finally {
-        configRead.mockRestore();
+        try {
+          observation?.mockRestore();
+        } finally {
+          configRead.mockRestore();
+        }
       }
     }
     expect(fs.readFileSync(disposed, "utf8")).toBe("disposed\ndisposed\n");
@@ -939,7 +968,7 @@ it("retires runtime diagnostics after each actual chat inspect reply", async () 
 
 it("keeps metadata getters live through awaited projection without retiring an independent handle", async () => {
   await withOpenClawTestState({ label: "diagnostics-projection" }, async (state) => {
-    const { id, event, config, disposed } = fixture(state);
+    const { id, event, config, disposed } = createDiagnosticsFixture(state);
     const params = {
       config,
       env: state.env,
@@ -979,7 +1008,7 @@ it("keeps metadata getters live through awaited projection without retiring an i
 
 it("preserves the diagnostics projection failure after best-effort instance cleanup", async () => {
   await withOpenClawTestState({ label: "diagnostics-failure" }, async (state) => {
-    const { id, event, config, disposed } = fixture(state, true);
+    const { id, event, config, disposed } = createDiagnosticsFixture(state, true);
     const before = process.listenerCount(event);
     const projectionError = new Error("fixture projection rejected");
     const failure = await withPluginDiagnosticsReport(

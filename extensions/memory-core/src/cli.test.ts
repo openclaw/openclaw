@@ -303,7 +303,7 @@ describe("memory cli", () => {
     return output;
   }
 
-  function loggedOutput(spy: ReturnType<typeof vi.spyOn>) {
+  function loggedOutput(spy: ReturnType<typeof vi.spyOn>): string {
     return spy.mock.calls
       .map((call: unknown[]) => (typeof call[0] === "string" ? call[0] : ""))
       .join("\n")
@@ -1602,6 +1602,132 @@ describe("memory cli", () => {
     expectLogged(log, "maxAgeDays=30");
     expectLogged(log, "maxPromotedSnippetTokens=640");
     expect(close).toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "no changes",
+      counts: [0, 0, 0],
+      rewrite: false,
+      stale: false,
+      expected: "no changes",
+    },
+    {
+      label: "rewrite without removals",
+      counts: [0, 0, 0],
+      rewrite: true,
+      stale: false,
+      expected: "rewrote store",
+    },
+    {
+      label: "invalid only",
+      counts: [2, 0, 0],
+      rewrite: true,
+      stale: false,
+      expected: "rewrote store (-2 invalid)",
+    },
+    {
+      label: "dangling only",
+      counts: [0, 3, 0],
+      rewrite: true,
+      stale: false,
+      expected: "rewrote store (-3 dangling)",
+    },
+    {
+      label: "overflow only",
+      counts: [0, 0, 4],
+      rewrite: true,
+      stale: false,
+      expected: "rewrote store (-4 overflow)",
+    },
+    {
+      label: "nonadjacent counts",
+      counts: [2, 0, 4],
+      rewrite: true,
+      stale: false,
+      expected: "rewrote store (-2 invalid, -4 overflow)",
+    },
+    {
+      label: "all counts and lock",
+      counts: [2, 3, 4],
+      rewrite: true,
+      stale: true,
+      expected: "rewrote store (-2 invalid, -3 dangling, -4 overflow) · removed stale lock",
+    },
+    {
+      label: "stale lock only",
+      counts: [0, 0, 0],
+      rewrite: false,
+      stale: true,
+      expected: "removed stale lock",
+    },
+    {
+      label: "synthetic counts without rewrite",
+      counts: [2, 3, 4],
+      rewrite: false,
+      stale: false,
+      expected: "no changes",
+    },
+  ] as const)(
+    "formats recall repair status: $label",
+    async ({ counts, rewrite, stale, expected }) => {
+      const producer = await import("./short-term-promotion-artifacts.js");
+      const repairSpy = vi.spyOn(producer, "repairShortTermPromotionArtifacts").mockResolvedValue({
+        changed: rewrite || stale,
+        removedInvalidEntries: counts[0],
+        removedDanglingEntries: counts[1],
+        removedOverflowEntries: counts[2],
+        rewroteStore: rewrite,
+        removedStaleLock: stale,
+      });
+      try {
+        await withTempWorkspace(async (workspaceDir) => {
+          mockManager({
+            status: () => makeMemoryStatus({ workspaceDir }),
+            close: vi.fn(async () => {}),
+          });
+          const log = spyRuntimeLogs(defaultRuntime);
+          await runMemoryCli(["status", "--fix"]);
+          expect(
+            loggedOutput(log)
+              .split("\n")
+              .filter((line) => line.startsWith("Repair:")),
+          ).toEqual([`Repair: ${expected}`]);
+        });
+      } finally {
+        repairSpy.mockRestore();
+      }
+    },
+  );
+
+  it("keeps the raw recall repair result in status --fix --json", async () => {
+    const producer = await import("./short-term-promotion-artifacts.js");
+    const repair = {
+      changed: true,
+      removedInvalidEntries: 2,
+      removedDanglingEntries: 3,
+      removedOverflowEntries: 4,
+      rewroteStore: true,
+      removedStaleLock: true,
+    };
+    const repairSpy = vi
+      .spyOn(producer, "repairShortTermPromotionArtifacts")
+      .mockResolvedValue(repair);
+    try {
+      await withTempWorkspace(async (workspaceDir) => {
+        mockManager({
+          status: () => makeMemoryStatus({ workspaceDir }),
+          close: vi.fn(async () => {}),
+        });
+        const output = spyRuntimeJson(defaultRuntime);
+        const log = spyRuntimeLogs(defaultRuntime);
+        await runMemoryCli(["status", "--fix", "--json"]);
+        expect(firstWrittenJsonArg(output)).toEqual([expect.objectContaining({ repair })]);
+        expectNotLogged(log, "Repair:");
+      });
+    } finally {
+      repairSpy.mockRestore();
+    }
   });
 
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {

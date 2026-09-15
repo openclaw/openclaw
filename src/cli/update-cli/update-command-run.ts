@@ -29,6 +29,10 @@ import {
   type DevUpdateTarget,
   UPDATE_DEV_TARGET_REF_ENV,
 } from "../../infra/update-dev-target.js";
+import {
+  createFreeBsdPkgOwnershipInspection,
+  type FreeBsdPkgOwnershipInspection,
+} from "../../infra/update-freebsd-pkg-ownership.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
@@ -59,7 +63,10 @@ import {
   type UpdateRecoveryFence,
 } from "../../infra/update-run-recovery.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
-import { AUTO_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
+import {
+  AUTO_UPDATE_STEP_TIMEOUT_MS,
+  UPDATE_RUNNER_TIMEOUT_MS,
+} from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -101,7 +108,11 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
   opts: UpdateCommandOptions;
   root: string;
   invocationCwd?: string;
+  pkgOwnership?: FreeBsdPkgOwnershipInspection;
 }): Promise<NodeJS.ProcessEnv> {
+  const pkgOwnership =
+    params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS);
+  await pkgOwnership.assertUnowned(params.root);
   let env = resolveServiceRefreshEnv(process.env, params.invocationCwd);
   // A preview belongs to its explicit state directory. Real updates follow the
   // same owned service selectors as finalization, then freeze them for all writers.
@@ -176,6 +187,7 @@ export async function admitUpdateCommandRun(params: {
   opts: UpdateCommandOptions;
   root: string;
   invocationCwd?: string;
+  pkgOwnership?: FreeBsdPkgOwnershipInspection;
   initialization?: {
     env: NodeJS.ProcessEnv;
     runId: string;
@@ -531,6 +543,10 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   const executingRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   const discoveredRoot = await resolveUpdateRoot();
   const installKind = await resolveUpdateInstallKind(discoveredRoot, { timeoutMs });
+  const pkgOwnership = createFreeBsdPkgOwnershipInspection(timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS);
+  // Inspect the invoking installation before a service can redirect its root,
+  // runtime or state. This also covers package-to-Git and preview requests.
+  await pkgOwnership.assertUnowned(discoveredRoot);
   // A post-core marker cannot bypass pending recovery without the live original
   // owner. Check both roots before config/autostart preparation or history.
   assertUpdatePackageActivationAdmission(discoveredRoot, {
@@ -538,7 +554,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   });
   const servicePlan =
     installKind === "package"
-      ? await resolveManagedServicePackageUpdatePlan({ root: discoveredRoot })
+      ? await resolveManagedServicePackageUpdatePlan({ root: discoveredRoot, pkgOwnership })
       : undefined;
   if (servicePlan?.rootRedirect) {
     assertUpdatePackageActivationAdmission(servicePlan.rootRedirect.root, {
@@ -586,6 +602,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     discoveredRoot,
     installKind,
     servicePlan,
+    pkgOwnership,
   };
 }
 

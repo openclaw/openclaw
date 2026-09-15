@@ -109,7 +109,6 @@ function readUpdateAttemptId(sentinel: UpdateRestartStatusResponse["sentinel"]):
   return id && id.length <= 256 ? id : null;
 }
 
-/** One projection owns the recorded display facts and the typed triage transition. */
 export function projectUpdateSentinel(sentinel: UpdateRestartStatusResponse["sentinel"]): {
   attempt: RecordedUpdateAttempt | null;
   banner: ApplicationStatusBanner | null;
@@ -172,11 +171,6 @@ function lastLogLine(tail: string | null | undefined): string | null {
   return last ? last.slice(0, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
 }
 
-/**
- * The updater records why it stopped — the failing step plus its captured
- * output — in the restart sentinel. Read that recorded fact instead of making
- * the operator reconstruct a disk-full or build failure from a reason slug.
- */
 function readUpdateFailureCause(
   sentinel: UpdateRestartStatusResponse["sentinel"],
 ): UpdateFailureCause | null {

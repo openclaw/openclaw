@@ -4,6 +4,7 @@ import { loadDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite-bound
 import { transitionOwnedDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite-claim.kernel.js";
 import {
   completeDeliveryQueueEntryInDatabase,
+  completeLoadedDeliveryQueueEntryInDatabase,
   deleteDeliveryQueueEntryInDatabase,
   prepareDeliveryQueueTerminalEntry,
   terminalizePendingDeliveryQueueEntryInDatabase,
@@ -96,7 +97,16 @@ export function ackDeliveryInDatabase(
         )
       : [];
     if (current?.completionRetention && options?.suppressCompletionReceipt !== true) {
-      completeDeliveryQueueEntryInDatabase(database, OUTBOUND_DELIVERY_QUEUE_NAME, id);
+      if (options && "expectedPlatformSendAttemptId" in options) {
+        completeLoadedDeliveryQueueEntryInDatabase(
+          database,
+          OUTBOUND_DELIVERY_QUEUE_NAME,
+          id,
+          current,
+        );
+      } else {
+        completeDeliveryQueueEntryInDatabase(database, OUTBOUND_DELIVERY_QUEUE_NAME, id);
+      }
     } else {
       deleteDeliveryQueueEntryInDatabase(database, OUTBOUND_DELIVERY_QUEUE_NAME, id);
     }

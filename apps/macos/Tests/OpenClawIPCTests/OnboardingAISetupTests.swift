@@ -4759,18 +4759,13 @@ struct OnboardingAISetupTests {
         let recorder = AISetupRequestRecorder()
         let gateway = GatewayConnection(
             configProvider: { (url: url, token: "route-b", password: nil) },
-            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
-                GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
-                    if respondToAISetupHealth(task: task, request: request) {
-                        return
-                    }
-                    await recorder.record(message)
-                    if request.method == "openclaw.setup.detect" {
-                        task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
-                    }
-                })
-            }))
+            sessionBox: WebSocketSessionBox(session: makeAISetupRequestSession(
+                recorder: recorder)
+            { task, request in
+                if request.method == "openclaw.setup.detect" {
+                    task.emitReceiveSuccess(.data(detectedSetupResponse(id: request.id)))
+                }
+            })
         )
         let relaunched = OnboardingAISetupModel(
             gateway: gateway,
@@ -4906,34 +4901,29 @@ struct OnboardingAISetupTests {
         let replacementID = "replacement-after-relaunch"
         let gateway = GatewayConnection(
             configProvider: { (url: url, token: "shared-route", password: nil) },
-            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
-                GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
-                    if respondToAISetupHealth(task: task, request: request) {
-                        return
+            sessionBox: WebSocketSessionBox(session: makeAISetupRequestSession(
+                recorder: recorder)
+            { task, request in
+                switch request.method {
+                case "openclaw.setup.verify":
+                    if let callbackDefaults = UserDefaults(suiteName: suiteName),
+                       let originalOwner = OnboardingSystemAgentResumeStore.activationOwner(
+                           for: "local",
+                           defaults: callbackDefaults
+                       )
+                    {
+                        let replacementOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
+                            id: replacementID,
+                            routeFingerprint: originalOwner.routeFingerprint
+                        )
+                        markPending(callbackDefaults, for: "local", owner: replacementOwner)
+                        markCompleted(callbackDefaults, for: "local", owner: replacementOwner)
                     }
-                    await recorder.record(message)
-                    switch request.method {
-                    case "openclaw.setup.verify":
-                        if let callbackDefaults = UserDefaults(suiteName: suiteName),
-                           let originalOwner = OnboardingSystemAgentResumeStore.activationOwner(
-                               for: "local",
-                               defaults: callbackDefaults
-                           )
-                        {
-                            let replacementOwner = OnboardingSystemAgentResumeStore.ActivationOwner(
-                                id: replacementID,
-                                routeFingerprint: originalOwner.routeFingerprint
-                            )
-                            markPending(callbackDefaults, for: "local", owner: replacementOwner)
-                            markCompleted(callbackDefaults, for: "local", owner: replacementOwner)
-                        }
-                        task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
-                    default:
-                        break
-                    }
-                })
-            }))
+                    task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
+                default:
+                    break
+                }
+            })
         )
         let route = try #require(await gateway.captureRoute())
         let activationOwner = try OnboardingSystemAgentResumeStore.ActivationOwner(
@@ -5717,16 +5707,12 @@ struct OnboardingAISetupTests {
         let recorder = AISetupRequestRecorder()
         let gateway = GatewayConnection(
             configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
-                GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
-                    if respondToAISetupPreparation(task: task, request: request, kind: "codex-cli") {
-                        return
-                    }
-                    await recorder.record(message)
-                    task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
-                })
-            }))
+            sessionBox: WebSocketSessionBox(session: makeAISetupRequestSession(
+                recorder: recorder,
+                preparationKind: "codex-cli")
+            { task, request in
+                task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
+            })
         )
         let model = makeAISetupModel(gateway: gateway, defaults: defaults)
         var scheduledRoutes: [String] = []
@@ -5753,34 +5739,30 @@ struct OnboardingAISetupTests {
         let markerObservation = ActivationMarkerObservation()
         let gateway = GatewayConnection(
             configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
-                GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
-                    if respondToAISetupPreparation(task: task, request: request, kind: "codex-cli") {
-                        return
+            sessionBox: WebSocketSessionBox(session: makeAISetupRequestSession(
+                recorder: recorder,
+                preparationKind: "codex-cli")
+            { task, request in
+                if let callbackDefaults = UserDefaults(suiteName: suiteName) {
+                    let pendingState = OnboardingSystemAgentResumeStore.pendingState(
+                        for: "local",
+                        defaults: callbackDefaults
+                    )
+                    if case let .activating(deadline) = pendingState {
+                        await markerObservation.record(deadline: deadline)
                     }
-                    await recorder.record(message)
-                    if let callbackDefaults = UserDefaults(suiteName: suiteName) {
-                        let pendingState = OnboardingSystemAgentResumeStore.pendingState(
-                            for: "local",
-                            defaults: callbackDefaults
-                        )
-                        if case let .activating(deadline) = pendingState {
-                            await markerObservation.record(deadline: deadline)
-                        }
-                        let owner = try #require(storedActivationOwner(callbackDefaults))
-                        #expect(OnboardingSystemAgentResumeStore.clear(
-                            ifOwnedBy: "local",
-                            activationOwner: owner,
-                            defaults: callbackDefaults
-                        ))
-                        #expect(OnboardingSystemAgentResumeStore.pendingState(
-                            for: "local", defaults: callbackDefaults
-                        ) == .none)
-                    }
-                    task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
-                })
-            }))
+                    let owner = try #require(storedActivationOwner(callbackDefaults))
+                    #expect(OnboardingSystemAgentResumeStore.clear(
+                        ifOwnedBy: "local",
+                        activationOwner: owner,
+                        defaults: callbackDefaults
+                    ))
+                    #expect(OnboardingSystemAgentResumeStore.pendingState(
+                        for: "local", defaults: callbackDefaults
+                    ) == .none)
+                }
+                task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
+            })
         )
         let model = makeAISetupModel(gateway: gateway, defaults: defaults)
         var scheduledDeadlines: [(deadline: Date, routeIdentity: String)] = []
@@ -5825,40 +5807,35 @@ struct OnboardingAISetupTests {
         let recorder = AISetupRequestRecorder()
         let gateway = GatewayConnection(
             configProvider: { (url: url, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: {
-                GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
-                    guard sendIndex > 0, let request = aiSetupRequest(from: message) else { return }
-                    if respondToAISetupHealth(task: task, request: request) {
-                        return
+            sessionBox: WebSocketSessionBox(session: makeAISetupRequestSession(
+                recorder: recorder)
+            { task, request in
+                switch request.method {
+                case "openclaw.setup.activate":
+                    if let callbackDefaults = UserDefaults(suiteName: suiteName) {
+                        let owner = try #require(storedActivationOwner(callbackDefaults))
+                        #expect(OnboardingSystemAgentResumeStore.clear(
+                            ifOwnedBy: "local",
+                            activationOwner: owner,
+                            defaults: callbackDefaults
+                        ))
+                        #expect(pendingState(callbackDefaults) == .none)
                     }
-                    await recorder.record(message)
-                    switch request.method {
-                    case "openclaw.setup.activate":
-                        if let callbackDefaults = UserDefaults(suiteName: suiteName) {
-                            let owner = try #require(storedActivationOwner(callbackDefaults))
-                            #expect(OnboardingSystemAgentResumeStore.clear(
-                                ifOwnedBy: "local",
-                                activationOwner: owner,
-                                defaults: callbackDefaults
-                            ))
-                            #expect(pendingState(callbackDefaults) == .none)
-                        }
-                        task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
-                    case "agents.list":
-                        task.emitReceiveSuccess(.data(configuredModelResponse(id: request.id)))
-                    case "openclaw.setup.verify":
-                        task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
-                    case "openclaw.setup.detect":
-                        task.emitReceiveSuccess(.data(detectedSetupResponse(
-                            id: request.id,
-                            kind: "codex-cli",
-                            modelRef: "openai/gpt-5.5"
-                        )))
-                    default:
-                        break
-                    }
-                })
-            }))
+                    task.emitReceiveSuccess(.data(indeterminateActivationResponse(id: request.id)))
+                case "agents.list":
+                    task.emitReceiveSuccess(.data(configuredModelResponse(id: request.id)))
+                case "openclaw.setup.verify":
+                    task.emitReceiveSuccess(.data(verifiedSetupResponse(id: request.id)))
+                case "openclaw.setup.detect":
+                    task.emitReceiveSuccess(.data(detectedSetupResponse(
+                        id: request.id,
+                        kind: "codex-cli",
+                        modelRef: "openai/gpt-5.5"
+                    )))
+                default:
+                    break
+                }
+            })
         )
         let view = makeAISetupView(
             state: appState,

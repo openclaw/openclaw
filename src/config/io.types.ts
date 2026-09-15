@@ -1,5 +1,6 @@
 import type fs from "node:fs";
 import type JSON5 from "json5";
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
 import type {
@@ -131,10 +132,13 @@ export type NormalizedConfigIoDeps = Required<ConfigIoDeps>;
 export type ConfigIoFactoryOptions = ConfigIoDeps & {
   pluginValidation?: "full" | "skip" | "core-only";
   preservedLegacyRootKeys?: readonly string[];
+  /** Admission can prepare migration facts before their checkpoint is writable. */
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   shellEnvFallback?: "load" | "defer";
 };
 
 export type ConfigSnapshotReadOptions = {
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   measure?: ConfigSnapshotReadMeasure;
   observe?: boolean;
   isolateEnv?: boolean;

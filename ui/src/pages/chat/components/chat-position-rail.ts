@@ -10,6 +10,7 @@ import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
@@ -53,6 +54,10 @@ class ChatPositionRailDirective extends AsyncDirective {
   private visibleIds = new Set<string>();
   private targetsChanged = true;
   private followActive = false;
+  private layoutVisible = false;
+  private readerViewport: (ChatSessionScrollPosition & { height: number }) | undefined;
+  private resizeScrollTarget: { offset: number; atEnd: boolean } | undefined;
+  private followingResize = false;
   private readonly stopScrollInput = {
     handleEvent: (event: Event) => event.stopPropagation(),
     passive: true,
@@ -91,6 +96,9 @@ class ChatPositionRailDirective extends AsyncDirective {
     this.intersectionObserver = undefined;
     this.mutationObserver = undefined;
     this.transcriptElement = undefined;
+    this.readerViewport = undefined;
+    this.resizeScrollTarget = undefined;
+    this.followingResize = false;
     this.observedMessages.clear();
     for (const id of this.visibleIds) {
       this.markerElements.get(id)?.removeAttribute("data-visible");
@@ -204,22 +212,52 @@ class ChatPositionRailDirective extends AsyncDirective {
   }
 
   private syncVisibleMarks() {
+    const root = this.transcriptElement;
+    if (root) {
+      const viewport = {
+        height: root.clientHeight,
+        ...captureChatSessionScrollPosition(root),
+      };
+      const previous = this.readerViewport;
+      if (previous && viewport.height !== previous.height) {
+        // The transcript can publish intersections before its resize scroll compensation.
+        // Neither update is a request to navigate the rail.
+        this.followingResize = true;
+        this.followActive = false;
+        const atEnd = this.resizeScrollTarget?.atEnd ?? previous.anchorToEnd;
+        const maxOffset = Math.max(0, root.scrollHeight - viewport.height);
+        this.resizeScrollTarget = {
+          offset: atEnd ? maxOffset : Math.min(previous.scrollTop, maxOffset),
+          atEnd,
+        };
+      } else if (previous && viewport.scrollTop !== previous.scrollTop) {
+        if (
+          !this.resizeScrollTarget ||
+          Math.abs(viewport.scrollTop - this.resizeScrollTarget.offset) > 1
+        ) {
+          if (this.followingResize) {
+            this.followActive = true;
+            this.scheduleLayout();
+          }
+          this.followingResize = false;
+        }
+        this.resizeScrollTarget = undefined;
+      }
+      this.readerViewport = viewport;
+    }
     const visible = new Set(
       Array.from(this.observedMessages.values())
         .filter((message) => message.visible)
         .map((message) => message.id),
     );
-    let changed = false;
     for (const id of this.visibleIds) {
       if (!visible.has(id)) {
         this.markerElements.get(id)?.removeAttribute("data-visible");
-        changed = true;
       }
     }
     for (const id of visible) {
       if (!this.visibleIds.has(id)) {
         this.markerElements.get(id)?.setAttribute("data-visible", "");
-        changed = true;
       }
     }
     this.visibleIds = visible;
@@ -240,10 +278,9 @@ class ChatPositionRailDirective extends AsyncDirective {
       this.markerElements.get(this.activeId ?? "")?.setAttribute("aria-current", "false");
       this.activeId = activeId;
       this.markerElements.get(activeId ?? "")?.setAttribute("aria-current", "true");
-      changed = true;
-    }
-    if (changed) {
-      this.followActive = true;
+      if (!this.followingResize) {
+        this.followActive = true;
+      }
       this.scheduleLayout();
     }
   }
@@ -251,9 +288,24 @@ class ChatPositionRailDirective extends AsyncDirective {
   private syncLayout() {
     const scroller = this.scrollElement;
     if (!scroller || scroller.clientHeight === 0) {
+      this.layoutVisible = false;
       return;
     }
+    const projectionChanged =
+      this.markersChanged &&
+      [...this.markerElements.keys()].some((id, index) => id !== this.markerIds[index]);
+    const initialize = !this.layoutVisible || projectionChanged;
+    this.layoutVisible = true;
+    if (initialize) {
+      this.readerViewport = undefined;
+      this.resizeScrollTarget = undefined;
+      this.followingResize = false;
+    }
     if (this.markersChanged) {
+      // Appends keep existing offsets valid; filtering or reordering retires that scroll room.
+      if (projectionChanged) {
+        scroller.style.removeProperty("--chat-position-scroll-top");
+      }
       this.markersChanged = false;
       this.markerElements.clear();
       for (const element of scroller.querySelectorAll<HTMLElement>(".chat-position-rail__marker")) {
@@ -265,17 +317,23 @@ class ChatPositionRailDirective extends AsyncDirective {
     // Reader offsets can move the anchor without changing any intersections.
     this.syncVisibleMarks();
     this.syncTabStop();
-    if (this.followActive) {
+    if (initialize || this.followActive) {
       this.followActive = false;
-      const current = this.markerElements.get(this.activeId ?? "");
+      const current = this.markerElements.get(
+        (initialize ? this.interaction.focusedId : null) ?? this.activeId ?? "",
+      );
       if (current) {
         this.revealMarker(current);
       }
     }
+    // Reserve only the trailing space needed to keep this offset when the viewport grows.
+    scroller.style.setProperty("--chat-position-scroll-top", `${scroller.scrollTop}px`);
+    const lastMarker = this.markerElements.get(this.markerIds.at(-1)!);
+    const contentBottom = lastMarker ? lastMarker.offsetTop + lastMarker.offsetHeight : 0;
     scroller.toggleAttribute("data-overflow-top", scroller.scrollTop > 1);
     scroller.toggleAttribute(
       "data-overflow-bottom",
-      scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop > 1,
+      contentBottom - scroller.clientHeight - scroller.scrollTop > 1,
     );
     const preview = this.previewElement;
     if (preview) {
@@ -316,6 +374,7 @@ class ChatPositionRailDirective extends AsyncDirective {
     this.resizeObserver?.disconnect();
     this.disconnectVisibility();
     this.markersChanged = true;
+    this.layoutVisible = false;
     if (this.layoutFrame !== undefined) {
       cancelAnimationFrame(this.layoutFrame);
       this.layoutFrame = undefined;
@@ -323,10 +382,7 @@ class ChatPositionRailDirective extends AsyncDirective {
     this.scrollElement = element instanceof HTMLElement ? element : undefined;
     if (this.scrollElement) {
       this.followActive = true;
-      this.resizeObserver = new ResizeObserver(() => {
-        this.followActive = true;
-        this.scheduleLayout();
-      });
+      this.resizeObserver = new ResizeObserver(this.scheduleLayout);
       this.resizeObserver.observe(this.scrollElement);
       this.scheduleLayout();
     }
@@ -390,6 +446,7 @@ class ChatPositionRailDirective extends AsyncDirective {
     if (this.session !== transcript) {
       this.session = transcript;
       this.interaction = initialInteraction();
+      this.layoutVisible = false;
       this.disconnectVisibility();
       this.markersChanged = true;
     }
@@ -479,6 +536,7 @@ class ChatPositionRailDirective extends AsyncDirective {
     return html`
       <aside
         class="chat-position-rail"
+        style=${`--chat-position-rail-count: ${count}`}
         aria-label=${t("chat.thread.positionRail")}
         @pointerleave=${() => {
           interaction.hoveredId = null;

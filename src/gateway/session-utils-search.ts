@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelManifestNormalizationContext } from "../agents/model-ref-shared.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
   buildGroupDisplayName,
@@ -16,8 +17,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunActive } from "../shared/session-run-state.js";
+import type { SynchronousWork } from "../shared/synchronous-work.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
+import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import type { SessionEntryPair } from "./session-list-order.js";
 import type {
   SessionListActiveRunProjector,
@@ -36,7 +39,7 @@ import { resolveSessionDisplayModelIdentityRefCached } from "./session-utils-mod
 import {
   buildSessionListRowMetadataContext,
   resolveGatewaySessionRuntimeProjection,
-  populateSessionListAcpMetadata,
+  populateSessionListAcpMetadataWork,
 } from "./session-utils-projection.js";
 import { buildGatewaySessionRow } from "./session-utils-row.js";
 import { createGatewaySessionEntryReader } from "./session-utils-store-lookup.js";
@@ -45,7 +48,7 @@ import {
   loadGatewaySessionEntryReadOnly,
   parseGroupKey,
 } from "./session-utils-store.js";
-import type { GatewaySessionRow } from "./session-utils.types.js";
+import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
 
 function resolveSessionListSearchDisplayName(
   key: string,
@@ -92,14 +95,16 @@ function shouldResolveDerivedSessionModelSearchFields(search: string): boolean {
   return !search.startsWith("agent:");
 }
 
-function resolveSessionListSearchModelFields(params: {
-  agentId: string;
-  cfg: OpenClawConfig;
-  key: string;
-  entry?: SessionEntry;
-  rowContext: SessionListRowContext;
-  selectedModel: ReturnType<typeof resolveSessionSelectedModelRef>;
-}): Array<string | undefined> {
+function resolveSessionListSearchModelFields(
+  params: {
+    agentId: string;
+    cfg: OpenClawConfig;
+    key: string;
+    entry?: SessionEntry;
+    rowContext: SessionListRowContext;
+    selectedModel: ReturnType<typeof resolveSessionSelectedModelRef>;
+  } & ModelManifestNormalizationContext,
+): Array<string | undefined> {
   const { agentId, selectedModel } = params;
   const subagentRun = params.rowContext.subagentRuns.getDisplaySubagentRun(params.key);
   const resolvedModel = resolveSessionModelIdentityRef(
@@ -107,7 +112,7 @@ function resolveSessionListSearchModelFields(params: {
     params.entry,
     agentId,
     subagentRun?.model,
-    { allowPluginNormalization: false },
+    { allowPluginNormalization: false, manifestPlugins: params.manifestPlugins },
   );
   const displayModelIdentity = resolveSessionDisplayModelIdentityRefCached({
     cfg: params.cfg,
@@ -130,6 +135,7 @@ export function createSessionListSearchMatcher(params: {
   cfg: OpenClawConfig;
   search: string;
   targetsBySessionKey: GatewayStoredSessionTargets;
+  modelCatalog?: SessionListModelCatalog;
   now: number;
   visibleEntries: readonly SessionEntryPair[];
   getRowContext?: SessionListRowContextProvider;
@@ -141,7 +147,7 @@ export function createSessionListSearchMatcher(params: {
   const context = () =>
     (rowContext ??= params.getRowContext?.() ?? buildSessionListRowMetadataContext({ now }));
   let acpPrepared = false;
-  return (key: string, entry: SessionEntry): boolean => {
+  return function* (key: string, entry: SessionEntry): SynchronousWork<boolean> {
     const target = expectDefined(params.targetsBySessionKey.get(key), "search row owner");
     const storeKey = target.storeKey ?? key;
     const fields = [
@@ -159,6 +165,9 @@ export function createSessionListSearchMatcher(params: {
       return true;
     }
     const agentId = target.agentId;
+    const metadataSnapshot = readPreparedGatewayModelCatalogMetadata(
+      params.modelCatalog?.get(agentId),
+    );
     const run = projectGatewaySessionRunState({
       key: storeKey,
       entry,
@@ -199,6 +208,7 @@ export function createSessionListSearchMatcher(params: {
       agentId,
       rowContext: context(),
       allowPluginNormalization: false,
+      manifestPlugins: metadataSnapshot,
     });
     if (
       shouldResolveDerivedSessionModelSearchFields(search) &&
@@ -210,6 +220,7 @@ export function createSessionListSearchMatcher(params: {
           agentId,
           rowContext: context(),
           selectedModel: selected,
+          manifestPlugins: metadataSnapshot,
         }),
         search,
       )
@@ -217,7 +228,7 @@ export function createSessionListSearchMatcher(params: {
       return true;
     }
     if (!acpPrepared) {
-      populateSessionListAcpMetadata({
+      yield* populateSessionListAcpMetadataWork({
         cfg,
         entries: params.visibleEntries,
         targetsBySessionKey: params.targetsBySessionKey,
@@ -232,6 +243,7 @@ export function createSessionListSearchMatcher(params: {
       agentId,
       provider: selected.provider,
       model: selected.model,
+      metadataSnapshot,
       rowContext: context(),
     });
     return matchesSessionListSearch([formatAgentRuntimeLabel(agentRuntime)], search);

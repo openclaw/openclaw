@@ -85,7 +85,13 @@ with its scheduler-owned continuation.
   IDs, and yield generation.
 - **Bounded delivery.** Existing limits remain: three attempts, three ambiguous
   transport replays, and ten stale deferrals. Active descendants do not consume
-  the stale-deferral budget. Findings are capped at 4,096 characters, individual
+  the stale-deferral budget. A private handoff's observation timeout does not
+  cancel the underlying Gateway turn. When the Gateway reports that turn as
+  in flight, settlement observes the same request without spending failure
+  attempts or discarding the child results. Gateway admission and execution
+  retain their own timeouts; explicit cancellation still stops the turn.
+  Individual private announcements keep their existing delivery deadline.
+  Findings are capped at 4,096 characters, individual
   results at 512, and route notices at 1,024. Ambiguous replay reuses its attempt
   key; it does not assert global exactly-once delivery across Gateway restarts.
 

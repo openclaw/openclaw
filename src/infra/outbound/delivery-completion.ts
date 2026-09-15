@@ -24,6 +24,8 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db-registry.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
@@ -37,6 +39,7 @@ export type ConversationDeliveryTarget = Pick<
   "agentId" | "databaseAgentId" | "storePath"
 > & {
   stateDir: string;
+  workerContext: OpenClawStateWorkerContext;
   supervisorMode?: "external";
 };
 
@@ -44,6 +47,7 @@ export function captureConversationDeliveryTarget(
   scope: PreparedConversationRegistryScope,
 ): ConversationDeliveryTarget {
   return {
+    workerContext: captureOpenClawStateWorkerContext({ env: scope.env }),
     agentId: scope.agentId,
     databaseAgentId: scope.databaseAgentId,
     storePath: scope.storePath,

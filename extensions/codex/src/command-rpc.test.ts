@@ -17,6 +17,10 @@ import {
   clearSessionStoreCacheForTest,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { withCodexAppServerJsonClient } from "./app-server/request.js";
 import { createClientHarness } from "./app-server/test-support.js";
@@ -111,6 +115,8 @@ describe("Codex command RPC helpers", () => {
       resetPluginRuntimeStateForTest();
     }
     harness.client.close();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     clearRuntimeAuthProfileStoreSnapshots();
     clearSessionStoreCacheForTest();
     vi.unstubAllEnvs();

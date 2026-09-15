@@ -113,16 +113,18 @@ internal fun ChatMessageLinkPreview(
   messageId: String,
   role: String,
   content: List<ChatMessageContent>,
+  excludedUrls: Set<String> = emptySet(),
 ) {
   val normalizedRole = normalizeVisibleChatMessageRole(role) ?: return
   if (normalizedRole != "user" && normalizedRole != "assistant") return
   val previewUrl =
-    remember(messageId, normalizedRole, content) {
+    remember(messageId, normalizedRole, content, excludedUrls) {
       content
         .asSequence()
         .filter { it.type == "text" }
         .mapNotNull { it.text?.let(::extractFirstBareUrl) }
         .firstOrNull()
+        ?.takeUnless { chatSourceKey(it) in excludedUrls }
     }
   if (previewUrl != null) {
     ChatLinkPreview(messageId = messageId, url = previewUrl)

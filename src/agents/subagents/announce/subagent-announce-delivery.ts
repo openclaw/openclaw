@@ -139,13 +139,10 @@ export async function deliverSubagentAnnouncement(params: {
   requesterSessionKey: string;
   requesterAgentId?: string;
   requesterRunTimeoutSeconds?: number;
-  announceId?: string;
   triggerMessage: string;
   steerMessage: string;
   internalEvents?: AgentInternalEvent[];
-  summaryLine?: string;
   requesterSessionOrigin?: DeliveryContext;
-  requesterOrigin?: DeliveryContext;
   completionDirectOrigin?: DeliveryContext;
   directOrigin?: DeliveryContext;
   sourceSessionKey?: string;

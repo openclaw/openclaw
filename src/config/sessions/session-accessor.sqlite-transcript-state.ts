@@ -3,6 +3,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -259,18 +260,39 @@ function normalizeTranscriptMutationAtMs(value: number): number | undefined {
   return Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : undefined;
 }
 
+function createTranscriptMutationStateQuery(database: Pick<OpenClawAgentDatabase, "db">) {
+  const db = getSessionKysely(database.db);
+  return prepareSqliteQueryTakeFirstSync<
+    string,
+    { transcript_observed_at: number | null; transcript_updated_at: number | null }
+  >(database.db, (parameter) =>
+    db
+      .selectFrom("session_windows")
+      .select(["transcript_observed_at", "transcript_updated_at"])
+      .where(
+        "session_id",
+        "=",
+        parameter((sessionId) => sessionId),
+      ),
+  );
+}
+
+// Only compilation is retained; writer transactions must see their latest mutation fences.
+const transcriptMutationStateQueries = new WeakMap<
+  OpenClawAgentDatabase["db"],
+  ReturnType<typeof createTranscriptMutationStateQuery>
+>();
+
 export function readTranscriptMutationStateInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
 ): { observedAt: number | null; updatedAt: number | null } {
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("session_windows")
-      .select(["transcript_observed_at", "transcript_updated_at"])
-      .where("session_id", "=", sessionId),
-  );
+  let query = transcriptMutationStateQueries.get(database.db);
+  if (!query) {
+    query = createTranscriptMutationStateQuery(database);
+    transcriptMutationStateQueries.set(database.db, query);
+  }
+  const row = query(sessionId);
   return {
     observedAt: row?.transcript_observed_at ?? null,
     updatedAt: row?.transcript_updated_at ?? null,

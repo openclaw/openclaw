@@ -152,23 +152,17 @@ function resolveBoundConversationOrigin(params: {
   const inferredThreadId =
     boundTarget?.threadId ??
     (parentConversationId && parentConversationId !== conversationId ? conversationId : undefined);
-  if (
+  const to =
     requesterTo &&
     conversationId &&
     requesterConversationId &&
     conversationId === requesterConversationId
-  ) {
-    return {
-      channel: conversation.channel,
-      accountId: conversation.accountId,
-      to: requesterTo,
-      threadId: inferredThreadId,
-    };
-  }
+      ? requesterTo
+      : boundTarget?.to;
   return {
     channel: conversation.channel,
     accountId: conversation.accountId,
-    to: boundTarget?.to,
+    to,
     threadId: inferredThreadId,
   };
 }

@@ -2,6 +2,7 @@ import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -74,6 +75,10 @@ export const sessionEntryInventoryJson =
   );
 
 export function normalizeStatus(value: unknown): SessionEntryStatus | null {
+  // Keep canonical interruption distinct without changing the derived status index schema.
+  if (value === "interrupted") {
+    return "failed";
+  }
   return value === "running" ||
     value === "done" ||
     value === "failed" ||
@@ -105,24 +110,50 @@ export function parseSessionEntryJson(
   return projectSqliteSessionOwner(projectCanonicalSessionEntryShape(record), row);
 }
 
+export function hasSessionEntriesByStatus(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  statuses: readonly SessionEntryStatus[],
+): boolean {
+  const selectedStatuses = new Set(statuses);
+  const projectedStatuses = [...new Set(statuses.map(normalizeStatus))].filter(
+    (status): status is SessionEntryStatus => status !== null,
+  );
+  if (projectedStatuses.length === 0) {
+    return false;
+  }
+  const query = selectSessionEntryRows(database, "list").where("status", "in", projectedStatuses);
+  for (const row of iterateSqliteQuerySync(database.db, query)) {
+    const entry = parseSessionEntryJson(row, "list");
+    if (entry?.status && selectedStatuses.has(entry.status)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function readSessionEntriesByStatus(
   database: OpenClawAgentDatabase,
   statuses: readonly SessionEntryStatus[],
   sessionKeys?: readonly string[],
 ): SessionEntrySummary[] {
   const selectedStatuses = [...new Set(statuses)];
+  const projectedStatuses = [...new Set(selectedStatuses.map(normalizeStatus))].filter(
+    (status): status is SessionEntryStatus => status !== null,
+  );
   if (selectedStatuses.length === 0) {
     return [];
   }
   const db = getNodeSqliteKysely<SessionStatusDatabase>(database.db);
-  let query = db.selectFrom("session_nodes").selectAll().where("status", "in", selectedStatuses);
+  let query = db.selectFrom("session_nodes").selectAll().where("status", "in", projectedStatuses);
   if (sessionKeys) {
     query = query.where("session_key", "in", sqliteStringSet(sessionKeys));
   }
   return executeSqliteQuerySync(database.db, query)
     .rows.flatMap((row) => {
       const entry = parseSessionEntryJson(row);
-      return entry ? [{ entry, sessionKey: row.session_key }] : [];
+      return entry?.status && selectedStatuses.includes(entry.status)
+        ? [{ entry, sessionKey: row.session_key }]
+        : [];
     })
     .toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey));
 }

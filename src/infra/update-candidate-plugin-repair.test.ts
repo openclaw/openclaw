@@ -102,7 +102,8 @@ it.each(["directory", "file", "alias", "install-record"] as const)(
     const copied = await fs.readFile(path.join(f.copiedPlugin, "index.mjs"));
     const before = await f.run();
     expect(before.code).not.toBe(0);
-    expect(before.stderr.toString()).toContain("ERR_MODULE_NOT_FOUND");
+    expect(before.stderr.toString()).toMatch(/ERR_MODULE_NOT_FOUND|Cannot find module/);
+    expect(before.stderr.toString()).toContain("shared/value.js");
 
     const repaired = await completeUpdateCandidatePluginRehearsal(f);
     expect(repaired.copiedFiles).toBeGreaterThan(0);
@@ -131,7 +132,8 @@ it("completes a declared Doctor module independently of the runtime entry", asyn
   const f = await fixture("directory", "doctor");
   const before = await f.run();
   expect(before.code).not.toBe(0);
-  expect(before.stderr.toString()).toContain("ERR_MODULE_NOT_FOUND");
+  expect(before.stderr.toString()).toMatch(/ERR_MODULE_NOT_FOUND|Cannot find module/);
+  expect(before.stderr.toString()).toContain("shared/value.js");
   expect((await completeUpdateCandidatePluginRehearsal(f)).copiedFiles).toBeGreaterThan(0);
   const after = await f.run();
   expect(after.code, after.stderr.toString()).toBe(0);

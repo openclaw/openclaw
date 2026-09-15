@@ -40,6 +40,7 @@ import { resolveAgentMainSessionKey, type SessionEntry } from "../config/session
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 import {
@@ -241,6 +242,7 @@ type GatewaySessionThinkingProjectionParams = {
   entry?: SessionEntry;
   modelCatalog?: ModelCatalogEntry[];
   modelCatalogRouteVariants?: readonly ModelCatalogEntry[];
+  metadataSnapshot?: PluginMetadataSnapshot;
   rowContext?: SessionListRowContext;
   providerPolicySource?: ThinkingProviderPolicySource;
 };
@@ -320,6 +322,7 @@ export function getSessionDefaults(
   options?: {
     agentId?: string;
     allowPluginNormalization?: boolean;
+    metadataSnapshot?: PluginMetadataSnapshot;
     providerPolicySource?: ThinkingProviderPolicySource;
   },
 ): GatewaySessionsDefaults {
@@ -331,12 +334,14 @@ export function getSessionDefaults(
         cfg,
         agentId,
         allowPluginNormalization: options.allowPluginNormalization,
+        manifestPlugins: options.metadataSnapshot,
       })
     : resolveConfiguredModelRef({
         cfg,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
         allowPluginNormalization: options?.allowPluginNormalization,
+        manifestPlugins: options?.metadataSnapshot,
       });
   const displayModel = resolveSessionDisplayModelIdentityRef({
     cfg,

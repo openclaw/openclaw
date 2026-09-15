@@ -77,20 +77,30 @@ export function sessionListEventMatcher(payload: unknown) {
   };
 }
 
+export type SessionRefreshOutcome =
+  | { status: "refreshed" | "stale" }
+  | { status: "failed"; error: string };
+
+export type SessionRefreshAttempt = {
+  result: SessionsListResult | null;
+  outcome: SessionRefreshOutcome;
+};
+
 export type QueuedSessionRefresh = {
   options: SessionRefreshOptions;
-  intent: "explicit" | "automatic" | (() => string | null);
+  intent: "explicit" | "automatic" | "reconcile" | (() => string | null);
   bootstrap?: boolean;
-  isErrorCurrent?: () => boolean;
+  errorOwner: { options: SessionRefreshOptions; isCurrent?: () => boolean };
   completions: Array<{
     options: SessionRefreshOptions;
-    complete: (refresh: Promise<SessionsListResult | null> | null) => void;
+    complete: (refresh: Promise<SessionRefreshAttempt | null> | null) => void;
   }>;
 };
 
 export function coalesceSessionRefresh(
   current: QueuedSessionRefresh | null,
   next: QueuedSessionRefresh,
+  snapshot: SessionGateway["snapshot"],
 ): QueuedSessionRefresh {
   if (!current) {
     return next;
@@ -98,12 +108,25 @@ export function coalesceSessionRefresh(
   // Explicit intent remains authoritative over automatic hydration and weaker queries.
   if (
     (next.intent !== "automatic" || current.intent === "automatic") &&
+    (next.intent !== "reconcile" ||
+      current.intent === "automatic" ||
+      current.intent === "reconcile") &&
     (isForegroundReplacement(next.options) || !isForegroundReplacement(current.options))
   ) {
     current.options = next.options;
     current.intent = next.intent;
     current.bootstrap = next.bootstrap;
-    current.isErrorCurrent = next.isErrorCurrent;
+    current.errorOwner = next.errorOwner;
+  } else if (
+    next.intent === "reconcile" &&
+    isSameSessionListQuery(
+      prepareSessionRefreshOptions(current.options, snapshot),
+      prepareSessionRefreshOptions(next.options, snapshot),
+      false,
+    )
+  ) {
+    // Reconciliation may own a matching query's error without replacing selection.
+    current.errorOwner = next.errorOwner;
   }
   current.completions.push(...next.completions);
   return current;
@@ -192,7 +215,7 @@ export function prepareSessionRefreshOptions(
 export function completeSessionRefreshWaiters(
   queued: QueuedSessionRefresh,
   nextOptions: SessionRefreshOptions,
-  next: Promise<SessionsListResult | null> | null,
+  next: Promise<SessionRefreshAttempt | null> | null,
   snapshot: SessionGateway["snapshot"],
 ): void {
   // Coalescing shares completion timing, but only equivalent queries share the result.

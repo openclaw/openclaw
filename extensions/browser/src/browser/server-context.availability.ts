@@ -398,7 +398,7 @@ export function createProfileAvailability({
       Date.now() + (state().resolved.localCdpReadyTimeoutMs ?? CDP_READY_AFTER_LAUNCH_WINDOW_MS);
     while (Date.now() < deadlineMs) {
       const remainingMs = Math.max(0, deadlineMs - Date.now());
-      // Keep each attempt short; loopback profiles derive a WS timeout from this value.
+      // Allow for Gateway scheduling delays while bounding attempts by the remaining window.
       const attemptTimeoutMs = Math.max(
         CDP_READY_AFTER_LAUNCH_MIN_TIMEOUT_MS,
         Math.min(CDP_READY_AFTER_LAUNCH_MAX_TIMEOUT_MS, remainingMs),

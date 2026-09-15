@@ -4,7 +4,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
-import { QA_EVIDENCE_FILENAME, validateQaEvidenceSummaryJson } from "../evidence-summary.js";
+import {
+  getEffectiveQaEvidenceEntries,
+  projectQaEvidenceScenarioOutcomes,
+  QA_EVIDENCE_FILENAME,
+  validateQaEvidenceSummaryJson,
+} from "../evidence-summary.js";
 import { trimToValue } from "../mantis-options.runtime.js";
 
 export type MantisBeforeAfterOptions = {
@@ -244,14 +249,32 @@ async function readNormalizedLaneResult(params: {
   }
 
   const summary = validateQaEvidenceSummaryJson(JSON.parse(rawSummary));
+  const outcome =
+    summary.schemaVersion === 3 ? projectQaEvidenceScenarioOutcomes(summary)[0] : undefined;
+  const selected =
+    summary.schemaVersion === 3
+      ? getEffectiveQaEvidenceEntries(summary).filter(
+          (candidate) =>
+            outcome?.scenarioId === params.scenario &&
+            "binding" in candidate &&
+            candidate.binding.occurrenceId === outcome.occurrenceId,
+        )
+      : [];
   const entry =
-    summary.entries.find((candidate) => candidate.test.id === params.scenario) ??
-    summary.entries[0];
+    summary.schemaVersion === 3
+      ? (selected.find((candidate) => candidate.result.status === outcome?.status) ?? selected[0])
+      : (summary.entries.find((candidate) => candidate.test.id === params.scenario) ??
+        summary.entries[0]);
   const artifacts = entry?.execution?.artifacts ?? [];
   return {
     details: entry?.result.failure?.reason,
     screenshotPath: artifacts.find((artifact) => artifact.kind === "screenshot")?.path,
-    status: entry?.result.status ?? "fail",
+    status:
+      summary.schemaVersion === 3
+        ? outcome?.scenarioId === params.scenario
+          ? (outcome.status ?? "unknown")
+          : "unknown"
+        : (entry?.result.status ?? "fail"),
     summaryPath,
     videoPath: artifacts.find((artifact) => artifact.kind === "video")?.path,
   };

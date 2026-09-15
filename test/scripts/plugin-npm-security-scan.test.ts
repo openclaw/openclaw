@@ -504,6 +504,38 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     },
   );
 
+  it("accepts the reviewed Codex process-inspection test helpers", async () => {
+    const packageName = "@openclaw/codex";
+    const spawnProbe = 'import { spawn } from "node:child_process";\n';
+    const artifact = writePluginArtifact({
+      extensionId: "codex",
+      packageName,
+      files: {
+        "src/app-server/sandbox-exec-server/sandbox-child.ts": `${spawnProbe}spawn(process.execPath, []);\n`,
+        "src/app-server/transport-process-snapshot.ts": `${spawnProbe}spawn(process.execPath, []);\n`,
+        "src/app-server/transport-stdio.ts": `${spawnProbe}spawn(process.execPath, []);\n`,
+        "src/app-server/transport-process-snapshot.test.ts":
+          spawnProbe + "spawn(process.execPath, []);\n".repeat(3),
+        "src/app-server/transport-procfs.test-support.ts":
+          spawnProbe + "spawn(process.execPath, []);\n".repeat(3),
+        "src/app-server/test-support/transport-process-blocked-command.test-support.mjs":
+          spawnProbe + "spawn(process.execPath, []);\n".repeat(2),
+        "src/app-server/test-support/transport-process-starvation.test-support.mjs": `${spawnProbe}spawn(process.execPath, []);\n`,
+      },
+    });
+
+    const scanned = await scanPublishablePluginPackages([artifact.artifact], "release/2026.9.4");
+    expect(scanned.scanErrors).toEqual([]);
+    expect(scanned.packageResults[0]?.unexpectedCriticalFindings).toEqual([]);
+    const report = buildPluginNpmSecurityScanReport({
+      candidateSha: CANDIDATE_SHA,
+      packageResults: scanned.packageResults,
+      targetContextRef: "release/2026.9.4",
+      toolingSha: TOOLING_SHA,
+    });
+    expect(report.errors.filter((error) => error.startsWith(`${packageName}:`))).toEqual([]);
+  });
+
   it.each([null, 0, 1, 2])(
     "reviews exactly one packed composition fixture for current and 9.5 only: %s",
     async (count) => {

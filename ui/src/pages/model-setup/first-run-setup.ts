@@ -31,6 +31,10 @@ export type ModelSetupConnection = Pick<
   agentId: string | null;
 };
 
+export function modelSetupAgentSelection(context: ApplicationContext, firstRun: boolean) {
+  return firstRun ? context.agentSelection : context.settingsAgentSelection;
+}
+
 export function captureModelSetupConnection(
   context: ApplicationContext,
   firstRun: boolean,
@@ -40,7 +44,7 @@ export function captureModelSetupConnection(
   return {
     client: snapshot.client,
     hello: snapshot.hello,
-    agentId: context.agentSelection.state.selectedId,
+    agentId: modelSetupAgentSelection(context, firstRun).state.selectedId,
     connected: snapshot.phase === "connected",
     firstRun,
     connectionRevision: context.gateway.connectionRevision,
@@ -462,7 +466,8 @@ export class FirstRunSetup {
       snapshot.phase === "connected" &&
       snapshot.client === owner.connection.client &&
       snapshot.hello === owner.connection.hello &&
-      context.agentSelection.state.selectedId === owner.connection.agentId
+      modelSetupAgentSelection(context, owner.firstRun).state.selectedId ===
+        owner.connection.agentId
     );
   }
 

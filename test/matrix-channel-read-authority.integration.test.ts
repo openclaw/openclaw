@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "../extensions/matrix/api.js";
 import { registerMatrixFullRuntime } from "../extensions/matrix/index.js";
@@ -10,6 +11,11 @@ import type {
   ChannelMessageActionContext,
   ChannelMessageActionName,
 } from "../src/channels/plugins/types.js";
+import { createDefaultDeps } from "../src/cli/deps.js";
+import { createMessageCliHelpers } from "../src/cli/program/message/helpers.js";
+import { registerMessageDiscordAdminCommands } from "../src/cli/program/message/register.discord-admin.js";
+import { messageCommand } from "../src/commands/message.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-identity-token.js";
 import {
   mintMessageActionTurnCapability,
@@ -71,6 +77,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
 });
 
@@ -369,6 +376,65 @@ const reads = [
     },
   },
 ] as const;
+
+describe("Matrix member info CLI", () => {
+  it("reads a selected room member without current conversation context", async () => {
+    await withHarness("bundled", async (fixture) => {
+      setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const command = new Command().name("message").exitOverride();
+      registerMessageDiscordAdminCommands(command, {
+        ...createMessageCliHelpers("matrix"),
+        runMessageAction: async (action, opts) => {
+          await messageCommand({ ...opts, action }, createDefaultDeps(), runtime);
+        },
+      });
+
+      await command.parseAsync(
+        [
+          "member",
+          "info",
+          "--channel",
+          "matrix",
+          "--user-id",
+          memberId,
+          "--channel-id",
+          allowedRoom,
+          "--json",
+        ],
+        { from: "user" },
+      );
+
+      expect(runtime.log).toHaveBeenCalledTimes(1);
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toMatchObject({
+        action: "member-info",
+        channel: "matrix",
+        dryRun: false,
+        handledBy: "plugin",
+        payload: {
+          ok: true,
+          member: { userId: memberId, displayName: "Alice", roomId: allowedRoom },
+        },
+      });
+      expect(fixture.requests.map((request) => request.path)).toEqual(
+        expect.arrayContaining([
+          `${roomPath}/joined_members`,
+          `/_matrix/client/v3/profile/${memberId}`,
+        ]),
+      );
+      expect(
+        fixture.requests.every(
+          (request) =>
+            request.method === "GET" && request.authorization === `Bearer ${accessToken}`,
+        ),
+      ).toBe(true);
+      expect(fixture.requests.filter((request) => responseFor(request.path) === undefined)).toEqual(
+        [],
+      );
+    });
+  });
+});
 
 describe.each(["bundled", "official-installed"] as const)(
   "registered Matrix reads (%s)",

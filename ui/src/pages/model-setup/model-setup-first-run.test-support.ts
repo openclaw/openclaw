@@ -109,6 +109,10 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
       state: { selectedId: "main", scopeId: "main" },
       subscribe: () => () => undefined,
     },
+    settingsAgentSelection: {
+      state: { selectedId: "main", scopeId: "main" },
+      subscribe: () => () => undefined,
+    },
     basePath: "/openclaw",
     resourceBasePath: "/openclaw",
     navigate: vi.fn(),

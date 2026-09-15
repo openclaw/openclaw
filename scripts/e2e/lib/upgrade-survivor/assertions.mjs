@@ -39,6 +39,7 @@ const SCENARIOS = new Set([
   "codex-allowlist-survival",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
+  "missing-configured-plugin-migration",
   "custom-plugin-siblings",
   "stale-source-plugin-shadow",
   "prerelease-plugin-registry",
@@ -1622,15 +1623,56 @@ function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, ba
   return denied;
 }
 
+function assertExpectedMissingCodexOutcome(result, expectedVersion) {
+  const plugins = result.postUpdate?.plugins;
+  assert(result.before?.version === "2026.9.2", "missing Codex fixture used the wrong baseline");
+  assert(result.run?.status === "succeeded", "missing Codex update run did not finish");
+  assert(plugins?.status === "warning", "missing Codex update omitted its final plugin warning");
+  const failures = plugins.npm?.outcomes?.filter((outcome) => outcome?.status === "error") ?? [];
+  assert(
+    failures.length === 1,
+    "missing Codex update must retain exactly its named failed attempt",
+  );
+  const failure = failures[0];
+  const missingPackage =
+    `Failed to install missing configured plugin "codex" from @openclaw/codex: ` +
+    `Package not found on npm: @openclaw/codex@${expectedVersion}.`;
+  assert(
+    failure.pluginId === "codex" &&
+      failure.code === undefined &&
+      typeof failure.message === "string" &&
+      failure.message.startsWith(missingPackage),
+    "missing Codex update retained an unexpected plugin failure",
+  );
+  const repairCommand = "openclaw plugins update codex";
+  assert(
+    plugins.warnings?.some(
+      (warning) =>
+        warning.pluginId === "codex" &&
+        warning.reason === failure.message &&
+        warning.guidance?.includes(repairCommand) &&
+        warning.message?.includes(`Run \`${repairCommand}\``),
+    ),
+    "missing Codex update omitted matching actionable recovery guidance",
+  );
+  return failure;
+}
+
 function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
   assert(file && expectedVersion, "assert-successful-update-json requires a path and version");
   const result = readUpdateJson(file, observationRoot);
   const plugins = result?.postUpdate?.plugins;
   assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
+  const expectedMissingPluginFailure =
+    getScenario() === "missing-configured-plugin-migration"
+      ? assertExpectedMissingCodexOutcome(result, expectedVersion)
+      : undefined;
   assert(
     plugins?.status !== "error" &&
       !plugins?.sync?.errors?.length &&
-      !plugins?.npm?.outcomes?.some((outcome) => outcome?.status === "error") &&
+      !plugins?.npm?.outcomes?.some(
+        (outcome) => outcome?.status === "error" && outcome !== expectedMissingPluginFailure,
+      ) &&
       !plugins?.integrityDrifts?.length,
     "successful update failed plugin convergence",
   );

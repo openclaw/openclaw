@@ -278,6 +278,16 @@ export function createMattermostClient(params: {
       return undefined as T;
     }
 
+    if (path === "/reactions" && init?.method?.toUpperCase() === "POST") {
+      try {
+        await res.body?.cancel();
+      } catch {
+        // Ignore cancellation failures.
+      }
+      // SAFETY: Reaction creation is a no-result mutation; its caller discards the receipt.
+      return undefined as T;
+    }
+
     try {
       const contentType = res.headers.get("content-type") ?? "";
       if (contentType.includes("application/json")) {

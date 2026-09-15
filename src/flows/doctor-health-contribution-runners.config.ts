@@ -50,6 +50,8 @@ export async function runWriteConfigHealth(
   const { resolveConfigIncludeWriteBoundary } = await import("../config/mutate.js");
   const { getConfigValueAtPath } = await import("../config/config-paths.js");
   const { isDeepStrictEqual } = await import("node:util");
+  const { getDeferredPluginMigrationConfigFacts, preserveDeferredPluginMigrationConfig } =
+    await import("../config/deferred-plugin-migration-config.js");
   const { createSubsystemLogger } = await import("../logging/subsystem.js");
   const { recordDoctorHealthWarnings } = await import("./doctor-health-contribution.js");
   const { logConfigUpdated } = await import("../config/logging.js");
@@ -79,6 +81,7 @@ export async function runWriteConfigHealth(
       await import("../commands/doctor/shared/config-flow-steps.js");
     const { assertShippedPluginInstallConfigImportCurrent } =
       await import("../commands/doctor/shared/plugin-registry-migration.js");
+    let committed: Awaited<ReturnType<typeof transformConfigFile>>;
     try {
       const authority = getUpdateDoctorConfigWriteAuthority(ctx.configPath);
       const includeSnapshot = authority
@@ -161,7 +164,7 @@ export async function runWriteConfigHealth(
             ),
           ),
         ].toSorted();
-        await runUpdateDoctorIncludeWrite(
+        committed = await runUpdateDoctorIncludeWrite(
           includeWrite.path,
           hashConfigRaw(includeWrite.raw),
           async () => {
@@ -173,7 +176,7 @@ export async function runWriteConfigHealth(
           },
         );
       } else {
-        await writeConfig();
+        committed = await writeConfig();
       }
     } catch (error) {
       recordUpdateDoctorConfigWriteRefusal({
@@ -269,9 +272,15 @@ export async function runWriteConfigHealth(
       }
       delete ctx.configResult.pendingChangePanels;
     }
-    // The final writer runs again after health repairs. Advance its baseline only
-    // after the atomic write succeeds so later failures cannot mark volatile state durable.
-    ctx.cfgForPersistence = structuredClone(ctx.cfg);
+    // Preserve committed retained inputs in the runtime-shaped baseline so late
+    // migration completion still triggers the final cleanup write.
+    ctx.cfgForPersistence = structuredClone(
+      preserveDeferredPluginMigrationConfig({
+        sourceConfig: committed.nextConfig,
+        nextConfig: ctx.cfg,
+        pending: getDeferredPluginMigrationConfigFacts(committed.nextConfig) ?? [],
+      }),
+    );
     delete ctx.configResult.sourceConfigForWrite;
     if (ctx.configResult.shouldWriteConfig === true) {
       ctx.configResultWriteCommitted = true;

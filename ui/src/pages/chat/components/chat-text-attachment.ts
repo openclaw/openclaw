@@ -15,16 +15,13 @@ import {
   renderAttachmentPreviewSkeleton,
   renderCompactAttachmentCard,
 } from "./chat-attachment-card.ts";
+import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import {
   htmlPreviewElement,
   isHtmlDocument,
   LazyCustomElementRequestController,
   renderHtmlPreview,
 } from "./chat-html-preview.ts";
-import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
-
-const TEXT_PREVIEW_MAX_BYTES = 256 * 1024;
-const TEXT_PREVIEW_TIMEOUT_MS = 10_000;
 
 export function isTextAttachment(rawMimeType: string, filename: string): boolean {
   const mimeType = rawMimeType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -93,33 +90,11 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
   }
 
   private async loadText(): Promise<void> {
-    if (this.sizeBytes !== undefined && this.sizeBytes > TEXT_PREVIEW_MAX_BYTES) {
-      this.failed = true;
-      return;
-    }
     const version = this.loadVersion;
     const controller = new AbortController();
     this.abortController = controller;
-    const timeout = setTimeout(() => controller.abort(), TEXT_PREVIEW_TIMEOUT_MS);
     try {
-      // The caller supplies a resolved media ticket or blob, never a reusable credential.
-      const response = await fetch(this.src, {
-        credentials: "same-origin",
-        redirect: "error",
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        await response.body?.cancel();
-        throw new Error("Text attachment unavailable");
-      }
-      const bytes = await readResponseBytesWithinLimit(response, TEXT_PREVIEW_MAX_BYTES);
-      if (!bytes) {
-        throw new Error("Text attachment exceeds preview limit");
-      }
-      const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-      if (text.includes("\0")) {
-        throw new Error("Binary attachment");
-      }
+      const text = await readAttachmentText(this.src, this.sizeBytes, controller.signal);
       if (version === this.loadVersion && this.isConnected) {
         this.text = text;
       }
@@ -128,7 +103,6 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
         this.failed = true;
       }
     } finally {
-      clearTimeout(timeout);
       if (this.abortController === controller) {
         this.abortController = undefined;
       }

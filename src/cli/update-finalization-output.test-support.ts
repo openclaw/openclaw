@@ -9,7 +9,10 @@ import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.
 const require = createRequire(import.meta.url);
 const root = process.env.HOME!;
 // Keep real install discovery inside the fixture; only the completion case has a CLI binary.
-await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+await fs.writeFile(
+  path.join(root, "package.json"),
+  JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
+);
 const [runtimeProcessEntrypointsJson, scenario, ...args] = process.argv.slice(2);
 const borrowed = scenario?.startsWith("borrowed-");
 const blockedChildSource = `
@@ -61,6 +64,12 @@ export async function doctorCommand() {
   }
   outro('Doctor complete.');
   ${scenario === "doctor-error" ? "throw new Error('Doctor repair failed');" : ""}
+  ${
+    scenario === "doctor-warning"
+      ? `await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH,
+        JSON.stringify({status:'ok', warnings:['Optional probe failed; run openclaw doctor after updating.']}));`
+      : ""
+  }
 }
 `;
 const installedEntry = path.join(root, "installed-cli.mjs");

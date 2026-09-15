@@ -2877,12 +2877,14 @@ jobs:
             ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts \
+            ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts \
             ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts \
             ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts \
             ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts \
             ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts \
             ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts \
+            ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts \
             ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts \
             ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts \
             ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts \
@@ -4932,8 +4934,8 @@ jobs:
             swift_test_width=$(( logical_cpu < 12 ? logical_cpu : 12 ))
             echo "[macos-swift] Swift Testing parallelization width: $swift_test_width"
             swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")
-            node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip AppStateIsolationTests
-            node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter AppStateIsolationTests
+            node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"
+            node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter "AppStateIsolationTests|ProfileChatPreferencesTests"
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets predate the resource-owner script and its tests.
             # Their original suite still runs only on this disposable macOS worker.
@@ -4943,6 +4945,32 @@ jobs:
             echo "Current CI targets must provide scripts/test-macos-native.mts." >&2
             exit 1
           fi
+
+      - name: Upload default-profile chat menu captures
+        if: ${{ always() && steps.swift-test.outputs.menu-default-artifact-path != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-chat-menu-captures-default
+          path: |
+            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/*-window.png
+            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/*-menu-*.png
+            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/*-capture-status.json
+            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/capture-export.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload named-profile chat menu captures
+        if: ${{ always() && steps.swift-test.outputs.menu-named-artifact-path != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-chat-menu-captures-named
+          path: |
+            ${{ steps.swift-test.outputs.menu-named-artifact-path }}/*-window.png
+            ${{ steps.swift-test.outputs.menu-named-artifact-path }}/*-menu-*.png
+            ${{ steps.swift-test.outputs.menu-named-artifact-path }}/*-capture-status.json
+            ${{ steps.swift-test.outputs.menu-named-artifact-path }}/capture-export.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Render isolated macOS health fixtures
         id: health-render
@@ -5473,9 +5501,9 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_android_job == 'true'
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    # Combined third-party unit tests and lint need setup/cleanup headroom on both
+    # Combined phone-flavor unit tests and lint need setup/cleanup headroom on both
     # runner routes. Hosted build-play keeps its three-invocation budget on retries.
-    timeout-minutes: ${{ matrix.task == 'test-third-party' && matrix.lint && 35 || matrix.task == 'build-play' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1) || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association))) && 35 || 20 }}
+    timeout-minutes: ${{ (matrix.task == 'test-play' || matrix.task == 'test-third-party') && matrix.lint && 35 || matrix.task == 'build-play' && (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1) || github.repository != 'openclaw/openclaw' || (github.event_name == 'pull_request' && !contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association))) && 35 || 20 }}
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -5511,6 +5539,21 @@ jobs:
         with:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
+          install-deps: "false"
+
+      - name: Install Mermaid renderer dependencies
+        if: needs.preflight.outputs.use_compatible_android_ci != 'true'
+        env:
+          CI: "true"
+        # Match the native Mermaid install profile used by macOS CodeQL.
+        # Keep root tooling while avoiding unrelated plugin SDK downloads.
+        run: >-
+          pnpm install --frozen-lockfile --prefer-offline --optional
+          --filter '@openclaw/mermaid-renderer...'
+          --config.ignore-scripts=false
+          --config.engine-strict=false
+          --config.enable-pre-post-scripts=true
+          --config.side-effects-cache=true
 
       # Same-repo runs carry the Gradle user home (dependency, wrapper, and
       # build caches) on a Blacksmith sticky disk: the setup-java gradle cache

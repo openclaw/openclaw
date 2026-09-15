@@ -51,6 +51,11 @@ export class SessionCatalogListLifetime {
     return false;
   }
 
+  readonly assertCurrent = (): void => {
+    this.active();
+    this.controller.signal.throwIfAborted();
+  };
+
   subscribe(
     key: string,
     publish: CatalogListProgressSubscriber,

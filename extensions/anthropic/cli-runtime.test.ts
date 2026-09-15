@@ -195,6 +195,21 @@ describe("Claude native stdio boundary", () => {
     }
   });
 
+  it("refuses replacement when the retired predecessor's cleanup failed", async () => {
+    const failure = new Error("artifact cleanup failed");
+    const liveSession = createLiveSession(async () => {
+      throw failure;
+    });
+    const context = await createContext("normal", { liveSession });
+    const first = resultDetail(await collect(context));
+    liveSession.fingerprint = "changed-authoritative-prompt";
+    await expect(
+      collect({ ...context, useResume: true, systemPrompt: "changed authoritative instructions" }),
+    ).rejects.toBe(failure);
+    expect(liveSession.current()).toBeUndefined();
+    expect(() => process.kill(Number(first.pid), 0)).toThrow();
+  });
+
   it("refuses process startup when the admitted owner rejects capture activation", async () => {
     const liveSession = createLiveSession();
     const reason = new Error("Synthetic capture owner rejected this run.");

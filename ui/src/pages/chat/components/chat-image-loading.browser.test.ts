@@ -1,12 +1,10 @@
 import { html, nothing, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
-import baseCss from "../../../styles/base.css?inline";
-import layoutCss from "../../../styles/chat/layout.css?inline";
-import messageCss from "../../../styles/chat/message-layout.css?inline";
+import "../../../test-helpers/load-styles.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 const containers: HTMLElement[] = [];
@@ -51,6 +49,15 @@ function svgResponse(width: number, height: number) {
 }
 
 describe.runIf(browserMode)("chat image loading geometry", () => {
+  let originalViewport: { width: number; height: number };
+  beforeEach(() => {
+    originalViewport = { width: window.innerWidth, height: window.innerHeight };
+  });
+  afterEach(async () => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(originalViewport.width, originalViewport.height);
+  });
+
   it.each(
     [
       {
@@ -99,7 +106,10 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
   )(
     "keeps the $role $name frame and next message stationary through fetch, decode, and cache reuse",
     async ({ scenario, role }) => {
-      const container = mount(scenario.pane);
+      const { page } = await import("vitest/browser");
+      await page.viewport(1440, 900);
+      // Constrain the message column, not the surrounding avatar row or mobile breakpoint.
+      const container = mount(1000);
       const response = createDeferred<Response>();
       const fetchMock = vi.fn(() => response.promise);
       vi.stubGlobal("fetch", fetchMock);
@@ -114,13 +124,15 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       ];
       const draw = () =>
         render(
-          html`<style>
-              ${baseCss}${layoutCss}${messageCss}
-            </style>
-            <div class="chat-group ${role}" style="--chat-user-content-align: end">
+          html`<div
+            class="chat-group ${role}"
+            style=${`--chat-message-max-width: ${scenario.pane}px`}
+          >
+            <div class="chat-group-messages">
               ${renderMessageImages(images)}
               <p data-next-message>Next message</p>
-            </div>`,
+            </div>
+          </div>`,
           container,
         );
       draw();
@@ -165,9 +177,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
       const draw = () =>
         render(
-          html`<style>
-              ${baseCss}${layoutCss}${messageCss}</style
-            >${
+          html`${
               kind === "attachment"
                 ? renderAssistantAttachments(
                     [
@@ -241,13 +251,12 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         height: 800,
       }));
       render(
-        html`<style>
-            ${baseCss}${layoutCss}${messageCss}
-          </style>
-          <div class="chat-group user" style="--chat-user-content-align: end">
+        html`<div class="chat-group user">
+          <div class="chat-group-messages">
             ${renderMessageImages(images)}
             <p data-next-message>Next message</p>
-          </div>`,
+          </div>
+        </div>`,
         container,
       );
       const rectangles = () =>
@@ -298,10 +307,9 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       },
     ];
     render(
-      html`<style>
-          ${baseCss}${layoutCss}${messageCss}
-        </style>
-        <div class="chat-group assistant">${renderMessageImages(images)}</div>`,
+      html`<div class="chat-group assistant">
+        <div class="chat-group-messages">${renderMessageImages(images)}</div>
+      </div>`,
       container,
     );
     await vi.waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(2));
@@ -343,9 +351,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     vi.stubGlobal("fetch", fetchMock);
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     render(
-      html`<style>
-          ${baseCss}${layoutCss}${messageCss}</style
-        >${renderMessageImages([{ url: source, width: 1200, height: 800 }])}
+      html`${renderMessageImages([{ url: source, width: 1200, height: 800 }])}
         <p data-next-message>Next message</p>`,
       container,
     );

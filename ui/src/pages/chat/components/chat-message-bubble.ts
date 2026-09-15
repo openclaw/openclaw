@@ -31,9 +31,9 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
+import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import "../../../styles/chat/reply-preview.css";
 import "./chat-clawhub-card.ts";
-import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { readAsyncQuestions, type AsyncQuestionPresentation } from "./chat-async-question.ts";
@@ -60,6 +60,7 @@ import {
   renderMessageMarkdown,
   type AssistantMessageDisclosure,
 } from "./chat-message-text.ts";
+import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   renderToolApprovalReviews,
@@ -312,7 +313,9 @@ export function renderGroupedMessage(
   const cardAttachments = visibleAttachments.filter((item) => !videoPreviews.includes(item));
   const hasUserFiles =
     normalizedRole === "user" &&
-    cardAttachments.some((item) => item.attachment.kind === "document");
+    cardAttachments.some(
+      (item) => item.attachment.kind === "document" && !isSentCommentAttachment(item),
+    );
   const imageRenderOptions = {
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,

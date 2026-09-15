@@ -1,3 +1,4 @@
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
@@ -51,9 +52,7 @@ describe("gateway chat metadata runtime", () => {
       });
       try {
         await entered.promise;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
         expect(mainSettled).toBe(true);
         expect(secondSettled).toBe(false);
         await expect(mainRead).resolves.toMatchObject({
@@ -103,9 +102,7 @@ describe("gateway chat metadata runtime", () => {
           harness.setPluginRegistryVersion(2);
         }
         releaseMain.resolve();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
         expect(settled).toBe(false);
         releaseSecond.resolve();
         await refresh;
@@ -203,9 +200,7 @@ describe("gateway chat metadata runtime", () => {
       void read.catch(() => {});
       try {
         releaseProjection.resolve();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
         expect(settled).toBe(false);
         releaseCommands.resolve();
         await refresh;

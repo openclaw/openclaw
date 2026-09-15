@@ -20,7 +20,7 @@ import {
 } from "./gateway-caller-context.js";
 
 async function withAdminTool(
-  origin: "local" | "unknown",
+  origin: "local" | "unknown" | "channel-owner",
   run: (fixture: {
     tool: ReturnType<typeof createCronTool>;
     calls: Array<{ method: string; params: unknown }>;
@@ -31,7 +31,13 @@ async function withAdminTool(
   const runId = "admin-management-tool-run";
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-  const capability = createCronCreatorAuthorityCapability(runId, { kind: origin }, true)!;
+  const capability = createCronCreatorAuthorityCapability(
+    runId,
+    origin === "channel-owner" ? { kind: "external", channel: "discord" } : { kind: origin },
+    origin === "channel-owner"
+      ? { source: "channel-owner", isCurrent: () => true }
+      : { source: "control-ui-admin" },
+  )!;
   const identity: AgentRuntimeIdentity = {
     kind: "agentRuntime",
     agentId: "main",
@@ -93,6 +99,7 @@ async function withAdminTool(
 
 describe("Control UI admin automation management tool", () => {
   it.each([
+    ["channel-owner", true],
     ["local", true],
     ["unknown", true],
     ["unknown", false],

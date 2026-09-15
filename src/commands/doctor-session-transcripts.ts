@@ -306,6 +306,23 @@ async function noteSessionSqliteMigrationHealth(params: {
         config: params.cfg ?? {},
         env: params.env,
         maintenanceAuthority,
+        ...(maintenanceAuthority
+          ? {
+              beforeCompletion: async (
+                completedPluginIds: readonly string[],
+                assertCurrent: () => void,
+              ) => {
+                const { settleRetainedDoctorSessionSources } =
+                  await import("./doctor-session-sqlite.js");
+                await settleRetainedDoctorSessionSources(
+                  report,
+                  completedPluginIds,
+                  maintenanceAuthority,
+                  assertCurrent,
+                );
+              },
+            }
+          : {}),
         ...(params.postSessionPluginMigration
           ? { plannedActions: params.postSessionPluginMigration.plannedActions }
           : {}),

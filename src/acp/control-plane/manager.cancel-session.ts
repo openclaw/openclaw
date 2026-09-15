@@ -5,6 +5,7 @@ import {
   toAcpRuntimeError,
   withAcpRuntimeErrorBoundary,
 } from "../runtime/errors.js";
+import type { AcceptedTurnState, AcceptedTurns } from "./manager.accepted-turns.js";
 import type {
   ActiveTurnState,
   EnsureManagerRuntimeHandle,
@@ -24,13 +25,13 @@ export async function runManagerCancelSession(params: {
   expectedInstanceId?: string;
   expectedOwnerKey?: string;
   activeTurnBySession: Map<string, ActiveTurnState>;
+  acceptedTurns: AcceptedTurns;
   withSessionActor: WithManagerSessionActor;
   resolveSession: ResolveManagerSession;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   setSessionState: SetManagerSessionState;
 }): Promise<void> {
   const actorKey = acpSessionActorKey(params);
-  const activeTurn = params.activeTurnBySession.get(actorKey);
   const expectedRunId = params.expectedRunId?.trim();
   const expectedInstanceId = params.expectedInstanceId?.trim();
   const expectedOwnerKey = params.expectedOwnerKey?.trim();
@@ -53,18 +54,26 @@ export async function runManagerCancelSession(params: {
       throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP task owner could not be verified.");
     }
   };
-  requireExpectedTurn(activeTurn);
-  if (activeTurn) {
-    await cancelManagerActiveTurn({
-      activeTurn,
-      reason: params.reason,
-      revalidate: () => {
-        requireExpectedTurn(params.activeTurnBySession.get(actorKey));
-        requireExpectedOwner();
-      },
-    });
+  // Snapshot accepted instances before yielding: a later successor is never cancelled.
+  const accepted = [...(params.acceptedTurns.get(actorKey) ?? [])].filter(
+    (turn) =>
+      (!expectedRunId || turn.requestId === expectedRunId) &&
+      (!expectedInstanceId || turn.instanceId === expectedInstanceId),
+  );
+  if (accepted.length > 0) {
+    requireExpectedOwner();
+    await Promise.all(
+      accepted.map((acceptedTurn) =>
+        cancelManagerAcceptedTurn({
+          acceptedTurn,
+          reason: params.reason,
+          revalidate: requireExpectedOwner,
+        }),
+      ),
+    );
     return;
   }
+  requireExpectedTurn(undefined);
 
   await params.withSessionActor(params, async () => {
     // The actor wait may admit queued work. Recheck exact authority only after
@@ -84,6 +93,7 @@ export async function runManagerCancelSession(params: {
       meta: resolvedMeta,
     });
     try {
+      requireExpectedOwner();
       await runtime.cancel({
         handle,
         reason: params.reason,
@@ -132,4 +142,26 @@ export async function cancelManagerActiveTurn(params: {
     fallbackCode: "ACP_TURN_FAILED",
     fallbackMessage: "ACP cancel failed before completion.",
   });
+}
+
+/** Cancellation retains setup custody until a late handle and its turn settle. */
+export async function cancelManagerAcceptedTurn(params: {
+  acceptedTurn: AcceptedTurnState;
+  reason?: string;
+  revalidate?: () => void;
+}): Promise<void> {
+  params.revalidate?.();
+  const turn = params.acceptedTurn;
+  turn.cancelReason ??= params.reason;
+  turn.revalidateCancel ??= params.revalidate;
+  turn.abortController.abort();
+  if (turn.activeTurn) {
+    await cancelManagerActiveTurn({
+      activeTurn: turn.activeTurn,
+      reason: turn.cancelReason,
+      revalidate: turn.revalidateCancel,
+    });
+  } else {
+    await turn.settled;
+  }
 }

@@ -17,7 +17,14 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { readPreparedGatewayModelCatalog } from "../server-model-catalog.js";
+import {
+  createPreparedGatewayModelCatalog,
+  readPreparedGatewayModelCatalogMetadata,
+} from "../server-model-catalog-view.js";
+import {
+  readPreparedGatewayModelCatalog,
+  readPreparedGatewayModelCatalogBatch,
+} from "../server-model-catalog.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "../session-utils.types.js";
 import { agentsHandlers } from "./agents.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -154,14 +161,20 @@ function publishedCatalogContext(
   config: OpenClawConfig,
   owners: ReadonlyMap<string, PreparedModelRuntimeSnapshot>,
 ): GatewayRequestContext {
-  vi.spyOn(preparedRuntime, "getPreparedModelRuntimeSnapshot").mockImplementation((input) =>
-    input.agentId ? owners.get(input.agentId) : undefined,
-  );
-  return {
+  vi.spyOn(preparedRuntime, "getPreparedModelRuntimeSnapshot").mockImplementation((input) => {
+    const owner = input.agentId ? owners.get(input.agentId) : undefined;
+    return owner?.agentDir === input.agentDir ? owner : undefined;
+  });
+  const context: GatewayRequestContext = {
     ...requestContext(config),
     readPreparedGatewayModelCatalog: (options) =>
-      readPreparedGatewayModelCatalog({ ...options, getConfig: () => config }),
+      readPreparedGatewayModelCatalog({ ...options, getConfig: () => context.getRuntimeConfig() }),
+    readPreparedGatewayModelCatalogBatch: (agentIds) =>
+      readPreparedGatewayModelCatalogBatch(agentIds, {
+        getConfig: () => context.getRuntimeConfig(),
+      }),
   };
+  return context;
 }
 
 beforeEach(() => {
@@ -175,6 +188,41 @@ afterEach(() => {
 });
 
 describe("sessions.list catalog scoping", () => {
+  it("refreshes runtime metadata when the prepared metadata owner changes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      config.agents = { ...config.agents, defaults: { model: "fixture-runtime/model" } };
+      const entries: ModelCatalogEntry[] = [
+        { provider: "fixture-runtime", id: "model", name: "Model" },
+      ];
+      const initialMetadataSnapshot = createPluginMetadataSnapshotFixture();
+      let metadataSnapshot = initialMetadataSnapshot;
+      let lastCatalog: ReturnType<typeof createPreparedGatewayModelCatalog> | undefined;
+      const context = {
+        ...requestContext(config),
+        readPreparedGatewayModelCatalog: async () => {
+          lastCatalog = createPreparedGatewayModelCatalog({ entries, metadataSnapshot });
+          return lastCatalog;
+        },
+      };
+      const client = identifiedClient("owner@example.com");
+      const request = { agentId: "main", archived: "all" as const, limit: 100 };
+      const first = await listSessions({ client, context, request });
+      const firstCatalog = lastCatalog;
+      expect(first.sessions[0]?.agentRuntime?.id).not.toBe("fixture-runtime");
+      expect(await listSessions({ client, context, request })).toBe(first);
+
+      metadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [{ id: "fixture-owner", cliBackends: ["fixture-runtime"] }],
+      });
+      const updated = await listSessions({ client, context, request });
+      expect(updated).not.toBe(first);
+      expect(updated.sessions[0]?.agentRuntime?.id).toBe("fixture-runtime");
+      expect(readPreparedGatewayModelCatalogMetadata(firstCatalog)).toBe(initialMetadataSnapshot);
+      expect(readPreparedGatewayModelCatalogMetadata(lastCatalog)).toBe(metadataSnapshot);
+    });
+  });
+
   it.each([
     { model: "gpt-5.6-sol", runtime: "codex", level: "ultra" },
     { model: "gpt-5.6-terra", runtime: "codex", level: "ultra" },
@@ -217,6 +265,11 @@ describe("sessions.list catalog scoping", () => {
         // The Gateway startup registry need not contain the model-selected provider.
         setActivePluginRegistry(createEmptyPluginRegistry());
         const context = publishedCatalogContext(config, new Map([["main", owner]]));
+        const prepared = await context.readPreparedGatewayModelCatalog?.({ agentId: "main" });
+        expect(readPreparedGatewayModelCatalogMetadata(prepared)).toBe(owner.metadataSnapshot);
+        expect(new Set(Reflect.ownKeys(prepared ?? {}))).toEqual(
+          new Set(["entries", "pluginRegistry", "routeVariants"]),
+        );
 
         const result = await listSessions({
           client: identifiedClient("owner@example.com"),
@@ -232,6 +285,7 @@ describe("sessions.list catalog scoping", () => {
           expect(result.defaults.thinkingOptions).not.toContain("ultra");
         }
         expect(owner.loadFullModelCatalog).not.toHaveBeenCalled();
+        expect(JSON.stringify(result)).not.toContain('"metadataSnapshot":');
       });
     },
   );
@@ -259,12 +313,18 @@ describe("sessions.list catalog scoping", () => {
       const mainRegistry = thinkingRegistry("dynamic-router", () => profile("ultra"));
       const workRegistry = thinkingRegistry("dynamic-router", () => profile("low"));
       const completed: { catalog?: ModelCatalogSnapshot } = {};
+      let failMainCatalogRead = false;
       const mainOwner = preparedOwner({
         config,
         agentId: "main",
         entries,
         pluginRegistry: mainRegistry,
-        readFullModelCatalog: () => completed.catalog,
+        readFullModelCatalog: () => {
+          if (failMainCatalogRead) {
+            throw new Error("main catalog owner replaced");
+          }
+          return completed.catalog;
+        },
       });
       const owners = new Map([
         ["main", mainOwner],
@@ -317,6 +377,14 @@ describe("sessions.list catalog scoping", () => {
         "low",
       ]);
 
+      failMainCatalogRead = true;
+      const partial = await listSessions(request);
+      expect(partial.sessions.find((row) => row.agentId === "work")?.thinkingOptions).toEqual([
+        "off",
+        "low",
+      ]);
+      failMainCatalogRead = false;
+
       completed.catalog = { entries: [{ ...entries[0]!, reasoning: false }], routeVariants: [] };
       const promoted = await listSessions(request);
       expect(promoted).not.toBe(replaced);
@@ -324,6 +392,45 @@ describe("sessions.list catalog scoping", () => {
         "off",
       ]);
       expect(mainOwner.loadFullModelCatalog).not.toHaveBeenCalled();
+
+      const workAgentDir = `${resolveAgentDir(config, "work")}-replacement`;
+      config.agents!.list = [
+        { id: "main", default: true },
+        { id: "work", agentDir: workAgentDir },
+      ];
+      owners.set("work", {
+        ...preparedOwner({ config, agentId: "work", entries, pluginRegistry: mainRegistry }),
+        agentDir: workAgentDir,
+      });
+      const changedRoster = await listSessions(request);
+      expect(changedRoster.sessions.find((row) => row.agentId === "work")?.thinkingOptions).toEqual(
+        ["off", "ultra"],
+      );
+
+      const nextConfig: OpenClawConfig = {
+        ...config,
+        agents: {
+          ...config.agents,
+          list: [
+            { id: "main", default: true },
+            { id: "work", agentDir: `${workAgentDir}-next` },
+          ],
+        },
+      };
+      context.getRuntimeConfig = () => nextConfig;
+      owners.set("work", {
+        ...preparedOwner({
+          config: nextConfig,
+          agentId: "work",
+          entries,
+          pluginRegistry: workRegistry,
+        }),
+        agentDir: `${workAgentDir}-next`,
+      });
+      const changedConfig = await listSessions(request);
+      expect(changedConfig.sessions.find((row) => row.agentId === "work")?.thinkingOptions).toEqual(
+        ["off", "low"],
+      );
     });
   });
 

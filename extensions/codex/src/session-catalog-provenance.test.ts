@@ -41,6 +41,52 @@ async function writeRollout(payload: Record<string, unknown>): Promise<string> {
 }
 
 describe("Codex catalog provenance", () => {
+  it.each(["openclaw", "codex_cli_rs", "OpenClaw", " openclaw ", " "])(
+    "uses the exact native creation originator %j without reading the rollout",
+    async (originator) => {
+      const file = await writeRollout({ id: "native-provenance", originator: "openclaw" });
+      const open = vi.spyOn(fs, "open");
+      try {
+        await expect(
+          isOpenClawManagedCodexThread(
+            idleThread({ id: "native-provenance", path: file, originator }),
+            path.dirname(file),
+          ),
+        ).resolves.toBe(originator === "openclaw");
+        expect(open).not.toHaveBeenCalled();
+      } finally {
+        open.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    { label: "missing", originator: undefined },
+    { label: "null", originator: null },
+    { label: "empty", originator: "" },
+    { label: "number", originator: 0 },
+    { label: "boolean", originator: false },
+    { label: "array", originator: [] },
+    { label: "object", originator: {} },
+  ])("keeps rollout fallback for native originator: $label", async ({ originator }) => {
+    const file = await writeRollout({ id: "legacy-provenance", originator: "openclaw" });
+    // Native JSON can violate the declared field type; the fallback owns that boundary.
+    const thread = {
+      ...idleThread({ id: "legacy-provenance", path: file }),
+      originator,
+    } as CodexThread;
+    await expect(isOpenClawManagedCodexThread(thread, path.dirname(file))).resolves.toBe(true);
+  });
+
+  it("does not seed rollout provenance cache from an API-only result", async () => {
+    const file = await writeRollout({ id: "uncached-originator", originator: "codex_cli_rs" });
+    const thread = idleThread({ id: "uncached-originator", path: file, originator: "openclaw" });
+    await expect(isOpenClawManagedCodexThread(thread, path.dirname(file))).resolves.toBe(true);
+    await expect(
+      isOpenClawManagedCodexThread({ ...thread, originator: null }, path.dirname(file)),
+    ).resolves.toBe(false);
+  });
+
   it("recognizes an OpenClaw-originated rollout even when Codex reports vscode", async () => {
     const file = await writeRollout({
       id: "managed-thread",
@@ -74,7 +120,7 @@ describe("Codex catalog provenance", () => {
     ).resolves.toBe(false);
     await expect(
       isOpenClawManagedCodexThread(
-        { id: "outside-managed-thread", path: file } as CodexThread,
+        { id: "outside-managed-thread", path: file, originator: "openclaw" } as CodexThread,
         undefined,
       ),
     ).resolves.toBe(false);
@@ -162,7 +208,10 @@ describe("Codex catalog provenance", () => {
       ),
     ).resolves.toBe(false);
     await expect(
-      isOpenClawManagedCodexThread({ id: "missing-path" } as CodexThread, path.dirname(native)),
+      isOpenClawManagedCodexThread(
+        { id: "missing-path", originator: "openclaw" } as CodexThread,
+        path.dirname(native),
+      ),
     ).resolves.toBe(false);
   });
 });
@@ -547,6 +596,7 @@ describe("Codex exact local eligibility", () => {
 
   it("does not promote cached negative provenance or cross-home ownership into eligibility", async () => {
     const f = await localEligibilityFixture();
+    f.thread.originator = "codex_cli_rs";
     commandRpcMocks.codexControlRequest.mockResolvedValue({ data: [f.thread] });
     await f.control.listPage({});
     await fs.rm(f.rollout);

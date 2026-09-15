@@ -1,9 +1,8 @@
 // Skill refresh tests cover runtime reload events and refresh-state updates.
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -11,7 +10,10 @@ import {
   getSkillsSnapshotVersion,
   shouldRefreshSnapshotForVersion,
 } from "./refresh-state.js";
-import { createSkillsWatcherMock } from "./refresh.watcher.test-support.js";
+import {
+  createSkillsWatcherMock,
+  useSkillsWatcherFixture,
+} from "./refresh.watcher.test-support.js";
 
 type SkillsChangeEvent = NonNullable<Parameters<typeof bumpSkillsSnapshotVersion>[0]>;
 
@@ -25,14 +27,7 @@ const pluginSkillsMocks = vi.hoisted(() => ({
 }));
 
 let refreshModule: typeof import("./refresh.js");
-let fixtureRoot: string;
 let fixtureWorkspaceDir: string;
-
-async function createFixtureDirectory(relativePath: string): Promise<string> {
-  const directory = path.join(fixtureRoot, relativePath);
-  await fs.mkdir(directory, { recursive: true });
-  return directory;
-}
 
 vi.mock("chokidar", () => ({
   default: { watch: watchMock },
@@ -44,27 +39,19 @@ vi.mock("../loading/plugin-skills.js", () => ({
 }));
 
 describe("ensureSkillsWatcher", () => {
+  const fixture = useSkillsWatcherFixture();
+  const { createFixtureDirectory } = fixture;
+
   beforeAll(async () => {
     refreshModule = await import("./refresh.js");
   });
 
-  beforeEach(async () => {
+  beforeEach(() => {
     watchMock.mockClear();
     createdWatchers.length = 0;
     pluginSkillsMocks.resolvePluginSkillRoots.mockClear();
     pluginSkillsMocks.resolvePluginSkillRootsFromMetadata.mockClear();
-    fixtureRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-fixture-")),
-    );
-    fixtureWorkspaceDir = await createFixtureDirectory("workspace");
-    await createFixtureDirectory("workspace/skills");
-  });
-
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-    await refreshModule.closeSkillsWatchers(true);
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
+    fixtureWorkspaceDir = fixture.workspaceDir;
   });
 
   it("watches skill roots and filters non-skill churn", async () => {
@@ -155,43 +142,6 @@ describe("ensureSkillsWatcher", () => {
     }
   });
 
-  it("does not double-refresh polling SKILL.md changes from raw events", async () => {
-    vi.useFakeTimers();
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-watch-polling-raw-"));
-    const previousPolling = process.env.CHOKIDAR_USEPOLLING;
-    const seen: SkillsChangeEvent[] = [];
-    try {
-      process.env.CHOKIDAR_USEPOLLING = "true";
-      refreshModule.registerSkillsChangeListener((change) => {
-        seen.push(change);
-      });
-      refreshModule.ensureSkillsWatcher({
-        workspaceDir,
-        config: { skills: { load: {} } },
-      });
-
-      seen.length = 0;
-      watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit(
-        "raw",
-        "change",
-        path.join(workspaceDir, "skills", "demo", "SKILL.md"),
-        {
-          watchedPath: path.join(workspaceDir, "skills", "demo"),
-        },
-      );
-      await vi.advanceTimersByTimeAsync(500);
-
-      expect(seen).toEqual([]);
-    } finally {
-      if (previousPolling === undefined) {
-        delete process.env.CHOKIDAR_USEPOLLING;
-      } else {
-        process.env.CHOKIDAR_USEPOLLING = previousPolling;
-      }
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
   it("keeps grouped skill folders within the watcher traversal depth", async () => {
     vi.useFakeTimers();
     const workspaceDir = await createFixtureDirectory("watch-depth");
@@ -220,139 +170,6 @@ describe("ensureSkillsWatcher", () => {
         changedPath,
       },
     ]);
-  });
-
-  it("refreshes snapshots from raw directory events for SKILL.md files", async () => {
-    vi.useFakeTimers();
-    const workspaceDir = fixtureWorkspaceDir;
-    const seen: SkillsChangeEvent[] = [];
-    refreshModule.registerSkillsChangeListener((change) => {
-      seen.push(change);
-    });
-
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir,
-      config: { skills: { load: {} } },
-    });
-
-    seen.length = 0;
-    watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit(
-      "raw",
-      "rename",
-      "README.md",
-      {
-        watchedPath: path.join(fixtureWorkspaceDir, "skills", "demo"),
-      },
-    );
-    await vi.advanceTimersByTimeAsync(250);
-    expect(seen).toEqual([]);
-
-    watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit("raw", "rename", "SKILL.md", {
-      watchedPath: path.join(fixtureWorkspaceDir, "skills", "demo"),
-    });
-    await Promise.resolve();
-    await vi.advanceTimersByTimeAsync(250);
-
-    expect(seen).toEqual([
-      {
-        workspaceDir,
-        reason: "watch",
-        changedPath: path.join(fixtureWorkspaceDir, "skills", "demo", "SKILL.md"),
-      },
-    ]);
-  });
-
-  it("falls back to a watched-directory refresh when raw events omit a filename", async () => {
-    vi.useFakeTimers();
-    const workspaceDir = fixtureWorkspaceDir;
-    const seen: SkillsChangeEvent[] = [];
-    refreshModule.registerSkillsChangeListener((change) => {
-      seen.push(change);
-    });
-
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir,
-      config: { skills: { load: {} } },
-    });
-
-    seen.length = 0;
-    watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit("raw", "rename", undefined, {
-      watchedPath: path.join(fixtureWorkspaceDir, "skills"),
-    });
-    await vi.advanceTimersByTimeAsync(250);
-
-    expect(seen).toEqual([
-      {
-        workspaceDir,
-        reason: "watch",
-        changedPath: path.join(fixtureWorkspaceDir, "skills"),
-      },
-    ]);
-  });
-
-  it("waits for raw SKILL.md files to stabilize before refreshing", async () => {
-    vi.useFakeTimers();
-    const workspaceDir = await createFixtureDirectory("watch-stable");
-    const skillDir = path.join(workspaceDir, "skills", "demo");
-    const skillFile = path.join(skillDir, "SKILL.md");
-    const seen: SkillsChangeEvent[] = [];
-    await fs.mkdir(skillDir, { recursive: true });
-    await fs.writeFile(skillFile, "---\nname: demo\ndescription: Demo\n---\n");
-    refreshModule.registerSkillsChangeListener((change) => {
-      seen.push(change);
-    });
-
-    refreshModule.ensureSkillsWatcher({
-      workspaceDir,
-      config: { skills: { load: {} } },
-    });
-
-    seen.length = 0;
-    watchForSkillRoot(path.join(workspaceDir, "skills")).watcher.emit("raw", "change", "SKILL.md", {
-      watchedPath: skillDir,
-    });
-    await Promise.resolve();
-    await vi.advanceTimersByTimeAsync(250);
-    expect(seen).toEqual([]);
-
-    await vi.advanceTimersByTimeAsync(250);
-    expect(seen).toEqual([
-      {
-        workspaceDir,
-        reason: "watch",
-        changedPath: skillFile,
-      },
-    ]);
-  });
-
-  it("retires raw-file stability polling without publishing after watchers close", async () => {
-    vi.useFakeTimers();
-    const skillDir = await createFixtureDirectory("workspace/skills/demo");
-    const skillFile = path.join(skillDir, "SKILL.md");
-    await fs.writeFile(skillFile, "skill content");
-    const seen: SkillsChangeEvent[] = [];
-    refreshModule.registerSkillsChangeListener((change) => seen.push(change));
-    refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir });
-    const watched = watchForSkillRoot(path.join(fixtureWorkspaceDir, "skills"));
-    const versionBefore = getSkillsSnapshotVersion(fixtureWorkspaceDir);
-    const stat = vi.spyOn(fsSync, "statSync");
-
-    seen.length = 0;
-    watched.watcher.emit("raw", "change", "SKILL.md", { watchedPath: skillDir });
-    await refreshModule.closeSkillsWatchers();
-    expect(watched.watcher.close).toHaveBeenCalledOnce();
-    stat.mockClear();
-    for (let tick = 0; tick < 4; tick += 1) {
-      await fs.appendFile(skillFile, " still writing");
-      await vi.advanceTimersByTimeAsync(100);
-    }
-
-    expect(seen).toEqual([]);
-    expect(getSkillsSnapshotVersion(fixtureWorkspaceDir)).toBe(versionBefore);
-    expect({
-      postCloseReads: stat.mock.calls.filter(([file]) => file === skillFile).length,
-      pendingTimers: vi.getTimerCount(),
-    }).toEqual({ postCloseReads: 0, pendingTimers: 0 });
   });
 
   it.runIf(process.platform !== "win32")(

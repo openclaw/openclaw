@@ -18,7 +18,6 @@ import {
   waitForProviders,
   requestCount,
   saveKey,
-  type AgentSelectElement,
   type ModelProvidersPageTestElement,
 } from "./model-providers-page.test-support.ts";
 
@@ -52,6 +51,7 @@ describe("ModelProvidersPage agent scope", () => {
         const routeData = {
           gateway: context.gateway,
           gatewaySnapshot: snapshot,
+          selectionIntentRevision: context.settingsAgentSelection.intentRevision,
           data: {
             ...EMPTY_MODEL_PROVIDERS_DATA,
             providerUsage: { ok: false as const, error: { kind: "request-failed" as const } },
@@ -96,6 +96,7 @@ describe("ModelProvidersPage agent scope", () => {
         page.routeData = {
           gateway: context.gateway,
           gatewaySnapshot: snapshot,
+          selectionIntentRevision: context.settingsAgentSelection.intentRevision,
           data: {
             ...EMPTY_MODEL_PROVIDERS_DATA,
             providerUsage: { ok: true, value: { updatedAt: 1, providers: [] } },
@@ -231,15 +232,11 @@ describe("ModelProvidersPage agent scope", () => {
     );
   });
 
-  it("switches application ownership from the concrete agent picker", async () => {
-    const { agentSelection, context } = createHarness("main");
+  it("keeps the Models header focused on provider actions", async () => {
+    const { context } = createHarness("main");
     const page = appendPage(context);
-    await waitForFast(() => expect(page.querySelector("openclaw-agent-select")).not.toBeNull());
-
-    page.querySelector<AgentSelectElement>("openclaw-agent-select")?.onSelect("writer");
-
-    expect(agentSelection.set).toHaveBeenCalledWith("writer");
-    expect(agentSelection.setScope).not.toHaveBeenCalled();
+    await waitForFast(() => expect(page.querySelector("[data-models-connect]")).not.toBeNull());
+    expect(page.querySelector("openclaw-agent-select")).toBeNull();
     expect(page.querySelector(".page-subtitle")?.textContent).toContain(
       "Providers and credentials for the selected agent.",
     );
@@ -554,8 +551,9 @@ describe("ModelProvidersPage agent scope", () => {
     });
   });
 
-  it("keeps a replacement agent's default-model draft after a global model write", async () => {
-    const { agentSelection, context, notifySelection, runtimeConfig } = createHarness("main");
+  it("keeps a newer global-model draft after an agent switch and earlier save", async () => {
+    const { settingsAgentSelection, context, notifySelection, runtimeConfig } =
+      createHarness("main");
     const gate = deferred();
     const page = appendPage(context);
     await waitForProviders(page);
@@ -570,20 +568,22 @@ describe("ModelProvidersPage agent scope", () => {
 
     const saving = page.saveDefaults();
     await vi.waitFor(() => expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce());
-    agentSelection.state.selectedId = "writer";
-    agentSelection.state.scopeId = "writer";
+    settingsAgentSelection.state.selectedId = "writer";
+    settingsAgentSelection.state.scopeId = "writer";
     notifySelection();
     await vi.waitFor(() => expect(page.selectedAgentId).toBe("writer"));
+    const replacement = { ...selection, utilityModel: "openai/gpt-4.1-mini" };
+    page.defaultsDraft = replacement;
     gate.resolve();
     await saving;
 
     expect(runtimeConfig.patch).toHaveBeenCalledOnce();
-    expect(page.defaultsDraft).toBe(selection);
+    expect(page.defaultsDraft).toBe(replacement);
     expect(page.messages.defaults).toBeUndefined();
   });
 
   it("cancels a queued key save when the selected agent changes", async () => {
-    const { agentSelection, context, notifySelection, runtimeConfig, request } =
+    const { settingsAgentSelection, context, notifySelection, runtimeConfig, request } =
       createHarness("main");
     const gate = deferred();
     runtimeConfig.beforeExternalDispatch.mockImplementationOnce(() => gate.promise);
@@ -591,8 +591,8 @@ describe("ModelProvidersPage agent scope", () => {
     await waitForProviders(page);
     await saveKey(page, "main-agent-key");
     await waitForFast(() => expect(runtimeConfig.beforeExternalDispatch).toHaveBeenCalledOnce());
-    agentSelection.state.selectedId = "writer";
-    agentSelection.state.scopeId = "writer";
+    settingsAgentSelection.state.selectedId = "writer";
+    settingsAgentSelection.state.scopeId = "writer";
     notifySelection();
     await vi.waitFor(() => expect(page.selectedAgentId).toBe("writer"));
     page.keyEditorProvider = "anthropic";
@@ -607,7 +607,7 @@ describe("ModelProvidersPage agent scope", () => {
   });
 
   it("keeps a replacement agent's matching add-provider draft after a saved key response", async () => {
-    const { agentSelection, context, notifySelection, runtimeConfig, request } =
+    const { settingsAgentSelection, context, notifySelection, runtimeConfig, request } =
       createHarness("main");
     const gate = deferred<unknown>();
     const originalRequest = request.getMockImplementation()!;
@@ -628,8 +628,8 @@ describe("ModelProvidersPage agent scope", () => {
         apiKey: "shared-provider-key",
       }),
     );
-    agentSelection.state.selectedId = "writer";
-    agentSelection.state.scopeId = "writer";
+    settingsAgentSelection.state.selectedId = "writer";
+    settingsAgentSelection.state.scopeId = "writer";
     notifySelection();
     await vi.waitFor(() => expect(page.selectedAgentId).toBe("writer"));
     page.addProviderOpen = true;
@@ -646,7 +646,7 @@ describe("ModelProvidersPage agent scope", () => {
   });
 
   it("ignores logout completion after switching away from and back to the selected agent", async () => {
-    const { agentSelection, context, notifySelection, request } = createHarness("main");
+    const { settingsAgentSelection, context, notifySelection, request } = createHarness("main");
     const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
     const page = appendPage(context);
     await waitForProviders(page);
@@ -665,12 +665,12 @@ describe("ModelProvidersPage agent scope", () => {
         agentId: "main",
       }),
     );
-    agentSelection.state.selectedId = "writer";
-    agentSelection.state.scopeId = "writer";
+    settingsAgentSelection.state.selectedId = "writer";
+    settingsAgentSelection.state.scopeId = "writer";
     notifySelection();
     await vi.waitFor(() => expect(page.selectedAgentId).toBe("writer"));
-    agentSelection.state.selectedId = "main";
-    agentSelection.state.scopeId = "main";
+    settingsAgentSelection.state.selectedId = "main";
+    settingsAgentSelection.state.scopeId = "main";
     notifySelection();
     await vi.waitFor(() => expect(page.selectedAgentId).toBe("main"));
     firstLogout.resolve({});
@@ -730,7 +730,7 @@ describe("ModelProvidersPage agent scope", () => {
   );
 
   it("drains a queued profile order after switching agents during an active save", async () => {
-    const { agentSelection, context, notifySelection, request } = createHarness("main");
+    const { settingsAgentSelection, context, notifySelection, request } = createHarness("main");
     const page = appendPage(context);
     await waitForProviders(page);
     const originalRequest = request.getMockImplementation()!;
@@ -745,8 +745,8 @@ describe("ModelProvidersPage agent scope", () => {
 
     page.profileActions.setOrder("openai", "openai", ["openai:two", "openai:one"]);
     await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(1));
-    agentSelection.state.selectedId = "writer";
-    agentSelection.state.scopeId = "writer";
+    settingsAgentSelection.state.selectedId = "writer";
+    settingsAgentSelection.state.scopeId = "writer";
     notifySelection();
     await vi.waitFor(() => expect(page.selectedAgentId).toBe("writer"));
     await waitForProviders(page);
@@ -810,7 +810,7 @@ describe("ModelProvidersPage agent scope", () => {
   });
 
   it("ignores logout completion when route data changes the selected agent", async () => {
-    const { agentSelection, context, request, snapshot } = createHarness("main");
+    const { settingsAgentSelection, context, request, snapshot } = createHarness("main");
     const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
     const page = appendPage(context);
     await waitForProviders(page);
@@ -838,11 +838,12 @@ describe("ModelProvidersPage agent scope", () => {
     page.probeResults = {
       openai: { provider: "openai", status: "ok", results: [] },
     };
-    agentSelection.state.selectedId = "writer";
-    agentSelection.state.scopeId = "writer";
+    settingsAgentSelection.state.selectedId = "writer";
+    settingsAgentSelection.state.scopeId = "writer";
     page.routeData = {
       gateway: context.gateway,
       gatewaySnapshot: snapshot,
+      selectionIntentRevision: context.settingsAgentSelection.intentRevision,
       data: { ...EMPTY_MODEL_PROVIDERS_DATA, updatedAt: 1 },
       client: snapshot.client,
       agentId: "writer",
@@ -867,7 +868,7 @@ describe("ModelProvidersPage agent scope", () => {
   });
 
   it("reloads credential status when the agent selector changes", async () => {
-    const { agentSelection, context, notifySelection, request } = createHarness("main");
+    const { settingsAgentSelection, context, notifySelection, request } = createHarness("main");
     const page = appendPage(context);
 
     await vi.waitFor(() =>
@@ -898,8 +899,8 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.addProviderId).toBe("anthropic");
     expect(page.addProviderKey).toBe("synthetic-selected-provider-key");
     expect(page.defaultsDraft).toBe(defaultsDraft);
-    agentSelection.state.selectedId = "writer";
-    agentSelection.state.scopeId = "writer";
+    settingsAgentSelection.state.selectedId = "writer";
+    settingsAgentSelection.state.scopeId = "writer";
     notifySelection();
 
     await waitForFast(() =>
@@ -920,8 +921,8 @@ describe("ModelProvidersPage agent scope", () => {
   });
 
   it("keeps the concrete selected owner after another page widens scope to all agents", async () => {
-    const { agentSelection, context, request } = createHarness("writer");
-    agentSelection.state.scopeId = null;
+    const { settingsAgentSelection, context, request } = createHarness("writer");
+    settingsAgentSelection.state.scopeId = null;
 
     const page = appendPage(context);
 
@@ -936,9 +937,9 @@ describe("ModelProvidersPage agent scope", () => {
   });
 
   it("does not request model data before a concrete agent is selected", async () => {
-    const { agentSelection, context, request } = createHarness("main");
-    agentSelection.state.selectedId = null;
-    agentSelection.state.scopeId = null;
+    const { settingsAgentSelection, context, request } = createHarness("main");
+    settingsAgentSelection.state.selectedId = null;
+    settingsAgentSelection.state.scopeId = null;
 
     const page = appendPage(context);
     await page.updateComplete;
@@ -952,9 +953,9 @@ describe("ModelProvidersPage agent scope", () => {
   });
 
   it("shows a roster failure without automatically retrying it", async () => {
-    const { agentSelection, context } = createHarness("main");
-    agentSelection.state.selectedId = null;
-    agentSelection.state.scopeId = null;
+    const { settingsAgentSelection, context } = createHarness("main");
+    settingsAgentSelection.state.selectedId = null;
+    settingsAgentSelection.state.scopeId = null;
     context.agents.state.agentsList = null;
     context.agents.state.agentsError = "Agent roster unavailable";
 
@@ -969,7 +970,7 @@ describe("ModelProvidersPage agent scope", () => {
   });
 
   it("recovers when the agent changes while a refresh is in flight", async () => {
-    const { agentSelection, context, notifySelection, request, deferNextAuthStatus } =
+    const { settingsAgentSelection, context, notifySelection, request, deferNextAuthStatus } =
       createHarness("main");
     const release = deferNextAuthStatus();
     const page = appendPage(context);
@@ -983,8 +984,8 @@ describe("ModelProvidersPage agent scope", () => {
     );
     // Invalidate the in-flight refresh mid-await; the stale completion must
     // clear `refreshing` so the new agent's load can proceed.
-    agentSelection.state.selectedId = "writer";
-    agentSelection.state.scopeId = "writer";
+    settingsAgentSelection.state.selectedId = "writer";
+    settingsAgentSelection.state.scopeId = "writer";
     notifySelection();
     release();
 
@@ -1008,6 +1009,7 @@ describe("ModelProvidersPage agent scope", () => {
     page.routeData = {
       gateway: context.gateway,
       gatewaySnapshot: snapshot,
+      selectionIntentRevision: context.settingsAgentSelection.intentRevision,
       data: staleData,
       client: snapshot.client,
       agentId: "main",
@@ -1040,7 +1042,7 @@ describe("ModelProvidersPage agent scope", () => {
   });
 
   it("stops queued provider probes after switching away from and back to the selected agent", async () => {
-    const { agentSelection, context, notifySelection, request } = createHarness("main");
+    const { settingsAgentSelection, context, notifySelection, request } = createHarness("main");
     const page = appendPage(context);
     await waitForProviders(page);
     request.mockClear();
@@ -1054,12 +1056,12 @@ describe("ModelProvidersPage agent scope", () => {
         agentId: "main",
       }),
     );
-    agentSelection.state.selectedId = "writer";
-    agentSelection.state.scopeId = "writer";
+    settingsAgentSelection.state.selectedId = "writer";
+    settingsAgentSelection.state.scopeId = "writer";
     notifySelection();
     await vi.waitFor(() => expect(page.selectedAgentId).toBe("writer"));
-    agentSelection.state.selectedId = "main";
-    agentSelection.state.scopeId = "main";
+    settingsAgentSelection.state.selectedId = "main";
+    settingsAgentSelection.state.scopeId = "main";
     notifySelection();
     await vi.waitFor(() => expect(page.selectedAgentId).toBe("main"));
     firstProbe.resolve({ provider: "anthropic", status: "ok", results: [] });
@@ -1071,7 +1073,7 @@ describe("ModelProvidersPage agent scope", () => {
   });
 
   it("discards an in-flight probe result after the selected agent changes", async () => {
-    const { agentSelection, context, notifySelection, request } = createHarness("main");
+    const { settingsAgentSelection, context, notifySelection, request } = createHarness("main");
     const page = appendPage(context);
     await waitForProviders(page);
     const pending = deferred<ModelsProbeResult>();
@@ -1084,8 +1086,8 @@ describe("ModelProvidersPage agent scope", () => {
         agentId: "main",
       }),
     );
-    agentSelection.state.selectedId = "writer";
-    agentSelection.state.scopeId = "writer";
+    settingsAgentSelection.state.selectedId = "writer";
+    settingsAgentSelection.state.scopeId = "writer";
     notifySelection();
     await vi.waitFor(() => expect(page.selectedAgentId).toBe("writer"));
     pending.resolve({ provider: "openai", status: "ok", results: [] });

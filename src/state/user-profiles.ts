@@ -30,7 +30,9 @@ import {
 import {
   normalizeUserProfileAvatarMime,
   requireResolvedUserProfileById,
-  selectResolvedUserProfileById,
+  requireResolvedUserProfileMetadataById,
+  selectResolvedUserProfileMetadataById,
+  type UserProfileMetadataRow,
   type UserProfileRow,
   userProfileAvatarPresence,
   userProfilesDb,
@@ -98,7 +100,7 @@ function normalizeInitialDisplayName(name: string | null | undefined): string | 
   return normalized ? truncateUtf16Safe(normalized, MAX_USER_PROFILE_DISPLAY_NAME_LENGTH) : null;
 }
 
-function toUserProfile(row: UserProfileRow): UserProfile {
+function toUserProfile(row: UserProfileMetadataRow): UserProfile {
   return {
     id: row.id,
     displayName: row.display_name,
@@ -191,7 +193,7 @@ export function resolveUserProfileId(
 ): string | undefined {
   ensureUserProfilesSchema(options);
   const { db } = openOpenClawStateDatabase(options);
-  return selectResolvedUserProfileById(db, profileId)?.id;
+  return selectResolvedUserProfileMetadataById(db, profileId)?.id;
 }
 
 /** Reads a profile's protocol-facing representation through its merge head. */
@@ -201,7 +203,8 @@ export function getUserProfileListItem(
 ): UserProfileListItem {
   ensureUserProfilesSchema(options);
   const { db } = openOpenClawStateDatabase(options);
-  return selectUserProfileListItemById(db, requireResolvedUserProfileById(db, profileId).id);
+  const profile = requireResolvedUserProfileMetadataById(db, profileId);
+  return selectUserProfileListItemById(db, profile.id);
 }
 
 /** Reads the role assigned to an existing profile's current merge head. */
@@ -211,7 +214,7 @@ export function getUserProfileRole(
 ): string | null {
   ensureUserProfileRoleSchema(options);
   const { db } = openOpenClawStateDatabase(options);
-  return requireResolvedUserProfileById(db, profileId).role ?? null;
+  return requireResolvedUserProfileMetadataById(db, profileId).role ?? null;
 }
 
 /** Assigns or clears the role on an existing profile's current merge head. */
@@ -224,7 +227,7 @@ export function setUserProfileRole(
   const now = Date.now();
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const profile = requireResolvedUserProfileById(db, profileId);
+      const profile = requireResolvedUserProfileMetadataById(db, profileId);
       if (profileId === GATEWAY_OWNER_PROFILE_ID || profile.id === GATEWAY_OWNER_PROFILE_ID) {
         throw new UserProfileOwnerError("role");
       }
@@ -269,7 +272,7 @@ function ensureProfileForEmailWithInitialName(
       );
       if (existingAlias) {
         // Authenticated avatar reads reuse this path; unchanged identities must not refresh rosters.
-        return toUserProfile(requireResolvedUserProfileById(db, existingAlias.profile_id));
+        return toUserProfile(requireResolvedUserProfileMetadataById(db, existingAlias.profile_id));
       }
       const row = insertUserProfile(db, displayName, now);
       executeSqliteQuerySync(
@@ -337,7 +340,9 @@ function ensureProfileForProviderIdentity(params: {
           );
           deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
         }
-        return toUserProfile(requireResolvedUserProfileById(db, existingIdentity.profile_id));
+        return toUserProfile(
+          requireResolvedUserProfileMetadataById(db, existingIdentity.profile_id),
+        );
       }
       const row = insertUserProfile(db, params.initialDisplayName, now);
       executeSqliteQuerySync(
@@ -416,12 +421,12 @@ function adoptDisplayNameIfEmpty(
 ): UserProfile {
   if (!displayName) {
     const { db } = openOpenClawStateDatabase(options);
-    return toUserProfile(requireResolvedUserProfileById(db, profileId));
+    return toUserProfile(requireResolvedUserProfileMetadataById(db, profileId));
   }
   const now = Date.now();
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const profile = requireResolvedUserProfileById(db, profileId);
+      const profile = requireResolvedUserProfileMetadataById(db, profileId);
       if (profile.display_name?.trim()) {
         return toUserProfile(profile);
       }
@@ -495,7 +500,6 @@ async function adoptAvatarIfEmpty(params: {
       deferSqlitePostCommitPublication(transactionDb, emitUserProfilesChanged);
       return toUserProfile({
         ...profile,
-        avatar: avatar.bytes,
         avatar_mime: avatar.mime,
         avatar_sha256: sha256,
         updated_at: now,
@@ -555,7 +559,7 @@ export function linkEmail(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = userProfilesDb(db);
-      const target = requireResolvedUserProfileById(db, targetProfileId);
+      const target = requireResolvedUserProfileMetadataById(db, targetProfileId);
       if (targetProfileId === GATEWAY_OWNER_PROFILE_ID || target.id === GATEWAY_OWNER_PROFILE_ID) {
         throw new UserProfileOwnerError("merge");
       }
@@ -634,7 +638,7 @@ export function setDisplayName(
   ensureUserProfilesSchema(options);
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const profile = requireResolvedUserProfileById(db, profileId);
+      const profile = requireResolvedUserProfileMetadataById(db, profileId);
       executeSqliteQuerySync(
         db,
         userProfilesDb(db)
@@ -723,7 +727,7 @@ export function setAvatar(
   ensureUserProfilesSchema(options);
   const value = runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const profile = requireResolvedUserProfileById(db, profileId);
+      const profile = requireResolvedUserProfileMetadataById(db, profileId);
       const sha256 = createHash("sha256").update(bytes).digest("hex");
       executeSqliteQuerySync(
         db,

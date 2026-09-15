@@ -94,14 +94,14 @@ suite.define(() => {
           expect(rows.every((row) => (width > 640 ? row.sideBySide : row.stacked))).toBe(true);
           const header = page.locator(".content-header--settings");
           const bounds = await header
-            .locator(".agent-select__trigger, .page-header-actions > button")
+            .locator(".page-header-actions > button")
             .evaluateAll((buttons) =>
               buttons.map((button) => {
                 const { x, y, width: buttonWidth, height } = button.getBoundingClientRect();
                 return { x, y, width: buttonWidth, height };
               }),
             );
-          expect(bounds).toHaveLength(3);
+          expect(bounds).toHaveLength(2);
           for (const [index, box] of bounds.entries()) {
             expect(box.x).toBeGreaterThanOrEqual(0);
             expect(box.x + box.width).toBeLessThanOrEqual(width);

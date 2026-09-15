@@ -1,3 +1,4 @@
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createChatMetadataHarness } from "./chat-metadata-runtime.test-support.js";
@@ -102,9 +103,7 @@ describe("gateway chat metadata shutdown", () => {
         await entered.promise;
         failSibling.resolve();
         await expect(refresh).rejects.toThrow("sibling projection failed");
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextEventLoopTurn();
         expect(settledReads).toBe(2);
         await expect(Promise.all(readings)).resolves.toEqual(["rejected", "rejected"]);
         const stopping = harness.runtime.stop().then(() => events.push("shutdown completed"));

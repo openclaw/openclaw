@@ -17,11 +17,8 @@ export type SshParsedTarget = {
 };
 
 export type SshTunnel = {
-  parsedTarget: SshParsedTarget;
   localPort: number;
-  remotePort: number;
   pid: number | null;
-  stderr: string[];
   stop: () => Promise<void>;
 };
 
@@ -280,11 +277,8 @@ export async function startSshPortForward(opts: {
   void exited.then(detachAbort);
 
   return {
-    parsedTarget: parsed,
     localPort,
-    remotePort: opts.remotePort,
     pid: typeof child.pid === "number" ? child.pid : null,
-    stderr,
     stop,
   };
 }

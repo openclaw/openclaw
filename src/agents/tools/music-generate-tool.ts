@@ -7,7 +7,6 @@ import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseMusicGenerationModelRef } from "../../media-generation/model-ref.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import { resolveMusicGenerationModeCapabilities } from "../../music-generation/capabilities.js";
 import { listRuntimeMusicGenerationProviders } from "../../music-generation/runtime.js";
 import type {
   MusicGenerationOutputFormat,
@@ -138,35 +137,6 @@ function normalizeReferenceImageInputs(args: Record<string, unknown>): string[] 
     maxCount: MAX_INPUT_IMAGES,
     label: "reference images",
   });
-}
-
-function validateMusicGenerationCapabilities(params: {
-  provider: MusicGenerationProvider | undefined;
-  inputImageCount: number;
-}) {
-  const provider = params.provider;
-  if (!provider) {
-    return;
-  }
-  const { capabilities: caps } = resolveMusicGenerationModeCapabilities({
-    provider,
-    inputImageCount: params.inputImageCount,
-  });
-  if (params.inputImageCount > 0) {
-    if (!caps) {
-      throw new ToolInputError(`${provider.id} does not support reference-image edit inputs.`);
-    }
-    if ("enabled" in caps && !caps.enabled) {
-      throw new ToolInputError(`${provider.id} does not support reference-image edit inputs.`);
-    }
-    const maxInputImages =
-      ("maxInputImages" in caps ? caps.maxInputImages : undefined) ?? MAX_INPUT_IMAGES;
-    if (params.inputImageCount > maxInputImages) {
-      throw new ToolInputError(
-        `${provider.id} supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}.`,
-      );
-    }
-  }
 }
 
 const defaultScheduleMusicGenerateBackgroundWork = createDefaultMediaGenerateBackgroundScheduler({
@@ -363,10 +333,6 @@ export function createMusicGenerateTool(options?: MediaGenerateToolOptions): Any
             sandboxConfig,
             ssrfPolicy: remoteMediaSsrfPolicy,
             signal,
-          });
-          validateMusicGenerationCapabilities({
-            provider: selectedProvider,
-            inputImageCount: loadedReferenceImages.length,
           });
           return {
             kind: "task" as const,

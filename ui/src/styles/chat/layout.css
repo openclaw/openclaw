@@ -3116,3 +3116,54 @@ openclaw-chat-ci-details {
     padding: var(--chat-mobile-row-icon-padding);
   }
 }
+
+::highlight(openclaw-comment) {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
+}
+
+.chat-annotation-editor {
+  position: fixed;
+  z-index: 10000;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  width: 380px;
+  overflow: auto;
+}
+
+.chat-annotation-editor textarea {
+  min-width: 0;
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  resize: none;
+}
+
+.chat-annotation-editor__controls {
+  display: none;
+}
+
+.chat-annotation-editor--expanded {
+  width: 440px;
+}
+
+.chat-annotation-editor--expanded textarea,
+.chat-annotation-editor--expanded .chat-annotation-editor__controls {
+  grid-column: 1 / -1;
+}
+
+.chat-annotation-editor--expanded .chat-annotation-editor__confirm {
+  display: none;
+}
+
+.chat-annotation-editor--expanded .chat-annotation-editor__controls {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.chat-annotation-editor__delete {
+  margin-right: auto;
+}

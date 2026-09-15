@@ -21,8 +21,13 @@ const packageExports = isPackageJsonRecord(parsedPackageJson.exports)
   : {};
 parsedPackageJson.exports = packageExports;
 
-// Private QA builds emit these two harness-only facades outside the regular SDK inventory.
-for (const subpath of [...privateLocalOnlyPluginSdkEntrypoints, "qa-lab", "qa-runtime"]) {
+// Private QA builds emit these harness-only facades outside the regular SDK inventory.
+for (const subpath of [
+  ...privateLocalOnlyPluginSdkEntrypoints,
+  "qa-channel-protocol",
+  "qa-lab",
+  "qa-runtime",
+]) {
   const exportPath = `./plugin-sdk/${subpath}`;
   if (!packageExports[exportPath]) {
     packageExports[exportPath] = {

@@ -15,7 +15,7 @@ import { readUserProfileVersion } from "./user-profile-events.js";
 import { selectUserProfileGitHubIdentities } from "./user-profile-github-identity.js";
 import {
   selectResolvedUserProfile,
-  selectResolvedUserProfileById,
+  selectResolvedUserProfileMetadataById,
   normalizeUserProfileAvatarMime,
   userProfileAvatarPresence,
   userProfilesDb,
@@ -143,7 +143,7 @@ export function readUserProfileAliases(
       if (!tableExists(db, "user_profiles")) {
         return new Set([profileId]);
       }
-      const canonicalId = selectResolvedUserProfileById(db, profileId)?.id;
+      const canonicalId = selectResolvedUserProfileMetadataById(db, profileId)?.id;
       if (!canonicalId) {
         return new Set([profileId]);
       }

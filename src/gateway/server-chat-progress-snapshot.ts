@@ -7,6 +7,16 @@ const CHAT_RUN_PROGRESS_MAX_EVENT_BYTES = 64 * 1024;
 const CHAT_RUN_PROGRESS_MAX_REVIEWS_PER_TOOL = 16;
 const retainedEventBytes = new WeakMap<AgentEventPayload, number>();
 
+function freezeCapturedProgress(value: unknown): void {
+  if (value === null || typeof value !== "object") {
+    return;
+  }
+  for (const child of Object.values(value)) {
+    freezeCapturedProgress(child);
+  }
+  Object.freeze(value);
+}
+
 function captureProgressEvent(event: AgentEventPayload) {
   try {
     const json = JSON.stringify(event);
@@ -16,9 +26,8 @@ function captureProgressEvent(event: AgentEventPayload) {
     }
     // Own the wire representation; producers and replay readers cannot change
     // captured content or invalidate its size after this synchronous receipt.
-    const captured: AgentEventPayload = JSON.parse(json, (_key, value: unknown) =>
-      value !== null && typeof value === "object" ? Object.freeze(value) : value,
-    );
+    const captured: AgentEventPayload = JSON.parse(json);
+    freezeCapturedProgress(captured);
     if (!asNullableRecord(captured.data)) {
       return undefined;
     }

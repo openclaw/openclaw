@@ -313,7 +313,7 @@ describe("Models provider login", () => {
   );
 
   it.each(["error", "input"] as const)(
-    "retains provider guidance for the next %s without a note acknowledgement",
+    "keeps recovery guidance in the next %s without replaying it in the ordinary alert",
     async (outcome) => {
       vi.spyOn(window, "open").mockReturnValue(null);
       const { context, request } = loginHarness();
@@ -349,8 +349,20 @@ describe("Models provider login", () => {
       const page = appendPage(context);
       await chooseLogin(page, "example-browser");
       await waitForFast(() =>
-        expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(guidance),
+        expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+          outcome === "error" ? "Could not finish. Open Details" : guidance,
+        ),
       );
+      if (outcome === "error") {
+        expect(page.querySelector("[role=alert]")?.textContent).not.toContain(guidance);
+        const details = page.querySelector<HTMLDetailsElement>("openclaw-modal-dialog details")!;
+        expect(details.open).toBe(false);
+        details.querySelector("summary")!.click();
+        expect(details.open).toBe(true);
+        expect(details.querySelector("p")?.textContent).toBe(
+          ["Certificate validation failed.", guidance].join("\n\n"),
+        );
+      }
       expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
         outcome === "error" ? "Certificate validation failed." : "Enter the client ID",
       );
@@ -559,13 +571,13 @@ describe("Models provider login", () => {
   );
 
   it("does not publish a previous agent's completion after selection changes", async () => {
-    const { context, agentSelection, notifySelection, answer, cancel } = loginHarness();
+    const { context, settingsAgentSelection, notifySelection, answer, cancel } = loginHarness();
     const mutations = vi.spyOn(context.runtimeConfig, "runExternalMutation");
     const page = appendPage(context);
     await openLogin(page);
     await submitCredential(page);
-    agentSelection.state.selectedId = "main";
-    agentSelection.state.scopeId = "main";
+    settingsAgentSelection.state.selectedId = "main";
+    settingsAgentSelection.state.scopeId = "main";
     notifySelection();
     await waitForFast(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
 

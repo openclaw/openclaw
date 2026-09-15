@@ -477,7 +477,7 @@ jobs:
           node --import tsx --input-type=module <<'NODE'
           import fs from "node:fs";
           import path from "node:path";
-          import { validateQaEvidenceSummaryJson } from "./extensions/qa-lab/src/evidence-summary.ts";
+          import * as qaEvidence from "./extensions/qa-lab/api.ts";
           import { qaProfileEvidencePlan } from "./extensions/qa-lab/src/profile-evidence-plan.ts";
 
           const evidencePath = process.env.QA_EVIDENCE_PATH;
@@ -489,7 +489,13 @@ jobs:
             throw new Error("TARGET_SHA is required");
           }
 
-          const evidence = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(evidencePath, "utf8")));
+          const evidence = qaEvidence.validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(evidencePath, "utf8")));
+          if (evidence.schemaVersion === 3 && typeof qaEvidence.getEffectiveQaEvidenceEntries !== "function") {
+            throw new Error("QA evidence v3 requires the selected checkout's effective-entry reader");
+          }
+          const entries = evidence.schemaVersion === 3
+            ? qaEvidence.getEffectiveQaEvidenceEntries(evidence)
+            : evidence.entries;
           if (evidence.profile !== "all") {
             throw new Error(`qa-evidence.json profile must be all, got ${JSON.stringify(evidence.profile)}`);
           }
@@ -523,6 +529,7 @@ jobs:
           const { plan: profilePlan, sha256: profilePlanSha256 } = qaProfileEvidencePlan.attest(
             evidence.profilePlan,
             manifest.qaPassed === true,
+            evidence,
           );
           if (profilePlan.profile !== "all") {
             throw new Error(`qa-evidence.json profilePlan.profile must be all, got ${JSON.stringify(profilePlan.profile)}`);
@@ -532,7 +539,7 @@ jobs:
           }
 
           const counts = { pass: 0, fail: 0, blocked: 0, skipped: 0 };
-          for (const entry of evidence.entries) {
+          for (const entry of entries) {
             counts[entry.result.status] += 1;
           }
           const scorecardPassed =

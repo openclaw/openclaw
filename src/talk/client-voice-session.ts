@@ -94,7 +94,7 @@ async function closeVoiceSessionOperationOwner(
   const incarnation = { createdAt: record.createdAt, origin: record.origin };
   return voiceSessionOperations.close(
     operationKey(store, params.voiceSessionId),
-    () => closeClientVoiceSessionInternal(params, store, incarnation),
+    (trySeal) => closeClientVoiceSessionInternal(params, store, incarnation, trySeal),
     params.staleBefore !== undefined,
   );
 }
@@ -590,6 +590,7 @@ async function closeClientVoiceSessionInternal(
   },
   store: ClientVoiceSessionStore,
   incarnation: Pick<ClientVoiceSessionRecord, "createdAt" | "origin">,
+  trySeal: () => boolean,
 ): Promise<boolean> {
   const now = params.now ?? Date.now();
   return runClientVoiceSessionWrite(
@@ -614,6 +615,9 @@ async function closeClientVoiceSessionInternal(
       }
       if (params.transcriptFailurePolicy === "retain-and-close" && current.origin !== "relay") {
         throw new Error("only relay voice sessions may close with unresolved transcripts");
+      }
+      if (!trySeal()) {
+        return false;
       }
       if (current.status === "open") {
         current.status = "closed";

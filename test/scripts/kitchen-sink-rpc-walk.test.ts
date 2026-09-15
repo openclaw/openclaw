@@ -1046,8 +1046,13 @@ setInterval(() => {}, 1000);
       });
 
     try {
-      await waitFor(() => existsSync(grandchildPidPath));
-      grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+      await waitFor(() => {
+        if (!existsSync(grandchildPidPath)) {
+          return false;
+        }
+        grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+        return Number.isInteger(grandchildPid);
+      });
       const parentPid = Number.parseInt(readText(parentPidPath), 10);
       await waitFor(() => existsSync(grandchildReadyPath));
       expect(Number.isInteger(grandchildPid)).toBe(true);

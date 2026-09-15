@@ -330,6 +330,8 @@ describe("projectContextEngineAssemblyForCodex", () => {
               type: "toolResult",
               toolUseId: "call-1",
               content: "OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok",
+              password: 842761,
+              attemptsRemaining: 3,
             },
           ],
           timestamp: 2,
@@ -351,6 +353,8 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).toContain("status ok");
     expect(result.promptText).not.toContain("cat .env");
     expect(result.promptText).not.toContain("sk-1234567890abcdef");
+    expect(result.promptText).not.toContain("842761");
+    expect(result.promptText).toContain('"attemptsRemaining": 3');
   });
 
   it.each(["assistant", "compaction", "branch_summary"] as const)(

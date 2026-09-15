@@ -60,6 +60,16 @@ export class GitHubPublicationWorkspaceChangedError extends GitHubPublicationKno
   }
 }
 
+export class GitHubPublicationBranchChangedError extends GitHubPublicationKnownFailure {
+  constructor() {
+    super("GitHub publication cannot safely extend the published branch.", {
+      code: "push_rejected",
+      nextAction:
+        "Preserve your local work and inspect the published head. To refresh the existing PR, apply the intended changes on top of that head without rewriting its history; otherwise publish from a new session branch and open a replacement PR. Repository-only checkpoints cannot adopt external branch changes; use a new session branch for those. Do not merge old history merely to make a rebased branch pushable. The broker never force-pushes.",
+    });
+  }
+}
+
 export class GitHubPublicationSessionChangedError extends GitHubPublicationKnownFailure {
   constructor() {
     super("GitHub publication session lifecycle changed.", {
@@ -75,6 +85,13 @@ export function resolveGitHubPublicationFailure(error: unknown): PublicationFail
     return error.failure;
   }
   const message = error instanceof Error ? error.message : "";
+  if (message.includes("publication remote branch could not be verified")) {
+    return {
+      code: "unavailable",
+      nextAction:
+        "Restore repository read access or connectivity, then verify the published branch before retrying. An unavailable observation does not prove the branch is absent or safe to overwrite.",
+    };
+  }
   if (message.includes("identity")) {
     return {
       code: message.includes("changed") ? "identity_changed" : "identity_unavailable",

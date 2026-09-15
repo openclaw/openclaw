@@ -571,6 +571,7 @@ describe("qa mock openai server", () => {
     });
 
     expect(failure.status).toBe(503);
+    expect(failure.headers.get("retry-after")).toBe("120");
     expect(await failure.json()).toEqual({
       error: {
         type: "server_error",

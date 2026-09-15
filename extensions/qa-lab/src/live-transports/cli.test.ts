@@ -53,7 +53,7 @@ import { listLiveTransportQaAdapterFactories, listLiveTransportQaCliRegistration
 const STANDARD_LANES = [
   {
     commandName: "discord",
-    description: "Run the Discord live QA lane against a private guild bot-to-bot harness",
+    description: "Run Discord QA through the live service or Crabline local provider server",
     label: "Discord",
   },
   {
@@ -191,6 +191,15 @@ describe("live transport QA contributions", () => {
           description: `Temporary ${label} account id inside the QA gateway config`,
           flags: "--sut-account <id>",
         },
+        ...(commandName === "discord"
+          ? [
+              {
+                defaultValue: false,
+                description: "Print the selected Discord scenario ids and exit",
+                flags: "--list-scenarios",
+              },
+            ]
+          : []),
         {
           defaultValue: undefined,
           description: `Credential source for ${label} QA: env or convex (default: env)`,
@@ -202,8 +211,41 @@ describe("live transport QA contributions", () => {
             "Credential role for convex auth: maintainer or ci (default: ci in CI, maintainer otherwise)",
           flags: "--credential-role <role>",
         },
+        ...(commandName === "discord"
+          ? [
+              {
+                defaultValue: undefined,
+                description: "Channel driver: live (default) or Crabline local provider server",
+                flags: "--channel-driver <live|crabline>",
+              },
+            ]
+          : []),
       ]);
       expect(command.helpInformation()).toContain(`Usage: qa ${commandName} [options]`);
+    },
+  );
+
+  it("maps the Discord Crabline driver", async () => {
+    const qa = new Command();
+    requireRegistration("discord").register(qa);
+
+    await qa.parseAsync(["node", "openclaw", "discord", "--channel-driver", "crabline"]);
+
+    expect(runLiveTransportQaSuiteCommand).toHaveBeenCalledWith({
+      channelId: "discord",
+      options: expect.objectContaining({ channelDriver: "crabline" }),
+    });
+  });
+
+  it.each(["slack", "whatsapp"] as const)(
+    "does not expose an unsupported Crabline driver on the %s command",
+    async (commandName) => {
+      const { qa } = registerCommand(commandName);
+
+      await expect(
+        qa.parseAsync(["node", "openclaw", commandName, "--channel-driver", "crabline"]),
+      ).rejects.toMatchObject({ code: "commander.unknownOption" });
+      expect(runLiveTransportQaSuiteCommand).not.toHaveBeenCalled();
     },
   );
 
@@ -313,9 +355,24 @@ describe("live transport QA contributions", () => {
 
     await qa.parseAsync(["node", "openclaw", "telegram", "--scenario", "telegram-canary"]);
 
-    expect(runTelegram).toHaveBeenCalledWith(
-      expect.objectContaining({ scenarioIds: ["telegram-canary"] }),
-    );
+    expect(runTelegram).toHaveBeenCalledWith({
+      allowFailures: false,
+      alternateModel: undefined,
+      concurrency: undefined,
+      credentialFile: undefined,
+      credentialRole: undefined,
+      credentialSource: undefined,
+      failFast: undefined,
+      fastMode: undefined,
+      listScenarios: false,
+      outputDir: undefined,
+      primaryModel: undefined,
+      profile: undefined,
+      providerMode: "live-frontier",
+      repoRoot: undefined,
+      scenarioIds: ["telegram-canary"],
+      sutAccountId: "sut",
+    });
   });
 
   it.each(["discord", "slack", "telegram", "whatsapp"])(

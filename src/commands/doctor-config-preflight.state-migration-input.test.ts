@@ -120,6 +120,7 @@ const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js"
 describe("runDoctorConfigPreflight state migration input", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    readConfigFileSnapshot.mockReset();
     findDoctorLegacyConfigIssues.mockReset();
     findDoctorLegacyConfigIssues.mockReturnValue([]);
   });
@@ -168,7 +169,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
       cron: { store: "/tmp/custom-cron/jobs.json" },
       talk: { agentId: "ops" },
     };
-    readConfigFileSnapshot.mockResolvedValueOnce({
+    readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: false,
       config: sourceConfig,
@@ -219,7 +220,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
         entries: { main: {} },
       },
     };
-    readConfigFileSnapshot.mockResolvedValueOnce({
+    readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: false,
       config: resolvedConfig,
@@ -299,7 +300,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
         list: [{ id: "main" }],
       },
     };
-    readConfigFileSnapshot.mockResolvedValueOnce({
+    readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: false,
       config: resolvedConfig,
@@ -336,10 +337,10 @@ describe("runDoctorConfigPreflight state migration input", () => {
   });
 
   it("runs config-independent state migration for invalid config", async () => {
-    findDoctorLegacyConfigIssues.mockReturnValueOnce([
+    findDoctorLegacyConfigIssues.mockReturnValue([
       { path: "cron.store", message: "cron.store is legacy." },
     ]);
-    readConfigFileSnapshot.mockResolvedValueOnce({
+    readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: false,
       config: { cron: { store: "/tmp/legacy-cron.json" } },

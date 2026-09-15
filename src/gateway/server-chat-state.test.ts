@@ -462,6 +462,12 @@ describe("createChatRunState", () => {
     expect(snapshot?.events[0]?.data.result).toEqual({
       details: { text: "é", values: [null, null] },
     });
+    const captured = snapshot!.events[0]!.data.result as {
+      details: { text: string; values: null[] };
+    };
+    expect(Reflect.set(captured, "details", {})).toBe(false);
+    expect(Reflect.set(captured.details, "text", "changed")).toBe(false);
+    expect(Reflect.set(captured.details.values, "0", "changed")).toBe(false);
     expect(snapshot?.byteLength).toBe(
       snapshot?.events.reduce(
         (total, event) => total + Buffer.byteLength(JSON.stringify(event)),

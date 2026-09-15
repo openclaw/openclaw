@@ -2001,19 +2001,21 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
     const childThreadId = deliveredTask?.sourceId?.match(/^codex-thread:(.+)$/)?.[1];
     expect(childThreadId).toBeTypeOf("string");
     const sessionId = await readCodexHarnessSessionId(params);
-    const readBinding = () => {
-      const row = pluginStateEntriesInKeyRange({
-        env: params.stateEnv,
-        pluginId: "codex",
-        namespace: "app-server-thread-bindings",
-        keyStartInclusive: "session-key:dev:",
-        keyEndExclusive: "session-key:dev;",
-        limit: 100,
-      }).find((entry) => asOptionalRecord(entry.value)?.sessionId === sessionId);
+    const readBinding = async () => {
+      const row = (
+        await pluginStateEntriesInKeyRange({
+          env: params.stateEnv,
+          pluginId: "codex",
+          namespace: "app-server-thread-bindings",
+          keyStartInclusive: "session-key:dev:",
+          keyEndExclusive: "session-key:dev;",
+          limit: 100,
+        })
+      ).find((entry) => asOptionalRecord(entry.value)?.sessionId === sessionId);
       // Lease acquisition refreshes the KV write timestamp even when binding content is unchanged.
       return row ? { key: row.key, value: row.value } : undefined;
     };
-    const bindingBefore = readBinding();
+    const bindingBefore = await readBinding();
     expect(bindingBefore).toBeDefined();
     const threadIdBefore = asOptionalRecord(
       asOptionalRecord(bindingBefore?.value)?.binding,
@@ -2025,17 +2027,17 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
       command: `/codex resume ${childThreadId}`,
       expectedText: "controlled by its parent",
     });
-    expect(readBinding()).toEqual(bindingBefore);
+    expect(await readBinding()).toEqual(bindingBefore);
     await requestAgentText({
       client: params.client,
       sessionKey: params.sessionKey,
       message: "Reply exactly PARENT-STILL-ATTACHED and nothing else.",
       expectedReply: "PARENT-STILL-ATTACHED",
     });
-    expect(readBinding()?.key).toBe(bindingBefore?.key);
-    expect(asOptionalRecord(asOptionalRecord(readBinding()?.value)?.binding)?.threadId).toBe(
-      threadIdBefore,
-    );
+    expect((await readBinding())?.key).toBe(bindingBefore?.key);
+    expect(
+      asOptionalRecord(asOptionalRecord((await readBinding())?.value)?.binding)?.threadId,
+    ).toBe(threadIdBefore);
     logCodexLiveStep("native-subagent-direct-input:rejected", { childThreadId });
   } else {
     logCodexLiveStep("native-subagent-direct-input:legacy-not-applicable");
@@ -2080,7 +2082,9 @@ async function verifyCodexSessionDeletion(params: {
       keyEndExclusive: "session-key:dev;",
       limit: 100,
     });
-  const before = readBindings().find((row) => asOptionalRecord(row.value)?.sessionId === sessionId);
+  const before = (await readBindings()).find(
+    (row) => asOptionalRecord(row.value)?.sessionId === sessionId,
+  );
   expect(before).toBeDefined();
   const siblingKey = `${sessionKey}:deletion-sibling`;
   const selectModel = async (key: string) =>
@@ -2100,7 +2104,7 @@ async function verifyCodexSessionDeletion(params: {
   });
   const siblingThreadId = observedCodexThreadIds.get(siblingKey);
   const siblingSessionId = await readCodexHarnessSessionId({ client, sessionKey: siblingKey });
-  const siblingBinding = readBindings().find(
+  const siblingBinding = (await readBindings()).find(
     (row) => asOptionalRecord(row.value)?.sessionId === siblingSessionId,
   );
   expect(siblingBinding).toBeDefined();
@@ -2113,15 +2117,19 @@ async function verifyCodexSessionDeletion(params: {
     command: `/codex resume ${siblingThreadId}`,
     expectedText: "owned by another OpenClaw session or conversation",
   });
-  expect(readBindings().find((row) => row.key === before?.key)).toEqual(before);
-  expect(readBindings().find((row) => row.key === siblingBinding?.key)).toEqual(siblingBinding);
+  expect((await readBindings()).find((row) => row.key === before?.key)).toEqual(before);
+  expect((await readBindings()).find((row) => row.key === siblingBinding?.key)).toEqual(
+    siblingBinding,
+  );
 
   const deletion = await client.request<{ deleted: boolean }>("sessions.delete", {
     key: sessionKey,
   });
   expect(deletion.deleted).toBe(true);
-  expect(readBindings().some((row) => row.key === before?.key)).toBe(false);
-  expect(readBindings().find((row) => row.key === siblingBinding?.key)).toEqual(siblingBinding);
+  expect((await readBindings()).some((row) => row.key === before?.key)).toBe(false);
+  expect((await readBindings()).find((row) => row.key === siblingBinding?.key)).toEqual(
+    siblingBinding,
+  );
   await requestAgentText({
     client,
     sessionKey: siblingKey,

@@ -25,6 +25,7 @@ import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   getChatSessionProjection,
+  observeChatRunModel,
   reduceChatSessionProjection,
   setChatRunOwner,
 } from "./history-merge.ts";
@@ -591,6 +592,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
     host.chatStreamStartedAt = null;
   }
   if (options.clearLocalRun) {
+    observeChatRunModel(host, undefined);
     if (host.chatRunId) {
       host.chatRunLifecycleGeneration = (host.chatRunLifecycleGeneration ?? 0) + 1;
     }

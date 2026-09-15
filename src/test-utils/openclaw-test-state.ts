@@ -37,6 +37,7 @@ type OpenClawTestStateOptions = {
   agentEnv?: "clear" | "main";
   applyEnv?: boolean;
   env?: Record<string, string | undefined>;
+  verifyCleanup?: (cleanup: () => Promise<void>) => Promise<void>;
   gateway?: {
     port?: number;
     token?: string;
@@ -394,8 +395,16 @@ export async function createOpenClawTestState(
     return state;
   } catch (error) {
     // Acquisition has no session/auth work to drain or close. Only undo this fixture.
-    rollbackEnv?.();
-    await removeRoot();
+    // Restore selectors synchronously before the verifier can yield.
+    const rollback = (async () => {
+      rollbackEnv?.();
+      await removeRoot();
+    })();
+    if (options.verifyCleanup) {
+      await options.verifyCleanup(() => rollback);
+    } else {
+      await rollback;
+    }
     throw error;
   }
 }

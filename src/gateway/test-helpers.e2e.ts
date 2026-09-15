@@ -73,7 +73,10 @@ export async function connectGatewayClient(params: {
   maxProtocol?: number;
   timeoutMs?: number;
   timeoutMessage?: string;
+  signal?: AbortSignal;
+  verifyCleanup?: (cleanup: () => Promise<void>) => Promise<void>;
 }) {
+  params.signal?.throwIfAborted();
   const role = params.role ?? "operator";
   const scopes = params.scopes ?? (role === "node" ? [] : undefined);
   const platform = params.platform ?? process.platform;
@@ -128,6 +131,8 @@ export async function connectGatewayClient(params: {
       timeoutMessage: params.timeoutMessage ?? "gateway connect timeout",
       closeMessage: "gateway closed during connect",
       unrefTimeout: true,
+      signal: params.signal,
+      verifyCleanup: params.verifyCleanup,
     },
   );
 }

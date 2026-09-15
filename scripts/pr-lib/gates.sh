@@ -47,6 +47,24 @@ run_hosted_prepare_gates() {
     args+=(--changelog-only)
   fi
   if run_quiet_logged "hosted CI/Testbox gates" ".local/gates-hosted-checks.log" node "${args[@]}"; then
+    local reused_head
+    reused_head=$(jq -er '.reusedFromSha // "" | strings' .local/gates-hosted-checks.json) || return 1
+    if [ -n "$reused_head" ]; then
+      # Compare only main context incorporated into the candidate, not later main drift.
+      local reused_base current_base
+      reused_base=$(git merge-base "$PR_MAIN_SHA" "$reused_head") || return 1
+      current_base=$(git merge-base "$PR_MAIN_SHA" "$current_head") || return 1
+      if mainline_drift_requires_sync "$reused_base" "$reused_head" "$current_base"; then
+        echo "Hosted CI reuse declined: candidate incorporated relevant main changes; require successful CI for $current_head."
+        return 1
+      else
+        local drift_status=$?
+        if [ "$drift_status" -ne 1 ]; then
+          echo "Hosted CI reuse failed: unable to evaluate mainline input changes." >&2
+          return 1
+        fi
+      fi
+    fi
     return 0
   fi
 
@@ -452,7 +470,7 @@ prepare_gates() {
     if [ "$changelog_only" = "true" ]; then
       run_quiet_logged "git diff --check" ".local/gates-diff-check.log" git diff --check "$PR_MAIN_SHA...HEAD"
     fi
-    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only" "$remote_record"
+    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only" "$remote_record" || return 1
     hosted_gates_head="$current_head"
   elif [ "$reuse_gates" = "true" ]; then
     gates_mode="reused_docs_only"

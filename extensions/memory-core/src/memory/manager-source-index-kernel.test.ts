@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import { endianness } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import {
   ensureMemoryIndexSchema,
@@ -83,21 +85,91 @@ describe("memory source index native kernel", () => {
   it("rolls back every index representation when the final source upsert fails", async () => {
     const database = await createDatabase();
     const beforeValue = replacement("memory/current.md");
+    beforeValue.chunks.push({
+      startLine: 3,
+      endLine: 4,
+      text: "second indexed text",
+      hash: "second",
+      importance: 4,
+      triggers: "second",
+      projectKey: "second-project",
+      provenance: { originClass: "agent", sessionKind: "interactive", observedAt: 95 },
+    });
+    beforeValue.embeddings.push([0.25, -0.5, 2]);
+    const sibling = replacement("memory/sibling.md");
+    const updated: MemorySourceIndexReplacement = {
+      ...beforeValue,
+      entry: { ...beforeValue.entry, hash: "updated", mtimeMs: 200.5, size: 24 },
+      now: 200,
+      chunks: beforeValue.chunks.map((chunk, index) => ({
+        ...chunk,
+        text: `updated indexed text ${index}`,
+        hash: `updated-${index}`,
+      })),
+      embeddings: [
+        [0.5, -0.25, 0.75],
+        [-1.25, 2, 0.125],
+      ],
+    };
+    const readRows = () =>
+      database.db
+        .prepare(`
+        SELECT chunk.path, chunk.start_line, chunk.end_line, chunk.text, chunk.embedding,
+               metadata.importance, metadata.triggers, metadata.project_key,
+               provenance.origin_class, provenance.session_kind, provenance.observed_at,
+               hex(vector.embedding) AS vector
+        FROM memory_index_chunks AS chunk
+        JOIN memory_index_chunks_vec AS vector ON vector.id = chunk.id
+        JOIN memory_index_chunk_recall_metadata AS metadata ON metadata.chunk_id = chunk.id
+        JOIN memory_index_chunk_provenance AS provenance ON provenance.chunk_id = chunk.id
+        ORDER BY chunk.path, chunk.start_line
+      `)
+        .all();
+    const expectedRows = (values: MemorySourceIndexReplacement[]) =>
+      values.flatMap((value) =>
+        value.chunks.map((chunk, index) => {
+          const embedding = value.embeddings[index];
+          assert.ok(embedding, "each fixture chunk must have an embedding");
+          const view = new DataView(new ArrayBuffer(embedding.length * 4));
+          embedding.forEach((number, offset) =>
+            view.setFloat32(offset * 4, number, endianness() === "LE"),
+          );
+          return {
+            path: value.entry.path,
+            start_line: chunk.startLine,
+            end_line: chunk.endLine,
+            text: chunk.text,
+            embedding: JSON.stringify(embedding),
+            importance: chunk.importance,
+            triggers: chunk.triggers,
+            project_key: chunk.projectKey,
+            origin_class: chunk.provenance?.originClass,
+            session_kind: chunk.provenance?.sessionKind,
+            observed_at: chunk.provenance?.observedAt,
+            vector: Buffer.from(view.buffer).toString("hex").toUpperCase(),
+          };
+        }),
+      );
     write(database, beforeValue);
-    write(database, replacement("memory/sibling.md"));
+    write(database, sibling);
+    expect(readRows()).toEqual(expectedRows([beforeValue, sibling]));
     const before = snapshot(database.db);
     database.db.exec(`CREATE TRIGGER fail_source_update
       AFTER UPDATE ON memory_index_sources
       BEGIN SELECT RAISE(FAIL, 'source upsert failed'); END`);
-    expect(() => write(database, replacement(beforeValue.entry.path, "updated"))).toThrow(
-      "source upsert failed",
-    );
+    expect(() => write(database, updated)).toThrow("source upsert failed");
     expect(snapshot(database.db)).toEqual(before);
     database.db.exec("DROP TRIGGER fail_source_update");
-    write(database, replacement(beforeValue.entry.path, "updated"));
-    expect(database.db.prepare("SELECT text FROM memory_index_chunks ORDER BY path").all()).toEqual(
-      [{ text: "updated indexed text" }, { text: "original indexed text" }],
-    );
+    write(database, updated);
+    expect(readRows()).toEqual(expectedRows([updated, sibling]));
+    expect(
+      database.db
+        .prepare("SELECT path, hash, mtime, size FROM memory_index_sources ORDER BY path")
+        .all(),
+    ).toEqual([
+      { path: beforeValue.entry.path, hash: "updated", mtime: 200.5, size: 24 },
+      { path: sibling.entry.path, hash: "original", mtime: 100.25, size: 12 },
+    ]);
   });
 
   it("conditionally removes all source representations while retaining a sibling", async () => {

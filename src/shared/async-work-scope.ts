@@ -118,6 +118,11 @@ export function captureAsyncWorkTracker(): typeof trackAsyncWork {
   return async (run) => await (scope ? scope.track(run) : currentWorkScope.exit(run));
 }
 
+/** Starts work its caller does not own, so the caller's scope neither waits for it nor closes under it. */
+export function runOutsideAsyncWorkScope<T>(run: () => T): T {
+  return currentWorkScope.exit(run);
+}
+
 export function getAsyncWorkSignal(): AbortSignal | undefined {
   return currentWorkScope.getStore()?.signal;
 }

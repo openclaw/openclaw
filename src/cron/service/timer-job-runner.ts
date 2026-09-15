@@ -281,7 +281,14 @@ async function executeJobCoreWithTimeoutUnfinalized(
       // Trigger and preflight keep the cron deadline; the heartbeat gets its own.
       onHeartbeatExecutionStarted:
         watchdog && resolveHeartbeatTimeoutMs
-          ? (heartbeat) => watchdog.replaceTimeout(resolveHeartbeatTimeoutMs(heartbeat))
+          ? (heartbeat) => {
+              const heartbeatTimeoutMs = resolveHeartbeatTimeoutMs(heartbeat);
+              // The queue owns admission and retries; only attempts spend the deadline.
+              return {
+                onAttemptStarted: () => watchdog.replaceTimeout(heartbeatTimeoutMs),
+                onQueued: () => watchdog.replaceTimeout(undefined),
+              };
+            }
           : undefined,
       assertRunCurrent,
       executionIdentity: executionIdentity && {

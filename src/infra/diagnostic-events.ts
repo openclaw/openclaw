@@ -21,6 +21,11 @@ import {
   CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY,
 } from "./diagnostic-semantic-run-progress-provenance.js";
 import {
+  consumeToolExecutionLivenessDiagnosticEvent,
+  TOOL_EXECUTION_LIVENESS_METADATA_KEY,
+  type DiagnosticToolExecutionLiveness,
+} from "./diagnostic-tool-execution-liveness.js";
+import {
   getActiveDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "./diagnostic-trace-context.js";
@@ -918,6 +923,7 @@ export type DiagnosticEventMetadata = Readonly<{
 
 type InternalDiagnosticEventMetadata = DiagnosticEventMetadata &
   Readonly<{
+    [TOOL_EXECUTION_LIVENESS_METADATA_KEY]?: DiagnosticToolExecutionLiveness;
     [CORE_MODEL_REQUEST_LIFECYCLE_METADATA_KEY]?: CoreModelRequestLifecycleProvenance;
     // String metadata survives duplicate module instances sharing dispatcher state;
     // only the non-SDK core emitter can set this semantic authority.
@@ -1386,6 +1392,7 @@ function createInternalDiagnosticMetadata(trusted: boolean): DiagnosticEventMeta
 }
 
 type EmitDiagnosticEventOptions = {
+  toolExecutionLiveness?: DiagnosticToolExecutionLiveness;
   allowSecurityEvent?: boolean;
   coreModelRequestLifecycle?: CoreModelRequestLifecycleProvenance;
   coreSemanticRunProgress?: boolean;
@@ -1416,6 +1423,9 @@ function emitDiagnosticEventWithTrust(
   const trustedTraceContext = options.trustedTraceContext === true;
   const metadata: InternalDiagnosticEventMetadata = {
     ...(internal ? createInternalDiagnosticMetadata(trusted) : { trusted }),
+    ...(options.toolExecutionLiveness
+      ? { [TOOL_EXECUTION_LIVENESS_METADATA_KEY]: options.toolExecutionLiveness }
+      : {}),
     ...(options.coreModelRequestLifecycle
       ? { [CORE_MODEL_REQUEST_LIFECYCLE_METADATA_KEY]: options.coreModelRequestLifecycle }
       : {}),
@@ -1517,9 +1527,11 @@ export function getInternalDiagnosticEventSequence(): number {
 
 /** Emits a trusted diagnostic event from core/runtime-owned instrumentation. */
 export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
+  const toolExecutionLiveness = consumeToolExecutionLivenessDiagnosticEvent(event);
   const hostPluginId = consumeHostPluginUsageDiagnosticEvent(event);
   const coreSemanticRunProgress = consumeCoreSemanticRunProgressDiagnosticEvent(event);
   emitDiagnosticEventWithTrust(event, true, {
+    ...(toolExecutionLiveness ? { toolExecutionLiveness } : {}),
     ...(hostPluginId ? { hostPluginId, internal: true } : {}),
     ...(coreSemanticRunProgress ? { coreSemanticRunProgress: true } : {}),
   });

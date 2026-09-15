@@ -3,6 +3,7 @@ import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { emitDiagnosticEventWithTrustedTraceContext } from "../infra/diagnostic-events.js";
+import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   type EventSessionRoutingPolicy,
@@ -1017,6 +1018,7 @@ export async function runExecProcess({
     assertSandboxCurrent = undefined;
   }
   session.processActivity = managedRun.activity;
+  recordDiagnosticToolExecutionDeadline(managedRun.activity.deadlineAtMs);
   session.stdin = managedRun.stdin;
   session.pid = managedRun.pid;
 

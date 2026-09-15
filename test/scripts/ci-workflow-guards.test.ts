@@ -27,6 +27,7 @@ import { minimatch } from "minimatch";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import * as qaEvidence from "../../extensions/qa-lab/api.js";
 import {
   detectChangedScope,
   detectNodeFastScope,
@@ -48,6 +49,7 @@ import {
 import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 import { sharedVitestConfig } from "../vitest/vitest.shared.config.ts";
 import {
   createUiE2eVitestConfig,
@@ -350,10 +352,13 @@ function runPreflightNodeInvocation(
   return readFileSync(argsPath, "utf8").trim().split("\n");
 }
 
+let linuxWorkflowBash: string | undefined;
+
 function runWorkflowShellScript(
   script: string,
-  options: { cwd?: string; env?: NodeJS.ProcessEnv },
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; linuxWorkflow?: boolean },
 ) {
+  const { linuxWorkflow, ...spawnOptions } = options;
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-workflow-shell-"));
   const modulePaths: string[] = [];
   try {
@@ -383,8 +388,12 @@ function runWorkflowShellScript(
       );
     const scriptPath = path.join(root, "run.sh");
     writeFileSync(scriptPath, rewritten.endsWith("\n") ? rewritten : `${rewritten}\n`, "utf8");
-    return spawnSync("bash", [scriptPath], {
-      ...options,
+    const bash =
+      linuxWorkflow && process.platform === "darwin"
+        ? (linuxWorkflowBash ??= resolveWorkflowBash())
+        : "bash";
+    return spawnSync(bash, [scriptPath], {
+      ...spawnOptions,
       encoding: "utf8",
       // Child caches and temporary artifacts share the fixture's cleanup owner.
       // Inheriting a huge host tsx cache makes startup depend on unrelated runs.
@@ -396,6 +405,143 @@ function runWorkflowShellScript(
     }
     rmSync(root, { force: true, recursive: true });
   }
+}
+
+function workflowOccurrenceEvidence(
+  instances: {
+    scenarioId: string;
+    attempts: qaEvidence.QaEvidenceStatus[];
+    selected?: number;
+    retry?: boolean;
+  }[],
+  evidenceMode: "full" | "slim" = "full",
+) {
+  const identity = {
+    source: { ref: null, integrity: null },
+    runtime: { id: null, version: null },
+    package: null,
+    protocol: null,
+    accountRef: null,
+    proofClass: null,
+  };
+  const occurrences: qaEvidence.QaEvidenceOccurrence[] = [];
+  const entries: qaEvidence.QaEvidenceSummaryV3Entry[] = [];
+  for (const [index, instance] of instances.entries()) {
+    const anchorId = `instance-${index}`;
+    const parentCell = {
+      scenarioId: instance.scenarioId,
+      executionKind: "flow" as const,
+      channel: null,
+    };
+    occurrences.push({
+      id: anchorId,
+      parentCell,
+      scenario: {
+        kind: "instance",
+        resultOccurrenceId:
+          instance.selected === undefined ? null : `${anchorId}-attempt-${instance.selected}`,
+      },
+      retryOf: null,
+      terminalStatus: null,
+      assertions: null,
+      launch: identity,
+      receipts: [],
+    });
+    for (const [attempt, status] of instance.attempts.entries()) {
+      const id = `${anchorId}-attempt-${attempt}`;
+      occurrences.push({
+        id,
+        parentCell,
+        scenario: { kind: "observation", instanceOccurrenceId: anchorId },
+        retryOf:
+          attempt === 0 || instance.retry === false ? null : `${anchorId}-attempt-${attempt - 1}`,
+        terminalStatus: status,
+        assertions: null,
+        launch: identity,
+        receipts: [],
+      });
+      entries.push({
+        test: { kind: "scenario", id: instance.scenarioId, title: instance.scenarioId },
+        coverage: [],
+        result: { status },
+        binding: { occurrenceId: id, assertionId: null, receiptId: null },
+        effective: instance.retry === false || attempt === instance.selected,
+      });
+    }
+  }
+  return qaEvidence.buildQaOccurrenceEvidenceSummary({
+    generatedAt: "2026-08-05T00:00:00.000Z",
+    evidenceMode,
+    occurrences,
+    entries,
+  });
+}
+
+function writeWorkflowEvidenceApi(root: string, accessors = true) {
+  const apiPath = path.join(root, "extensions/qa-lab/api.ts");
+  mkdirSync(path.dirname(apiPath), { recursive: true });
+  writeFileSync(
+    path.join(root, "tsconfig.json"),
+    JSON.stringify({ extends: path.resolve("tsconfig.json") }),
+  );
+  const source = pathToFileURL(path.resolve("extensions/qa-lab/src/evidence-summary.ts")).href;
+  // Historical checkouts can validate v2 without exporting the v3 readers.
+  writeFileSync(
+    apiPath,
+    `export { validateQaEvidenceSummaryJson${accessors ? ", getEffectiveQaEvidenceEntries, projectQaEvidenceScenarioOutcomes" : ""} } from ${JSON.stringify(source)};\n`,
+  );
+}
+
+function runMantisEvidenceReader(
+  kind: "status-reactions" | "thread-attachment",
+  evidence: unknown,
+  accessors = true,
+) {
+  const root = tempDirs.make("openclaw-mantis-reader-");
+  const laneRoot = path.join(root, "lanes/baseline");
+  const outputDir = path.join(root, "evidence/baseline");
+  mkdirSync(outputDir, { recursive: true });
+  const moduleRoot = kind === "status-reactions" ? root : laneRoot;
+  writeWorkflowEvidenceApi(moduleRoot, accessors);
+  // A reader must not silently use a newer neighboring checkout's API.
+  const otherRoot = kind === "status-reactions" ? laneRoot : root;
+  writeWorkflowEvidenceApi(otherRoot);
+  writeFileSync(
+    path.join(otherRoot, "extensions/qa-lab/api.ts"),
+    'throw new Error("wrong evidence API owner");\n',
+  );
+  if (evidence !== undefined) {
+    writeFileSync(
+      path.join(outputDir, "qa-evidence.json"),
+      typeof evidence === "string" ? evidence : JSON.stringify(evidence),
+    );
+  }
+  const scenarioId =
+    kind === "status-reactions"
+      ? "discord-status-reactions-tool-only"
+      : "discord-thread-reply-filepath-attachment";
+  writeFileSync(
+    path.join(outputDir, "discord-qa-summary.json"),
+    JSON.stringify({ scenarios: [{ id: scenarioId, status: "pass" }] }),
+  );
+  const workflow = readWorkflow(`.github/workflows/mantis-discord-${kind}.yml`);
+  const job = kind === "status-reactions" ? "run_status_reactions" : "run_thread_attachment";
+  const script = expectDefined(
+    workflow.jobs[job].steps.find((step: WorkflowStep) => step.id === "run_mantis")?.run,
+    "Mantis run script",
+  );
+  const functionName =
+    kind === "status-reactions"
+      ? "read_discord_status_reaction_status"
+      : "read_discord_thread_attachment_status";
+  const start = script.indexOf(`${functionName}()`);
+  const end = script.indexOf("\nbaseline_status=", start);
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+  return runWorkflowShellScript(
+    `set -euo pipefail\nroot=${quoteShell(path.join(root, "evidence"))}\nworktree_root=lanes\n${script.slice(start, end)}\n${functionName} baseline\n`,
+    { cwd: root, env: { ...process.env, GITHUB_WORKSPACE: root } },
+  );
 }
 
 function runCiChangedScopeFixture(changedPaths: string[]): Record<string, string> {
@@ -1412,6 +1558,246 @@ function findUnpinnedExternalActions(): string[] {
 
 function runGit(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function runReleaseFallbackHistoryFixture(options: {
+  route: "branch" | "tag" | "orphan" | "non-release-tag";
+  many?: boolean;
+  failure?: "fetch-branches" | "fetch-tags" | "branch-producer" | "tag-producer";
+}) {
+  const ownedDirs = createTempDirTracker();
+  const root = ownedDirs.make("openclaw-release-fallback-");
+  const origin = path.join(root, "origin.git");
+  const checkout = path.join(root, "checkout");
+  const bin = path.join(root, "bin");
+  const home = path.join(root, "home");
+  const hooks = path.join(root, "hooks");
+  const records = path.join(root, "git-results.jsonl");
+  const fixtureEnv: NodeJS.ProcessEnv = {
+    PATH: [path.dirname(testNodeExecPath), "/usr/local/bin", "/usr/bin", "/bin"].join(
+      path.delimiter,
+    ),
+    HOME: home,
+    XDG_CONFIG_HOME: home,
+    LC_ALL: "C",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: devNull,
+    GIT_ALLOW_PROTOCOL: "file",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_COUNT: "6",
+    GIT_CONFIG_KEY_0: "credential.helper",
+    GIT_CONFIG_VALUE_0: "",
+    GIT_CONFIG_KEY_1: "core.hooksPath",
+    GIT_CONFIG_VALUE_1: hooks,
+    GIT_CONFIG_KEY_2: "gc.auto",
+    GIT_CONFIG_VALUE_2: "0",
+    GIT_CONFIG_KEY_3: "maintenance.auto",
+    GIT_CONFIG_VALUE_3: "false",
+    GIT_CONFIG_KEY_4: "commit.gpgsign",
+    GIT_CONFIG_VALUE_4: "false",
+    GIT_CONFIG_KEY_5: "protocol.file.allow",
+    GIT_CONFIG_VALUE_5: "always",
+    GIT_AUTHOR_NAME: "Release Fixture",
+    GIT_AUTHOR_EMAIL: "release-fixture@example.com",
+    GIT_COMMITTER_NAME: "Release Fixture",
+    GIT_COMMITTER_EMAIL: "release-fixture@example.com",
+    GITHUB_TOKEN: "synthetic-fixture-token",
+  };
+  try {
+    for (const dir of [checkout, bin, home, hooks]) {
+      mkdirSync(dir);
+    }
+    const realGit = execFileSync("bash", ["--noprofile", "--norc", "-c", "command -v git"], {
+      env: fixtureEnv,
+      encoding: "utf8",
+    }).trim();
+    const git = (cwd: string, args: string[], input?: string) =>
+      execFileSync(realGit, args, {
+        cwd,
+        env: fixtureEnv,
+        input,
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+        timeout: 20_000,
+      }).trim();
+    git(root, ["init", "--bare", "-q", origin]);
+    const tree = git(origin, ["mktree"], "");
+    const selected = git(origin, ["commit-tree", tree, "-m", "selected"]);
+    const unrelated = git(origin, ["commit-tree", tree, "-m", "unrelated"]);
+    const count = options.many ? 4096 : 1;
+    const refs = Array.from({ length: count }, (_, index) => {
+      const suffix = options.many
+        ? `${String(index).padStart(4, "0")}-${"a".repeat(192)}/${"b".repeat(192)}`
+        : "small";
+      return options.route === "branch"
+        ? `refs/heads/fixture/${suffix}`
+        : `refs/tags/${options.route === "non-release-tag" ? "fixture" : "vfixture"}/${suffix}`;
+    });
+    git(
+      origin,
+      ["update-ref", "--stdin"],
+      [
+        `create refs/heads/setup-target ${selected}`,
+        `create refs/heads/unrelated ${unrelated}`,
+        ...(options.route === "orphan" ? [] : refs.map((ref) => `create ${ref} ${selected}`)),
+        "",
+      ].join("\n"),
+    );
+    git(origin, ["pack-refs", "--all"]);
+    git(checkout, ["init", "-q"]);
+    git(checkout, ["remote", "add", "origin", pathToFileURL(origin).href]);
+    git(checkout, ["fetch", "--no-tags", "origin", "refs/heads/setup-target"]);
+    git(checkout, ["checkout", "-q", "--detach", "FETCH_HEAD"]);
+    git(origin, ["update-ref", "-d", "refs/heads/setup-target"]);
+    git(checkout, ["update-ref", "-d", "refs/remotes/origin/setup-target"]);
+    expect(
+      git(checkout, [
+        "for-each-ref",
+        "--format=%(objectname)",
+        "--contains",
+        selected,
+        "refs/remotes",
+      ]),
+    ).toBe("");
+    expect(git(checkout, ["tag", "--points-at", selected])).toBe("");
+    if (options.route === "tag") {
+      git(checkout, [
+        "config",
+        "http.https://github.com/.extraheader",
+        "AUTHORIZATION: basic Zml4dHVyZQ==",
+      ]);
+    }
+    const enumerationBytes = Buffer.byteLength(
+      refs
+        .map((ref) => ref.replace(/^refs\/heads\//u, "origin/").replace(/^refs\/tags\//u, ""))
+        .join("\n") + "\n",
+    );
+    if (options.many && existsSync("/proc/sys/fs/pipe-max-size")) {
+      expect(enumerationBytes).toBeGreaterThan(
+        Number(readFileSync("/proc/sys/fs/pipe-max-size", "utf8").trim()),
+      );
+    }
+
+    // Enumeration inherits the real pipeline. Only verbose fetch stderr uses a regular file.
+    const launcher = path.join(root, "git-launcher.mjs");
+    writeFileSync(
+      launcher,
+      [
+        'import { spawnSync } from "node:child_process";',
+        'import { createHash } from "node:crypto";',
+        'import { appendFileSync, closeSync, openSync, readFileSync, statSync } from "node:fs";',
+        'import { constants } from "node:os";',
+        `const git = ${JSON.stringify(realGit)};`,
+        `const records = ${JSON.stringify(records)};`,
+        `const failure = ${JSON.stringify(options.failure ?? null)};`,
+        "let args = process.argv.slice(2);",
+        'const op = args.includes("fetch") ? (args.includes("--no-tags") ? "fetch-branches" : "fetch-tags")',
+        '  : args[0] === "tag" ? "tag-producer" : args[0] === "for-each-ref" ? "branch-producer" : args[0];',
+        'if (op.startsWith("fetch-") && op === failure) {',
+        `  args = args.map(arg => arg === "origin" ? ${JSON.stringify(pathToFileURL(path.join(root, "missing.git")).href)} : arg);`,
+        "}",
+        `const fetchPath = ${JSON.stringify(path.join(root, "fetch-"))} + op + ".stderr";`,
+        'const fd = op.startsWith("fetch-") ? openSync(fetchPath, "w", 0o600) : null;',
+        'const result = spawnSync(git, args, { stdio: ["inherit", "inherit", fd ?? "inherit"], timeout: 20_000 });',
+        "if (fd !== null) closeSync(fd);",
+        "const exitCode = result.signal ? 128 + constants.signals[result.signal] : result.status ?? 1;",
+        "const entry = { op, status: result.status, signal: result.signal, exitCode, error: result.error?.code };",
+        "if (fd !== null) {",
+        "  const size = statSync(fetchPath).size;",
+        '  if (size > 8 * 1024 * 1024) throw new Error("fixture fetch capture exceeded 8 MiB");',
+        "  const bytes = readFileSync(fetchPath);",
+        '  entry.stderr = { bytes: size, sha256: createHash("sha256").update(bytes).digest("hex") };',
+        "  process.stderr.write(bytes.subarray(Math.max(0, bytes.length - 1024)));",
+        "}",
+        'appendFileSync(records, JSON.stringify(entry) + "\\n");',
+        "if (op === failure && fd === null && result.status === 0) {",
+        '  const failed = spawnSync(git, ["rev-parse", "--verify", "refs/heads/fixture-missing"], { stdio: ["ignore", "ignore", "inherit"] });',
+        '  appendFileSync(records, JSON.stringify({ op: "post-output-failure", status: failed.status, signal: failed.signal }) + "\\n");',
+        "  process.exit(failed.status ?? 1);",
+        "}",
+        "process.exit(exitCode);",
+        "",
+      ].join("\n"),
+    );
+    writeExecutable(path.join(bin, "git"), [
+      "#!/bin/bash",
+      `exec ${quoteShell(testNodeExecPath)} ${quoteShell(launcher)} "$@"`,
+    ]);
+    const allocatedBytes = () =>
+      Number(
+        execFileSync("du", ["-sk", root], { env: fixtureEnv, encoding: "utf8" })
+          .trim()
+          .split(/\s/u)[0],
+      ) * 1024;
+    const beforeBytes = allocatedBytes();
+    expect(beforeBytes).toBeLessThan(256 * 1024 * 1024);
+    console.info(
+      "fallback-fixture-before",
+      JSON.stringify({ ...options, refs: count, enumerationBytes, allocatedBytes: beforeBytes }),
+    );
+    const step = expectDefined(
+      readReleaseChecksWorkflow().jobs.resolve_target.steps.find(
+        (candidate: WorkflowStep) =>
+          candidate.name === "Validate selected ref belongs to this repository",
+      ) as WorkflowStep | undefined,
+      "fallback history validation",
+    );
+    const result = runWorkflowShellScript(expectDefined(step.run, "fallback validation body"), {
+      cwd: checkout,
+      env: {
+        ...fixtureEnv,
+        PATH: `${bin}${path.delimiter}${fixtureEnv.PATH}`,
+        RELEASE_REF: selected,
+      },
+    });
+    const events = readFileSync(records, "utf8")
+      .trim()
+      .split("\n")
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            op: string;
+            status: number | null;
+            signal: string | null;
+            error?: string;
+          },
+      );
+    const containingBranches = git(checkout, [
+      "for-each-ref",
+      "--format=%(objectname)",
+      "--contains",
+      selected,
+      "refs/remotes",
+    ])
+      .split(/\s/u)
+      .filter(Boolean).length;
+    if (!options.failure?.startsWith("fetch-")) {
+      expect(containingBranches).toBe(options.route === "branch" ? count : 0);
+    }
+    const afterBytes = allocatedBytes();
+    expect(afterBytes).toBeLessThan(256 * 1024 * 1024);
+    console.info(
+      "fallback-fixture-result",
+      JSON.stringify({
+        ...options,
+        status: result.status,
+        signal: result.signal,
+        error: result.error?.message,
+        enumerationBytes,
+        containingBranches,
+        allocatedBytes: afterBytes,
+        events,
+        rejection: result.stderr.includes("but that commit is not reachable"),
+      }),
+    );
+    expect(result.error).toBeUndefined();
+    expect(events.every((event) => event.error === undefined)).toBe(true);
+    return { result, events };
+  } finally {
+    ownedDirs.cleanup();
+    expect(existsSync(root)).toBe(false);
+    console.info("fallback-fixture-cleanup", JSON.stringify({ ...options, remaining: 0 }));
+  }
 }
 
 function runDiffBaseFixture(options: {
@@ -4969,7 +5355,37 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
     expect(nativeResourcesSetup.if).toBe(
       "needs.preflight.outputs.use_compatible_android_ci != 'true'",
     );
-    expect(nativeResourcesSetup.with).toMatchObject({ "install-bun": "false" });
+    expect(nativeResourcesSetup.with).toMatchObject({
+      "install-bun": "false",
+      "install-deps": "false",
+    });
+    const nativeResourcesInstall = expectDefined(
+      androidJob.steps.find(
+        (step: WorkflowStep) => step.name === "Install Mermaid renderer dependencies",
+      ),
+      "Android native resources dependency install",
+    );
+    expect(nativeResourcesInstall.if).toBe(nativeResourcesSetup.if);
+    expect(nativeResourcesInstall.env).toEqual({ CI: "true" });
+    expect(nativeResourcesInstall.run.trim().split(/\s+/u)).toEqual([
+      "pnpm",
+      "install",
+      "--frozen-lockfile",
+      "--prefer-offline",
+      "--optional",
+      "--filter",
+      "'@openclaw/mermaid-renderer...'",
+      "--config.ignore-scripts=false",
+      "--config.engine-strict=false",
+      "--config.enable-pre-post-scripts=true",
+      "--config.side-effects-cache=true",
+    ]);
+    expect(androidJob.steps.indexOf(nativeResourcesSetup)).toBeLessThan(
+      androidJob.steps.indexOf(nativeResourcesInstall),
+    );
+    expect(androidJob.steps.indexOf(nativeResourcesInstall)).toBeLessThan(
+      androidJob.steps.indexOf(runStep),
+    );
   });
 
   describe("Android validation tiers", () => {
@@ -5001,6 +5417,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
         "if (process.argv.includes(process.env.FAIL_GRADLE_TASK)) process.exit(23);",
       ]);
       const result = runWorkflowShellScript(expectDefined(step.run, "Android commands"), {
+        linuxWorkflow: true,
         cwd: root,
         env: {
           ...process.env,
@@ -6319,7 +6736,7 @@ setImmediate(() => {
       ]) {
         for (const lint of [undefined, false, true]) {
           const extendedBudget =
-            (task === "test-third-party" && lint === true) ||
+            ((task === "test-play" || task === "test-third-party") && lint === true) ||
             (task === "build-play" && runner === "ubuntu-24.04");
           expect(
             evaluateTimeout("android", { ...context, matrix: { task, lint } }),
@@ -7076,13 +7493,14 @@ process.exit(JSON.parse(process.env.RECIPE_EXITS)[count] ?? 99);
         }
       }
       // Capture the pinned CLI before switching to the fixture-only registry/store.
-      const bootstrap = resolvePnpmRunner();
+      const nodeExecPath = resolveTestNodeExecPath();
+      const bootstrap = resolvePnpmRunner({ nodeExecPath });
       const npmExecPath = execFileSync(
         bootstrap.command,
         [...bootstrap.args, "--silent", "run", "pnpm-path"],
         { cwd: source, encoding: "utf8", env: { ...process.env, CI: "true" } },
       ).trim();
-      const pnpm = resolvePnpmRunner({ npmExecPath });
+      const pnpm = resolvePnpmRunner({ nodeExecPath, npmExecPath });
       const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
       const configureCache = expectDefined(
         action.runs.steps.find(
@@ -9750,6 +10168,84 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
+  describe.skipIf(process.platform !== "linux")("release fallback history with real Git", () => {
+    it.each(["branch", "tag"] as const)("accepts a small valid %s history", (route) => {
+      const { result, events } = runReleaseFallbackHistoryFixture({ route });
+      expect(result.status, result.stderr).toBe(0);
+      expect(events.filter((event) => event.op.startsWith("fetch-"))).toMatchObject([
+        { op: "fetch-branches", status: 0, signal: null },
+        { op: "fetch-tags", status: 0, signal: null },
+      ]);
+      expect(events.find((event) => event.op === `${route}-producer`)).toMatchObject({
+        status: 0,
+        signal: null,
+      });
+    });
+
+    it.each(["orphan", "non-release-tag"] as const)("rejects %s history", (route) => {
+      const { result, events } = runReleaseFallbackHistoryFixture({ route });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("but that commit is not reachable");
+      expect(events.filter((event) => event.op.endsWith("-producer"))).toMatchObject([
+        { op: "tag-producer", status: 0, signal: null },
+        { op: "branch-producer", status: 0, signal: null },
+      ]);
+    });
+
+    it.each(["fetch-branches", "fetch-tags"] as const)(
+      "fails closed when the real %s command fails",
+      (failure) => {
+        const { result, events } = runReleaseFallbackHistoryFixture({ route: "branch", failure });
+        expect(result.status).not.toBe(0);
+        expect(events.find((event) => event.op === failure)).toMatchObject({
+          status: 128,
+          signal: null,
+        });
+        expect(events.some((event) => event.op.endsWith("-producer"))).toBe(false);
+        expect(result.stderr).not.toContain("but that commit is not reachable");
+      },
+    );
+
+    it.each(["branch", "tag"] as const)(
+      "does not accept matching %s output followed by a real Git failure",
+      (route) => {
+        const { result, events } = runReleaseFallbackHistoryFixture({
+          route,
+          failure: `${route}-producer`,
+        });
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("but that commit is not reachable");
+        expect(events.find((event) => event.op === `${route}-producer`)).toMatchObject({
+          status: 0,
+          signal: null,
+        });
+        expect(events.find((event) => event.op === "post-output-failure")).toMatchObject({
+          status: 128,
+          signal: null,
+        });
+      },
+    );
+
+    it.each(["branch", "tag"] as const)(
+      "accepts valid %s enumeration larger than the pipe capacity",
+      (route) => {
+        const { result, events } = runReleaseFallbackHistoryFixture({ route, many: true });
+        expect(events.filter((event) => event.op.startsWith("fetch-"))).toMatchObject([
+          { op: "fetch-branches", status: 0, signal: null },
+          { op: "fetch-tags", status: 0, signal: null },
+        ]);
+        const producer = events.find((event) => event.op === `${route}-producer`);
+        if (result.status !== 0) {
+          expect(result.stderr).toContain("but that commit is not reachable");
+          expect(producer).toMatchObject({ status: null, signal: "SIGPIPE", exitCode: 141 });
+        }
+        expect(result.status, JSON.stringify({ producer, stderr: result.stderr })).toBe(0);
+        expect(producer).toMatchObject({ status: 0, signal: null });
+      },
+      60_000,
+    );
+  });
+
   it("checks the generated Git owner in the workflow guard lane", () => {
     const check = spawnSync(process.execPath, ["scripts/generate-ci-git-owner.mts", "--check"], {
       encoding: "utf8",
@@ -10777,12 +11273,23 @@ if (args[0] === 'delete-keychain') fs.unlinkSync(args.at(-1));
         "build --package-path apps/macos --build-system native --enable-code-coverage --build-tests",
         ...(buildExitCode === 0
           ? [
-              "test --package-path apps/macos --build-system native --enable-code-coverage --skip-build --experimental-maximum-parallelization-width 4 --skip AppStateIsolationTests",
+              expect.stringMatching(
+                /^test --package-path apps\/macos --build-system native --enable-code-coverage --skip-build --experimental-maximum-parallelization-width 4 --skip AppStateIsolationTests\|ProfileChatPreferencesTests --event-stream-output-path \S+\/swift-testing-events\.jsonl --event-stream-version 6\.3$/,
+              ),
             ]
           : []),
       ]);
       const output = existsSync(outputPath) ? readFileSync(outputPath, "utf8").trim() : "";
-      expect(output).toBe(buildExitCode === 0 ? "debug-tests-built=true" : "");
+      const outputLines = output.split("\n");
+      if (buildExitCode === 0) {
+        expect(outputLines).toHaveLength(2);
+        expect(outputLines[0]).toBe("debug-tests-built=true");
+        expect(
+          outputLines[1]?.startsWith(`menu-default-artifact-path=${root}/openclaw-menu-default-`),
+        ).toBe(true);
+      } else {
+        expect(output).toBe("");
+      }
     }
   });
 
@@ -12349,10 +12856,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checksFastRun.run).toContain('pnpm check:assertion-safety --base "$base_ref"');
     expect(checksFastRun.run).toContain("pnpm config:docs:check");
     expect(checksFastRun.run).toContain("pnpm plugins:inventory:check");
+    expect(maxLinesRatchet).toContain('} from "./check-env-var-count.mts";');
     expect(maxLinesRatchet).toContain(
-      'import { main as checkEnvVarCount } from "./check-env-var-count.mts";',
+      "checkEnvVarCount(envVarCountArgs(argv), root, envVarNames);",
     );
-    expect(maxLinesRatchet).toContain("checkEnvVarCount(envVarCountArgs(argv), root);");
     expect(checksFastRun.run).toContain(
       '--only=core --split-core --core-stripe="${stripe}/5" --threads=1',
     );
@@ -13709,6 +14216,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             inSuiteServer &&
             (node.expression.text === "createOpenClawTestInstance" ||
               node.expression.text === "startProductionControlUiE2eServer" ||
+              node.expression.text === "startProviderBrowserLoginFixture" ||
               node.expression.text === "createServer")
           ) {
             ownsPrivateServer = true;
@@ -13770,6 +14278,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
+      "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
       "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
       "ui/src/e2e/child-session-load-errors.e2e.test.ts",
       "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
@@ -13782,6 +14291,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
       "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
       "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+      "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
       "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
       "ui/src/e2e/session-management.delete.e2e.test.ts",
       "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
@@ -14503,6 +15013,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         { mode: 0o755 },
       );
       const result = runWorkflowShellScript(expectDefined(step.run, "real-Gateway script"), {
+        linuxWorkflow: true,
         cwd: directory,
         env: {
           ...process.env,
@@ -17337,7 +17848,7 @@ fi
     expect(validateManifestStep.run).toContain("QA evidence manifest profile must be all");
     expect(validateManifestStep.run).toContain("manifest.targetSha !== targetSha");
     expect(validateManifestStep.run).toMatch(
-      /qaProfileEvidencePlan\.attest\(\s*evidence\.profilePlan,\s*manifest\.qaPassed === true,?\s*\)/u,
+      /qaProfileEvidencePlan\.attest\(\s*evidence\.profilePlan,\s*manifest\.qaPassed === true,\s*evidence,?\s*\)/u,
     );
     expect(validateManifestStep.run).toContain("profilePlanSha256");
     expect(validateManifestStep.run).toContain("rerun the QA Profile Evidence workflow");
@@ -17532,6 +18043,136 @@ fi
   });
 
   it.skipIf(process.platform === "win32")(
+    "Mantis evidence readers project a passing retry from the canonical owner",
+    () => {
+      for (const kind of ["status-reactions", "thread-attachment"] as const) {
+        const scenarioId =
+          kind === "status-reactions"
+            ? "discord-status-reactions-tool-only"
+            : "discord-thread-reply-filepath-attachment";
+        const evidence = workflowOccurrenceEvidence([
+          { scenarioId, attempts: ["fail", "pass"], selected: 1 },
+        ]);
+        const result = runMantisEvidenceReader(kind, evidence);
+        expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+        expect(result.stdout.trim()).toBe("pass");
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["full", "slim"] as const)(
+    "Mantis evidence readers preserve v2 %s rows without new API exports",
+    (evidenceMode) => {
+      for (const kind of ["status-reactions", "thread-attachment"] as const) {
+        const scenarioId =
+          kind === "status-reactions"
+            ? "discord-status-reactions-tool-only"
+            : "discord-thread-reply-filepath-attachment";
+        const evidence = {
+          kind: "openclaw.qa.evidence-summary",
+          schemaVersion: 2,
+          generatedAt: "2026-08-05T00:00:00.000Z",
+          evidenceMode,
+          entries: ["fail", "pass"].map((status) => ({
+            test: { kind: "scenario", id: scenarioId, title: scenarioId },
+            coverage: [],
+            result: { status },
+          })),
+        };
+        const result = runMantisEvidenceReader(kind, evidence, false);
+        expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+        expect(result.stdout.trim()).toBe(kind === "status-reactions" ? "fail" : "fail\npass");
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each([
+    { name: "unresolved first", firstId: null, attempts: [], selected: undefined, first: "null" },
+    {
+      name: "foreign first owner",
+      firstId: "another-scenario",
+      attempts: ["pass"],
+      selected: 0,
+      first: "null",
+    },
+    {
+      name: "nonpassing retry",
+      firstId: null,
+      attempts: ["fail", "blocked"],
+      selected: 0,
+      first: "fail",
+    },
+  ] as const)("Mantis evidence readers retain $name and independent instances", (testCase) => {
+    for (const kind of ["status-reactions", "thread-attachment"] as const) {
+      const scenarioId =
+        kind === "status-reactions"
+          ? "discord-status-reactions-tool-only"
+          : "discord-thread-reply-filepath-attachment";
+      const evidence = workflowOccurrenceEvidence(
+        [
+          {
+            scenarioId: testCase.firstId ?? scenarioId,
+            attempts: [...testCase.attempts],
+            selected: testCase.selected,
+          },
+          { scenarioId, attempts: ["pass"], selected: 0 },
+        ],
+        "slim",
+      );
+      const result = runMantisEvidenceReader(kind, evidence);
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      expect(result.stdout.trim()).toBe(
+        kind === "status-reactions"
+          ? testCase.first
+          : testCase.firstId
+            ? "pass"
+            : `${testCase.first}\npass`,
+      );
+    }
+  });
+
+  it
+    .skipIf(process.platform === "win32")
+    .each(["invalid JSON", "null", "invalid binding", "missing v3 accessor"])(
+    "Mantis evidence readers reject %s without legacy fallback",
+    (invalid) => {
+      for (const kind of ["status-reactions", "thread-attachment"] as const) {
+        const scenarioId =
+          kind === "status-reactions"
+            ? "discord-status-reactions-tool-only"
+            : "discord-thread-reply-filepath-attachment";
+        const evidence = workflowOccurrenceEvidence([
+          { scenarioId, attempts: ["pass"], selected: 0 },
+        ]);
+        if (invalid === "invalid binding") {
+          evidence.entries[0]!.binding.occurrenceId = "foreign";
+        }
+        const input = invalid === "invalid JSON" ? "{" : invalid === "null" ? null : evidence;
+        const result = runMantisEvidenceReader(kind, input, invalid !== "missing v3 accessor");
+        expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+        expect(result.stderr).toContain(
+          invalid === "invalid JSON"
+            ? "SyntaxError"
+            : invalid === "missing v3 accessor"
+              ? "scenario reader"
+              : "ZodError",
+        );
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "Mantis evidence readers use legacy summaries only when evidence is absent",
+    () => {
+      for (const kind of ["status-reactions", "thread-attachment"] as const) {
+        const result = runMantisEvidenceReader(kind, undefined);
+        expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+        expect(result.stdout.trim()).toBe("pass");
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "round-trips profile evidence and rejects digest drift",
     () => {
       const qaWorkflow = readQaProfileEvidenceWorkflow();
@@ -17545,6 +18186,13 @@ fi
       const producerScript = expectDefined(producerStep?.run, "QA evidence producer script");
       const consumerScript = expectDefined(consumerStep?.run, "QA evidence consumer script");
       const root = tempDirs.make("openclaw-qa-profile-artifact-");
+      const selectedRoot = path.join(root, "selected");
+      writeWorkflowEvidenceApi(selectedRoot, false);
+      mkdirSync(path.join(selectedRoot, "extensions/qa-lab/src"), { recursive: true });
+      writeFileSync(
+        path.join(selectedRoot, "extensions/qa-lab/src/profile-evidence-plan.ts"),
+        `export { qaProfileEvidencePlan } from ${JSON.stringify(pathToFileURL(path.resolve("extensions/qa-lab/src/profile-evidence-plan.ts")).href)};\n`,
+      );
       const evidencePath = path.join(root, "qa-evidence.json");
       const manifestPath = path.join(root, "qa-profile-evidence-manifest.json");
       const protocolBaseSha = "b".repeat(40);
@@ -17647,6 +18295,7 @@ fi
         });
       const runConsumer = () =>
         runWorkflowShellScript(consumerScript, {
+          cwd: selectedRoot,
           env: {
             ...process.env,
             GITHUB_OUTPUT: path.join(root, "consumer-output"),
@@ -17676,6 +18325,125 @@ fi
         expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
           "scorecard_passed=true",
         );
+
+        const originalEvidence = JSON.parse(readFileSync(evidencePath, "utf8"));
+        writeFileSync(evidencePath, JSON.stringify({ ...originalEvidence, evidenceMode: "slim" }));
+        const oldApiSlim = runConsumer();
+        expect(oldApiSlim.status, `${oldApiSlim.stdout}${oldApiSlim.stderr}`).toBe(0);
+        expect(readFileSync(manifestPath, "utf8")).toBe(completeManifest);
+
+        const retryEvidence = {
+          ...originalEvidence,
+          ...workflowOccurrenceEvidence([
+            { scenarioId: "scenario-one", attempts: ["fail", "pass"], selected: 1 },
+          ]),
+          profile: originalEvidence.profile,
+          profilePlan: originalEvidence.profilePlan,
+          scorecard,
+        };
+        writeFileSync(evidencePath, JSON.stringify(retryEvidence));
+        const missingReader = runConsumer();
+        expect(missingReader.status).toBe(1);
+        expect(`${missingReader.stdout}${missingReader.stderr}`).toContain(
+          "requires the selected checkout's effective-entry reader",
+        );
+        writeWorkflowEvidenceApi(selectedRoot);
+
+        for (const evidenceMode of ["full", "slim"] as const) {
+          writeFileSync(evidencePath, JSON.stringify({ ...retryEvidence, evidenceMode }));
+          const producer = runProducer("0");
+          expect(producer.status, `${producer.stdout}${producer.stderr}`).toBe(0);
+          expect(JSON.parse(readFileSync(manifestPath, "utf8")).profilePlanSha256).toBe(
+            JSON.parse(completeManifest).profilePlanSha256,
+          );
+          writeFileSync(path.join(root, "consumer-output"), "");
+          const consumer = runConsumer();
+          expect(consumer.status, `${consumer.stdout}${consumer.stderr}`).toBe(0);
+          const output = readFileSync(path.join(root, "consumer-output"), "utf8");
+          expect(output).toContain("scorecard_passed=true");
+          expect(output).toContain("passed_count=1");
+          expect(output).toContain("failed_count=0");
+        }
+
+        for (const obligation of ["required", "advisory"] as const) {
+          const declared = {
+            ...retryEvidence,
+            profilePlan: {
+              ...retryEvidence.profilePlan,
+              proofRequirements: [
+                {
+                  id: "observed-protocol",
+                  coverageId: "qa.reporting",
+                  obligation,
+                  owner: "fixture-owner",
+                  acceptedRef: "qa/fixtures/acceptance",
+                  retryAcceptance: "selected-attempt",
+                  alternatives: [{ protocol: "gateway:3" }],
+                },
+              ],
+            },
+          };
+          writeFileSync(evidencePath, JSON.stringify(declared));
+          const producer = runProducer("0");
+          expect(producer.status, `${producer.stdout}${producer.stderr}`).toBe(0);
+          const consumer = runConsumer();
+          expect(consumer.status, `${consumer.stdout}${consumer.stderr}`).toBe(
+            obligation === "required" ? 1 : 0,
+          );
+          if (obligation === "required") {
+            expect(`${consumer.stdout}${consumer.stderr}`).toContain(
+              "observed-protocol (insufficient)",
+            );
+          }
+        }
+        writeFileSync(manifestPath, completeManifest);
+
+        for (const status of ["fail", "blocked"] as const) {
+          const parentFailure = {
+            ...originalEvidence,
+            ...workflowOccurrenceEvidence([
+              // Parent failure is independent of the child, not a retry of its pass.
+              { scenarioId: "scenario-one", attempts: ["pass", status], selected: 1, retry: false },
+            ]),
+            profile: originalEvidence.profile,
+            profilePlan: originalEvidence.profilePlan,
+            scorecard,
+          };
+          writeFileSync(evidencePath, JSON.stringify(parentFailure));
+          writeFileSync(path.join(root, "consumer-output"), "");
+          const consumer = runConsumer();
+          expect(consumer.status, `${consumer.stdout}${consumer.stderr}`).toBe(0);
+          const output = readFileSync(path.join(root, "consumer-output"), "utf8");
+          expect(output).toContain("scorecard_passed=false");
+          expect(output).toContain("passed_count=1");
+          expect(output).toContain(`${status === "fail" ? "failed" : "blocked"}_count=1`);
+        }
+
+        writeFileSync(evidencePath, JSON.stringify(retryEvidence));
+        writeFileSync(
+          manifestPath,
+          JSON.stringify({ ...JSON.parse(completeManifest), qaPassed: false }),
+        );
+        writeFileSync(path.join(root, "consumer-output"), "");
+        const failedProducer = runConsumer();
+        expect(failedProducer.status, `${failedProducer.stdout}${failedProducer.stderr}`).toBe(0);
+        expect(readFileSync(path.join(root, "consumer-output"), "utf8")).toContain(
+          "scorecard_passed=false",
+        );
+        writeFileSync(
+          manifestPath,
+          JSON.stringify({ ...JSON.parse(completeManifest), targetSha: protocolBaseSha }),
+        );
+        const wrongSource = runConsumer();
+        expect(wrongSource.status).toBe(1);
+        expect(`${wrongSource.stdout}${wrongSource.stderr}`).toContain(
+          "does not match selected ref",
+        );
+        writeFileSync(manifestPath, completeManifest);
+        const invalidBinding = structuredClone(retryEvidence);
+        invalidBinding.entries[0]!.binding.occurrenceId = "foreign";
+        writeFileSync(evidencePath, JSON.stringify(invalidBinding));
+        expect(runConsumer().status).toBe(1);
 
         writeEvidence("fail");
         writeFileSync(path.join(root, "consumer-output"), "", "utf8");

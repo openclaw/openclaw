@@ -199,7 +199,7 @@ async function deliverWithProducerLease(
           lease,
         );
       } finally {
-        lease.stop();
+        await lease.stop();
       }
     },
     { unbound: questionBinding === "unbound" },

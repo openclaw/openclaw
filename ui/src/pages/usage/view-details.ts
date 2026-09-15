@@ -13,7 +13,7 @@ import "../../components/tooltip.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { createMsFormatter, formatMs, formatTimeMs } from "../../lib/format.ts";
 import { parseToolSummary } from "./helpers.ts";
-import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
+import { charsToTokens, formatIsoDate, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import type {
   SessionLogEntry,
   SessionLogRole,
@@ -46,14 +46,6 @@ function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 
   const day = Number(date.slice(8, 10)) + dayOffset;
   // Build the target date directly; advancing a normalized skipped midnight can retain 01:00.
   return timeZone === "utc" ? Date.UTC(year, month, day) : new Date(year, month, day).getTime();
-}
-
-export function usageDateKey(timestamp: number, timeZone: "local" | "utc"): string {
-  const value = new Date(timestamp);
-  const year = timeZone === "utc" ? value.getUTCFullYear() : value.getFullYear();
-  const month = (timeZone === "utc" ? value.getUTCMonth() : value.getMonth()) + 1;
-  const day = timeZone === "utc" ? value.getUTCDate() : value.getDate();
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 /** Filter session logs by a timestamp range. */
@@ -444,7 +436,7 @@ function renderTimeSeriesCompact(
         return false;
       }
       if (selectedDaySet) {
-        return selectedDaySet.has(usageDateKey(p.timestamp, timeZone));
+        return selectedDaySet.has(formatIsoDate(new Date(p.timestamp), timeZone));
       }
       return true;
     });

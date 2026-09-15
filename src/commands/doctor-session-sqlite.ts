@@ -1,15 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
+import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../config/config.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
-import { resolveSessionFilePathCore } from "../config/sessions/paths.js";
+import {
+  isLegacySessionRecordOwnedByTarget,
+  readLegacySessionStoreEntries,
+  shouldFilterLegacySessionRecordsByTarget,
+} from "../config/sessions/legacy-store-inspection.js";
 import { importSqliteSessionRowsBatch } from "../config/sessions/session-accessor.sqlite-import.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
   resolveAgentSessionStoreTargetsSync,
@@ -18,28 +20,38 @@ import {
   resolveSessionStoreTargets,
   type SessionStoreTarget as ResolvedSessionStoreTarget,
 } from "../config/sessions/targets.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.js";
-import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import {
+  DeferredPluginMigrationConflictError,
+  readDeferredPluginMigrations,
+  withDeferredPluginMigrationsCurrent,
+  type DeferredPluginMigration,
+} from "../infra/deferred-plugin-migrations.js";
+import {
+  deferredPluginSessionStoreIds,
+  readDeferredPluginSessionImport,
+  recordDeferredPluginSessionImport,
+  type DeferredPluginSessionImport,
+} from "../infra/deferred-plugin-session-sources.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { prepareLegacyAcpMigrationSource } from "../infra/legacy-acp-migration-source.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import {
-  LEGACY_IMPLICIT_AGENT_ID,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
-import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import {
   readMigrationArtifactIdentity,
   sameMigrationArtifact,
   moveMigrationArtifact,
   type MigrationArtifactIdentity,
 } from "./doctor-session-sqlite-artifact.js";
-import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
+import {
+  appendActiveSqliteTranscriptFileIssues,
+  appendSqliteDbStats,
+  compactSqliteDatabase,
+  summarizeDoctorSessionSqliteReport,
+} from "./doctor-session-sqlite-diagnostics.js";
 import {
   collectHistoricalArchiveSources,
   discoverLegacyHistoricalTranscripts,
@@ -65,23 +77,19 @@ import {
 import {
   countTranscriptEventsForPath,
   createTranscriptEventReader,
-  readOnlySqliteDbStats,
   readOnlySqliteValidationSnapshot,
   readTranscriptFingerprint,
   readSqliteEntryCount,
   resolveLegacyTranscriptPaths,
   resolveTargetSqlitePath,
-  scanReadOnlySqliteActiveTranscriptFiles,
   type ReadOnlySqliteValidationSnapshot,
 } from "./doctor-session-sqlite-readers.js";
 import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recover-report.js";
 import { restoreDoctorSessionSqliteTargets } from "./doctor-session-sqlite-restore-report.js";
 import { reconcileSessionSqliteMigrationPublications } from "./doctor-session-sqlite-restore.js";
 import {
-  createDoctorSessionSqliteTotals,
   createDoctorSessionSqliteTargetReport,
   isSessionSqliteMigrationWarning,
-  sumDoctorSessionSqliteTargets,
   type DoctorSessionSqliteIssue,
   type DoctorSessionSqliteMode,
   type DoctorSessionSqliteOptions,
@@ -91,6 +99,7 @@ import {
 import {
   assertDoctorSqliteMaintenancePathsNotAliased,
   isDestructiveDoctorSessionSqliteMode,
+  type DoctorSqliteMaintenanceAuthority,
 } from "./doctor-sqlite-maintenance-lock.js";
 export type {
   DoctorSessionSqliteOptions,
@@ -104,7 +113,19 @@ type LegacyArchiveTarget = {
   report: DoctorSessionSqliteTargetReport;
   validated: boolean;
   records: Array<Omit<LegacySessionRecord, "entry"> & { sessionId: string }>;
+  deferredPluginIds: string[];
+  retainedImportVerified: boolean;
+  verifiedSources?: DeferredPluginSessionImport["sources"];
 };
+
+const retainedArchivePlans = new WeakMap<
+  DoctorSessionSqliteReport,
+  {
+    cfg: OpenClawConfig;
+    env: NodeJS.ProcessEnv;
+    owners: Array<{ owner: LegacyArchiveTarget; receipt: DeferredPluginSessionImport }>;
+  }
+>();
 
 const SESSION_IMPORT_BATCH_SIZE = 256;
 
@@ -117,6 +138,7 @@ export async function runDoctorSessionSqlite(
 ): Promise<DoctorSessionSqliteReport> {
   const env = options.env ?? process.env;
   const cfg = resolveDoctorSessionSqliteConfig(options);
+  const pendingPlugins = readDeferredPluginMigrations({ env });
   const historicalArchives =
     options.mode === "import" || options.mode === "dry-run" || options.mode === "validate"
       ? collectHistoricalArchiveSources({ cfg, env })
@@ -175,16 +197,103 @@ export async function runDoctorSessionSqlite(
         target,
         historicalArchives,
         referencedPaths: coverage?.referencedPaths,
+        expectedIndexIdentity: coverage?.indexIdentities.get(
+          canonicalMigrationFilePath(target.storePath),
+        ),
+        deferredPluginIds: deferredPluginSessionStoreIds({
+          target,
+          pending: pendingPlugins,
+        }),
       }),
     );
   }
   if (activeRun && coverage) {
-    await archiveLegacyArtifacts(archiveTargets, coverage, activeRun);
+    const deferredSourcePaths = new Set<string>();
+    const retainDeferredSources = () => {
+      for (const owner of archiveTargets) {
+        if (owner.deferredPluginIds.length > 0) {
+          coverage.selectedStorePaths.delete(canonicalMigrationFilePath(owner.target.storePath));
+          coverage.retainedDirectories.add(
+            path.dirname(canonicalMigrationFilePath(owner.target.storePath)),
+          );
+          if (owner.retainedImportVerified) {
+            for (const record of owner.records) {
+              if (record.transcriptPath) {
+                deferredSourcePaths.add(canonicalMigrationFilePath(record.transcriptPath));
+              }
+            }
+          }
+        }
+      }
+    };
+    const publishArchive = (remove: () => void, retainSource: () => void) => {
+      const conflict = withDeferredPluginMigrationsCurrent<
+        readonly DeferredPluginMigration[] | undefined
+      >(
+        {
+          env,
+          expectedPending: pendingPlugins,
+          onConflict(pending) {
+            retainSource();
+            if (pending.length > 0) {
+              for (const owner of archiveTargets) {
+                if (!owner.retainedImportVerified && owner.verifiedSources) {
+                  recordDeferredPluginSessionImport({
+                    target: owner.target,
+                    env,
+                    pluginIds: pending.map((plugin) => plugin.pluginId),
+                    sources: owner.verifiedSources,
+                    recordCount: owner.report.legacyEntries,
+                  });
+                }
+              }
+            }
+            return pending;
+          },
+        },
+        () => {
+          remove();
+          return undefined;
+        },
+      );
+      if (conflict) {
+        for (const owner of archiveTargets) {
+          owner.deferredPluginIds = deferredPluginSessionStoreIds({
+            target: owner.target,
+            pending: conflict,
+          });
+          if (owner.deferredPluginIds.length > 0) {
+            owner.retainedImportVerified ||= owner.verifiedSources !== undefined;
+            owner.report.issues.push({
+              code: "plugin_migration_source_retained",
+              message: `Plugin migration obligations changed before archival. Original session migration inputs remain pending for plugin(s): ${owner.deferredPluginIds.join(", ")}. Run openclaw doctor --fix after the plugin is available.`,
+            });
+          }
+        }
+        retainDeferredSources();
+        throw new DeferredPluginMigrationConflictError(conflict);
+      }
+    };
+    retainDeferredSources();
+    await archiveLegacyArtifacts(
+      archiveTargets,
+      coverage,
+      activeRun,
+      undefined,
+      undefined,
+      publishArchive,
+    );
     for (const { target, report } of archiveTargets) {
-      appendActiveSqliteTranscriptFileIssues(target, report);
+      appendActiveSqliteTranscriptFileIssues(target, report, deferredSourcePaths);
       updateMigrationManifestTarget(activeRun, createMigrationTargetInput(target), report.issues);
     }
-    await archiveImportedLegacySessionStores(archiveTargets, activeRun, coverage);
+    await archiveImportedLegacySessionStores(
+      archiveTargets,
+      activeRun,
+      coverage,
+      undefined,
+      publishArchive,
+    );
     const hasBlockingIssues = reports.some((report) => blockingIssueCount(report) > 0);
     activeRun.manifest.completedAt = new Date().toISOString();
     if (hasBlockingIssues) {
@@ -196,7 +305,171 @@ export async function runDoctorSessionSqlite(
     }
     writeSessionSqliteMigrationManifest(activeRun);
   }
-  return summarizeDoctorSessionSqliteReport(options.mode, reports, activeRun);
+  const report = summarizeDoctorSessionSqliteReport(options.mode, reports, activeRun);
+  if (activeRun) {
+    const owners = archiveTargets
+      .filter((owner) => owner.retainedImportVerified && owner.deferredPluginIds.length > 0)
+      .map((owner) => {
+        const receipt = readDeferredPluginSessionImport({ target: owner.target, env });
+        if (!receipt) {
+          throw new Error("Verified retained session import receipt is missing.");
+        }
+        return { owner, receipt };
+      });
+    if (owners.length > 0) {
+      retainedArchivePlans.set(report, { cfg, env: { ...env }, owners });
+    }
+  }
+  return report;
+}
+
+/** Retire only this import's verified originals before the last plugin obligation clears. */
+export async function settleRetainedDoctorSessionSources(
+  report: DoctorSessionSqliteReport,
+  completedPluginIds: readonly string[],
+  authority: DoctorSqliteMaintenanceAuthority,
+  assertCompletionCurrent: () => void,
+): Promise<void> {
+  const plan = retainedArchivePlans.get(report);
+  if (!plan) {
+    return;
+  }
+  const assertCurrent = () => {
+    authority.assertCurrent();
+    assertCompletionCurrent();
+  };
+  assertCurrent();
+  retainedArchivePlans.delete(report);
+  const completed = new Set(completedPluginIds);
+  const expectedPending = readDeferredPluginMigrations({ env: plan.env });
+  const remainingPending = expectedPending.filter((plugin) => !completed.has(plugin.pluginId));
+  if (remainingPending.length > 0) {
+    return;
+  }
+  const publishArchive = (remove: () => void, retainSource: () => void) => {
+    const conflict = withDeferredPluginMigrationsCurrent<
+      readonly DeferredPluginMigration[] | undefined
+    >(
+      {
+        env: plan.env,
+        expectedPending,
+        onConflict(pending) {
+          authority.assertCurrent();
+          retainSource();
+          return pending;
+        },
+      },
+      () => {
+        remove();
+        return undefined;
+      },
+    );
+    if (conflict) {
+      throw new DeferredPluginMigrationConflictError(conflict);
+    }
+  };
+  const verifyImports = () => {
+    assertCurrent();
+    for (const { owner, receipt } of plan.owners) {
+      const current = readDeferredPluginSessionImport({ target: owner.target, env: plan.env });
+      if (!current || !isDeepStrictEqual(current, receipt)) {
+        throw new Error("Verified retained session import receipt changed before settlement.");
+      }
+    }
+  };
+  const owners = plan.owners.map(({ owner }) => ({
+    ...owner,
+    deferredPluginIds: [],
+    report: {
+      ...owner.report,
+      archivedLegacyStoreFiles: [...(owner.report.archivedLegacyStoreFiles ?? [])],
+      archivedTranscriptFiles: [...owner.report.archivedTranscriptFiles],
+      archivedUnreferencedJsonlFiles: [...owner.report.archivedUnreferencedJsonlFiles],
+      issues: owner.report.issues.filter(
+        (issue) => issue.code !== "plugin_migration_source_retained",
+      ),
+    },
+  }));
+  let activeRun: ActiveSessionSqliteMigrationRun | undefined;
+  let failure: Error | undefined;
+  try {
+    verifyImports();
+    const coverage = gatherLegacyArchiveCoverage(
+      plan.cfg,
+      plan.env,
+      owners.map(({ target }) => target),
+    );
+    verifyImports();
+    const targets = owners.map(({ target }) => target);
+    assertDoctorSqliteMaintenancePathsNotAliased(
+      "retained session source settlement",
+      resolveDoctorSessionSqliteMaintenancePaths(targets),
+      resolveDoctorSessionSqliteMaintenanceRoots(targets, plan.env),
+    );
+    assertCurrent();
+    activeRun = createSessionSqliteMigrationRun(plan.env, targets);
+    for (const owner of owners) {
+      updateMigrationManifestTarget(activeRun, owner.target, owner.report.issues, {
+        validationBeforeArchive: "passed",
+      });
+    }
+    const capturedSources = new Set(
+      plan.owners.flatMap(({ receipt }) => receipt.sources.map((source) => source.path)),
+    );
+    await archiveLegacyArtifacts(
+      owners,
+      coverage,
+      activeRun,
+      assertCurrent,
+      capturedSources,
+      publishArchive,
+    );
+    verifyImports();
+    const transcriptIssue = owners.flatMap((owner) => owner.report.issues)[0];
+    if (transcriptIssue) {
+      throw new Error(transcriptIssue.message);
+    }
+    await archiveImportedLegacySessionStores(
+      owners,
+      activeRun,
+      coverage,
+      assertCurrent,
+      publishArchive,
+    );
+    verifyImports();
+    const issue = owners.flatMap((owner) => owner.report.issues)[0];
+    if (issue || owners.some((owner) => fs.existsSync(owner.target.storePath))) {
+      throw new Error(issue?.message ?? "Retained session sources could not be archived.");
+    }
+  } catch (error) {
+    failure = error instanceof Error ? error : new Error(formatErrorMessage(error));
+    for (const [index, owner] of owners.entries()) {
+      owner.report.issues.push(
+        ...plan.owners[index]!.owner.report.issues.filter(
+          (issue) => issue.code === "plugin_migration_source_retained",
+        ),
+        { code: "retained_plugin_source_settlement_failed", message: formatErrorMessage(error) },
+      );
+    }
+  }
+  for (const [index, owner] of owners.entries()) {
+    Object.assign(plan.owners[index]!.owner.report, owner.report);
+  }
+  if (activeRun) {
+    assertCurrent();
+    for (const owner of owners) {
+      updateMigrationManifestTarget(activeRun, owner.target, owner.report.issues);
+    }
+    activeRun.manifest.completedAt = new Date().toISOString();
+    if (failure) {
+      activeRun.manifest.failedAt = activeRun.manifest.completedAt;
+    }
+    writeSessionSqliteMigrationManifest(activeRun);
+  }
+  Object.assign(report, summarizeDoctorSessionSqliteReport(report.mode, report.targets, activeRun));
+  if (failure) {
+    throw failure;
+  }
 }
 
 /** Called only under the public maintenance lock, before its strict alias recheck. */
@@ -361,11 +634,32 @@ async function inspectOrMigrateTarget(params: {
   env: NodeJS.ProcessEnv;
   mode: Exclude<DoctorSessionSqliteMode, "restore" | "recover">;
   target: SessionStoreTarget;
+  expectedIndexIdentity?: MigrationArtifactIdentity;
+  deferredPluginIds?: string[];
 }): Promise<DoctorSessionSqliteTargetReport> {
   const issues: DoctorSessionSqliteIssue[] = [];
   // Exact SQLite locators are maintenance targets, never legacy import sources.
   // Keeping them out of the file path also prevents archiving a live database.
   const isSqliteStore = params.target.storePath.endsWith(".sqlite");
+  let retainedImport: DeferredPluginSessionImport | undefined;
+  if (!isSqliteStore && fs.existsSync(params.target.storePath)) {
+    try {
+      retainedImport = readDeferredPluginSessionImport({
+        target: {
+          ...params.target,
+          sqlitePath: resolveTargetSqlitePath(params.target, params.env),
+        },
+        env: params.env,
+      });
+    } catch (error) {
+      return createDoctorSessionSqliteTargetReport({
+        agentId: params.target.agentId,
+        storePath: params.target.storePath,
+        sqlitePath: resolveTargetSqlitePath(params.target, params.env),
+        issues: [{ code: "retained_plugin_source_conflict", message: formatErrorMessage(error) }],
+      });
+    }
+  }
   const allRecords = isSqliteStore
     ? []
     : readLegacySessionRecords(params.target, issues, {
@@ -373,6 +667,7 @@ async function inspectOrMigrateTarget(params: {
       });
   if (
     !isSqliteStore &&
+    !retainedImport &&
     params.mode !== "inspect" &&
     params.mode !== "compact" &&
     issues.length === 0
@@ -487,7 +782,14 @@ async function inspectOrMigrateTarget(params: {
     report.sqliteEntries = 0;
     return report;
   }
-  if (params.mode === "import") {
+  if (retainedImport) {
+    for (const record of records) {
+      if (record.transcriptPath && fs.existsSync(record.transcriptPath)) {
+        record.sourceFingerprint = readTranscriptFingerprint(record.transcriptPath);
+        record.recovery = { complete: true, repaired: false, events: 0 };
+      }
+    }
+  } else if (params.mode === "import") {
     await importLegacySessionRecords(params.target, records, report);
   } else if (params.mode === "dry-run") {
     for (const record of records) {
@@ -496,8 +798,19 @@ async function inspectOrMigrateTarget(params: {
   } else {
     validateLegacySessionRecords(params.target, records, report, "validate");
   }
-  let validationPassed = false;
-  if (params.mode === "import" && blockingIssueCount(report) === 0) {
+  let validationPassed = retainedImport !== undefined;
+  if (params.mode === "import" && retainedImport) {
+    // Exact source and database identities carry the earlier verified import into archival.
+    updateMigrationManifestTarget(
+      params.activeRun,
+      createMigrationTargetInput(params.target),
+      report.issues,
+      {
+        validationBeforeArchive: "passed",
+      },
+    );
+  }
+  if (params.mode === "import" && !retainedImport && blockingIssueCount(report) === 0) {
     validationPassed = validateLegacySessionRecords(
       params.target,
       records,
@@ -551,11 +864,80 @@ async function inspectOrMigrateTarget(params: {
     }
   }
   if (params.mode === "import") {
+    const deferredPluginIds = params.deferredPluginIds ?? [];
+    // Zero-row validation may certify an existing canonical store, but must never
+    // create a database solely for an unused shared-index owner.
+    const verifiedImport =
+      validationPassed &&
+      (retainedImport !== undefined ||
+        records.length > 0 ||
+        fs.existsSync(resolveTargetSqlitePath(params.target, params.env)));
+    let retainedImportVerified = retainedImport !== undefined;
+    let verifiedSources = retainedImport?.sources;
+    const indexIdentity = params.expectedIndexIdentity;
+    if (!retainedImport && indexIdentity && verifiedImport && report.issues.length === 0) {
+      try {
+        const sources = new Map<string, MigrationArtifactIdentity>([
+          [path.resolve(params.target.storePath), indexIdentity],
+        ]);
+        for (const record of records) {
+          if (!record.transcriptPath || !record.sourceFingerprint) {
+            continue;
+          }
+          sources.set(
+            path.resolve(record.transcriptPath),
+            readMigrationArtifactIdentity(record.transcriptPath, 1n, record.sourceFingerprint),
+          );
+          for (const file of [
+            resolveTrajectoryPath(record.transcriptPath),
+            resolveTrajectoryPointerPath(record.transcriptPath),
+          ]) {
+            if (file && fs.existsSync(file)) {
+              sources.set(path.resolve(file), readMigrationArtifactIdentity(file));
+            }
+          }
+        }
+        verifiedSources = [...sources].map(([sourcePath, identity]) => ({
+          path: sourcePath,
+          identity,
+        }));
+      } catch (error) {
+        report.issues.push({
+          code: "transcript_archive_failed",
+          message: formatErrorMessage(error),
+        });
+      }
+    }
+    if (deferredPluginIds.length > 0 && verifiedImport && report.issues.length === 0) {
+      if (!retainedImport) {
+        if (!verifiedSources) {
+          throw new Error("Deferred plugin session import has no verified source index.");
+        }
+        recordDeferredPluginSessionImport({
+          target: {
+            ...params.target,
+            sqlitePath: resolveTargetSqlitePath(params.target, params.env),
+          },
+          env: params.env,
+          pluginIds: deferredPluginIds,
+          sources: verifiedSources,
+          recordCount: records.length,
+        });
+        retainedImportVerified = true;
+      }
+      report.issues.push({
+        code: "plugin_migration_source_retained",
+        message: `Canonical sessions were imported and verified. Original session migration inputs remain pending for plugin(s): ${deferredPluginIds.join(", ")}. Install the plugin and run openclaw doctor --fix to finish.`,
+      });
+    }
     // Retain importer outcomes, not entry or transcript payloads, until every owner finishes.
     params.archiveTargets?.push({
       target: createMigrationTargetInput(params.target),
       report,
       validated: validationPassed,
+      deferredPluginIds,
+      retainedImportVerified,
+      verifiedSources,
       records: records
         .filter((record) => !record.historical?.archiveMove)
         .map(({ entry, ...record }) => Object.assign(record, { sessionId: entry.sessionId })),
@@ -688,125 +1070,18 @@ function readLegacySessionRecords(
   issues: DoctorSessionSqliteIssue[],
   options: { allowMissingStore?: boolean; sourcePath?: string } = {},
 ): LegacySessionRecord[] {
-  // Open a file descriptor first, then stat and read through it to eliminate
-  // the TOCTOU race where a file can change between size validation and read.
-  // Use O_NONBLOCK so a path substituted with a FIFO cannot block waiting for
-  // a writer; fstat on the descriptor then rejects non-regular files.
-  const openFlags =
-    process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
-  let fd: number;
-  try {
-    fd = fs.openSync(options.sourcePath ?? target.storePath, openFlags);
-  } catch (err) {
-    const nodeErr = err as NodeJS.ErrnoException;
-    if (options.allowMissingStore === true && nodeErr.code === "ENOENT") {
-      try {
-        const parentStat = fs.statSync(path.dirname(target.storePath));
-        if (!parentStat.isDirectory()) {
-          issues.push({
-            code: "store_unreadable",
-            message: `${target.storePath}: parent path is not a directory`,
-          });
-        }
-      } catch (parentErr) {
-        if ((parentErr as NodeJS.ErrnoException).code !== "ENOENT") {
-          issues.push({
-            code: "store_unreadable",
-            message: `${target.storePath}: ${String(parentErr)}`,
-          });
-        }
-      }
-      return [];
-    }
-    issues.push({
-      code: "store_unreadable",
-      message: `${target.storePath}: ${String(err)}`,
+  const records: LegacySessionRecord[] = [];
+  for (const { entry, sessionKey } of readLegacySessionStoreEntries(target, issues, options)
+    .entries) {
+    const transcript = resolveLegacyTranscriptPaths(target, entry);
+    records.push({
+      // Import repairs file-era fields before canonical SQLite readers can see them.
+      entry: migrateLegacySessionCreator(normalizeSessionEntryDelivery(entry)),
+      sessionKey,
+      ...transcript,
     });
-    return [];
   }
-
-  try {
-    let parsed: unknown;
-    try {
-      const storeStat = fs.fstatSync(fd);
-      if (!storeStat.isFile()) {
-        issues.push({
-          code: "store_unreadable",
-          message: `${target.storePath}: not a regular file`,
-        });
-        return [];
-      }
-      // Fail closed if the pinned file grows past the size validated above.
-      const raw = readFileDescriptorBoundedSync(fd, storeStat.size).toString("utf-8");
-      parsed = JSON.parse(raw);
-    } catch (err) {
-      issues.push({
-        code: "store_unreadable",
-        message: `${target.storePath}: ${String(err)}`,
-      });
-      return [];
-    }
-    if (!isRecord(parsed)) {
-      issues.push({
-        code: "store_not_object",
-        message: `${target.storePath} does not contain an object session store.`,
-      });
-      return [];
-    }
-    const records: LegacySessionRecord[] = [];
-    for (const [sessionKey, value] of Object.entries(parsed)) {
-      if (!isSessionEntry(value)) {
-        issues.push({
-          code: "entry_invalid",
-          message: "Session entry is missing a valid sessionId.",
-          sessionKey,
-        });
-        continue;
-      }
-      const transcript = resolveLegacyTranscriptPaths(target, value);
-      records.push({
-        // Import is the migration boundary: repair legacy delivery/route shapes
-        // here because the SQLite runtime read path assumes canonical entries.
-        entry: migrateLegacySessionCreator(normalizeSessionEntryDelivery(value)),
-        sessionKey,
-        ...transcript,
-      });
-    }
-    return records;
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-function isLegacySessionRecordOwnedByTarget(
-  cfg: OpenClawConfig,
-  target: SessionStoreTarget,
-  sessionKey: string,
-): boolean {
-  if (target.sqlitePath) {
-    const parsed = parseAgentSessionKey(sessionKey);
-    const ownerAgentId =
-      parsed?.agentId ??
-      cfg.agents?.defaults?.sessionStore?.agentId?.trim() ??
-      tryResolveLegacyCompatibilityAgentId(cfg);
-    return ownerAgentId
-      ? normalizeAgentId(ownerAgentId) === normalizeAgentId(target.agentId)
-      : false;
-  }
-  const ownerAgentId = resolveStoredSessionOwnerAgentId({
-    cfg,
-    agentId: target.agentId,
-    sessionKey,
-  });
-  return ownerAgentId
-    ? ownerAgentId === target.agentId
-    : target.agentId === tryResolveDefaultAgentId(cfg);
-}
-
-function shouldFilterLegacySessionRecordsByTarget(target: SessionStoreTarget): boolean {
-  // Filtering depends on whether the authored store path encodes an owner,
-  // not on the configured/default owner selected for its SQLite target.
-  return !resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).agentId;
+  return records;
 }
 
 function countLegacyTranscript(
@@ -911,12 +1186,26 @@ function prepareLegacySessionImport(
   record.sourceFingerprint = transcriptFingerprint;
   const result = countTranscriptEvents(record);
   const transcriptMtimeMs = readLegacyTranscriptMtimeMs(record);
+  const acpEntry = !record.historical
+    ? normalizePersistedSessionEntryShape(record.entry, { sessionKey: record.sessionKey })
+    : undefined;
   const params = {
     historicalOnly: Boolean(record.historical),
     allowMalformedRowRepair: true,
     repairLegacyTranscript: true,
     agentId: target.agentId,
     entry: record.entry,
+    ...(acpEntry?.acp
+      ? {
+          legacyAcpMigrationSource: prepareLegacyAcpMigrationSource({
+            sourcePath: target.storePath,
+            sourceSessionKey: record.sessionKey,
+            sessionId: acpEntry.sessionId,
+            lifecycleRevision: acpEntry.lifecycleRevision,
+            meta: acpEntry.acp,
+          }),
+        }
+      : {}),
     preserveExactStoredKey: true,
     sessionKey: record.sessionKey,
     storePath: target.sqlitePath ?? target.storePath,
@@ -1078,6 +1367,9 @@ async function archiveLegacyArtifacts(
   owners: readonly LegacyArchiveTarget[],
   coverage: ReturnType<typeof gatherLegacyArchiveCoverage>,
   activeRun: ActiveSessionSqliteMigrationRun,
+  assertCurrent?: () => void,
+  capturedSources?: ReadonlySet<string>,
+  publishSourceRemoval?: (remove: () => void, retainSource: () => void) => void,
 ): Promise<void> {
   const {
     selectedStorePaths,
@@ -1171,7 +1463,7 @@ async function archiveLegacyArtifacts(
     }
     if (retainedPaths.has(source) || retainedDirectories.has(path.dirname(source))) {
       for (const { owner, record } of refs) {
-        if (blockingIssueCount(owner.report) === 0) {
+        if (blockingIssueCount(owner.report) === 0 && owner.deferredPluginIds.length === 0) {
           owner.report.issues.push({
             code: "transcript_archive_deferred",
             message: `${source}: retaining the original for an incomplete or unselected importing owner; rerun import for all known owners after resolving their index/import issues.`,
@@ -1187,6 +1479,7 @@ async function archiveLegacyArtifacts(
         first.record.sessionKey,
         source,
         reservedArchivePaths,
+        capturedSources,
       );
       // Same-session aliases reuse the actual importer evidence only within their validated target.
       const imports = refs.map(({ owner, record }) =>
@@ -1281,6 +1574,9 @@ async function archiveLegacyArtifacts(
       ...referencedPaths,
       ...planned.keys(),
     ])) {
+      if (capturedSources && !capturedSources.has(source)) {
+        continue;
+      }
       try {
         const move = planSessionJsonlArchiveMove({
           archiveKey: "archive-tier",
@@ -1310,6 +1606,7 @@ async function archiveLegacyArtifacts(
       .map(({ move, owners: refs }) => Object.assign({}, move, { sessionKey: refs.get(owner) }));
   // Every referencing target gets its own session key and shared mapping before publication.
   for (const owner of owners) {
+    assertCurrent?.();
     recordPlannedMigrationMoves(activeRun, owner.target, movesForOwner(owner));
   }
   const completed = new Set<string>();
@@ -1318,7 +1615,19 @@ async function archiveLegacyArtifacts(
       for (const owner of referencingOwners.keys()) {
         assertSafeSessionSqliteMigrationMove(move, owner.target);
       }
-      await moveMigrationArtifact(move.sourcePath, move.archivePath, move.artifact!.identity);
+      assertCurrent?.();
+      await moveMigrationArtifact(
+        move.sourcePath,
+        move.archivePath,
+        move.artifact!.identity,
+        assertCurrent
+          ? () => {
+              assertCurrent();
+            }
+          : undefined,
+        publishSourceRemoval,
+      );
+      assertCurrent?.();
       completed.add(move.sourcePath);
       const report = [...referencingOwners.keys()][0]!.report;
       (move.kind === "unreferenced-jsonl"
@@ -1326,12 +1635,16 @@ async function archiveLegacyArtifacts(
         : report.archivedTranscriptFiles
       ).push(move.archivePath);
     } catch (error) {
+      if (error instanceof DeferredPluginMigrationConflictError && error.pending.length > 0) {
+        break;
+      }
       for (const owner of referencingOwners.keys()) {
         recordFailure(owner, move.sourcePath, error, move.kind === "unreferenced-jsonl");
       }
     }
   }
   for (const owner of owners) {
+    assertCurrent?.();
     recordCompletedMigrationMoves(
       activeRun,
       owner.target,
@@ -1347,6 +1660,8 @@ async function archiveImportedLegacySessionStores(
   owners: readonly LegacyArchiveTarget[],
   activeRun: ActiveSessionSqliteMigrationRun,
   coverage: ReturnType<typeof gatherLegacyArchiveCoverage>,
+  assertCurrent?: () => void,
+  publishSourceRemoval?: (remove: () => void, retainSource: () => void) => void,
 ): Promise<void> {
   const byStore = new Map<string, LegacyArchiveTarget[]>();
   for (const owner of owners) {
@@ -1354,6 +1669,7 @@ async function archiveImportedLegacySessionStores(
     byStore.set(storePath, [...(byStore.get(storePath) ?? []), owner]);
   }
   for (const [storePath, entries] of byStore) {
+    assertCurrent?.();
     // A historical-only target may never have had an index; losing an admitted index is a failure.
     if (!coverage.indexIdentities.has(storePath) && !fs.existsSync(storePath)) {
       continue;
@@ -1398,16 +1714,32 @@ async function archiveImportedLegacySessionStores(
         disposal: { state: "retained" },
       };
       for (const { target } of entries) {
+        assertCurrent?.();
         recordPlannedMigrationMoves(activeRun, target, [move]);
         assertSafeSessionSqliteMigrationMove(move, target);
       }
       publicationPlanned = true;
-      await moveMigrationArtifact(move.sourcePath, move.archivePath, expected);
+      assertCurrent?.();
+      await moveMigrationArtifact(
+        move.sourcePath,
+        move.archivePath,
+        expected,
+        assertCurrent
+          ? () => {
+              assertCurrent();
+            }
+          : undefined,
+        publishSourceRemoval,
+      );
+      assertCurrent?.();
       for (const { target } of entries) {
         recordCompletedMigrationMoves(activeRun, target, [move]);
       }
       first.report.archivedLegacyStoreFiles!.push(move.archivePath);
     } catch (error) {
+      if (error instanceof DeferredPluginMigrationConflictError && error.pending.length > 0) {
+        break;
+      }
       for (const { report, target } of entries) {
         report.issues.push({
           code: "legacy_store_archive_failed",
@@ -1416,6 +1748,7 @@ async function archiveImportedLegacySessionStores(
         // A recorded index plan already protects its dependencies and can reconcile on retry.
         // Earlier failures have no artifact record, so retain that failure on the owner instead.
         if (!publicationPlanned) {
+          assertCurrent?.();
           updateMigrationManifestTarget(activeRun, target, report.issues);
         }
       }
@@ -1485,117 +1818,18 @@ function listUnreferencedJsonlFiles(
     .toSorted((a, b) => a.localeCompare(b));
 }
 
-function appendActiveSqliteTranscriptFileIssues(
-  target: SessionStoreTarget,
-  report: DoctorSessionSqliteTargetReport,
-): void {
-  const result = scanReadOnlySqliteActiveTranscriptFiles(
-    target,
-    (sessionKey, sessionId, sessionFile) => {
-      const transcriptPath = resolveActiveSqliteTranscriptFile(target, {
-        ...(sessionFile ? { sessionFile } : {}),
-        sessionId,
-      });
-      if (transcriptPath) {
-        report.issues.push({
-          code: "active_sqlite_transcript_jsonl",
-          message: `SQLite-backed session still has an active JSONL transcript file: ${transcriptPath}`,
-          sessionKey,
-        });
-      }
-    },
-  );
-  if (!result.ok) {
-    report.issues.push({
-      code: "sqlite_active_transcript_scan_failed",
-      message: `Could not scan SQLite-backed sessions for active JSONL transcript files: ${String(result.error)}`,
-    });
-  }
-}
-
-function appendSqliteDbStats(
-  target: SessionStoreTarget,
-  report: DoctorSessionSqliteTargetReport,
-): void {
-  const result = readOnlySqliteDbStats(target);
-  if (!result.ok) {
-    report.issues.push({
-      code: "sqlite_corrupt",
-      message: `SQLite database could not be inspected: ${String(result.error)}`,
-    });
-    return;
-  }
-  report.dbStats = result.stats;
-  if (result.stats.integrityCheck && result.stats.integrityCheck !== "ok") {
-    report.issues.push({
-      code: "sqlite_integrity_check_failed",
-      message: `SQLite quick_check reported: ${result.stats.integrityCheck}`,
-    });
-  }
-}
-
-async function compactSqliteDatabase(
-  target: SessionStoreTarget,
-  report: DoctorSessionSqliteTargetReport,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    operation?: "import-finalize";
-  } = {},
-): Promise<void> {
-  try {
-    if (options.operation === "import-finalize") {
-      closeOpenClawAgentDatabaseByPath(resolveTargetSqlitePath(target));
-    }
-    report.compact = await compactDoctorSessionSqliteTarget(target, options);
-  } catch (err) {
-    report.issues.push({
-      code: "sqlite_compact_failed",
-      message: `SQLite database compact failed: ${formatErrorMessage(err)}`,
-    });
-  }
-}
-
-function resolveActiveSqliteTranscriptFile(
-  target: SessionStoreTarget,
-  entry: { sessionFile?: string; sessionId: string },
-): string | undefined {
-  let transcriptPath: string;
-  try {
-    transcriptPath = resolveSessionFilePathCore(entry.sessionId, entry, {
-      agentId: target.agentId,
-      sessionsDir: path.dirname(target.storePath),
-    });
-  } catch {
-    return undefined;
-  }
-  if (!transcriptPath.endsWith(".jsonl")) {
-    return undefined;
-  }
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(transcriptPath);
-  } catch {
-    return undefined;
-  }
-  if (!stat.isFile()) {
-    return undefined;
-  }
-  const sessionsDir = canonicalFilePath(path.dirname(target.storePath));
-  const activePath = canonicalFilePath(transcriptPath);
-  if (path.dirname(activePath) !== sessionsDir) {
-    return undefined;
-  }
-  return activePath;
-}
-
 function planImportedTranscriptArtifactsToArchive(
   target: SessionStoreTarget,
   sessionKey: string,
   transcriptPath: string,
   reservedArchivePaths: Set<string>,
+  capturedSources?: ReadonlySet<string>,
 ): SessionSqliteMigrationMove[] {
   const moves: SessionSqliteMigrationMove[] = [];
   const addMove = (sourcePathRaw: string, kind: SessionSqliteMigrationMoveKind) => {
+    if (capturedSources && !capturedSources.has(canonicalMigrationFilePath(sourcePathRaw))) {
+      return;
+    }
     const move = planSessionJsonlArchiveMove({
       archiveKey: sessionKey,
       baseNameRaw: path.basename(sourcePathRaw),
@@ -1700,46 +1934,4 @@ function createMigrationTargetInput(target: SessionStoreTarget): SessionSqliteMi
   };
 }
 
-function isSessionEntry(value: unknown): value is SessionEntry {
-  return isRecord(value) && typeof value.sessionId === "string" && value.sessionId.trim() !== "";
-}
-
-function summarizeDoctorSessionSqliteReport(
-  mode: DoctorSessionSqliteMode,
-  targets: DoctorSessionSqliteTargetReport[],
-  activeRun?: ActiveSessionSqliteMigrationRun,
-): DoctorSessionSqliteReport {
-  const sum = (value: (target: DoctorSessionSqliteTargetReport) => number) =>
-    sumDoctorSessionSqliteTargets(targets, value);
-  return {
-    ...(activeRun
-      ? {
-          migrationRun: {
-            ...(activeRun.manifest.failureReports
-              ? {
-                  failureReportJsonPath: activeRun.manifest.failureReports.jsonPath,
-                  failureReportMarkdownPath: activeRun.manifest.failureReports.markdownPath,
-                }
-              : {}),
-            manifestPath: activeRun.manifestPath,
-            runId: activeRun.manifest.runId,
-          },
-        }
-      : {}),
-    mode,
-    targets,
-    totals: createDoctorSessionSqliteTotals(targets, {
-      archivedLegacyStoreFiles: sum((target) => target.archivedLegacyStoreFiles?.length ?? 0),
-      archivedTranscriptFiles: sum((target) => target.archivedTranscriptFiles.length),
-      archivedUnreferencedJsonlFiles: sum((target) => target.archivedUnreferencedJsonlFiles.length),
-      importedEntries: sum((target) => target.importedEntries),
-      importedTranscriptEvents: sum((target) => target.importedTranscriptEvents),
-      legacyEntries: sum((target) => target.legacyEntries),
-      reclaimedBytes: sum((target) => target.compact?.reclaimedBytes ?? 0),
-      unreferencedJsonlFiles: sum((target) => target.unreferencedJsonlFiles.length),
-      validatedEntries: sum((target) => target.validatedEntries),
-      validatedTranscriptEvents: sum((target) => target.validatedTranscriptEvents),
-    }),
-  };
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

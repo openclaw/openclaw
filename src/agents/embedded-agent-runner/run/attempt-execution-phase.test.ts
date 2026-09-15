@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createAssistantMessageEventStream, type Message } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -319,7 +320,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         model: testModel,
         modelId: testModel.id,
         provider: testModel.provider,
-        sessionId: `async-fragment-${stopReason}-${cacheRead}-${completion}`,
+        sessionId: randomUUID(),
       });
       Object.assign(runtime, {
         anthropicPayloadLogger: undefined,

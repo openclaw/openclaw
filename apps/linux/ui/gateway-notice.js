@@ -16,7 +16,7 @@
       notice.setAttribute("role", "alert");
       notice.setAttribute("aria-atomic", "true");
       // Injected dashboards can predate the companion's shared chrome styles.
-      notice.style.cssText = "position:fixed;top:56px;right:12px;z-index:10000;max-width:min(360px,90vw);box-sizing:border-box;padding:12px 44px 12px 12px;border:1px solid currentColor;border-radius:8px;background:var(--bg,#0e1015);color:var(--text,#f6f7fb);font:13px system-ui,sans-serif;overflow-wrap:anywhere";
+      notice.style.cssText = "position:fixed;top:56px;right:12px;z-index:10000;max-width:min(360px,90vw);box-sizing:border-box;padding:12px 44px 12px 12px;border:1px solid currentColor;border-radius:8px;background:var(--bg,#0e1015);color:var(--text,#f6f7fb);font:13px/1.5 var(--font-body,system-ui,sans-serif);overflow-wrap:anywhere";
       text = document.createElement("span");
       const dismiss = document.createElement("button");
       dismiss.type = "button";

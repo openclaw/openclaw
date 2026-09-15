@@ -132,6 +132,12 @@ const fetchNpmPackageTargetStatus = vi.fn(
 const readGatewayRestartHandoffSync = vi.fn<
   (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
 >(() => null);
+const readGatewayLastShutdown = vi.fn<
+  (_env?: NodeJS.ProcessEnv) => { reason: string | null; completedAtMs: number } | undefined
+>(() => undefined);
+const findSystemdGatewayInstallation = vi.fn<
+  typeof import("../../daemon/systemd-scope.js").findSystemdGatewayInstallation
+>(async () => ({ kind: "none" }));
 const inspectWindowsGatewayFirewall = vi.fn<(opts?: unknown) => Promise<unknown>>(async () => ({
   applies: false,
   severity: "info" as const,
@@ -265,6 +271,15 @@ vi.mock("../../daemon/diagnostics.js", () => ({
 
 vi.mock("../../daemon/inspect.js", () => ({
   findExtraGatewayServices: (env: unknown, opts?: unknown) => findExtraGatewayServices(env, opts),
+}));
+
+vi.mock("../../infra/gateway-boot-lifecycle.js", () => ({
+  readGatewayLastShutdown: (env?: NodeJS.ProcessEnv) => readGatewayLastShutdown(env),
+}));
+
+vi.mock("../../daemon/systemd-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-scope.js")>()),
+  findSystemdGatewayInstallation: (env: NodeJS.ProcessEnv) => findSystemdGatewayInstallation(env),
 }));
 
 vi.mock("../../daemon/launchd.js", async (importOriginal) => ({
@@ -514,6 +529,8 @@ describe("gatherDaemonStatus", () => {
     readLastGatewayErrorLine.mockReset();
     readLastGatewayErrorLine.mockResolvedValue(null);
     readGatewayRestartHandoffSync.mockClear();
+    readGatewayLastShutdown.mockReset().mockReturnValue(undefined);
+    findSystemdGatewayInstallation.mockReset().mockResolvedValue({ kind: "none" });
     serviceIsLoaded.mockClear();
     serviceReadCommand.mockClear();
     serviceReadRuntime.mockClear();
@@ -1409,6 +1426,91 @@ describe("gatherDaemonStatus", () => {
     expect(status.service.restartHandoff?.restartKind).toBe("full-process");
     expect(status.service.restartHandoff?.supervisorMode).toBe("launchd");
   });
+
+  it.each([
+    { deep: true, remote: false },
+    { deep: false, remote: false },
+    { deep: true, remote: true },
+  ])(
+    "reports the last shutdown only for deep local status ($deep, $remote)",
+    async ({ deep, remote }) => {
+      const lastShutdown = { reason: "stop (SIGTERM)", completedAtMs: 1_800_000_000_000 };
+      readGatewayLastShutdown.mockReturnValue(lastShutdown);
+
+      const status = await gatherStatus({
+        probe: false,
+        deep,
+        rpc: remote ? { url: "wss://gateway.example" } : {},
+      });
+
+      if (deep && !remote) {
+        expect(status.gateway).toMatchObject({ lastShutdown });
+        expect(readGatewayLastShutdown).toHaveBeenCalledWith(
+          expect.objectContaining({ OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon" }),
+        );
+        const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+        const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+        try {
+          printDaemonStatus(status, { json: false, deep });
+          expect(log.mock.calls.flat().join("\n")).toContain(
+            "Last shutdown: stop (SIGTERM) at 2027-01-15T08:00:00.000Z",
+          );
+        } finally {
+          log.mockRestore();
+          error.mockRestore();
+        }
+      } else {
+        expect(readGatewayLastShutdown).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([
+    { deep: true, rpc: {}, diagnose: true },
+    { deep: false, rpc: {}, diagnose: false },
+    { deep: true, rpc: { url: "wss://gateway.example" }, diagnose: false },
+    { deep: true, rpc: { localPortOverride: 19002 }, diagnose: false },
+  ])(
+    "reports dueling systemd diagnosis only for its native target ($deep, $rpc)",
+    async ({ deep, rpc, diagnose }) => {
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      findSystemdGatewayInstallation.mockResolvedValue({
+        kind: "dueling",
+        user: {
+          scope: "user",
+          unitName: "openclaw-gateway.service",
+          unitPath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+        },
+        system: {
+          scope: "system",
+          unitName: "openclaw-gateway.service",
+          unitPath: "/etc/systemd/system/openclaw-gateway.service",
+        },
+      });
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      try {
+        const status = await gatherStatus({ probe: false, deep, rpc });
+        printDaemonStatus(status, { json: false, deep });
+        if (diagnose) {
+          expect(error.mock.calls.flat().join("\n")).toContain(
+            "they will SIGTERM each other in a restart loop",
+          );
+          expect(error.mock.calls.flat().join("\n")).toContain(
+            "Run `openclaw doctor` interactively",
+          );
+        } else {
+          expect(findSystemdGatewayInstallation).not.toHaveBeenCalled();
+          expect(error.mock.calls.flat().join("\n")).not.toContain("they will SIGTERM each other");
+        }
+      } finally {
+        log.mockRestore();
+        error.mockRestore();
+        Object.defineProperty(process, "platform", platform);
+      }
+    },
+  );
 
   it.runIf(process.platform === "darwin")(
     "surfaces stale updater launchd jobs only during deep status",

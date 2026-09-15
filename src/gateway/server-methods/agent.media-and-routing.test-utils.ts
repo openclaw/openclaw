@@ -59,24 +59,20 @@ describe("gateway agent handler", () => {
       sessionKey: "agent:main:telegram:group:stale-failed",
       sessionId: "stale-failed-session-id",
       configureTranscript: async () => {
-        mocks.readTranscriptStatsSync.mockReturnValue({ eventCount: 1, maxSeq: 1, sizeBytes: 32 });
+        mocks.hasSessionTranscriptEventsSync.mockReturnValue(true);
         return {};
       },
-      expectsSqliteStats: true,
+      expectsSqlitePresence: true,
     },
     {
       name: "SQLite transcript marker",
       sessionKey: "agent:main:telegram:group:stale-failed-sqlite",
       sessionId: "stale-failed-sqlite-session-id",
       configureTranscript: async (params: { sessionId: string; storePath: string }) => {
-        mocks.readTranscriptStatsSync.mockReturnValue({
-          eventCount: 1,
-          maxSeq: 1,
-          sizeBytes: 32,
-        });
+        mocks.hasSessionTranscriptEventsSync.mockReturnValue(true);
         return { sessionFile: `sqlite:main:${params.sessionId}:${params.storePath}` };
       },
-      expectsSqliteStats: true,
+      expectsSqlitePresence: true,
     },
   ])("recovers a stale failed session when its $name exists", async (scenario) => {
     const now = Date.parse("2026-05-18T09:49:30.000Z");
@@ -133,8 +129,8 @@ describe("gateway agent handler", () => {
 
       const call = await waitForAgentCommandCall<{ sessionId?: string }>();
       expect(call.sessionId).toBe(scenario.sessionId);
-      if (scenario.expectsSqliteStats) {
-        expect(mocks.readTranscriptStatsSync).toHaveBeenCalledWith({
+      if (scenario.expectsSqlitePresence) {
+        expect(mocks.hasSessionTranscriptEventsSync).toHaveBeenCalledWith({
           agentId: "main",
           sessionId: scenario.sessionId,
           sessionKey: scenario.sessionKey,
@@ -142,7 +138,7 @@ describe("gateway agent handler", () => {
           sessionEntry: failedEntryWithStaleActivity,
         });
       } else {
-        expect(mocks.readTranscriptStatsSync).not.toHaveBeenCalled();
+        expect(mocks.hasSessionTranscriptEventsSync).not.toHaveBeenCalled();
       }
       expect(capturedEntry?.sessionId).toBe(scenario.sessionId);
       expect(capturedEntry?.status).toBeUndefined();
@@ -163,7 +159,7 @@ describe("gateway agent handler", () => {
     await withTestDir({ prefix: "openclaw-gateway-failed-session-file-" }, async (root) => {
       const sessionsDir = `${root}/sessions`;
       await fs.mkdir(sessionsDir, { recursive: true });
-      mocks.readTranscriptStatsSync.mockReturnValue({ eventCount: 1, maxSeq: 1, sizeBytes: 32 });
+      mocks.hasSessionTranscriptEventsSync.mockReturnValue(true);
       const failedEntryWithResolvedTranscript = {
         sessionId: "failed-present-session-id",
         status: "failed",
@@ -889,7 +885,7 @@ describe("gateway agent handler", () => {
     await withTestDir({ prefix: "openclaw-gateway-terminal-recovery-" }, async (root) => {
       const sessionsDir = `${root}/sessions`;
       await fs.mkdir(sessionsDir, { recursive: true });
-      mocks.readTranscriptStatsSync.mockReturnValue({ eventCount: 1, maxSeq: 1, sizeBytes: 32 });
+      mocks.hasSessionTranscriptEventsSync.mockReturnValue(true);
       mocks.loadSessionEntry.mockReturnValue({
         cfg: {},
         storePath: `${sessionsDir}/sessions.json`,

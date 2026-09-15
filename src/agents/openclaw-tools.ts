@@ -541,6 +541,8 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     createSessionsListTool({
       ...sessionLookupToolOptions,
       requesterAgentIdOverride: sessionAgentId,
+      requesterProfileId: options?.gatewayUiCommandTarget?.profileId,
+      supportsActiveOnly: !embedded,
     }),
     createSessionsHistoryTool({
       ...sessionLookupToolOptions,
@@ -593,8 +595,8 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
             agentAccountId: options?.agentAccountId,
             agentTo: options?.agentTo,
             agentThreadId: options?.agentThreadId,
-            currentMessagingTarget: options?.currentMessagingTarget,
-            currentChannelId: options?.currentChannelId,
+            currentMessagingTarget: options?.currentMessagingTarget ?? options?.currentChannelId,
+            currentChannelId: options?.nativeChannelId ?? options?.currentChannelId,
             currentThreadTs: options?.currentThreadTs,
             currentMessageId: options?.currentMessageId,
             agentGroupId: options?.agentGroupId,

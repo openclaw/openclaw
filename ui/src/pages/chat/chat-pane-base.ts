@@ -318,7 +318,18 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   @property({ attribute: false }) onClosePane?: (paneId: string) => void;
   @property({ attribute: false }) boardProvider?: BoardProvider;
 
+  private publishedRunActivity: ChatPaneBase["runActivity"] = null;
   protected readonly chatState = new ChatStateController<ChatPageHost>(this, () => {
+    const activity = this.runActivity;
+    if (
+      activity?.client === this.publishedRunActivity?.client &&
+      activity?.agentId === this.publishedRunActivity?.agentId &&
+      activity?.working === this.publishedRunActivity?.working &&
+      activity?.completion === this.publishedRunActivity?.completion
+    ) {
+      return;
+    }
+    this.publishedRunActivity = activity;
     this.dispatchEvent(new Event(CHAT_RUN_ACTIVITY_CHANGED_EVENT, { bubbles: true }));
   });
 

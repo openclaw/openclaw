@@ -596,6 +596,84 @@ afterEach(() => {
 });
 
 describe("runGatewayLoop", () => {
+  it.each([
+    { signal: "SIGTERM", restartReason: undefined, reason: "stop (SIGTERM)" },
+    { signal: "SIGINT", restartReason: undefined, reason: "stop (SIGINT)" },
+    { signal: "SIGUSR1", restartReason: undefined, reason: "restart (SIGUSR1)" },
+    {
+      signal: "SIGUSR1",
+      restartReason: "config reload: gateway.bind",
+      reason: "restart (SIGUSR1: config reload: gateway.bind)",
+    },
+    {
+      signal: "SIGTERM",
+      restartReason: "update.run",
+      reason: "restart (SIGTERM: update.run)",
+    },
+  ] as const)("names the shutdown trigger: $reason", async ({ signal, restartReason, reason }) => {
+    vi.clearAllMocks();
+    if (signal === "SIGTERM" && restartReason) {
+      consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ reason: restartReason });
+    } else {
+      peekGatewaySigusr1RestartReason.mockReturnValueOnce(restartReason);
+    }
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const close = createCloseMock();
+      const { start, started } = createSignaledStart(close);
+      const { runtime, exited } = createRuntimeWithExitSignal();
+      const completeBoot = vi.fn();
+      await runLoopWithStart({ start, runtime, completeBoot });
+      await waitForStart(started);
+      captureSignal(signal)();
+      if (signal === "SIGUSR1") {
+        await waitForLoopCondition(() => start.mock.calls.length === 2, "restart did not finish");
+        captureSignal("SIGINT")();
+      }
+      await expect(exited).resolves.toBe(0);
+      expect(gatewayLog.info).toHaveBeenCalledWith(`admission closed: ${reason}`);
+      expect(gatewayLog.info).not.toHaveBeenCalledWith("admission closed: restart drain");
+      expect(completeBoot).toHaveBeenCalledWith({
+        outcome: reason.startsWith("restart") ? "planned_restart" : "clean_stop",
+        reason,
+      });
+    });
+  });
+
+  it.each([false, true])(
+    "hints on three repeated signals within five minutes (expired: %s)",
+    async (expired) => {
+      vi.clearAllMocks();
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { close, exited } = await createSignaledLoopHarness();
+        const closing = createDeferredCore();
+        close.mockImplementationOnce(() => closing.promise);
+        const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+        try {
+          const sigterm = captureSignal("SIGTERM");
+          sigterm();
+          await waitForLoopCondition(() => close.mock.calls.length === 1, "close did not start");
+          now.mockReturnValue(1_000_000 + (expired ? 300_001 : 1_000));
+          sigterm();
+          sigterm();
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          const hint =
+            "received SIGTERM 3 times in 5 min: another supervisor may be managing this Gateway — see `openclaw gateway status --deep`";
+          if (expired) {
+            expect(gatewayLog.warn).not.toHaveBeenCalledWith(hint);
+          } else {
+            expect(gatewayLog.warn).toHaveBeenCalledWith(hint);
+          }
+        } finally {
+          now.mockRestore();
+          closing.resolve();
+          await expect(exited).resolves.toBe(0);
+        }
+      });
+    },
+  );
+
   it.each([false, true])(
     "joins external restart cleanup without creating a successor (close failure: %s)",
     async (fails) => {
@@ -2004,7 +2082,7 @@ describe("runGatewayLoop", () => {
       expectRestartCloseCall(close, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
       expect(completeBoot).toHaveBeenCalledWith({
         outcome: "planned_restart",
-        reason: "gateway.restart",
+        reason: "restart (SIGTERM: gateway.restart)",
       });
       expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
       expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
@@ -2625,7 +2703,7 @@ describe("runGatewayLoop", () => {
             expect(await settled).toEqual([{ status: "fulfilled", value: undefined }]);
             expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
               outcome: "clean_stop",
-              reason: "gateway.stop",
+              reason: "stop (SIGINT)",
             });
           }
           expect(close).not.toHaveBeenCalled();
@@ -2695,7 +2773,7 @@ describe("runGatewayLoop", () => {
             expect(await settled).toEqual([{ status: "fulfilled", value: undefined }]);
             expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
               outcome: "clean_stop",
-              reason: "gateway.stop",
+              reason: "stop (SIGTERM)",
             });
           } else {
             expect(await settled).toEqual([{ status: "rejected", reason: failure }]);
@@ -3757,7 +3835,7 @@ describe("runGatewayLoop", () => {
           await expect(exited).resolves.toBe(0);
           expect(completeBoot).toHaveBeenCalledWith({
             outcome: "planned_restart",
-            reason: "gateway.restart",
+            reason: "restart (SIGTERM: gateway.restart)",
           });
           expect(restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
           expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();

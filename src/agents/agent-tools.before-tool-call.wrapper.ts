@@ -38,6 +38,7 @@ import {
   resolveToolErrorDiagnostic,
   resolveToolResultTerminalDiagnostic,
   summarizeToolParams,
+  startToolExecutionLiveness,
 } from "./agent-tools.before-tool-call.diagnostics.js";
 import {
   consumeFinalClientVoiceToolConfirmation,
@@ -542,18 +543,13 @@ export function wrapToolWithBeforeToolCallHook(
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
       recordToolExecutionStarted(toolCallId, ctx?.runId);
-      if (hookOptions.emitDiagnostics) {
-        emitTrustedDiagnosticEvent({
-          type: "tool.execution.started",
-          ...eventBase,
-        });
-      }
+      const liveness = startToolExecutionLiveness(eventBase, hookOptions.emitDiagnostics, signal);
       const startedAt = Date.now();
       try {
         let result: Awaited<ReturnType<ForwardedToolExecution>>;
         try {
           const args = [toolCallId, executeParams, signal, forwardedOnUpdate, ...executionArgs];
-          const invoke = () => (execute as ForwardedToolExecution)(...args);
+          const invoke = () => liveness.run(() => (execute as ForwardedToolExecution)(...args));
           result = outcome.ownerDecision
             ? await invoke()
             : await runWithGenericToolActionDecision(tool, toolCallId, invoke);
@@ -651,6 +647,8 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallOrdinal,
         });
         throw err;
+      } finally {
+        liveness.close();
       }
     },
   };

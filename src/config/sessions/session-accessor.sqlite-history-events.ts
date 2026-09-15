@@ -42,6 +42,7 @@ import {
   assertHistoryReadWindow,
   captureHistoryReadWindow,
   resolveHistoryMessageSequence,
+  resolveVisibleHistoryEventCount,
   resolveVisibleHistoryProjection,
   resolveVisibleHistoryRange,
   type VisibleHistoryBoundary,
@@ -506,10 +507,7 @@ export function readSessionTranscriptHistoryEventPage(
 }
 
 export function readSessionTranscriptHistoryEventCount(scope: SessionTranscriptReadScope): number {
-  return withCurrentProjectionSnapshot(
-    scope,
-    (projection) => resolveVisibleHistoryProjection(projection).total,
-  );
+  return withCurrentProjectionSnapshot(scope, resolveVisibleHistoryEventCount);
 }
 
 export function readSessionTranscriptHistoryEventById(

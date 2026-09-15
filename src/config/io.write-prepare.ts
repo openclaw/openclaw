@@ -11,6 +11,7 @@ import {
 } from "../agents/agent-scope-config.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { configIncludeOwnsAgentRosterValues } from "./agent-roster-provenance.js";
@@ -998,7 +999,7 @@ function indexAgentRosterSourcePaths(
               normalizeAgentId(id),
               source.kind === "list"
                 ? `agents.list[${source.index}]`
-                : `agents.entries.${source.key}`,
+                : appendConfigPathSegment("agents.entries", source.key),
             ],
           ];
     }),

@@ -1,8 +1,38 @@
 // Tests media-only get-reply runs and sandboxed media attachment handling.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import {
+  captureRequesterCronAuthority,
+  promoteRequesterCronAuthority,
+  consumeRequesterCronAuthorityAdmission,
+  revokeRequesterCronAuthority,
+  withRequesterCronAuthority,
+} from "../../agents/subagents/requester-cron-authority.js";
+import { createCronTool } from "../../agents/tools/cron-tool.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../../agents/tools/gateway-caller-context.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
+import {
+  getCronManagementAuthority,
+  withCronManagementGrant,
+} from "../../gateway/cron-creator-authority-grant.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  registerAgentRunContext,
+  clearAgentRunContext,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {
   enqueueSystemEvent,
@@ -208,6 +238,7 @@ vi.mock("../../config/sessions/group.js", () => ({
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionFilePathCore: vi.fn().mockReturnValue("/tmp/session.jsonl"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({}),
+  resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/session-store"),
 }));
 
 const loadSessionEntryMock = vi.hoisted(() => vi.fn());
@@ -216,6 +247,7 @@ const updateAmbientTranscriptWatermarkMock = vi.hoisted(() => vi.fn().mockResolv
 vi.mock("../../config/sessions/session-accessor.js", () => ({
   listSessionEntriesCore: vi.fn().mockReturnValue([]),
   loadSessionEntry: loadSessionEntryMock,
+  loadSessionEntryReadOnly: loadSessionEntryMock,
   patchSessionEntryCore: vi.fn(),
   persistSessionTranscriptTurn: vi.fn(),
 }));
@@ -507,6 +539,259 @@ function requireLastRunReplyAgentCall() {
 }
 
 describe("runPreparedReply media-only handling", () => {
+  it.each(["fresh-non-owner", "fresh-owner", "inter-session", "heartbeat", "replay"] as const)(
+    "retires pending owner task authority only for new channel input: %s",
+    async (kind) => {
+      const sessionKey = "agent:default:discord:channel:123";
+      const sessionId = "pending-owner-session";
+      const originalRunId = "pending-owner-run";
+      const child: SubagentRunRecord = {
+        runId: "pending-child",
+        execution: { status: "running" },
+        requesterTurnRunId: originalRunId,
+        requesterAgentId: "default",
+        childSessionKey: "agent:default:subagent:child",
+        requesterSessionKey: sessionKey,
+        requesterDisplayKey: "discord",
+        task: "review",
+        cleanup: "keep",
+        createdAt: 1,
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          requesterYieldBatch: true,
+          rearmGeneration: 1,
+          batchRunIds: ["pending-child"],
+        },
+      };
+      const batch = [child];
+      const runs = new Map([[child.runId, child]]);
+      const sessionEntry: SessionEntry = { sessionId, updatedAt: 1, lifecycleRevision: "original" };
+      loadSessionEntryMock.mockReturnValue(sessionEntry);
+      const { operationalRunInstance } = createTestAdmittedRunContext(originalRunId);
+      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      registerAgentRunContext(originalRunId, { sessionKey, sessionId, agentId: "default" });
+      const scope = createCronCreatorAuthorityCapability(
+        originalRunId,
+        { kind: "external", channel: "discord" },
+        { source: "channel-owner", isCurrent: () => true },
+      )!;
+      try {
+        await runWithCronCreatorAuthorityCapability(scope, () =>
+          withGatewayToolCallerIdentity(
+            {
+              agentId: "default",
+              sessionKey,
+              operationalRunInstance,
+              approvalAuthority: authority,
+            },
+            async () => {
+              const capture = captureRequesterCronAuthority({
+                requesterSessionKey: sessionKey,
+                requesterAgentId: "default",
+                requesterTurnRunId: originalRunId,
+                batch,
+                runs,
+              });
+              expect(capture).toBeDefined();
+              capture!.commit();
+            },
+          ),
+        );
+        promoteRequesterCronAuthority({
+          requesterTurnRunId: originalRunId,
+          batch,
+          rearmGeneration: 1,
+        });
+        const provenance =
+          kind === "inter-session"
+            ? { kind: "inter_session" as const, sourceTool: "sessions_send" }
+            : undefined;
+        const params = baseParams();
+        params.command.senderIsOwner = kind === "fresh-owner";
+        await runPrepared({
+          ...params,
+          conversation: undefined,
+          sessionKey,
+          sessionId,
+          sessionEntry,
+          ctx: {
+            ...createInboundTurn("new request", "discord", "group"),
+            SenderId: "sender",
+            InputProvenance: provenance,
+          },
+          sessionCtx: {
+            ...createSessionTurn("new request", "discord", "group"),
+            SenderId: "sender",
+            InputProvenance: provenance,
+          },
+          opts: {
+            isHeartbeat: kind === "heartbeat",
+            suppressNextUserMessagePersistence: kind === "replay",
+          },
+        });
+        expect(runReplyAgent).toHaveBeenCalledOnce();
+        await withRequesterCronAuthority(
+          {
+            requesterSessionKey: sessionKey,
+            requesterSessionId: sessionId,
+            requesterAgentId: "default",
+            batch,
+            rearmGeneration: 1,
+            runId: "successor",
+            isCurrent: () => true,
+          },
+          async () => {
+            const admission = consumeRequesterCronAuthorityAdmission({
+              runId: "successor",
+              sessionKey,
+              sessionId,
+              inputProvenance: {
+                kind: "inter_session",
+                sourceTool: "subagent_settle",
+                sourceSessionKey: child.childSessionKey,
+              },
+            });
+            expect(Boolean(admission)).toBe(kind !== "fresh-non-owner" && kind !== "fresh-owner");
+            if (admission) {
+              expect(admission.callerOrigin).toEqual({ kind: "unknown" });
+            }
+          },
+        );
+      } finally {
+        revokeRequesterCronAuthority(sessionKey);
+        releaseAgentRunDelegatedAuthority(authority);
+        clearAgentRunContext(originalRunId);
+      }
+    },
+  );
+  it.each([
+    "owner",
+    "owner-alias",
+    "non-owner",
+    "channel-allowlist",
+    "owner-wildcard",
+    "revoked-before-bind",
+    "room-event",
+    "spawned",
+    "heartbeat",
+    "inter-session",
+    "cron",
+    "replay",
+    "revoked",
+  ] as const)(
+    "admits configured Discord owner management through the reply ingress and real automation tool: %s",
+    async (kind) => {
+      const runId = "discord-owner-management";
+      const cfg =
+        kind === "channel-allowlist"
+          ? { channels: { discord: { allowFrom: ["owner-1"] } } }
+          : {
+              commands: { ownerAllowFrom: kind === "owner-wildcard" ? ["*"] : ["discord:owner-1"] },
+            };
+      const admitted = kind === "owner" || kind === "owner-alias" || kind === "revoked";
+      setRuntimeConfigSnapshot(cfg);
+      const { operationalRunInstance } = createTestAdmittedRunContext(runId);
+      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+      const identity: AgentRuntimeIdentity = {
+        kind: "agentRuntime",
+        agentId: "default",
+        sessionKey: "agent:default:discord:channel:123",
+        operationalRunInstance,
+        delegatedAuthority: { kind: "local", ...authority },
+      };
+      const calls: string[] = [];
+      vi.mocked(runReplyAgent).mockImplementationOnce(async ({ opts }) => {
+        await withGatewayToolCallerIdentity(
+          { ...identity, approvalAuthority: authority },
+          async () => {
+            if (kind === "revoked-before-bind") {
+              setRuntimeConfigSnapshot({});
+            }
+            const tool = createCronTool(
+              { runId: opts?.runId, agentSessionKey: identity.sessionKey },
+              {
+                callGatewayTool: async <T>(method: string) => {
+                  const grant = getGatewayToolCallerIdentity()?.cronManagementGrant;
+                  if (!admitted) {
+                    expect(grant).toBeUndefined();
+                    calls.push("restricted");
+                    return { jobs: [], total: 0, hasMore: false } as T;
+                  }
+                  expect(grant, "configured owner must receive a management grant").toBeDefined();
+                  return await withCronManagementGrant(grant!, identity, method, async () => {
+                    const assertActive = getCronManagementAuthority(identity)!;
+                    assertActive();
+                    await Promise.resolve();
+                    if (kind === "revoked") {
+                      setRuntimeConfigSnapshot({});
+                    }
+                    assertActive();
+                    calls.push(method);
+                    return { jobs: [], total: 0, hasMore: false } as T;
+                  });
+                },
+              },
+            );
+            if (kind === "revoked") {
+              await expect(tool.execute("list", { action: "list" })).rejects.toThrow(
+                "Automation admin grant",
+              );
+            } else {
+              await tool.execute("list", { action: "list" });
+            }
+          },
+        );
+        return undefined;
+      });
+      try {
+        const params = ownerParams();
+        params.command.senderId = "owner-1";
+        params.command.senderIsOwner = ![
+          "non-owner",
+          "channel-allowlist",
+          "owner-wildcard",
+        ].includes(kind);
+        const provenance =
+          kind === "inter-session"
+            ? { kind: "inter_session" as const, sourceTool: "sessions_send" }
+            : kind === "cron"
+              ? { kind: "internal_system" as const, sourceTool: "cron" }
+              : undefined;
+        await runPrepared({
+          ...params,
+          conversation: undefined,
+          cfg,
+          ctx: {
+            ...createInboundTurn("list automations", "discord", "group"),
+            SenderId: kind === "owner-alias" ? "transport-alias" : "owner-1",
+            InputProvenance: provenance,
+            InboundEventKind: kind === "room-event" ? "room_event" : undefined,
+          },
+          sessionCtx: {
+            ...createSessionTurn("list automations", "discord", "group"),
+            SenderId: kind === "owner-alias" ? "transport-alias" : "owner-1",
+            InputProvenance: provenance,
+            InboundEventKind: kind === "room-event" ? "room_event" : undefined,
+          },
+          sessionEntry:
+            kind === "spawned"
+              ? { sessionId: "spawned-session", updatedAt: 1, spawnedBy: "agent:parent:main" }
+              : undefined,
+          opts: {
+            runId,
+
+            isHeartbeat: kind === "heartbeat",
+            suppressNextUserMessagePersistence: kind === "replay",
+          },
+        });
+        expect(calls).toEqual(kind === "revoked" ? [] : admitted ? ["cron.list"] : ["restricted"]);
+      } finally {
+        releaseAgentRunDelegatedAuthority(authority);
+        clearRuntimeConfigSnapshot();
+      }
+    },
+  );
   beforeAll(async () => {
     // Preload the runtime seams directly so test setup does not need a synthetic
     // reply turn with registry and session side effects.

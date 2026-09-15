@@ -136,8 +136,13 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
         .poll(async () => readiness.textContent())
         .toContain("Connect a verified AI model");
       await expect.poll(async () => readiness.textContent()).toContain("Model required");
-      await expect.poll(async () => openaiCard.textContent()).toContain("Credentials configured");
-      await expect.poll(async () => openaiCard.textContent()).not.toContain("Signed in");
+      const providerReadiness = openaiCard.locator(".model-providers__head");
+      const profileStatus = openaiCard.locator(".model-providers__profile-status");
+      await expect
+        .poll(async () => providerReadiness.textContent())
+        .toContain("Credentials configured");
+      await expect.poll(async () => providerReadiness.textContent()).not.toContain("Signed in");
+      await expect.poll(async () => (await profileStatus.textContent())?.trim()).toBe("Signed in");
       expect(
         (await gateway.getRequests("models.list")).filter(
           (request) => (request.params as { view?: string } | undefined)?.view === "all",
@@ -179,7 +184,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       }
 
       await page.getByRole("button", { name: "Refresh", exact: true }).click();
-      await expect.poll(async () => openaiCard.textContent()).toContain("Credentials rejected");
+      await expect
+        .poll(async () => providerReadiness.textContent())
+        .toContain("Credentials rejected");
+      await expect
+        .poll(async () => (await profileStatus.textContent())?.trim())
+        .toBe("Credentials configured");
       expect(
         (await gateway.getRequests("models.list")).filter(
           (request) => (request.params as { view?: string } | undefined)?.view === "all",
@@ -938,7 +948,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}settings/model-providers`);
-      const agentPicker = page.locator(".agent-scope-control openclaw-agent-select");
+      const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       await agentPicker.locator('wa-dropdown-item[aria-label="Writer"]').click();
       await expect

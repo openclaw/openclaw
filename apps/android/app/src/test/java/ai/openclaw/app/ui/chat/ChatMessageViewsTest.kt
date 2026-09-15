@@ -48,6 +48,49 @@ class ChatMessageViewsTest {
   val composeRule = createComposeRule()
 
   @Test
+  fun representedFirstLinkSuppressesOnlyItsOriginalGenericPreview() {
+    val represented = setOf("https://example.com/guide", "https://example.org/guide")
+    composeRule.setContent {
+      ClawDesignTheme {
+        Column {
+          ChatMessageLinkPreview(
+            messageId = "across-blocks",
+            role = "assistant",
+            excludedUrls = represented,
+            content =
+              listOf(
+                ChatMessageContent(text = "[source](https://example.com/guide#section)"),
+                ChatMessageContent(text = "[session](https://gateway.example/chat/main/research)"),
+              ),
+          )
+          ChatMessageLinkPreview(
+            messageId = "same-block",
+            role = "assistant",
+            excludedUrls = represented,
+            content = listOf(ChatMessageContent(text = "[redirected source](https://example.org/guide#section) [session](https://gateway.example/chat/main/research)")),
+          )
+          ChatMessageLinkPreview(
+            messageId = "unrepresented-first",
+            role = "assistant",
+            excludedUrls = represented,
+            content = listOf(ChatMessageContent(text = "[issue](https://github.com/openclaw/openclaw/issues/123) [source](https://example.com/guide)")),
+          )
+          ChatMessageLinkPreview(
+            messageId = "user-link",
+            role = "user",
+            content = listOf(ChatMessageContent(text = "[article](https://reader.example/article)")),
+          )
+        }
+      }
+    }
+    composeRule.onAllNodesWithText("Preview · example.com").assertCountEquals(0)
+    composeRule.onAllNodesWithText("Preview · example.org").assertCountEquals(0)
+    composeRule.onAllNodesWithText("Preview · gateway.example").assertCountEquals(0)
+    composeRule.onNodeWithText("Preview · github.com").assertIsDisplayed()
+    composeRule.onNodeWithText("Preview · reader.example").assertIsDisplayed()
+  }
+
+  @Test
   fun transcriptBubblesExposeSpeakerWithoutReplacingMessageText() {
     val messages =
       listOf(

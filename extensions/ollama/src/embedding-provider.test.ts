@@ -347,8 +347,8 @@ describe("ollama embedding provider", () => {
           provider: providerId,
         }),
       ).rejects.toThrow(
-        `models.providers.${providerId}.${
-          surface === "headers" ? "headers.X-Proxy-Auth" : "apiKey"
+        `models.providers["${providerId}"].${
+          surface === "headers" ? 'headers["X-Proxy-Auth"]' : "apiKey"
         }`,
       );
       expect(fetchMock).not.toHaveBeenCalled();

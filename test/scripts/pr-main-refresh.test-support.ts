@@ -425,13 +425,15 @@ if (args[0] === 'pr' && args[1] === 'view') {
       } } } };
     } else if (args.some(arg => arg.includes('ref(qualifiedName:'))) {
       value = { data: { repository: {
-        id: 'fixture-repo', nameWithOwner: 'fixture/repo', url: 'https://github.com/fixture/repo',
+        id: 'fixture-repo', databaseId: 123, nameWithOwner: 'fixture/repo', url: 'https://github.com/fixture/repo',
         ref: { target: { oid: runGit(['-C', origin, 'rev-parse', 'refs/heads/main']) } },
         pullRequest: control.metadata,
       } } };
     } else {
       throw new Error('Unexpected GraphQL request');
     }
+  } else if (endpoint === 'repos/fixture/repo') {
+    value = { id: 123, node_id: 'fixture-repo', full_name: 'fixture/repo', html_url: 'https://github.com/fixture/repo' };
   } else if (endpoint === 'repos/fixture/repo/commits/${head}') {
     const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae', ${JSON.stringify(head)}]).split('\\n');
     value = { commit: { author: { name, email } }, author: { ...control.metadata.author, type: 'User' } };

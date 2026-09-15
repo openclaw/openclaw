@@ -77,6 +77,7 @@ afterEach(async () => {
 
 describe("persistent session roster", () => {
   it("round-trips durable sidebar fields while excluding live run state and avatars", async () => {
+    const writes = vi.spyOn(IDBObjectStore.prototype, "put");
     const row: GatewaySessionRow = {
       key: "agent:main:one",
       kind: "direct",
@@ -93,6 +94,10 @@ describe("persistent session roster", () => {
       owner: { actor: { type: "human", id: "profile-one", avatarUrl: "/avatar" } },
       hasActiveRun: true,
       activeRunIds: ["run"],
+      model: "primary",
+      modelProvider: "example",
+      activeModel: "fallback",
+      activeModelProvider: "example",
       status: "running",
       runtimeMs: 30,
       runtimeSampledAt: 40,
@@ -110,6 +115,8 @@ describe("persistent session roster", () => {
     const source = record("gateway-one", [row]);
     persistSessionRoster(source);
     await flushSessionRosters();
+    expect(writes).toHaveBeenCalledOnce();
+    expect(JSON.stringify(writes.mock.calls[0]?.[0])).not.toMatch(/activeModel/u);
     const saved = await sessionRosterCache.read(source.scope, expected);
     expect(saved).toMatchObject({
       groups: ["Work"],
@@ -128,16 +135,26 @@ describe("persistent session roster", () => {
             category: "Work",
             boardFace: "chat",
             thinkingLevel: "high",
+            model: "primary",
+            modelProvider: "example",
             owner: { actor: { type: "human", id: "profile-one" } },
           },
         ],
       },
     });
     expect(JSON.stringify(saved)).not.toMatch(
-      /hasActiveRun|activeRunIds|runtimeMs|runtimeSampledAt|swarmPhase|swarmLog|subagentRunState|hasActiveSubagentRun|avatarUrl|channelAvatarUrl|"status"/u,
+      /hasActiveRun|activeRunIds|activeModel|runtimeMs|runtimeSampledAt|swarmPhase|swarmLog|subagentRunState|hasActiveSubagentRun|avatarUrl|channelAvatarUrl|"status"/u,
     );
     expect(row.hasActiveRun).toBe(true);
     expect(await sessionRosterCache.read("gateway-two", expected)).toBeNull();
+    await putRaw(source);
+    const oldWriter = await sessionRosterCache.read(source.scope, expected);
+    expect(oldWriter?.result.sessions[0]).toMatchObject({
+      model: "primary",
+      modelProvider: "example",
+    });
+    expect(oldWriter?.result.sessions[0]).not.toHaveProperty("activeModel");
+    expect(oldWriter?.result.sessions[0]).not.toHaveProperty("activeModelProvider");
   });
 
   it("never persists Incognito rows and drops them from an older stored record", async () => {

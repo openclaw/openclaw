@@ -1860,27 +1860,65 @@ describe("createVideoGenerateTool", () => {
     expect(generateSpy).not.toHaveBeenCalled();
   });
 
-  it("attaches positional role hints to loaded reference assets", async () => {
-    mockVideoPluginProvider({
-      imageToVideo: { enabled: true, maxInputImages: 2 },
-    });
-    const generateSpy = mockSavedVideoResult();
-    const tool = createVideoPluginTool();
+  it.each([
+    {
+      name: "distinct images with explicit roles",
+      inputs: {
+        images: ["data:image/png;base64,Zmlyc3Q=", "data:image/png;base64,bGFzdA=="],
+        imageRoles: ["first_frame", "last_frame"],
+      },
+      expectedImages: ["first", "last"],
+      expectedRoles: ["first_frame", "last_frame"],
+    },
+    {
+      name: "repeated images with explicit roles",
+      inputs: {
+        images: ["data:image/png;base64,Zmlyc3Q=", "data:image/png;base64,Zmlyc3Q="],
+        imageRoles: ["first_frame", "last_frame"],
+      },
+      expectedImages: ["first", "first"],
+      expectedRoles: ["first_frame", "last_frame"],
+    },
+    {
+      name: "repeated images with provider-default roles",
+      inputs: {
+        images: ["data:image/png;base64,Zmlyc3Q=", "data:image/png;base64,Zmlyc3Q="],
+      },
+      expectedImages: ["first", "first"],
+      expectedRoles: [undefined, undefined],
+    },
+    {
+      name: "a repeated singular and plural image with explicit roles",
+      inputs: {
+        image: "data:image/png;base64,Zmlyc3Q=",
+        images: ["data:image/png;base64,Zmlyc3Q="],
+        imageRoles: ["first_frame", "last_frame"],
+      },
+      expectedImages: ["first", "first"],
+      expectedRoles: ["first_frame", "last_frame"],
+    },
+  ])(
+    "preserves reference positions for $name",
+    async ({ inputs, expectedImages, expectedRoles }) => {
+      mockVideoPluginProvider({
+        imageToVideo: { enabled: true, maxInputImages: 2 },
+      });
+      const generateSpy = mockSavedVideoResult();
+      const tool = createVideoPluginTool();
 
-    await tool.execute("call-1", {
-      prompt: "lobster",
-      images: ["data:image/png;base64,Zmlyc3Q=", "data:image/png;base64,bGFzdA=="],
-      imageRoles: ["first_frame", "last_frame"],
-    });
+      await tool.execute("call-1", {
+        prompt: "lobster",
+        ...inputs,
+      });
 
-    expect(generateSpy).toHaveBeenCalledTimes(1);
-    const call = firstMockCallArg(generateSpy) as {
-      inputImages?: Array<{ role?: string }>;
-    };
-    expect(call.inputImages).toHaveLength(2);
-    expect(call.inputImages?.[0]?.role).toBe("first_frame");
-    expect(call.inputImages?.[1]?.role).toBe("last_frame");
-  });
+      expect(generateSpy).toHaveBeenCalledTimes(1);
+      const call = firstMockCallArg(generateSpy) as {
+        inputImages?: Array<{ buffer: Buffer; role?: string }>;
+      };
+      expect(call.inputImages?.map((image) => image.buffer.toString())).toEqual(expectedImages);
+      expect(call.inputImages?.map((image) => image.role)).toEqual(expectedRoles);
+    },
+  );
 
   it("passes direct remote reference URLs to the provider without local media loading", async () => {
     mockVideoPluginProvider({

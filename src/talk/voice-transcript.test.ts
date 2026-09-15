@@ -91,4 +91,88 @@ describe("VoiceTranscriptOperationRegistry", () => {
     }
     expect(await explicit).toBe(true);
   });
+
+  it("skips recovery after later accepted work fails without leaving a pending task", async () => {
+    const registry = createVoiceTranscriptOperationRegistry(VOICE_TRANSCRIPT_QUEUE_POLICY);
+    const gate = createDeferred();
+    const entered = createDeferred();
+    const key = "agent\0late-failure";
+    const recovery = registry.close(
+      key,
+      async (trySeal) => {
+        entered.resolve();
+        await gate.promise;
+        return trySeal();
+      },
+      true,
+    );
+    await entered.promise;
+    const failure = new Error("failed before transcript reservation");
+    await expect(
+      registry.run(key, async () => {
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+    gate.resolve();
+    expect(await recovery).toBe(false);
+    await expect(registry.run(key, async () => "retry speech")).resolves.toBe("retry speech");
+  });
+
+  it("joins the accepted tail before releasing an explicit close after recovery fails", async () => {
+    const registry = createVoiceTranscriptOperationRegistry(VOICE_TRANSCRIPT_QUEUE_POLICY);
+    const key = "agent\0failed-recovery-tail";
+    const recoveryGate = createDeferred<boolean>();
+    const recovery = registry.close(key, () => recoveryGate.promise, true);
+    const recoveryFailure = new Error("recovery failed");
+    const recoveryResult = expect(recovery).rejects.toBe(recoveryFailure);
+    const tailGate = createDeferred();
+    const tail = registry.run(key, () => tailGate.promise);
+    const closeOperation = vi.fn(async () => true);
+    let settled = false;
+    const close = registry.close(key, closeOperation);
+    const closeResult = expect(close)
+      .rejects.toBe(recoveryFailure)
+      .then(() => {
+        settled = true;
+      });
+    try {
+      recoveryGate.reject(recoveryFailure);
+      await recoveryResult;
+      expect(settled).toBe(false);
+      await expect(registry.run(key, async () => "late speech")).rejects.toThrow(
+        "voice transcript persistence session is closing",
+      );
+    } finally {
+      tailGate.resolve();
+      await Promise.all([tail, closeResult]);
+    }
+    expect(closeOperation).not.toHaveBeenCalled();
+    await expect(registry.run(key, async () => "fresh owner")).resolves.toBe("fresh owner");
+  });
+
+  it("retains overflow after recovery skips the call", async () => {
+    const registry = createVoiceTranscriptOperationRegistry(VOICE_TRANSCRIPT_QUEUE_POLICY);
+    const key = "agent\0recovery-overflow";
+    const recoveryGate = createDeferred<boolean>();
+    const recovery = registry.close(key, () => recoveryGate.promise, true);
+    const first = createDeferred();
+    const accepted = [
+      registry.run(key, () => first.promise),
+      ...Array.from({ length: VOICE_TRANSCRIPT_QUEUE_POLICY.maxPendingCount }, () =>
+        registry.run(key, async () => undefined),
+      ),
+    ];
+    await expect(registry.run(key, async () => undefined)).rejects.toThrow(
+      "voice transcript persistence queue capacity exceeded",
+    );
+    recoveryGate.resolve(false);
+    expect(await recovery).toBe(false);
+    first.resolve();
+    await Promise.all(accepted);
+    await expect(registry.run(key, async () => "retry speech")).rejects.toThrow(
+      "voice transcript persistence queue capacity exceeded",
+    );
+    await registry.close(key, async () => true);
+    await expect(registry.run(key, async () => "fresh owner")).resolves.toBe("fresh owner");
+  });
 });

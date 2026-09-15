@@ -127,6 +127,14 @@ files stay in place, and restore reports why it cannot use them. Completed
 history archives do not block migration of the remaining backups.
 If cleanup stops after publishing a restorable backup, the next migration
 verifies the saved manifest and all copied files before removing the old copy.
+If no configured agent uses a legacy backup's recorded workspace, Doctor checks
+its post-cleanup result hashes against every configured agent's Workshop skills.
+Exactly one complete match identifies the owner even when the old workspace is
+gone. Empty, partial, changed, or ambiguous matches stay preserved; Doctor names
+the agents considered and their verification results. Follow the
+[manual backup recovery procedure](/tools/skill-workshop/collection-review#when-an-older-backup-cannot-be-restored-automatically)
+without changing the current workspace or rewriting the backup manifest.
+After a successful repair, restart the Gateway to clear its startup warning.
 Skills that were symlinked into a workspace stay where they are as workspace
 skills; the migration marks their proposals stale instead of moving them.
 

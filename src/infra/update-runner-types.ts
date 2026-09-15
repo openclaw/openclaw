@@ -118,6 +118,13 @@ export type UpdateStepProgress = {
   onStepComplete?: (step: UpdateStepCompletion) => void;
 };
 
+type GitUpdateTarget = {
+  sha?: string;
+  version?: string;
+  schemaVersions?: OpenClawSchemaVersions;
+  metadataUnreadable?: string;
+};
+
 export type UpdateRunnerOptions = {
   runId?: string;
   cwd?: string;
@@ -131,10 +138,7 @@ export type UpdateRunnerOptions = {
   /** Expose a new checkout only after target admission; subsequent work uses the published path. */
   publishGitCheckout?: () => Promise<string>;
   /** Read-only admission before executing a fetched candidate; never stops a service. */
-  inspectGitTarget?: (target: {
-    schemaVersions?: OpenClawSchemaVersions;
-    metadataUnreadable?: string;
-  }) => Promise<void>;
+  inspectGitTarget?: (target: GitUpdateTarget) => Promise<void>;
   /** Admit the built candidate after validation, before retention or activation. */
   inspectGitCandidate?: (candidateRoot: string) => Promise<void>;
   /** Admit required preparation after no-op detection, before allocating the candidate worktree. */
@@ -147,10 +151,7 @@ export type UpdateRunnerOptions = {
     candidateSha: string,
     env: NodeJS.ProcessEnv | undefined,
   ) => Promise<void>;
-  beforeGitMutation?: (target: {
-    schemaVersions?: OpenClawSchemaVersions;
-    metadataUnreadable?: string;
-  }) => Promise<{
+  beforeGitMutation?: (target: GitUpdateTarget) => Promise<{
     allowGatewayServiceRepair?: boolean;
     allowGatewayActivation?: boolean;
   } | void>;

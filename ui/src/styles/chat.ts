@@ -9,6 +9,7 @@ import "./sidebar-markdown.css";
 import "./chat/grouped.css";
 import "./chat/working-indicator.css";
 import "./chat/tool-cards.css";
+import "./chat/source-previews.css";
 import "./chat/question-card.css";
 import "./chat/sidebar.css";
 import "./chat/split-view.css";

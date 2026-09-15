@@ -8,6 +8,17 @@ Dashboard widgets and browser panels load inside the app. Browser tabs belong to
 
 Reading tabs share a private browser session, isolated from the dashboard's native commands and authentication scripts. Closing every reading tab, switching Gateways, or quitting the app ends that private session. Reloading the dashboard retains its tabs. Sign-in links and **Open in browser** continue to use your system browser.
 
+Startup, setup, connection recovery, Manage Gateways, and Quick Chat share the
+web UI's typography and light/dark palettes. They follow system appearance changes
+while open, preserving connection drafts, credential visibility, and Quick Chat
+replies. The connected dashboard retains its own web UI appearance setting.
+
+During remote setup or in Connection Settings, choose token or password under
+**Authentication**. **Show credential** reveals only what you entered; changing
+authentication types clears that draft and masks the new field. Press Enter or
+**Connect to Gateway** to connect. Leave credentials blank in Connection Settings
+to reuse saved credentials for the same endpoint.
+
 The tray's **Stop Gateway** and **Restart Gateway** actions request graceful shutdown. Running work can delay completion; **Start Gateway** brings a stopped local Gateway back online.
 
 After a connection drops, the companion keeps reconnecting while the service state is unknown. **Start Gateway** remains available only for a confirmed stopped service.
@@ -225,9 +236,6 @@ dashboard does not prove Gateway availability or successful authentication; chec
 the dashboard for HTTP errors, authentication prompts, and Gateway readiness.
 
 ### Switching Gateways
-
-The Gateway manager follows your system's light or dark appearance, including
-changes made while it is open, without interrupting an unsaved connection form.
 
 Use **Gateways → Manage Gateways…** in the app or tray menu to save a direct URL
 or SSH connection. **Add Gateway** and **Edit** open a focused connection form;

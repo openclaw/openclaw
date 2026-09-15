@@ -171,6 +171,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
         return;
       }
     }
+    const exitCode = isRecord(error) && typeof error.exitCode === "number" ? error.exitCode : null;
     const redaction = { env: process.env, stateDir: resolveStateDir() };
     const failureFacts = doctorResult?.failureFacts?.length
       ? doctorResult.failureFacts
@@ -208,13 +209,13 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       throw new UpdateDoctorError(
         `Updated ${params.phase} Doctor failed:\n${details.join("\n")}`,
         failureFacts,
-        { cause: error },
+        { cause: error, exitCode },
       );
     }
     throw new UpdateDoctorError(
       error instanceof Error ? error.message : String(error),
       failureFacts,
-      { cause: error },
+      { cause: error, exitCode },
     );
   } finally {
     doctorResult ??= await consumeUpdatePostInstallDoctorResult(doctorResultPath);

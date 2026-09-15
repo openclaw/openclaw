@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync, constants } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -18,6 +19,7 @@ import {
   loadSubagentRunsForControllerFromSqlite,
   loadSubagentRegistryFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
+  loadSubagentSessionListRunsForSessionsFromSqlite,
   saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry.store.sqlite.js";
@@ -142,6 +144,59 @@ describe("subagent registry sqlite store", () => {
     }
     return await withEnvAsync({ OPENCLAW_STATE_DIR: tempStateDir }, fn);
   }
+
+  it("keeps identity selection and metadata in one snapshot across an external move", async () => {
+    await withTempStateEnv(async () => {
+      const run = createRun({ model: "original-model" });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+      const { db, path: databasePath } = openOpenClawStateDatabase();
+      const writer = new DatabaseSync(databasePath);
+      let moved = false;
+      db.setAuthorizer((action, table, column) => {
+        if (
+          !moved &&
+          action === constants.SQLITE_READ &&
+          table === "subagent_runs" &&
+          column === "payload_json"
+        ) {
+          moved = true;
+          writer
+            .prepare(
+              "UPDATE subagent_runs SET requester_session_key = ?, payload_json = ? WHERE run_id = ?",
+            )
+            .run(
+              "agent:main:other",
+              JSON.stringify({ ...run, model: "replacement-model" }),
+              run.runId,
+            );
+        }
+        return constants.SQLITE_OK;
+      });
+      try {
+        const before = loadSubagentSessionListRunsForSessionsFromSqlite(
+          [run.requesterSessionKey],
+          [],
+        );
+        expect(moved).toBe(true);
+        expect(before.runs.get(run.runId)).toMatchObject({
+          requesterSessionKey: run.requesterSessionKey,
+          model: "original-model",
+        });
+        db.setAuthorizer(null);
+        expect(
+          loadSubagentSessionListRunsForSessionsFromSqlite([run.requesterSessionKey], []).runs.size,
+        ).toBe(0);
+        expect(
+          loadSubagentSessionListRunsForSessionsFromSqlite(["agent:main:other"], []).runs.get(
+            run.runId,
+          )?.model,
+        ).toBe("replacement-model");
+      } finally {
+        db.setAuthorizer(null);
+        writer.close();
+      }
+    });
+  });
 
   it.each(["pending", "in_progress", "delivered", "failed", "suspended"] as const)(
     "preserves private %s handoffs across every current reader and restart",

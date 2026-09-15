@@ -115,7 +115,7 @@ export function projectGatewaySessionRunState(params: {
   const liveSubagentRunActive = isSubagentRunLive(subagentRun) || isSubagentRunQueued(subagentRun);
   const hasActiveSubagentRun =
     liveSubagentRunActive || subagentRuns.countActiveDescendantRuns(key) > 0;
-  const persistedSessionStatus = entry?.status;
+  const persistedSessionStatus = entry?.status === "interrupted" ? "failed" : entry?.status;
   const persistedSessionEndedAt = entry?.endedAt;
   const persistedSessionStartedAt = entry?.startedAt;
   const persistedSessionRuntimeMs = entry?.runtimeMs;
@@ -163,7 +163,7 @@ export function projectGatewaySessionRunState(params: {
     GatewaySessionRow,
     "status" | "subagentRunState" | "hasActiveSubagentRun" | "startedAt" | "endedAt" | "runtimeMs"
   > = {
-    status: subagentRun ? subagentStatus : entry?.status,
+    status: subagentRun ? subagentStatus : persistedSessionStatus,
     subagentRunState,
     hasActiveSubagentRun: subagentRun || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,

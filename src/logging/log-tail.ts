@@ -125,7 +125,17 @@ async function readLogSlice(params: {
     };
   }
 
-  const handle = await fs.open(params.file, "r");
+  const handle = await fs.open(params.file, "r").catch(missingPathToNull);
+  if (!handle) {
+    // Rotation can remove the path after stat; retain the existing missing-file contract.
+    return {
+      cursor: 0,
+      size: 0,
+      lines: [],
+      truncated: false,
+      reset: cursor != null && cursor > 0,
+    };
+  }
   try {
     let prefix = "";
     if (start > 0) {

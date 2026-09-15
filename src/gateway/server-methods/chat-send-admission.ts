@@ -682,6 +682,7 @@ export async function admitChatSend(params: {
     respond(true, payload, undefined, { runId: clientRunId });
   };
   claimAgentRunContext(clientRunId, {
+    agentId: selectedAgent.agentId ?? agentId,
     sessionKey,
     sessionId: admittedSessionId,
     lifecycleGeneration,
@@ -732,7 +733,5 @@ export async function admitChatSend(params: {
   };
 }
 
-export type AdmittedChatSend = Extract<
-  Awaited<ReturnType<typeof admitChatSend>>,
-  { ok: true }
->["value"];
+type ChatSendAdmissionResult = Awaited<ReturnType<typeof admitChatSend>>;
+export type AdmittedChatSend = Extract<ChatSendAdmissionResult, { ok: true }>["value"];

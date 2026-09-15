@@ -2,7 +2,10 @@ import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
-import { preparePersistedInstalledPluginIndexCacheEntry } from "../plugins/installed-plugin-index-record-state.js";
+import {
+  preparePersistedInstalledPluginIndexCacheEntry,
+  preparePluginMetadataMachineState,
+} from "../plugins/installed-plugin-index-record-state.js";
 import {
   loadPluginManifestRegistryCore,
   type PluginManifestRegistry,
@@ -181,6 +184,10 @@ export function resolveConfigWidePluginMetadataSnapshot(
 function resolveConfigWidePluginMetadataSnapshotInScope(
   params: ResolveConfigWidePluginMetadataParams,
 ): PluginMetadataSnapshot {
+  const env = params.env ?? process.env;
+  if (params.installRecords === undefined) {
+    preparePluginMetadataMachineState({ env, stateDir: params.stateDir });
+  }
   const { key, workspaceDirs } = resolveConfigWideMetadataSelection(params);
   const cache = getPluginCache();
   const cached = cache.metadata.snapshots.get(key);

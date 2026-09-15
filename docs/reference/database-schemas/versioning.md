@@ -42,6 +42,22 @@ never guesses their owner. Confirmed process-exit settlement uses existing task
 terminal fields and retention rules. Downgrading code does not undo a terminal
 outcome already recorded by restore.
 
+Retained ACP imports use the same-version additive-column exception for the bare
+nullable `session_nodes.legacy_acp_migration_json TEXT` column. Legacy session
+import ensures it on first use and records exact source-component provenance;
+ordinary session edits preserve it, and canonical-key repairs carry it with the
+session. Canonical ACP initialization or closure consumes those components in
+the existing shared-state migration ledger, atomically with the ACP mutation.
+A later Doctor retry reads that completion fact instead of treating an absent
+ACP row as permission to restore legacy metadata. Missing provenance remains
+unknown; readers do not create the column or reconstruct it from legacy files.
+The column follows its session's lifetime, while completed receipts retain the
+existing migration-ledger lifecycle. No schema-version bump is required.
+
+Older same-version readers can ignore the nullable column and open the database.
+Older ACP writers do not record this supersession; complete pending migrations
+before returning to an older writer when that protection is needed.
+
 [Cold transcript storage](/reference/database-schemas/agent-schema-history#cold-transcript-storage)
 requires agent schema 20 even though it adds a companion table. Older readers
 would interpret extracted transcript rows as missing history and cannot safely

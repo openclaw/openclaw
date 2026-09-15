@@ -62,6 +62,38 @@ afterEach(() => {
 });
 
 describe("attachment sidebar source ownership", () => {
+  it("preserves an ordinary comment-named file when its source cannot be previewed", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenSidebar = vi.fn();
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: "selection-comment.txt",
+              mimeType: "text/plain",
+              url: "https://files.example/notes.txt",
+            },
+          },
+        ],
+        {},
+        onOpenSidebar,
+        undefined,
+        false,
+      ),
+      container,
+    );
+    await vi.waitFor(() =>
+      expect(
+        container.querySelector(".chat-assistant-attachment-card__title")?.textContent,
+      ).toContain("selection-comment.txt"),
+    );
+    container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+    expect(onOpenSidebar).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ["sample-image.png", "image/png", "https://example.com/sample-image.png"],
     ["photo.jpg", "image/jpeg", "https://example.com/photo.jpg"],

@@ -4,13 +4,17 @@ import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import { isRetainedExecutionOwnerBinding } from "../../audit/execution-owner-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { recordSubagentTerminalState } from "../../sessions/session-state-events.js";
 import {
   createRunningTaskRun,
   completeTaskRunByRunId,
   failTaskRunByRunId,
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
-import { createNextAcpTaskBackingDetail } from "../../tasks/task-backing-authority.js";
+import {
+  createNextAcpTaskBackingDetail,
+  readTaskBackingInstance,
+} from "../../tasks/task-backing-authority.js";
 import { resolveRequiredCompletionTerminalResult } from "../../tasks/task-completion-contract.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
 import { listTasksForRelatedSessionKey } from "../../tasks/task-registry-query.js";
@@ -21,7 +25,7 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "./manager.turn-timeout.js";
-import type { AcpSessionManagerDeps } from "./manager.types.js";
+import type { AcpRunTurnInput, AcpSessionManagerDeps } from "./manager.types.js";
 import { resolveAcpSessionTarget } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
 
@@ -217,6 +221,63 @@ export function createBackgroundTaskRecord(
     );
     return undefined;
   }
+}
+
+/** Mirrors a cancelled actor wait without replacing a same-id predecessor's task. */
+export function recordQueuedBackgroundTaskCancellation(params: {
+  input: AcpRunTurnInput;
+  deps: AcpSessionManagerDeps;
+  sessionKey: string;
+  agentId: string;
+  startedAt: number;
+}): void {
+  if (params.input.mode !== "prompt") {
+    return;
+  }
+  const { input, sessionKey, agentId } = params;
+  const instanceId = input.admittedRunContext.operationalRunInstance.instanceId;
+  const existing = listTasksForRelatedSessionKey(sessionKey, agentId).filter(
+    (task) =>
+      task.runtime === "acp" &&
+      task.childSessionKey === sessionKey &&
+      task.runId === input.requestId,
+  );
+  // Actor-wait cancellation bypasses serialization. It must not overwrite task
+  // custody retained by an earlier operational instance with the same request id.
+  if (
+    existing.some((task) => {
+      const backing = readTaskBackingInstance(task.detail);
+      return backing?.runtime !== "acp" || backing.instanceId !== instanceId;
+    })
+  ) {
+    return;
+  }
+  const context = resolveBackgroundTaskContext({
+    ...params,
+    cfg: input.cfg,
+    requestId: input.requestId,
+    text: input.text,
+  });
+  if (
+    !context ||
+    (existing.length === 0 && !createBackgroundTaskRecord(context, params.startedAt, instanceId))
+  ) {
+    return;
+  }
+  markBackgroundTaskTerminal(context.runId, {
+    sessionKey,
+    status: "cancelled",
+    endedAt: Date.now(),
+    lastEventAt: Date.now(),
+    progressSummary: null,
+    terminalSummary: null,
+  });
+  recordSubagentTerminalState({
+    childSessionKey: sessionKey,
+    runId: context.runId,
+    requesterSessionKey: context.requesterSessionKey,
+    outcomeStatus: "cancelled",
+  });
 }
 
 /** Links ACP owner rows only when the runtime reaches its prompt-submitted boundary. */

@@ -211,17 +211,16 @@ export async function cancelTaskById(params: {
           // Current rows carry taskKind before their runner publishes a child
           // session. Only an unmarked childless row is legacy cleanup state.
         }
-      } else if (!childSessionKey) {
-        if (!isHarnessOwnedSubagentTask(task)) {
-          return notCancelled("Task has no cancellable child session.");
-        }
       }
       if (task.runtime === "cron") {
         // The live cron service owns the abort signal; registry finalization below
         // keeps CLI/Gateway callers aligned while the run unwinds.
       } else if (!childSessionKey) {
-        // Harness-mirrored rows have no OpenClaw child session to terminate.
-        // Cancellation clears only their task-registry record.
+        return notCancelled(
+          isHarnessOwnedSubagentTask(task)
+            ? "This subagent is controlled by its native harness. Use the parent session's native collaboration tools to stop it."
+            : "Task has no cancellable child session.",
+        );
       } else if (task.runtime === "acp") {
         const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
         await getAcpSessionManager().cancelSession({

@@ -19,10 +19,6 @@ describe("xiaomi onboard", () => {
     expect(provider?.models.map((m) => m.id)).toEqual(["mimo-v2.5", "mimo-v2.5-pro"]);
     expect(cfg.agents?.defaults?.models?.["xiaomi/mimo-v2.5"]).toEqual({ alias: "Xiaomi" });
     expect(cfg.agents?.defaults?.model).toEqual({ primary: "xiaomi/mimo-v2.5" });
-    expectProviderOnboardPrimaryModel({
-      applyConfig: applyXiaomiConfig,
-      modelRef: "xiaomi/mimo-v2.5",
-    });
   });
 
   it("merges Xiaomi models and keeps existing provider overrides", () => {

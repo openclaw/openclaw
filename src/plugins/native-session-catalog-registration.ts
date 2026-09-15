@@ -4,6 +4,7 @@ import {
   hasLegacyNativeSessionCatalogDefault,
   readNativeSessionCatalogPreference,
 } from "./native-session-catalog-config.js";
+import { runPluginCleanup } from "./plugin-instance-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type { OpenClawPluginNodeHostCommand } from "./types.node-host.js";
@@ -24,6 +25,41 @@ function hasReadableNativeCatalogConfig(): boolean {
   }
 }
 
+function guardCatalogListOperation(
+  initialOperation:
+    | ReturnType<NonNullable<SessionCatalogProvider["createListOperation"]>>
+    | undefined,
+  assertEnabled: () => void,
+): ReturnType<NonNullable<SessionCatalogProvider["createListOperation"]>> {
+  let operation = initialOperation;
+  let closed = false;
+  return {
+    async next() {
+      if (closed) {
+        throw new Error("Session catalog list operation is closed");
+      }
+      if (!operation) {
+        return { done: true, hosts: [] };
+      }
+      assertEnabled();
+      const step = await operation.next();
+      assertEnabled();
+      return step;
+    },
+    close() {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      const closing = operation;
+      operation = undefined;
+      if (closing) {
+        runPluginCleanup(closing, () => closing.close());
+      }
+    },
+  };
+}
+
 export function createNativeSessionCatalogGate(params: {
   pluginId: string;
   getConfig: PluginRuntime["config"]["current"];
@@ -42,6 +78,7 @@ export function createNativeSessionCatalogGate(params: {
   return {
     catalog(provider: SessionCatalogProvider): SessionCatalogProvider {
       const {
+        createListOperation,
         continueSession,
         copyToGatewaySession,
         archive,
@@ -51,6 +88,15 @@ export function createNativeSessionCatalogGate(params: {
       return {
         ...provider,
         list: async (query) => (enabled() ? provider.list(query) : []),
+        ...(createListOperation
+          ? {
+              createListOperation: (query) =>
+                guardCatalogListOperation(
+                  enabled() ? createListOperation.call(provider, query) : undefined,
+                  assertEnabled,
+                ),
+            }
+          : {}),
         read: async (request) => {
           assertEnabled();
           return provider.read(request);

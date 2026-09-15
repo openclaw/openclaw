@@ -275,8 +275,12 @@ export function resolveSessionResetCommand(params: {
     const triggerLower = normalizeLowercaseStringOrEmpty(trigger);
     if (
       !triggerLower ||
-      (normalizedResetBodyLower !== triggerLower &&
-        !normalizedResetBodyLower.startsWith(`${triggerLower} `))
+      ![triggerLower, normalizeLowercaseStringOrEmpty(normalizeCommandBody(trigger))].some(
+        (candidate) =>
+          normalizedResetBodyLower === candidate ||
+          (normalizedResetBodyLower.startsWith(candidate) &&
+            /\s/.test(normalizedResetBodyLower.charAt(candidate.length))),
+      )
     ) {
       continue;
     }

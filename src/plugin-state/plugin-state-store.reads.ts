@@ -2,7 +2,9 @@ import { toUSVString } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { executeSqliteQuerySync, sqliteStringSet } from "../infra/kysely-sync.js";
 import {
+  createPluginStateError,
   getPluginStateKysely,
+  selectPluginStateEntriesInKeyRange,
   iteratePluginStateEntries,
   parseStoredJson,
   rowToEntry,
@@ -67,4 +69,41 @@ export function listPluginStateEntries(
     throw decodeFailure.error;
   }
   return entries;
+}
+
+export type PluginStateKeyRangeParams = {
+  pluginId: string;
+  namespace: string;
+  keyStartInclusive: string;
+  keyEndExclusive: string;
+  limit: number;
+  order?: "asc" | "desc";
+};
+
+export function validatePluginStateKeyRange(params: PluginStateKeyRangeParams): void {
+  if (!Number.isSafeInteger(params.limit) || params.limit < 1) {
+    throw createPluginStateError({
+      code: "PLUGIN_STATE_INVALID_INPUT",
+      operation: "entries",
+      message: "Plugin state key-range limit must be a positive safe integer.",
+    });
+  }
+  if (params.keyStartInclusive >= params.keyEndExclusive) {
+    throw createPluginStateError({
+      code: "PLUGIN_STATE_INVALID_INPUT",
+      operation: "entries",
+      message: "Plugin state key range must have an increasing exclusive upper bound.",
+    });
+  }
+}
+
+export function listPluginStateEntriesInKeyRange(
+  store: PluginStateDatabase,
+  params: PluginStateKeyRangeParams,
+): PluginStateEntry<unknown>[] {
+  return selectPluginStateEntriesInKeyRange(store.db, {
+    ...params,
+    order: params.order ?? "asc",
+    now: Date.now(),
+  }).map((row) => rowToEntry(row, "entries", store.path));
 }

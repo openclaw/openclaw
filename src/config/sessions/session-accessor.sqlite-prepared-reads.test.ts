@@ -3,7 +3,7 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js";
-import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
+import { SESSION_OWNER_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import { sessionParticipantsSchemaSql } from "../../state/openclaw-agent-session-participants-schema.js";
 import {
   readExactSessionEntryJson,
@@ -57,7 +57,7 @@ function createDatabase(filename = ":memory:") {
 }
 
 function addOwnerColumns(db: DatabaseSync) {
-  for (const { columnName, dataType } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+  for (const { columnName, dataType } of SESSION_OWNER_COLUMN_DEFINITIONS) {
     db.exec(`ALTER TABLE session_nodes ADD COLUMN ${columnName} ${dataType}`);
   }
 }
@@ -109,7 +109,7 @@ describe("prepared session entry reads", () => {
       expect(read()?.owner?.actor).toEqual({ type: "human", id: ownerId });
       database.db.prepare("UPDATE session_nodes SET owner_actor_id = 'current-owner'").run();
       expect(read()?.owner?.actor.id).toBe("current-owner");
-      for (const { columnName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+      for (const { columnName } of SESSION_OWNER_COLUMN_DEFINITIONS) {
         database.db.exec(`ALTER TABLE session_nodes DROP COLUMN ${columnName}`);
       }
       expect(read()?.owner).toBeUndefined();

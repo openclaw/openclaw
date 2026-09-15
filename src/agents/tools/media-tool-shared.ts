@@ -453,7 +453,7 @@ export function resolveGenerateAction(
 }
 
 /**
- * Normalizes singular/plural media reference parameters into a deduped, bounded list.
+ * Normalizes singular/plural media references, preserving positions when requested.
  */
 export function normalizeMediaReferenceInputs(params: {
   args: Record<string, unknown>;
@@ -461,6 +461,7 @@ export function normalizeMediaReferenceInputs(params: {
   pluralKey: string;
   maxCount: number;
   label: string;
+  dedupe?: boolean;
 }): string[] {
   const single = readToolStringParam(params.args, params.singularKey);
   const multiple = readStringArrayParam(params.args, params.pluralKey);
@@ -470,7 +471,7 @@ export function normalizeMediaReferenceInputs(params: {
   for (const candidate of combined) {
     const trimmed = candidate.trim();
     const dedupe = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
-    if (!dedupe || seen.has(dedupe)) {
+    if (!dedupe || (params.dedupe !== false && seen.has(dedupe))) {
       continue;
     }
     seen.add(dedupe);

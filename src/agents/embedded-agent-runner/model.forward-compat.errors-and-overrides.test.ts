@@ -27,7 +27,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 }));
 
 vi.mock("../auth-profiles.js", () => ({
-  ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
+  loadAuthProfileStoreForRuntime: () => ({ version: 1, profiles: {} }),
   resolveAuthProfileOrder: () => [],
 }));
 

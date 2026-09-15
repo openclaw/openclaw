@@ -459,6 +459,8 @@ export function setControlUiPluginAuthCookieForRequest(
   if (grants.length > 0) {
     return setControlUiPluginAuthCookie(res, grants, {
       generation: authGeneration,
+      basePath: getRuntimeConfig().gateway?.controlUi?.basePath,
+      request: req,
       ...(authenticatedProfileId ? { profileId: authenticatedProfileId } : {}),
     });
   }

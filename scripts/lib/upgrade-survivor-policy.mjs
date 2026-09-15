@@ -10,6 +10,7 @@ const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
   "channel-post-core-restore",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
+  "missing-configured-plugin-migration",
   "custom-plugin-siblings",
   "stale-source-plugin-shadow",
   "prerelease-plugin-registry",
@@ -53,6 +54,7 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
   (scenario) =>
     scenario !== "msteams-polls" &&
     scenario !== "abandoned-update" &&
+    scenario !== "missing-configured-plugin-migration" &&
     scenario !== "mobile-pairing-reconnect" &&
     scenario !== "watchos-direct-node" &&
     scenario !== "prerelease-plugin-registry" &&
@@ -148,7 +150,7 @@ function comparePublishedReleaseVersion(a, b) {
 
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
   const version = parsePublishedReleaseVersion(baselineSpec);
-  if (scenario === "abandoned-update") {
+  if (scenario === "abandoned-update" || scenario === "missing-configured-plugin-migration") {
     return baselineSpec === "openclaw@2026.9.2";
   }
   const minimumBaseline = scenarioMinimumBaselines.get(scenario);

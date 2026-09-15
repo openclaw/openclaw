@@ -104,6 +104,39 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(getComputedStyle(scroller).overflowX).toBe("auto");
   });
 
+  it("wraps long lines at the panel width when word wrap is on and remembers the choice", async () => {
+    localStorage.removeItem("openclaw.control.fileView.wrap.v1");
+    const panel = await mountFile(
+      {
+        kind: "file",
+        path: "src/long-line.ts",
+        name: "long-line.ts",
+        content: `export const value = "${"long-content-".repeat(80)}";`,
+      },
+      320,
+    );
+    const scroller = panel.querySelector<HTMLElement>(".cm-scroller")!;
+    await expect.poll(() => scroller.scrollWidth).toBeGreaterThan(scroller.clientWidth);
+
+    const wrapButton = button(panel, "Enable word wrap");
+    expect(wrapButton.getAttribute("aria-pressed")).toBe("false");
+    await userEvent.click(wrapButton);
+
+    await expect.poll(() => scroller.scrollWidth).toBeLessThanOrEqual(scroller.clientWidth);
+    // One logical line now occupies several visual rows.
+    const line = panel.querySelector<HTMLElement>(".cm-line")!;
+    expect(line.getBoundingClientRect().height).toBeGreaterThan(
+      Number.parseFloat(getComputedStyle(line).lineHeight) * 2,
+    );
+    expect(button(panel, "Disable word wrap").getAttribute("aria-pressed")).toBe("true");
+    expect(localStorage.getItem("openclaw.control.fileView.wrap.v1")).toBe("true");
+
+    await userEvent.click(button(panel, "Disable word wrap"));
+    await expect.poll(() => scroller.scrollWidth).toBeGreaterThan(scroller.clientWidth);
+    expect(localStorage.getItem("openclaw.control.fileView.wrap.v1")).toBe("false");
+    localStorage.removeItem("openclaw.control.fileView.wrap.v1");
+  });
+
   it("renders content and decorates the requested line", async () => {
     const panel = await mountFile({
       kind: "file",
@@ -116,6 +149,35 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(panel.querySelector(".cm-content")?.textContent).toContain("const second = 2;");
     const target = panel.querySelector(".file-view__line--target");
     expect(target?.getAttribute("data-line")).toBe("2");
+  });
+
+  it.each([
+    { name: "LF", content: "first\nneedle\nlast\nneedle\n", matchLines: [1, 3] },
+    { name: "CRLF", content: "first\r\nneedle\r\nlast\r\nneedle\r\n", matchLines: [1, 3] },
+    { name: "CR", content: "first\rneedle\rlast\rneedle\r", matchLines: [1, 3] },
+    { name: "mixed CRLF first", content: "first\r\nneedle\rlast\r\nneedle", matchLines: [1, 2] },
+    { name: "mixed LF first", content: "first\nneedle\rlast\r\nneedle", matchLines: [1, 3] },
+  ])("searches the displayed lines in $name files", async ({ content, matchLines }) => {
+    const panel = await mountFile({
+      kind: "file",
+      path: "search.txt",
+      name: "search.txt",
+      draftKey: crypto.randomUUID(),
+      content,
+    });
+    await userEvent.click(button(panel, "Search in file"));
+    await userEvent.fill(panel.querySelector<HTMLInputElement>('input[type="search"]')!, "needle");
+    const lineIndexes = (selector: string) => {
+      const lines = Array.from(panel.querySelectorAll(".cm-line"));
+      return Array.from(panel.querySelectorAll(selector), (line) => lines.indexOf(line));
+    };
+    await expect.poll(() => lineIndexes(".file-view__line--match")).toEqual(matchLines);
+    expect(panel.querySelector(".file-view__search-counter")?.textContent?.trim()).toBe("1/2");
+    expect(lineIndexes(".file-view__line--current")).toEqual([matchLines[0]]);
+    await userEvent.click(button(panel, "Next match"));
+    await expect.poll(() => lineIndexes(".file-view__line--current")).toEqual([matchLines[1]]);
+    await userEvent.click(button(panel, "Previous match"));
+    await expect.poll(() => lineIndexes(".file-view__line--current")).toEqual([matchLines[0]]);
   });
 
   it("enables save after an edit and keeps the saved content", async () => {
@@ -142,29 +204,31 @@ describe.runIf(browserMode)("chat file editor", () => {
     expect(panel.querySelector(".cm-content")?.textContent).toContain("after");
   });
 
-  it("round-trips CRLF line endings through an edit and save", async () => {
-    const save = vi.fn().mockResolvedValue({ ok: true, hash: "hash-2" });
-    const panel = await mountFile({
-      kind: "file",
-      path: "notes.txt",
-      name: "notes.txt",
-      content: "alpha\r\nbeta",
-      edit: { hash: "hash-1", save, fetchLatest: vi.fn() },
-    });
+  it.each(["\n", "\r\n", "\r"])(
+    "round-trips %j line endings through an edit and save",
+    async (separator) => {
+      const save = vi.fn().mockResolvedValue({ ok: true, hash: "hash-2" });
+      const panel = await mountFile({
+        kind: "file",
+        path: "notes.txt",
+        name: "notes.txt",
+        content: `alpha${separator}beta`,
+        edit: { hash: "hash-1", save, fetchLatest: vi.fn() },
+      });
 
-    await userEvent.click(button(panel, "Edit file"));
-    const editor = panel.querySelector<HTMLElement>(".cm-content");
-    expect(editor).not.toBeNull();
-    await userEvent.type(editor!, "x");
-    await userEvent.click(button(panel, "Save"));
+      await userEvent.click(button(panel, "Edit file"));
+      const editor = panel.querySelector<HTMLElement>(".cm-content");
+      expect(editor).not.toBeNull();
+      await userEvent.type(editor!, "x");
+      await userEvent.click(button(panel, "Save"));
 
-    await expect.poll(() => save.mock.calls.length).toBe(1);
-    const saved = expectDefined(save.mock.calls[0], "save callback call")[0] as {
-      content: string;
-    };
-    expect(saved.content).toContain("\r\n");
-    expect(saved.content).toContain("x");
-  });
+      await expect.poll(() => save.mock.calls.length).toBe(1);
+      const saved = expectDefined(save.mock.calls[0], "save callback call")[0] as {
+        content: string;
+      };
+      expect(saved.content).toBe(`xalpha${separator}beta`);
+    },
+  );
 
   it("keeps edits made while a save is in flight dirty", async () => {
     let finishSave: ((outcome: { ok: true; hash: string }) => void) | undefined;

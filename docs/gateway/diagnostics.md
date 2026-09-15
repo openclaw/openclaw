@@ -205,6 +205,44 @@ openclaw gateway stability --bundle latest --export
 
 Persisted bundles live under `~/.openclaw/logs/stability/` when events exist.
 
+## CPU profile
+
+An operator with `operator.admin` can request one in-memory profile of the Gateway's
+main JavaScript isolate:
+
+```bash
+openclaw gateway call diagnostics.cpuProfile --params '{}' --timeout 30000 --json
+```
+
+This Node-only RPC requests five seconds of sampling at a 10 ms interval. It opens
+no debugger port and sends no process signal. A disconnected caller or Gateway
+shutdown cancels the capture and runs profiler cleanup. Overlapping requests fail
+instead of queuing. No profile is written to disk or included in diagnostics exports.
+
+The result contains `profile` in V8 CPU-profile format, `requestedDurationMs`,
+`actualDurationMs`, `samplingIntervalMicros`, `redactedNodeCount`, and
+`sampleLossCount: null` because V8 does not expose an explicit lost-sample count.
+The complete result is limited to 1 MiB; larger profiles fail without truncating
+nodes or samples. Code locations inside the OpenClaw package use `openclaw:` paths;
+Node builtin locations use `node:` paths. External paths, eval labels, and other
+unrecognized names are redacted. Bounded code-symbol names at recognized locations
+are retained; their syntax does not prove that a computed name is public. Review
+the profile before sharing it. Graph edges and sample order remain intact.
+
+Sampling can outlast the requested interval when the event loop is blocked. The
+response limit does not bound V8's internal allocation during that delay. Profile
+samples describe this isolate, not all process threads, and are not exact
+per-function CPU accounting.
+
+The RPC refuses a known active inspector listener, profiling flags, coverage
+collection, or any active Node tracing, including non-CPU categories. Stop tracing
+before requesting a profile, and do not enable it during capture: V8 can send raw
+profile chunks to an existing trace writer before this RPC sanitizes the result.
+The RPC cannot discover arbitrary third-party in-process inspector sessions;
+do not run it alongside another debugger, profiler, tracer, or coverage owner. An unavailable
+response names the reason and whether cleanup failed. If cleanup remains uncertain,
+further captures are refused; the RPC never restarts the Gateway automatically.
+
 ## Useful options
 
 ```bash

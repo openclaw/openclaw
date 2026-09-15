@@ -9,7 +9,7 @@ import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/tr
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { applyTranscriptSenderIdentityToWrite } from "../../sessions/user-turn-transcript.metadata.js";
-import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
+import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
 import { consumeAdjustedParamsForToolCall } from "../agent-tools.before-tool-call.js";
 import type { AgentMessage } from "../runtime/index.js";
 
@@ -80,7 +80,7 @@ export function runAgentHarnessBeforeMessageWriteHook(params: {
     params.prepareAssistantTranscriptMessage &&
     params.message.role === "assistant" &&
     Reflect.get(params.message, "display") !== false
-      ? extractAssistantPhaseText(params.message)
+      ? extractAssistantTranscriptSourceText(params.message)
       : undefined;
   const hookRunner = getGlobalHookRunner();
   const message =

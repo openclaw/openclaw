@@ -17,17 +17,21 @@ export function trackSqliteStatementExecutions<Key extends string>(
   counts: Record<Key, number>;
   rowCounts: Record<Key, number>;
   textBytes: Record<Key, number>;
+  blobBytes: Record<Key, number>;
   restore: () => void;
 } {
   clearNodeSqliteKyselyCacheForDatabase(db);
   const counts = Object.fromEntries(keys.map((key) => [key, 0])) as Record<Key, number>;
   const rowCounts = Object.fromEntries(keys.map((key) => [key, 0])) as Record<Key, number>;
   const textBytes = Object.fromEntries(keys.map((key) => [key, 0])) as Record<Key, number>;
+  const blobBytes = Object.fromEntries(keys.map((key) => [key, 0])) as Record<Key, number>;
   const observeRow = (key: Key, row: Record<string, unknown>) => {
     rowCounts[key] += 1;
     for (const value of Object.values(row)) {
       if (typeof value === "string") {
         textBytes[key] += Buffer.byteLength(value);
+      } else if (ArrayBuffer.isView(value)) {
+        blobBytes[key] += value.byteLength;
       }
     }
   };
@@ -84,6 +88,7 @@ export function trackSqliteStatementExecutions<Key extends string>(
     counts,
     rowCounts,
     textBytes,
+    blobBytes,
     restore: () => {
       clearNodeSqliteKyselyCacheForDatabase(db);
       prepareSpy.mockRestore();

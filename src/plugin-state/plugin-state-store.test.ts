@@ -142,7 +142,7 @@ describe("plugin state keyed store", () => {
       store.register("workspace:other:0003", { count: 3 });
 
       expect(
-        pluginStateEntriesInKeyRange({
+        await pluginStateEntriesInKeyRange({
           pluginId: "memory-core",
           namespace: "events",
           keyStartInclusive: "workspace:event:",
@@ -684,7 +684,7 @@ describe("plugin state keyed store", () => {
       await expect(store.lookup("k")).resolves.toEqual({ ok: true });
       await expect(store.entries()).resolves.toMatchObject([{ key: "k", value: { ok: true } }]);
       expect(
-        pluginStateEntriesInKeyRange({
+        await pluginStateEntriesInKeyRange({
           pluginId: "discord",
           namespace: "read-only",
           keyStartInclusive: "k",

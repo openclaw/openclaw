@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
@@ -21,17 +22,19 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resetAgentEventsForTest } from "../../infra/agent-events.js";
+import { emitAgentEventForRunContext, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import {
   claimAgentRunContext,
   clearAgentRunContext,
   releaseAgentRunContext,
+  getAgentRunContext,
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { registerChatAbortController } from "../chat-abort.js";
 import * as sessionUtils from "../session-utils.js";
 import {
   identifiedClient,
@@ -515,3 +518,131 @@ it.each(["settled", "replaced"] as const)(
     });
   },
 );
+
+it.each([false, true])(
+  "refreshes the active model across aliased keys after list projection yields (known=%s)",
+  async (known) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const config = await seedSessions();
+      const context = requestContext(config);
+      const sessionKey = "agent:main:active";
+      const sessionId = "main-active";
+      const runId = "new-model-run";
+      const project = sessionUtils.listSessionsFromStoreAsync;
+      vi.spyOn(sessionUtils, "listSessionsFromStoreAsync").mockImplementationOnce(
+        async (params) => {
+          const result = await project(params);
+          const row = expectDefined(
+            result.sessions.find((session) => session.key === sessionKey),
+            "projected session",
+          );
+          row.activeModelProvider = "old-provider";
+          row.activeModel = "old-fallback";
+          registerChatAbortController({
+            chatAbortControllers: context.chatAbortControllers,
+            runId,
+            agentId: "main",
+            sessionKey,
+            sessionId,
+            timeoutMs: 60_000,
+          });
+          if (known) {
+            registerAgentRunContext(runId, {
+              agentId: "main",
+              sessionKey: "agent:main:requested",
+              sessionId,
+              projectSessionActive: true,
+            });
+            emitAgentEventForRunContext(
+              {
+                runId,
+                stream: "lifecycle",
+                data: { phase: "model", provider: "current-provider", model: "current-model" },
+              },
+              getAgentRunContext(runId)!,
+            );
+          }
+          return result;
+        },
+      );
+      const result = await listSessions({
+        client: identifiedClient("viewer@example.com"),
+        context,
+        request: { agentId: "main", limit: 100 },
+      });
+      const row = result.sessions.find((session) => session.key === sessionKey);
+      expect(row).toMatchObject({ hasActiveRun: true });
+      expect(row?.activeModelProvider).toBe(known ? "current-provider" : undefined);
+      expect(row?.activeModel).toBe(known ? "current-model" : undefined);
+    });
+  },
+);
+
+it("reconciles a completed fallback when the active run settles during projection", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const config = await seedSessions();
+    config.agents = {
+      ...config.agents,
+      defaults: { model: { primary: "selected-provider/selected-model" } },
+    };
+    const context = requestContext(config);
+    const sessionKey = "agent:main:active";
+    const sessionId = "main-active";
+    const runId = "settling-model-run";
+    registerChatAbortController({
+      chatAbortControllers: context.chatAbortControllers,
+      runId,
+      agentId: "main",
+      sessionKey,
+      sessionId,
+      timeoutMs: 60_000,
+    });
+    registerAgentRunContext(runId, {
+      agentId: "main",
+      sessionKey,
+      sessionId,
+      projectSessionActive: true,
+    });
+    emitAgentEventForRunContext(
+      {
+        runId,
+        stream: "lifecycle",
+        data: { phase: "model", provider: "attempt-provider", model: "attempt-model" },
+      },
+      getAgentRunContext(runId)!,
+    );
+
+    const project = sessionUtils.listSessionsFromStoreAsync;
+    vi.spyOn(sessionUtils, "listSessionsFromStoreAsync").mockImplementationOnce(async (params) => {
+      const result = await project(params);
+      context.chatAbortControllers.delete(runId);
+      clearAgentRunContext(runId);
+      const scope = { agentId: "main", sessionKey };
+      const entry = expectDefined(loadSessionEntry(scope), "settling session");
+      await replaceSessionEntry(scope, {
+        ...entry,
+        status: "done",
+        lastRunId: runId,
+        modelProvider: "fallback-provider",
+        model: "fallback-model",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "selected-provider/selected-model",
+          activeModel: "fallback-provider/fallback-model",
+        },
+      });
+      return result;
+    });
+
+    const result = await listSessions({
+      client: identifiedClient("viewer@example.com"),
+      context,
+      request: { agentId: "main", limit: 100 },
+    });
+    expect(result.sessions.find((session) => session.key === sessionKey)).toMatchObject({
+      hasActiveRun: false,
+      activeModelProvider: "fallback-provider",
+      activeModel: "fallback-model",
+    });
+  });
+});

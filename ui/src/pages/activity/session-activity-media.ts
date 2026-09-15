@@ -98,6 +98,7 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
   private visible = false;
   private observer?: IntersectionObserver;
   private entry?: ImageEntry;
+  private displayedImages: ImageBlock[] = [];
   private owner?: ConnectionImages;
   private key = "";
   private boundImageIdentity = "";
@@ -162,6 +163,7 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
     ]);
     const imageIdentity = this.imageIdentity;
     if (owner !== this.owner || imageIdentity !== this.boundImageIdentity) {
+      this.displayedImages = [];
       this.closeImage();
       releaseChatMediaResourceSubscriber(this.refresh);
       this.boundImageIdentity = imageIdentity;
@@ -190,6 +192,13 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
     if (this.entry?.pending && this.observedPending !== this.entry.pending) {
       this.observedPending = this.entry.pending;
       void this.observedPending.then(this.refresh);
+    }
+    if (
+      this.entry?.loaded &&
+      !this.entry.pending &&
+      (!this.entry.error || this.displayedImages.length === 0)
+    ) {
+      this.displayedImages = this.entry.images.slice(0, 4);
     }
   }
 
@@ -279,14 +288,15 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
     if (!entry || !owner || !client) {
       return nothing;
     }
-    const showMedia = entry.images.length > 0 || entry.error || entry.cursor || entry.omitted;
+    const showMedia =
+      this.displayedImages.length > 0 || entry.error || entry.cursor || entry.omitted;
     const imageIdentity = this.imageIdentity;
     const agentId = this.agentId;
     return html`
       ${
         showMedia
           ? html`<div class="activity-feed__media">
-              ${renderMessageImages(entry.images.slice(0, 4), {
+              ${renderMessageImages(this.displayedImages, {
                 sessionKey: this.sessionKey,
                 agentId: this.agentId,
                 connectionEpoch: owner.epoch,

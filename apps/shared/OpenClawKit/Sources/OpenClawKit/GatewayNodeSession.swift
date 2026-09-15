@@ -702,6 +702,17 @@ public actor GatewayNodeSession {
         return try? JSONSerialization.data(withJSONObject: connection)
     }
 
+    /// HTTP readers reuse only credentials accepted by this physical socket.
+    /// Bootstrap enrollment credentials never authorize resource downloads.
+    public func httpResourceAuthorization(ifCurrentRoute route: GatewayNodeSessionRoute) async -> (
+        url: URL, bearer: String?, tlsFingerprint: String?)?
+    {
+        guard self.isCurrentRoute(route), let channel, let url = self.activeURL else { return nil }
+        let bearer = await channel.httpResourceBearer(ifCurrentConnectionGeneration: route.socketGeneration)
+        guard self.isCurrentRoute(route), self.channel === channel else { return nil }
+        return (url, bearer, self.activeTLSRouteMetadataProvider?.effectiveTLSFingerprintSHA256)
+    }
+
     public func currentGatewayID(ifCurrentRoute route: GatewayNodeSessionRoute) -> String? {
         guard self.isCurrentRoute(route), self.channel != nil else { return nil }
         // iOS operator routes normalize this to the effective stable ID before connect.

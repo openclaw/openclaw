@@ -219,7 +219,14 @@ async function promptForOpenRouterRedirect(
   const input = await ctx.prompter.text({
     message: "Paste the OpenRouter redirect URL",
     placeholder: `${OPENROUTER_OAUTH_REDIRECT_URI}?state=...&code=...`,
-    validate: (value: string) => (value.trim().length > 0 ? undefined : "Required"),
+    validate: (value: string) => {
+      try {
+        parseOpenRouterOAuthCallbackInput(value, expectedState);
+        return undefined;
+      } catch (error) {
+        return formatErrorMessage(error);
+      }
+    },
   });
   return parseOpenRouterOAuthCallbackInput(input, expectedState).code;
 }

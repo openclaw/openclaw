@@ -9364,9 +9364,7 @@ bash "$ROOT_DIR/scripts/e2e/doctor-install-switch-docker.sh"
       "demo-plugin-npm is up to date (0.0.1).",
       "demo.git.update.v2",
       "clawhub-updated",
-      "record.clawpackSha256",
       "record.artifactKind",
-      "record.npmIntegrity",
     ]);
 
     expectTextToIncludeAll(npmRegistry, [

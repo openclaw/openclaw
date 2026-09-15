@@ -1,3 +1,7 @@
+# Load receipt helpers for the invocation before cleanup can delete this module's worktree.
+# shellcheck source=scripts/pr-lib/merge-outcome.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/merge-outcome.sh" || return 1
+
 require_artifact() {
   local path="$1"
   if [ ! -s "$path" ]; then
@@ -482,7 +486,6 @@ require_worktree_cleanup_evidence() (
   has_worktree_merge_output "$path" || return 0
   # Keep loader state separate from an uninterrupted merge's live outcome owner.
   # Even an empty capture can be the only evidence of an earlier dispatch.
-  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/merge-outcome.sh" || return 1
   if pr=$(pr_number_from_worktree_dir "$path") &&
     merge_outcome_load_local "$pr" && [ -n "$MERGE_OUTCOME_OID" ]; then
     return 0
@@ -492,7 +495,7 @@ require_worktree_cleanup_evidence() (
 )
 
 remove_worktree_if_present() {
-  local path="$1" state registered_path registration admin
+  local path="$1" state registered_path registration admin dirty
   state=$(pr_worktree_state "$path") || return $?
   registered_path=$(printf '%s\n' "$state" | jq -r '.path') || return $?
   admin=$(printf '%s\n' "$state" | jq -r '.admin') || return $?
@@ -506,9 +509,17 @@ remove_worktree_if_present() {
     echo "Preserving $path: unregistered or ambiguous PR worktree; scripts/pr refuses to mutate the shared canonical checkout." >&2
     return 1
   fi
+  if [ -d "$path" ]; then
+    dirty=$(git -C "$path" status --porcelain --untracked-files=all --ignore-submodules=none) || return $?
+    if [ -n "$dirty" ] || [ -e "$admin/locked" ]; then
+      echo "Preserving $path: worktree has local changes or is locked. Review its contents and ownership before cleanup." >&2
+      return 1
+    fi
+  fi
+  [ "${2:-false}" != true ] || return 0
   # One native removal owns both the path and its exact admin entry. A partial
   # deletion still fails; neither repository-wide prune nor orphan trash is safe.
-  git worktree remove --force -- "$registered_path" || return $?
+  git worktree remove -- "$registered_path" || return $?
   state=$(pr_worktree_state "$path" "$admin") || return $?
   registration=$(worktree_registration_state "$registered_path") || return $?
   if [ "$registration" != absent ] ||
@@ -520,7 +531,7 @@ remove_worktree_if_present() {
 }
 
 delete_local_branch_if_safe() {
-  local branch="$1"
+  local branch="$1" retained="${2:-}"
   local ref="refs/heads/$branch"
 
   local existing status
@@ -539,9 +550,21 @@ delete_local_branch_if_safe() {
     return 1
   fi
 
-  # Git's branch owner rejects checked-out branches even with -D. Never bypass
-  # that protection with raw ref deletion when a query or deletion fails.
-  git branch -D -- "$branch" || return $?
+  local config=()
+  # A confirmed squash receipt retains the reviewed source as ancestry even
+  # though main does not. Use it only for this command's non-force merge check.
+  # Git still rejects advanced tips and branches checked out in another worktree.
+  if [ -n "$retained" ]; then
+    # merge is multi-valued: appending must not redirect an existing upstream.
+    if git config --get-all "branch.$branch.merge" >/dev/null; then
+      :
+    else
+      status=$?
+      [ "$status" -eq 1 ] || return "$status"
+      config=(-c "branch.$branch.remote=." -c "branch.$branch.merge=$retained")
+    fi
+  fi
+  git ${config[@]+"${config[@]}"} branch -d -- "$branch" || return $?
   existing=$(git for-each-ref --format="%(if:equals=$ref)%(refname)%(then)%(refname)%(end)" -- "$ref" 2>&1) || {
     status=$?; printf '%s\n' "$existing" >&2; return "$status"
   }
@@ -549,12 +572,19 @@ delete_local_branch_if_safe() {
 }
 
 cleanup_pr_worktree() {
-  local path="$1" pr branch
+  local path="$1" pr branch retained=""
+  # Preserve the uninterrupted merge's live receipt while validating cleanup proof.
+  local MERGE_OUTCOME_REF="" MERGE_OUTCOME_OID="" MERGE_OUTCOME_RECORD=""
   pr=$(pr_number_from_worktree_dir "$path") || return 1
+  merge_outcome_load_local "$pr" || return 1
+  if [ -n "$MERGE_OUTCOME_OID" ] &&
+    printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '.phase != "intent"' >/dev/null; then
+    retained="$MERGE_OUTCOME_REF"
+  fi
   remove_worktree_if_present "$path" || return $?
   # Refusal or incomplete removal preserves the branches with the worktree.
   [ ! -e "$path" ] && [ ! -L "$path" ] || return 1
   for branch in "temp/pr-$pr" "pr-$pr" "pr-$pr-prep"; do
-    delete_local_branch_if_safe "$branch" || return $?
+    delete_local_branch_if_safe "$branch" "$retained" || return $?
   done
 }

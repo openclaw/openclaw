@@ -14,6 +14,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { readUserProfileVersion } from "../../state/user-profile-events.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
+import { readPreparedGatewayModelCatalogMetadata } from "../server-model-catalog-view.js";
 import { readSessionActivitySummaryVersion } from "../session-activity-summary-state.js";
 import { readSessionAutomationVersion } from "../session-automation-index.js";
 import { readSessionLifecyclePersistenceVersion } from "../session-lifecycle-state.js";
@@ -90,7 +91,7 @@ function readSessionListModelCatalogFence(
     .toSorted(([left], [right]) => left.localeCompare(right))
     .map(
       ([agentId, catalog]) =>
-        `${agentId}:${readModelCatalogRevision(catalog?.entries)}:${readModelCatalogRevision(catalog?.pluginRegistry)}`,
+        `${agentId}:${readModelCatalogRevision(catalog?.entries)}:${readModelCatalogRevision(catalog?.pluginRegistry)}:${readModelCatalogRevision(readPreparedGatewayModelCatalogMetadata(catalog))}`,
     )
     .join(",");
 }

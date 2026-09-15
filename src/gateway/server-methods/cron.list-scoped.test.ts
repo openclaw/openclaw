@@ -11,7 +11,8 @@ import * as cronSort from "../../cron/service/list-page-sort.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withLocalGatewayRequestScope } from "../local-request-context.js";
 import { cronHandlers } from "./cron.js";
@@ -90,10 +91,13 @@ async function withCronStore(
         });
       } finally {
         cron.stop();
-        closeOpenClawStateDatabaseForTest();
       }
     });
   } finally {
+    // Retire worker admissions before removing storage, including failed fixture setup.
+    await closeOpenClawStateDatabaseByPathAsync(
+      resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(root, "state") }),
+    );
     await fs.rm(root, { recursive: true, force: true });
   }
 }

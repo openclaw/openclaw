@@ -20,7 +20,9 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   deliveryContextFromSession,
@@ -1463,7 +1465,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           }
         });
       } finally {
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(stateDir);
+        await closeOpenClawStateDatabaseByPathAsync(
+          resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stateDir }),
+        );
         await fs.rm(stateDir, { recursive: true, force: true });
       }
     },

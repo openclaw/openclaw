@@ -51,9 +51,15 @@ export const VOICE_TRANSCRIPT_QUEUE_POLICY = {
     }),
 } as const;
 
+type VoiceTranscriptClose = {
+  promise: Promise<boolean>;
+  conditional: boolean;
+  laterAdmission: boolean;
+};
+
 type VoiceTranscriptOperationOwner = {
   queue: BoundedSerialQueue;
-  close?: { promise: Promise<boolean>; conditional: boolean };
+  close?: VoiceTranscriptClose;
 };
 
 class VoiceTranscriptOperationRegistry {
@@ -91,7 +97,7 @@ class VoiceTranscriptOperationRegistry {
   ): Promise<T> {
     while (true) {
       const owner = this.getOrCreate(key);
-      if (owner.close) {
+      if (owner.close && !owner.close.conditional) {
         if (options.waitForCapacity !== true) {
           throw new Error("voice transcript persistence session is closing");
         }
@@ -109,6 +115,9 @@ class VoiceTranscriptOperationRegistry {
         sealOnOverflow: options.waitForCapacity !== true,
       });
       if (admission.accepted) {
+        if (owner.close?.conditional) {
+          owner.close.laterAdmission = true;
+        }
         void admission.completion.then(
           () => this.cleanup(key, owner),
           () => this.cleanup(key, owner),
@@ -132,22 +141,48 @@ class VoiceTranscriptOperationRegistry {
 
   async close(
     key: string,
-    operation: () => Promise<boolean>,
+    operation: (trySeal: () => boolean) => Promise<boolean>,
     conditional = false,
   ): Promise<boolean> {
     const owner = this.getOrCreate(key);
     if (!owner.close) {
-      // Seal synchronously so no transcript can enter behind the close barrier.
-      owner.queue.seal();
-      owner.close = {
+      if (!conditional) {
+        owner.queue.seal();
+      }
+      const close: VoiceTranscriptClose = {
         conditional,
-        promise: owner.queue.flush({ requireSuccess: true }).then(operation),
+        laterAdmission: false,
+        promise: owner.queue.flush({ requireSuccess: true }).then(() =>
+          operation(() => {
+            // The admitted transaction rechecks freshness before requesting this fence.
+            // A later accepted task can already have failed without updating the record.
+            if (close.laterAdmission || !owner.queue.isIdle) {
+              return false;
+            }
+            owner.queue.seal();
+            close.conditional = false;
+            return true;
+          }),
+        ),
       };
+      owner.close = close;
     } else if (owner.close.conditional && !conditional) {
-      // An explicit hangup retains this fence while recovery decides whether to skip.
+      const recovery = owner.close.promise;
+      // Hangup seals immediately, including work admitted after recovery's first flush.
+      owner.queue.seal();
+      const prefix = owner.queue.flush({ requireSuccess: true });
       owner.close = {
         conditional: false,
-        promise: owner.close.promise.then((closed) => (closed ? true : operation())),
+        laterAdmission: false,
+        promise: Promise.allSettled([recovery, prefix]).then(([closed, drained]) => {
+          if (closed.status === "rejected") {
+            throw closed.reason;
+          }
+          if (drained.status === "rejected") {
+            throw drained.reason;
+          }
+          return closed.value ? true : operation(() => true);
+        }),
       };
     }
     const close = owner.close;
@@ -155,7 +190,12 @@ class VoiceTranscriptOperationRegistry {
       return await close.promise;
     } finally {
       if (this.owners.get(key) === owner && owner.close === close) {
-        this.owners.delete(key);
+        if (close.conditional) {
+          owner.close = undefined;
+          this.cleanup(key, owner);
+        } else {
+          this.owners.delete(key);
+        }
       }
     }
   }

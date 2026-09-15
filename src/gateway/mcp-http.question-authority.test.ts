@@ -12,6 +12,7 @@ import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../agents/cli-runner.test-helpers.js";
+import { createCliRunCurrentAssertion } from "../agents/cli-runner/execution-target.js";
 import { prepareCliRunContext } from "../agents/cli-runner/prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -237,7 +238,10 @@ async function withCliQuestionLoopback(
                   context.preparedBackend.env?.OPENCLAW_MCP_TOKEN,
                   "prepared CLI grant",
                 );
-                context.preparedBackend.mcpClientGrantCapture?.activate(captureKey);
+                context.preparedBackend.mcpClientGrantCapture?.activate(
+                  captureKey,
+                  createCliRunCurrentAssertion(context.params),
+                );
                 expect(
                   resolveMcpLoopbackClientGrant({
                     token,
@@ -395,8 +399,8 @@ describe("CLI loopback question creator authority", () => {
               token: owner.token,
               runtimeOwnerToken: fixture.runtimeOwnerToken,
               captureKey,
-            })?.isCurrent(),
-          ).toBe(true);
+            }),
+          ).toBeUndefined();
         } else {
           owner.admission.close();
         }

@@ -103,7 +103,7 @@ describe("diagnostics timeline", () => {
 
   it("bounds queued UTF-8 bytes without dropping bursts or oversized events", async () => {
     const { env, path } = await createTimelineEnv();
-    const write = vi.spyOn(fs, "writeSync");
+    const write = vi.spyOn(fs, "appendFileSync");
     const names = Array.from({ length: 6 }, (_, index) => `event-${index}`);
     for (const name of names) {
       emitDiagnosticsTimelineEvent(
@@ -112,7 +112,14 @@ describe("diagnostics timeline", () => {
       );
     }
     const chunks = () =>
-      write.mock.calls.flatMap(([, content]) => (Buffer.isBuffer(content) ? [content] : []));
+      write.mock.calls.flatMap(([, content]) => {
+        if (typeof content === "string") {
+          return [Buffer.from(content)];
+        }
+        return ArrayBuffer.isView(content)
+          ? [Buffer.from(content.buffer, content.byteOffset, content.byteLength)]
+          : [];
+      });
     expect(chunks().length).toBeGreaterThan(0);
     expect(chunks().every((content) => content.byteLength <= 64 * 1024)).toBe(true);
     const oversized = "界".repeat(32 * 1024);

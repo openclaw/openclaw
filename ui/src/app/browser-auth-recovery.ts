@@ -104,7 +104,7 @@ export function startBrowserAuthRecovery(
         current.every((candidate, index) => candidate === authCandidates[index])
       );
     };
-    const probe = (async () => {
+    pending = (async () => {
       try {
         // This canonical endpoint never redirects. Manual mode exposes an edge
         // redirect without following it or forwarding Gateway credentials to it.
@@ -147,8 +147,7 @@ export function startBrowserAuthRecovery(
           probeResult = "unavailable";
         }
       }
-    })();
-    pending = probe.finally(() => {
+    })().finally(() => {
       pending = undefined;
       dialog?.update();
     });
@@ -187,14 +186,11 @@ export function startBrowserAuthRecovery(
       onFocus();
     }
   };
-  serviceWorker?.addEventListener("message", onWorkerMessage);
-  window.addEventListener("focus", onFocus);
-  document.addEventListener("visibilitychange", onVisibilityChange);
+  serviceWorker?.addEventListener("message", onWorkerMessage, { signal: lifetime.signal });
+  window.addEventListener("focus", onFocus, { signal: lifetime.signal });
+  document.addEventListener("visibilitychange", onVisibilityChange, { signal: lifetime.signal });
   return () => {
     lifetime.abort();
     stopFailures();
-    serviceWorker?.removeEventListener("message", onWorkerMessage);
-    window.removeEventListener("focus", onFocus);
-    document.removeEventListener("visibilitychange", onVisibilityChange);
   };
 }

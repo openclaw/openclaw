@@ -410,6 +410,18 @@ exit 42
             slug: "homeassistant-safe",
             trust: { clawHubVerdict: null, installability: "installable" },
           },
+          {
+            installRef: "@owner/fallback-two",
+            slug: "fallback-two",
+          },
+          {
+            installRef: "@owner/fallback-three",
+            slug: "fallback-three",
+          },
+          {
+            installRef: "@owner/fallback-four",
+            slug: "fallback-four",
+          },
         ],
       })}\n`,
     );
@@ -426,6 +438,18 @@ exit 42
           {
             installRef: "@owner/safe",
             slug: "homeassistant-safe",
+          },
+          {
+            installRef: "@owner/fallback-two",
+            slug: "fallback-two",
+          },
+          {
+            installRef: "@owner/fallback-three",
+            slug: "fallback-three",
+          },
+          {
+            installRef: "@owner/fallback-four",
+            slug: "fallback-four",
           },
         ],
       });

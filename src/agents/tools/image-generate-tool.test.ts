@@ -1723,8 +1723,8 @@ describe("createImageGenerateTool", () => {
     },
   ])("accepts $model edits up to its reference limit", async (testCase) => {
     const { model, primaryRef, maxInputImages } = testCase;
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-      createFalEditProvider({
+    const provider = {
+      ...createFalEditProvider({
         defaultModel: model,
         models: [model],
         maxInputImages: 1,
@@ -1733,15 +1733,15 @@ describe("createImageGenerateTool", () => {
           : { maxInputImagesByModel: { [model]: maxInputImages } }),
         ...(testCase.disablesResolution ? { resolutionsByModel: { [model]: [] } } : {}),
       }),
+      generateImage: vi.fn(async () => ({
+        images: [{ buffer: Buffer.from("edited"), mimeType: "image/png" }],
+      })),
+    };
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      provider,
     ]);
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-      provider: "fal",
-      model,
-      attempts: [],
-      ignoredOverrides: [],
-      images: [{ buffer: Buffer.from("edited"), mimeType: "image/png" }],
-    });
-    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
+    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
       kind: "image",
       buffer: Buffer.from("reference"),
       contentType: "image/png",
@@ -1778,15 +1778,23 @@ describe("createImageGenerateTool", () => {
         ),
       }),
     ).rejects.toThrow(/reference image/);
-    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(provider.generateImage).toHaveBeenCalledTimes(1);
+    if (maxInputImages === 16) {
+      expect(loadWebMedia).toHaveBeenCalledTimes(16);
+      expect(generateImage).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("keeps the default edit limit at 10 for providers without limit metadata", async () => {
+    const provider = createFalEditProvider({ omitMaxInputImages: true });
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-      createFalEditProvider({ omitMaxInputImages: true }),
+      provider,
     ]);
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
-    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia");
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("reference"),
+      contentType: "image/png",
+    });
     const tool = createToolWithPrimaryImageModel("fal/fal-ai/flux/dev", {
       workspaceDir: process.cwd(),
     });
@@ -1795,43 +1803,17 @@ describe("createImageGenerateTool", () => {
       tool.execute("call-default-reference-limit", {
         prompt: "combine references",
         images: Array.from({ length: 11 }, (_, index) => `./fixtures/ref-${index + 1}.png`),
+        size: "1024x1024",
       }),
-    ).rejects.toThrow("fal edit supports at most 10 reference images");
-    expect(loadWebMedia).not.toHaveBeenCalled();
-    expect(generateImage).not.toHaveBeenCalled();
-  });
-
-  it("rejects model-specific reference limits before loading inputs", async () => {
-    const model = "xai/grok-imagine-image";
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-      createFalEditProvider({
-        defaultModel: model,
-        models: [model],
-        maxInputImages: 1,
-        maxInputImagesByModel: { [model]: 3 },
-      }),
-    ]);
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
-    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia");
-    const tool = createToolWithPrimaryImageModel(`fal/${model}`, {
-      workspaceDir: process.cwd(),
-    });
-
-    await expect(
-      tool.execute("call-grok-too-many-references", {
-        prompt: "combine references",
-        images: Array.from({ length: 4 }, (_, index) => `./fixtures/ref-${index + 1}.png`),
-      }),
-    ).rejects.toThrow("fal edit supports at most 3 reference images");
-    expect(loadWebMedia).not.toHaveBeenCalled();
-    expect(generateImage).not.toHaveBeenCalled();
+    ).rejects.toThrow("fal/fal-ai/flux/dev supports at most 10 reference images");
+    expect(provider.generateImage).not.toHaveBeenCalled();
   });
 
   it("accepts the highest reference limit across configured fallbacks", async () => {
     const primaryModel = "xai/grok-imagine-image";
     const fallbackModel = "google/nano-banana-2-lite";
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-      createFalEditProvider({
+    const provider = {
+      ...createFalEditProvider({
         defaultModel: primaryModel,
         models: [primaryModel, fallbackModel],
         maxInputImages: 1,
@@ -1840,14 +1822,13 @@ describe("createImageGenerateTool", () => {
           [fallbackModel]: 14,
         },
       }),
+      generateImage: vi.fn(async () => ({
+        images: [{ buffer: Buffer.from("edited"), mimeType: "image/png" }],
+      })),
+    };
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      provider,
     ]);
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
-      provider: "fal",
-      model: fallbackModel,
-      attempts: [],
-      ignoredOverrides: [],
-      images: [{ buffer: Buffer.from("edited"), mimeType: "image/png" }],
-    });
     vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
       kind: "image",
       buffer: Buffer.from("reference"),
@@ -1873,7 +1854,54 @@ describe("createImageGenerateTool", () => {
       images: Array.from({ length: 14 }, (_, index) => `./fixtures/ref-${index + 1}.png`),
     });
 
-    expect(mockCallArg(generateImage, 0, "generateImage").inputImages).toHaveLength(14);
+    expect(provider.generateImage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        model: fallbackModel,
+        inputImages: Array.from({ length: 14 }, () => ({
+          buffer: Buffer.from("reference"),
+          mimeType: "image/png",
+        })),
+      }),
+    );
+  });
+
+  it("uses a capable image fallback for reference images", async () => {
+    const primary = createFalEditProvider();
+    primary.capabilities.edit.enabled = false;
+    const fallback = {
+      ...createFalEditProvider(),
+      id: "fallback-image",
+      generateImage: vi.fn(async () => ({
+        images: [{ buffer: Buffer.from("edited"), mimeType: "image/png" }],
+      })),
+    };
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      primary,
+      fallback,
+    ]);
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/fallback-edit.png",
+      id: "fallback-edit.png",
+      size: 6,
+      contentType: "image/png",
+    });
+    const tool = createToolWithPrimaryImageModel("fal/edit", {
+      fallbacks: ["fallback-image/edit"],
+    });
+
+    const result = await tool.execute("call-reference-fallback", {
+      prompt: "edit the reference image",
+      image: "data:image/png;base64,cmVmZXJlbmNl",
+      size: "1024x1024",
+    });
+
+    expect(primary.generateImage).not.toHaveBeenCalled();
+    expect(fallback.generateImage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        inputImages: [{ buffer: Buffer.from("reference"), mimeType: "image/png" }],
+      }),
+    );
+    expect(resultDetails(result).provider).toBe("fallback-image");
   });
 
   it("passes inferred resolution separately when fallbacks have different capabilities", async () => {
@@ -2793,55 +2821,34 @@ describe("createImageGenerateTool", () => {
     expect(providers[0]?.authEnvVars).toEqual([]);
   });
 
-  it("rejects provider-specific edit limits before runtime", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-      createFalEditProvider(),
-    ]);
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
-    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-      kind: "image",
-      buffer: Buffer.from("input-image"),
-      contentType: "image/png",
-    });
+  it.each([undefined, "fal-ai/flux/dev"])(
+    "enforces provider edit limits with model override %s",
+    async (model) => {
+      const provider = createFalEditProvider();
+      vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+        provider,
+      ]);
+      vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+        kind: "image",
+        buffer: Buffer.from("input-image"),
+        contentType: "image/png",
+      });
 
-    const tool = createToolWithPrimaryImageModel("fal/fal-ai/flux/dev", {
-      workspaceDir: process.cwd(),
-    });
+      const tool = createToolWithPrimaryImageModel("fal/fal-ai/flux/dev", {
+        workspaceDir: process.cwd(),
+      });
 
-    await expect(
-      tool.execute("call-fal-edit", {
-        prompt: "combine",
-        images: ["https://example.test/a.png", "https://example.test/b.png"],
-      }),
-    ).rejects.toThrow("fal edit supports at most 1 reference image");
-    expect(loadWebMedia).not.toHaveBeenCalled();
-    expect(generateImage).not.toHaveBeenCalled();
-  });
-
-  it("uses registered provider metadata for slash-containing model overrides", async () => {
-    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
-      createFalEditProvider(),
-    ]);
-    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
-    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
-      kind: "image",
-      buffer: Buffer.from("input-image"),
-      contentType: "image/png",
-    });
-
-    const tool = createToolWithPrimaryImageModel("fal/fal-ai/flux/dev", {
-      workspaceDir: process.cwd(),
-    });
-
-    await expect(
-      tool.execute("call-fal-model-only-edit", {
-        prompt: "combine",
-        model: "fal-ai/flux/dev",
-        images: ["./fixtures/a.png", "./fixtures/b.png"],
-      }),
-    ).rejects.toThrow("fal edit supports at most 1 reference image");
-    expect(generateImage).not.toHaveBeenCalled();
-  });
+      await expect(
+        tool.execute("call-fal-edit", {
+          prompt: "combine",
+          images: ["https://example.test/a.png", "https://example.test/b.png"],
+          size: "1024x1024",
+          model,
+        }),
+      ).rejects.toThrow("fal/fal-ai/flux/dev supports at most 1 reference image");
+      expect(provider.generateImage).not.toHaveBeenCalled();
+    },
+  );
 
   it("passes edit aspect ratio overrides through to runtime for provider-level handling", async () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([

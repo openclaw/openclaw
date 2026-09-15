@@ -47,6 +47,15 @@ Token credentials (`type: "token"`) support inline `token` and/or `tokenRef`.
 2. For eligible profiles, token material may be resolved from the inline value or `tokenRef`.
 3. Unresolvable refs produce `unresolved_ref` in `models status --probe` output.
 
+## Manual API keys
+
+Saving a manual API key in Models waits for the Gateway to apply any changed
+provider binding before refreshing model authentication. Replacing a key whose
+binding is unchanged needs only the authentication refresh. If the Gateway cannot
+confirm application, the key remains saved and the response includes a restart
+warning. This preserves the configured reload policy, including disabled reloads.
+Removing a key still rejects a binding or credential that changed concurrently.
+
 ## Setup replacements
 
 Setup replacement credentials are saved under separate profile IDs with an

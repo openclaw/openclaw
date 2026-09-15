@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import {
   inspectDatabasePathIdentitySync,
@@ -8,6 +9,16 @@ import {
 } from "../infra/sqlite-worker-identity.js";
 import type { tryCreateGatewaySchemaFenceDelegate } from "../infra/state-database-coordinator.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+
+const STATE_DATABASE_READ_ADMISSION_INVALIDATED = "STATE_DATABASE_READ_ADMISSION_INVALIDATED";
+
+class StateDatabaseReadAdmissionInvalidatedError extends Error {
+  readonly code = STATE_DATABASE_READ_ADMISSION_INVALIDATED;
+}
+
+export function isStateDatabaseReadAdmissionInvalidatedError(error: unknown): boolean {
+  return extractErrorCode(error) === STATE_DATABASE_READ_ADMISSION_INVALIDATED;
+}
 
 export type OpenClawStateDatabaseReadAdmission = {
   readonly databasePath: string;
@@ -263,7 +274,9 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     [...seals].some((held) => held.record === undefined || overlaps(held.record, record));
   const assertOpen = (record: IdentityRecord) => {
     if (isSealed(record)) {
-      throw new Error("OpenClaw state database read admission is closed");
+      throw new StateDatabaseReadAdmissionInvalidatedError(
+        "OpenClaw state database read admission is closed",
+      );
     }
   };
   const resolve = (pathname: string, preparedIdentity?: DatabasePathIdentity): IdentityRecord => {
@@ -389,7 +402,9 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         assertCurrent() {
           assertOpen(record);
           if (records.get(record.identity.key) !== record || record.generation !== generation) {
-            throw new Error("OpenClaw state database read admission changed");
+            throw new StateDatabaseReadAdmissionInvalidatedError(
+              "OpenClaw state database read admission changed",
+            );
           }
         },
       };

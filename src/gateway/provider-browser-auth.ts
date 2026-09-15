@@ -3,6 +3,9 @@ import type { ProviderAuthContext } from "../plugins/provider-authentication.typ
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { isLoopbackHost } from "./net.js";
+import { isGatewayHostBrowserOrigin } from "./origin-check.js";
+import type { GatewayWsBrowserOrigin } from "./server/ws-types.js";
 import { getTailscalePublishedOrigin } from "./tailscale-published-origin.js";
 
 export const PROVIDER_OAUTH_CALLBACK_PATH = "/oauth/provider/callback";
@@ -34,17 +37,39 @@ export class ProviderBrowserSignInUnavailableError extends Error {
   }
 }
 
+function resolveBrowserAuthOrigin(
+  browser: GatewayWsBrowserOrigin | undefined,
+  signal: AbortSignal,
+) {
+  const published = getTailscalePublishedOrigin();
+  if (!browser || browser.origin === published?.origin) {
+    return published;
+  }
+  if (browser.origin && browser.isLocalClient && isGatewayHostBrowserOrigin(browser)) {
+    const url = new URL(browser.origin);
+    if ((url.protocol === "http:" || url.protocol === "https:") && isLoopbackHost(url.hostname)) {
+      return { origin: url.origin, signal };
+    }
+  }
+  return undefined;
+}
+
 export function createProviderBrowserAuthSession(params: {
   signal?: AbortSignal;
   openUrl: (url: string) => Promise<void>;
+  browserOrigin?: GatewayWsBrowserOrigin;
 }) {
   const lifetime = new AbortController();
+  const browserOriginSignal = params.browserOrigin
+    ? resolveBrowserAuthOrigin(params.browserOrigin, lifetime.signal)?.signal
+    : undefined;
   const signal = AbortSignal.any([
     lifetime.signal,
     getGatewayRestartDrainSignal(),
     ...(params.signal ? [params.signal] : []),
+    ...(browserOriginSignal ? [browserOriginSignal] : []),
   ]);
-  let origin: ReturnType<typeof getTailscalePublishedOrigin>;
+  let origin: ReturnType<typeof resolveBrowserAuthOrigin>;
   let deadline: ReturnType<typeof setTimeout> | undefined;
   let expiresAt: number | undefined;
   let authorizationStarted = false;
@@ -61,7 +86,7 @@ export function createProviderBrowserAuthSession(params: {
   };
   const authorize: Authorization = async ({ state, timeoutMs, buildAuthorizationUrl }) => {
     assertCurrent();
-    const published = getTailscalePublishedOrigin();
+    const published = resolveBrowserAuthOrigin(params.browserOrigin, lifetime.signal);
     if (!published) {
       throw new ProviderBrowserSignInUnavailableError();
     }
@@ -91,7 +116,7 @@ export function createProviderBrowserAuthSession(params: {
     requestSignal.addEventListener("abort", onAbort, { once: true });
     try {
       const authorizationUrl = new URL(
-        buildAuthorizationUrl(new URL(PROVIDER_OAUTH_CALLBACK_PATH, origin.origin).href),
+        buildAuthorizationUrl(new URL(PROVIDER_OAUTH_CALLBACK_PATH, published.origin).href),
       );
       if (
         authorizationUrl.protocol !== "https:" ||
@@ -117,6 +142,9 @@ export function createProviderBrowserAuthSession(params: {
     }
   };
   return {
+    get available() {
+      return Boolean(resolveBrowserAuthOrigin(params.browserOrigin, lifetime.signal));
+    },
     authorize,
     signal,
     assertCurrent,

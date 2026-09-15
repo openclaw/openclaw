@@ -23,6 +23,20 @@ export type BrowserAnnotationAttachment = {
   inspectedElement: boolean;
 };
 
+export type ChatSelectionSource = {
+  text: string;
+  messageId?: string;
+  entryId?: string;
+  /** UTF-16 offsets in the source bubble’s concatenated DOM text nodes. */
+  start: number;
+  end: number;
+};
+
+export type ChatSelectionAnnotation = ChatSelectionSource & {
+  comment: string;
+  sessionKey: string;
+};
+
 export type ChatAttachment = {
   id: string;
   dataUrl?: string;
@@ -32,6 +46,7 @@ export type ChatAttachment = {
   sizeBytes?: number;
   /** UI-local context that must remain coupled to its annotated screenshot. */
   browserAnnotation?: BrowserAnnotationAttachment;
+  selectionAnnotation?: ChatSelectionAnnotation;
 };
 
 // Shared payload contract: draft and outbox storage must not import each other's runtime.
@@ -41,6 +56,7 @@ export type DurableComposerDraftAttachment = {
   fileName?: string;
   sizeBytes?: number;
   browserAnnotation?: BrowserAnnotationAttachment;
+  selectionAnnotation?: ChatSelectionAnnotation;
 };
 
 export type ChatComposerDraftRetry = {

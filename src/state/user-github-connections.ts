@@ -25,7 +25,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { selectResolvedUserProfileById } from "./user-profiles-internal.js";
+import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
 import type { UserProfilesDatabase } from "./user-profiles-schema.js";
 
 const tokenPair = z.strictObject({
@@ -162,7 +162,7 @@ export function resolvePersonalGitHubOwner(
   if (!tableExists(db, "user_profiles")) {
     return undefined;
   }
-  const resolved = selectResolvedUserProfileById(db, profile);
+  const resolved = selectResolvedUserProfileMetadataById(db, profile);
   return resolved && !resolved.merged_into ? resolved.id : undefined;
 }
 

@@ -12,12 +12,13 @@ import {
 import { MINIMAX_TEXT_MODEL_CATALOG, MINIMAX_TEXT_MODEL_ORDER } from "./provider-models.js";
 
 export function buildMinimaxModelDiscovery(
+  { baseUrl, api }: Pick<ModelProviderConfig, "baseUrl" | "api">,
   authMode: "api_key" | "oauth" = "api_key",
-  api: ModelProviderConfig["api"] = "anthropic-messages",
 ): OpenAICompatibleModelDiscoveryOptions {
   const usesOpenAI = api === "openai-completions";
+  const basePath = new URL(baseUrl).pathname.replace(/\/+$/, "");
   return {
-    endpointPath: usesOpenAI ? "models" : "v1/models",
+    endpointPath: usesOpenAI || basePath.endsWith("/v1") ? "models" : "v1/models",
     // Anthropic API keys use X-Api-Key; OpenAI-compatible catalogs and portal
     // OAuth use Bearer authentication.
     buildRequestHeaders: ({ apiKey, discoveryApiKey }): HeadersInit => {

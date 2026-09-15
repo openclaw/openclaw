@@ -11,19 +11,15 @@ import {
   resolveQaEvidenceProducerFile,
 } from "./evidence-gallery.js";
 import {
+  createTempRepo,
+  vitestArtifactEvidence,
+  writeJson,
+} from "./evidence-gallery.test-support.js";
+import {
   QA_EVIDENCE_FILENAME,
   buildVitestEvidenceSummary,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
-
-async function createTempRepo(prefix = "qa-evidence-gallery-") {
-  return fs.mkdtemp(path.join(os.tmpdir(), prefix));
-}
-
-async function writeJson(filePath: string, value: unknown) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
 
 function producerRootLeakSegments(repoRoot: string) {
   if (process.platform !== "win32") {
@@ -40,37 +36,6 @@ function producerRootLeakSegments(repoRoot: string) {
 
 function repoRelativePath(repoRoot: string, filePath: string) {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
-}
-
-function vitestArtifactEvidence(params: {
-  id: string;
-  title: string;
-  artifact: { kind: string; path: string };
-}): QaEvidenceSummaryJson {
-  return {
-    kind: "openclaw.qa.evidence-summary",
-    schemaVersion: 2,
-    generatedAt: "2026-06-17T12:00:00.000Z",
-    evidenceMode: "full",
-    entries: [
-      {
-        test: { kind: "vitest-test", id: params.id, title: params.title },
-        coverage: [{ id: "qa.artifact", role: "primary" }],
-        execution: {
-          runner: "vitest",
-          environment: { ref: "gallery-test", os: "darwin", nodeVersion: "v24.0.0" },
-          provider: {
-            id: "mock-openai",
-            live: false,
-            model: { name: "mock-openai/gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
-          },
-          packageSource: { kind: "source-checkout" },
-          artifacts: [{ ...params.artifact, source: "vitest" }],
-        },
-        result: { status: "pass" },
-      },
-    ],
-  };
 }
 
 describe("evidence gallery", () => {
@@ -674,6 +639,7 @@ describe("evidence gallery", () => {
         status: "pass",
         surface: "web-ui",
         testId: "ux-matrix.web-ui.first-run",
+        entryKey: "0",
         title: "UX Matrix: web-ui / first-run at <repo-root>",
       },
       {
@@ -691,6 +657,7 @@ describe("evidence gallery", () => {
         status: "proof-gap",
         surface: "cli",
         testId: null,
+        entryKey: null,
         title: null,
       },
       {
@@ -702,6 +669,7 @@ describe("evidence gallery", () => {
         status: "blocked",
         surface: "cli",
         testId: "qa-lab.wrapper-cli-error",
+        entryKey: "1",
         title: "UX Matrix: cli / error-state",
       },
     ]);

@@ -19,6 +19,7 @@ const statementCacheSymbol = Symbol.for("openclaw.kyselySyncStatementCache");
 const statementInvalidationSymbol = Symbol.for("openclaw.kyselySyncStatementInvalidation");
 const statementCacheEnabledSymbol = Symbol.for("openclaw.kyselySyncStatementCacheEnabled");
 const authorizerActiveSymbol = Symbol.for("openclaw.kyselySyncAuthorizerActive");
+const disposeCallbacksSymbol = Symbol.for("openclaw.sqliteDisposeCallbacks");
 // Bound SQL plus variable-size bindings to about 2 MiB per enabled database.
 // Process-wide retention scales with open handles; repeated variable SQL can enter.
 const statementCacheCapacity = 32;
@@ -37,7 +38,28 @@ type StatementCacheOwner = DatabaseSync & {
   [statementInvalidationSymbol]?: true;
   [statementCacheEnabledSymbol]?: true;
   [authorizerActiveSymbol]?: boolean;
+  [disposeCallbacksSymbol]?: Set<() => void>;
 };
+
+/** Retire dependent native resources before this connection closes or is replaced. */
+export function registerNodeSqliteDisposeCallback(
+  db: DatabaseSync,
+  callback: () => void,
+): () => void {
+  const owner: StatementCacheOwner = db;
+  installStatementInvalidation(owner);
+  const callbacks = (owner[disposeCallbacksSymbol] ??= new Set());
+  callbacks.add(callback);
+  return () => {
+    callbacks.delete(callback);
+  };
+}
+
+export function disposeNodeSqliteDependents(owner: StatementCacheOwner): void {
+  for (const callback of owner[disposeCallbacksSymbol] ?? []) {
+    callback();
+  }
+}
 
 /** Register the lifecycle owner's handler for synchronous Kysely query failures. */
 export function registerNodeSqliteKyselyQueryErrorHandler(
@@ -80,6 +102,7 @@ export function installStatementInvalidation(owner: StatementCacheOwner): void {
       configurable: true,
       writable: true,
       value(this: StatementCacheOwner, ...args: Parameters<DatabaseSync["deserialize"]>): void {
+        disposeNodeSqliteDependents(this);
         try {
           deserialize(...args);
         } finally {
@@ -96,6 +119,7 @@ export function installStatementInvalidation(owner: StatementCacheOwner): void {
       configurable: true,
       writable: true,
       value(this: StatementCacheOwner): void {
+        disposeNodeSqliteDependents(this);
         clearNodeSqliteKyselyCacheForDatabase(this);
         return close();
       },
@@ -107,6 +131,7 @@ export function installStatementInvalidation(owner: StatementCacheOwner): void {
       configurable: true,
       writable: true,
       value(this: StatementCacheOwner): void {
+        disposeNodeSqliteDependents(this);
         clearNodeSqliteKyselyCacheForDatabase(this);
         return dispose();
       },

@@ -996,7 +996,12 @@ describe("chat media resource lifecycle", () => {
     const { blobUrl } = installManagedImageUrls();
     const resolveArtifactDownload = vi.fn(async () => ({ url: ticketedUrl }));
     const fetchMock = vi
-      .fn()
+      .fn<
+        (
+          url: string,
+          init: RequestInit,
+        ) => Promise<{ ok: false } | ReturnType<typeof imageResponse>>
+      >()
       .mockResolvedValueOnce({ ok: false })
       .mockResolvedValueOnce(imageResponse());
     vi.stubGlobal("fetch", fetchMock);
@@ -1013,7 +1018,7 @@ describe("chat media resource lifecycle", () => {
 
     expect(resolveArtifactDownload).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    for (const [requestUrl, init] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+    for (const [requestUrl, init] of fetchMock.mock.calls) {
       expect(requestUrl).toBe(ticketedUrl.replace(/\/full(?=\?)/u, "/thumbnail"));
       const headers = new Headers(init.headers);
       expect(headers.get("Authorization")).toBeNull();

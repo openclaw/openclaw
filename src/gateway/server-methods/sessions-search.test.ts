@@ -1,8 +1,12 @@
 /** Gateway session-search validation and agent-scoping tests. */
 
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
+
+const fixedStorePath = path.resolve("/stores/shared/sessions.sqlite");
+const templateStorePath = path.resolve("/stores/{agentId}.json");
 
 const searchSessionTranscriptsMock = vi.fn();
 const listSessionEntriesMock = vi.fn();
@@ -90,7 +94,7 @@ describe("sessions.search gateway method", () => {
     expect(searchSessionTranscriptsMock).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, "/stores/shared/sessions.sqlite", "/stores/{agentId}.json"])(
+  it.each([undefined, fixedStorePath, templateStorePath])(
     "derives one agent and canonical filters from sessionKeys with store %s",
     async (storePath) => {
       if (storePath) {
@@ -138,7 +142,7 @@ describe("sessions.search gateway method", () => {
 
   it("rejects a bare fixed-store key scoped to a non-owner before transcript lookup", async () => {
     cfg = {
-      session: { store: "/stores/shared/sessions.sqlite" },
+      session: { store: fixedStorePath },
       agents: {
         ownership: "explicit",
         defaults: { sessionStore: { agentId: "ops" } },
@@ -165,7 +169,7 @@ describe("sessions.search gateway method", () => {
 
   it("retains the inferred fixed-store owner for a bare key search", async () => {
     cfg = {
-      session: { store: "/stores/shared/sessions.sqlite" },
+      session: { store: fixedStorePath },
       agents: {
         ownership: "explicit",
         defaults: { sessionStore: { agentId: "ops" } },
@@ -180,7 +184,7 @@ describe("sessions.search gateway method", () => {
       query: "needle",
       limit: undefined,
       sessionKeys: ["global"],
-      storePath: "/stores/shared/sessions.sqlite",
+      storePath: fixedStorePath,
     });
   });
 
@@ -311,10 +315,12 @@ describe("sessions.search gateway method", () => {
       .mockReturnValueOnce({
         hits: [duplicate, { ...duplicate, messageId: "message-2", score: 1 }],
         indexing: false,
+        archivedTranscriptsExcluded: 2,
       })
       .mockReturnValueOnce({
         hits: [{ ...duplicate }, { ...duplicate, messageId: "message-3", score: 2 }],
         indexing: false,
+        archivedTranscriptsExcluded: 3,
       });
 
     const respond = await callSearch({
@@ -335,6 +341,7 @@ describe("sessions.search gateway method", () => {
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
+        archivedTranscriptsExcluded: 5,
         results: [
           expect.objectContaining({ messageId: "message-1" }),
           expect.objectContaining({ messageId: "message-3" }),
@@ -349,10 +356,10 @@ describe("sessions.search gateway method", () => {
     async (agentId) => {
       cfg = {
         agents: { list: [{ id: "main", default: true }] },
-        session: { store: "/stores/shared/sessions.sqlite" },
+        session: { store: fixedStorePath },
       };
       resolveExistingAgentSessionStoreTargetsSyncMock.mockReturnValue([
-        { agentId: "retired", storePath: "/stores/shared/sessions.sqlite" },
+        { agentId: "retired", storePath: fixedStorePath },
       ]);
       await callSearch({ ...(agentId === "retired" ? { agentId } : {}), query: "needle" });
 
@@ -361,7 +368,7 @@ describe("sessions.search gateway method", () => {
         agentId,
         query: "needle",
         limit: agentId === "retired" ? 25 : undefined,
-        storePath: "/stores/shared/sessions.sqlite",
+        storePath: fixedStorePath,
       });
     },
   );

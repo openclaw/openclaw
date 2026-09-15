@@ -108,7 +108,6 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
     await store.register("key-1", { value: "hello" });
     const claimed = await store.registerIfAbsent("dedupe-key", { value: "first" });
     const value = await store.lookup("key-1");
-    await store.deleteIf?.("key-1", (current) => current.value === "hello");
     await store.consume("key-1");
     await store.clear();
 
@@ -127,7 +126,7 @@ The runtime config snapshot, durable plugin-scoped storage, system utilities, ev
     const blob = await blobs.lookup("artifact-1");
     ```
 
-    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `deleteIf(...)` when cleanup must remove only the value previously observed; its synchronous predicate and deletion run in one SQLite transaction. Limits: `maxEntries` per namespace, 50,000 live rows per plugin, JSON values up to 1 MiB of UTF-8 encoded JSON, and optional TTL expiry. By default, a write at either row limit sheds the oldest live rows from the namespace being written; sibling namespaces are not evicted for that write, and the write still fails if the namespace cannot free enough rows. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at either limit, while existing keys remain updateable.
+    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Use `observe(...)` with `compareAndApply(...)` when a mutation depends on the current value; the comparison and mutation run in one SQLite worker transaction. Limits: `maxEntries` per namespace, 50,000 live rows per plugin, JSON values up to 1 MiB of UTF-8 encoded JSON, and optional TTL expiry. By default, a write at either row limit sheds the oldest live rows from the namespace being written; sibling namespaces are not evicted for that write, and the write still fails if the namespace cannot free enough rows. Set `overflowPolicy: "reject-new"` for durable ownership records that must never be evicted: new keys fail at either limit, while existing keys remain updateable.
 
     `lookupMany(keys)` is an optional keyed-store capability for at most 10,000 exact keys per call. Results have the same length and order as the input, including duplicates. Each position is a `Result<T | undefined, PluginStateStoreError>`: `{ ok: true, value }` on success, including `value: undefined` for missing or expired keys, or `{ ok: false, error }` for corrupt stored JSON. An empty request returns `[]`. Keys use the same trimming and 512-byte UTF-8 limit as `lookup`; invalid keys or an oversized request fail with `PLUGIN_STATE_INVALID_INPUT` and operation `lookup` before reading. Database acquisition and query errors fail the whole call. Corrupt-JSON errors retain the `lookup` error code and operation in their per-key result. Inspect each result only when the reader reaches that position, and throw `result.error` if it is not `ok`; this lets a reader stop at an earlier missing or invalid chunk without raising a later corruption error. Each call uses one expiry cutoff and one SQLite selection in the same plugin and namespace, without creating a missing database. Separate calls, including metadata reads, do not share a snapshot; chunked formats must retain their generation, digest, and reader-lifetime checks.
 
@@ -184,6 +183,41 @@ callbacks async or replace atomic operations with separate lookups and writes.
 Returning `undefined` from an updater leaves the entry unchanged. `update`,
 `deleteIf`, `lookupMany`, and `count` remain optional in public store types, so preserve
 capability checks for supported older hosts and third-party adapters.
+
+For new atomic mutations, use the optional `observe` and `compareAndApply`
+methods. `observe(key)` prepares a mutation through canonical writable database
+admission and may create or open state. It returns `{ value, comparison }`; use
+`lookup` for a plain, noncreating read. No transaction remains open while the
+caller prepares the next value.
+
+`compareAndApply(key, comparison, intent)` compares the current live row before
+changing it in the same worker-owned transaction. The opaque comparison binds
+the actual database, plugin, namespace, key, stored JSON bytes, creation time,
+and expiry. It compares content and metadata; it is not an incarnation token or
+permission to act. Another store or key rejects the comparison with
+`PLUGIN_STATE_INVALID_INPUT`.
+
+The intent is explicit:
+
+- `{ operation: "update", action: "set", value, ttlMs? }` writes a defined value
+  and refreshes its creation time and TTL, even when the value is unchanged.
+- `{ operation: "update", action: "keep" }` leaves the entry unchanged while
+  retaining writable admission and the existing namespace expiry sweep.
+- `{ operation: "delete", action: "delete" }` removes a matching live entry.
+- `{ operation: "delete", action: "keep" }` retains writable admission without
+  an expiry sweep or entry mutation.
+
+The result is `{ status: "applied" }`, `{ status: "unchanged" }`, or
+`{ status: "conflict", current }`. A conflict does not change plugin-state rows
+and supplies a fresh observation. An entry that expires after observation
+conflicts; missing and expired entries otherwise share logical-absence semantics.
+Existing quotas, eviction order, validation, and store errors still apply.
+
+On an explicit conflict, a plugin may recompute a named pure decision from
+`current.value` and try again. Prepare clocks, randomness, and external effects
+outside that decision. Never retry transport failures, unknown outcomes, or
+arbitrary callbacks. Check both optional methods before using this capability;
+there is no safe fallback consisting of a separate lookup and unconditional write.
 
 `registerIfAbsent` and the optional `deleteIfEqual(key, expected)` operation use
 the shared-state SQLite worker. `deleteIfEqual` accepts a string, finite number,

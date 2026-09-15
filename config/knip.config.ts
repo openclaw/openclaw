@@ -111,6 +111,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/diagnostics.mjs!",
   "scripts/upgrade-survivor-diagnostics.mjs!",
   "scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
@@ -208,7 +209,9 @@ function listScriptShimEntries(dir = "scripts"): string[] {
       return [];
     }
     const implementationPath = entryPath.replace(/\.(?:mjs|js)$/u, ".mts");
-    return fs.existsSync(implementationPath) ? [`${entryPath}!`, `${implementationPath}!`] : [];
+    return fs.existsSync(implementationPath)
+      ? [entryPath, implementationPath].map((filePath) => `${filePath.replaceAll("\\", "/")}!`)
+      : [];
   });
 }
 

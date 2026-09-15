@@ -225,13 +225,7 @@ def resolve_sut(config, bot_config):
     user_id = env_or_config("TELEGRAM_USER_DRIVER_SUT_ID", config, "sutId")
     if username and user_id:
         return {"username": username.lstrip("@"), "id": int(user_id)}
-    token = (
-        os.environ.get("TELEGRAM_E2E_SUT_BOT_TOKEN")
-        or os.environ.get("OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN")
-        or bot_config.get("sutBotToken")
-        or bot_config.get("botAToken")
-        or bot_config.get("BOTA")
-    )
+    token = bot_config.get("sutBotToken")
     if token:
         me = telegram_bot(token, "getMe", test_dc=config.get("testDc") is True)
         return {"username": me.get("username", "").lstrip("@"), "id": int(me["id"])}

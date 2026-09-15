@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearBundledDiscoveryModeMemo } from "../plugins/bundled-discovery-state.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
 import { readConfigHealthStateFromStore } from "./io.health-state.js";
 import { captureRuntimeConfigAsyncReader } from "./io.runtime.js";
 import {
@@ -56,24 +56,14 @@ function fixture(config: unknown = { gateway: { mode: "local", port: 18789 } }) 
 }
 
 async function withoutMainSql<T>(run: () => Promise<T>): Promise<T> {
-  const spies = [
-    vi.spyOn(DatabaseSync.prototype, "prepare"),
-    vi.spyOn(DatabaseSync.prototype, "exec"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    ),
-  ];
+  const mainSql = observeMainThreadSql();
   try {
     return await run();
   } finally {
     try {
-      for (const spy of spies) {
-        expect(spy).not.toHaveBeenCalled();
-      }
+      mainSql.expectIdle();
     } finally {
-      for (const spy of spies) {
-        spy.mockRestore();
-      }
+      mainSql.restore();
     }
   }
 }

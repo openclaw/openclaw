@@ -1,7 +1,6 @@
 /**
  * Prepares the attempt-local tool catalog, schema projection, and diagnostics.
  */
-import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import {
   isCodeModeDiagnosticEnabled,
   logCodeModeDiagnostic,
@@ -12,7 +11,6 @@ import {
   markAgentToolExecutionUnavailable,
 } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
-import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
@@ -53,7 +51,6 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
   setup: EmbeddedAttemptSetup;
   preparedToolBase: PreparedToolBase;
   bundleTools: Pick<PreparedBundleTools, "clientTools" | "uncompactedEffectiveTools">;
-  runTrace: DiagnosticTraceContext;
   abortSignal: AbortSignal;
   executeCodeModeTool: ToolSearchCatalogToolExecutor;
 }) {
@@ -78,23 +75,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     let effectiveTools = attempt.toolExecutionAllow
       ? gateToolExecution(uncompactedEffectiveTools, attempt.toolExecutionAllow)
       : uncompactedEffectiveTools;
-    const catalogToolHookContext = {
-      agentId: input.setup.sessionAgentId,
-      config: attempt.config,
-      cwd: input.setup.effectiveCwd,
-      sessionKey: input.setup.sandboxSessionKey,
-      sessionId: attempt.sessionId,
-      runId: attempt.runId,
-      approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
-      channelId: attempt.currentChannelId,
-      trace: input.runTrace,
-      loopDetection: resolveToolLoopDetectionConfig({
-        cfg: attempt.config,
-        agentId: input.setup.sessionAgentId,
-      }),
-      onToolOutcome: attempt.onToolOutcome,
-      allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
-    };
+    const catalogToolHookContext = preparedToolBase.toolHookContext;
     const codeModeTools = codeModeControlsEnabledForRun
       ? createCodeModeTools({
           config: attempt.config,

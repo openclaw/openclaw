@@ -19,6 +19,7 @@ import {
 import { readPresenceEntries, type PresencePayload } from "../../app/user-profile.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
+import { renderLoadingState } from "../../components/loading-state.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -57,8 +58,8 @@ function selectorKey(selector: RunInspectorSelector | null): string | null {
   return selector ? `${selector.kind}:${selector.id}` : null;
 }
 
-function inspectorRequestKey(route: ActivityRouteData): string | null {
-  if (route.mode !== "run" || !route.selector) {
+function inspectorRequestKey(route: ActivityRouteData | undefined): string | null {
+  if (route?.mode !== "run" || !route.selector) {
     return null;
   }
   return `${selectorKey(route.selector)}:${route.decisionCursor ?? ""}`;
@@ -76,16 +77,10 @@ class ActivityPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @property({ attribute: false }) routeLocation: RouteLocation = {
-    pathname: "/activity",
-    search: "",
-    hash: "",
-  };
-  private routeData: ActivityRouteData = {
-    mode: "sessions",
-    filters: { personId: null, query: "", time: "7d" },
-    selector: null,
-  };
+  // A loaded route module can still be waiting for its location data.
+  @property({ attribute: false }) routeLocation?: RouteLocation;
+  private routeData?: ActivityRouteData;
+  private presentedRoute?: { location: RouteLocation; data: ActivityRouteData };
 
   @state() private entries: readonly ActivityEntry[] = [];
   @state() private filterText = "";
@@ -154,10 +149,15 @@ class ActivityPage extends OpenClawLightDomElement {
 
   override willUpdate(changed: PropertyValues) {
     if (changed.has("routeLocation")) {
-      this.routeData = resolveActivityRouteData(
-        this.routeLocation.search,
-        activityPersonFromPath(this.routeLocation.pathname, this.context?.basePath),
-      );
+      this.routeData = this.routeLocation
+        ? resolveActivityRouteData(
+            this.routeLocation.search,
+            activityPersonFromPath(this.routeLocation.pathname, this.context?.basePath),
+          )
+        : undefined;
+      if (this.routeLocation && this.routeData) {
+        this.presentedRoute = { location: this.routeLocation, data: this.routeData };
+      }
       this.syncSessionActivity();
     }
   }
@@ -166,11 +166,13 @@ class ActivityPage extends OpenClawLightDomElement {
     if (changed.has("routeLocation")) {
       this.bindInspectorRoute();
     }
-    const canonical = this.sessionActivity.canonicalLocation(
-      this.routeLocation,
-      this.context.basePath,
-      projectPresencePayload(this.presencePayload).users,
-    );
+    const canonical = this.routeLocation
+      ? this.sessionActivity.canonicalLocation(
+          this.routeLocation,
+          this.context.basePath,
+          projectPresencePayload(this.presencePayload).users,
+        )
+      : null;
     if (canonical) {
       this.context.replace("activity", canonical);
     }
@@ -186,6 +188,7 @@ class ActivityPage extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.subscriptions.clear();
     this.cancelInspectorRequest();
+    this.presentedRoute = undefined;
     super.disconnectedCallback();
   }
 
@@ -196,6 +199,7 @@ class ActivityPage extends OpenClawLightDomElement {
   ) {
     if (sourceChanged || gateway.eventLogRevision !== this.sessionActivityRevision) {
       this.sessionActivityRevision = gateway.eventLogRevision;
+      this.presentedRoute = undefined;
       this.sessionActivity.load(null, null);
     }
     if (sourceChanged || snapshot.client !== this.presenceClient) {
@@ -214,9 +218,9 @@ class ActivityPage extends OpenClawLightDomElement {
     const snapshot = this.context?.gateway.snapshot;
     this.sessionActivity.load(
       snapshot?.phase === "connected" ? snapshot.client : null,
-      this.routeData.mode === "sessions"
+      this.routeData?.mode === "sessions"
         ? this.routeData.filters
-        : this.routeData.mode === "live"
+        : this.routeData?.mode === "live"
           ? "current"
           : null,
       reason,
@@ -324,7 +328,7 @@ class ActivityPage extends OpenClawLightDomElement {
       gateway.snapshot.phase === "connected" &&
       this.routeData?.mode === "run" &&
       inspectorRequestKey(this.routeData) === requestSelectorKey;
-    const decisionCursor = this.routeData.mode === "run" ? this.routeData.decisionCursor : null;
+    const decisionCursor = this.routeData?.mode === "run" ? this.routeData.decisionCursor : null;
     try {
       const params =
         selector.kind === "run"
@@ -430,7 +434,7 @@ class ActivityPage extends OpenClawLightDomElement {
     const snapshot = gateway.snapshot;
     const inspectorState = this.runInspector;
     if (
-      route.mode !== "run" ||
+      route?.mode !== "run" ||
       !route.selector ||
       snapshot.phase !== "connected" ||
       !snapshot.client ||
@@ -496,7 +500,7 @@ class ActivityPage extends OpenClawLightDomElement {
 
   private restartRunInspector() {
     const route = this.routeData;
-    if (route.mode !== "run" || !route.selector) {
+    if (route?.mode !== "run" || !route.selector) {
       return;
     }
     this.context.navigate("activity", { search: activityRunInspectorSearch(route.selector) });
@@ -516,7 +520,10 @@ class ActivityPage extends OpenClawLightDomElement {
       change &&
       (change.hasActiveRun === false ||
         (change.status !== null && change.status !== "running" && change.status !== "queued"));
-    if (event.event === "sessions.changed" || (this.routeData.mode === "live" && terminalMessage)) {
+    if (
+      event.event === "sessions.changed" ||
+      (this.routeData?.mode === "live" && terminalMessage)
+    ) {
       this.sessionActivity.invalidate(event.payload);
     }
     if (event.event === "presence") {
@@ -529,8 +536,10 @@ class ActivityPage extends OpenClawLightDomElement {
     this.context.liveActivity.clear();
   }
 
-  private renderMode() {
-    const route = this.routeData;
+  private renderMode(route: ActivityRouteData, location: RouteLocation, pending: boolean) {
+    if (pending && route.mode === "run") {
+      return renderLoadingState();
+    }
     if (route.mode === "sessions") {
       const presenceViewers = projectPresencePayload(this.presencePayload).users;
       return renderSessionActivityView({
@@ -542,7 +551,7 @@ class ActivityPage extends OpenClawLightDomElement {
         },
         presenceViewers,
         result: this.sessionActivity.result,
-        loading: this.sessionActivity.loading,
+        loading: pending || this.sessionActivity.loading,
         retrying: this.sessionActivity.retrying,
         error: this.sessionActivity.error,
         onRetry: () => this.syncSessionActivity("retry"),
@@ -568,7 +577,7 @@ class ActivityPage extends OpenClawLightDomElement {
             "activity",
             this.sessionActivity.locationForFilters(
               next,
-              this.routeLocation,
+              location,
               this.context.basePath,
               presenceViewers,
             ),
@@ -606,7 +615,7 @@ class ActivityPage extends OpenClawLightDomElement {
         navigate: this.context.navigate,
         connected: this.context.gateway.snapshot.phase === "connected",
         result: this.sessionActivity.result,
-        loading: this.sessionActivity.loading,
+        loading: pending || this.sessionActivity.loading,
         incomplete: this.sessionActivity.incomplete,
         error: this.sessionActivity.error,
         onRetry: () => this.syncSessionActivity("retry"),
@@ -647,7 +656,14 @@ class ActivityPage extends OpenClawLightDomElement {
   }
 
   override render() {
-    const mode = this.routeData.mode;
+    const pending = !this.routeData || !this.routeLocation;
+    // Keep editing controls mounted; retained presentation never authorizes requests.
+    const route = this.routeData ?? this.presentedRoute?.data;
+    const location = this.routeLocation ?? this.presentedRoute?.location;
+    if (!route || !location) {
+      return renderLoadingState();
+    }
+    const mode = route.mode;
     const body = html`
       ${
         mode === "run"
@@ -671,7 +687,7 @@ class ActivityPage extends OpenClawLightDomElement {
         role=${mode === "run" ? nothing : "tabpanel"}
         aria-labelledby=${mode === "run" ? nothing : `activity-mode-tab-${mode}`}
       >
-        ${this.renderMode()}
+        ${this.renderMode(route, location, pending)}
       </div>
     `;
     return html`
@@ -690,7 +706,7 @@ class ActivityPage extends OpenClawLightDomElement {
 
 export const activityPageComponent = {
   header: true,
-  render: (location: RouteLocation = { pathname: "/activity", search: "", hash: "" }) =>
+  render: (location: RouteLocation | undefined) =>
     html`<openclaw-activity-page .routeLocation=${location}></openclaw-activity-page>`,
 };
 

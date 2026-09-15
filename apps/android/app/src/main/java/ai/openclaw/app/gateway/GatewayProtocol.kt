@@ -948,6 +948,7 @@ enum class GatewayMethod(
   ComputerInvoke("computer.invoke"),
   SessionsActivitySummaryEnsure("sessions.activitySummary.ensure"),
   ControlUiSessionPullRequestsChecks("controlUi.sessionPullRequests.checks"),
+  DiagnosticsCpuProfile("diagnostics.cpuProfile"),
 }
 
 enum class GatewayEvent(

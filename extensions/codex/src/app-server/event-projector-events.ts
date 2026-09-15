@@ -301,6 +301,10 @@ export class CodexEventProjection {
     this.responseModel = toModel ?? this.responseModel;
     if (fromModel && toModel && fromModel !== toModel) {
       this.emitAgentEvent({
+        stream: "lifecycle",
+        data: { phase: "model", provider: this.provider, model: toModel },
+      });
+      this.emitAgentEvent({
         stream: "fallback",
         data: { fromModel, toModel, ...(reason ? { reason } : {}) },
       });

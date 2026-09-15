@@ -38,7 +38,7 @@ import {
   setQueryTokensForKey,
 } from "./query.ts";
 import type { UsageFilterState, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
-import { renderSessionDetailPanel, usageDateKey } from "./view-details.ts";
+import { renderSessionDetailPanel } from "./view-details.ts";
 import { renderUsageHeatmap } from "./view-heatmap.ts";
 import {
   renderCostBreakdownCompact,
@@ -200,7 +200,8 @@ export function renderUsage(props: UsageProps) {
       return session.usage.activityDates.some((date) => selectedDaySet.has(date));
     }
     return Boolean(
-      session.updatedAt && selectedDaySet.has(usageDateKey(session.updatedAt, filters.timeZone)),
+      session.updatedAt &&
+      selectedDaySet.has(formatIsoDate(new Date(session.updatedAt), filters.timeZone)),
     );
   };
   const filteredSessions = queryResult.sessions.filter(matchesSelectedDays);
@@ -278,7 +279,12 @@ export function renderUsage(props: UsageProps) {
   // Cost windows use range-wide daily totals; filtered pages need exact scoped data.
   const costWindowComparison = hasAggregateFilters
     ? nothing
-    : renderCostWindowComparison(data.costDaily, filters.startDate, filters.endDate);
+    : renderCostWindowComparison(
+        data.costDaily,
+        filters.startDate,
+        filters.endDate,
+        filters.timeZone,
+      );
 
   const insightStats = buildUsageInsightStats(aggregateSessions, insightTotals, insightAggregates);
   // The gateway always returns a totals object (all-zero when idle), so key
@@ -309,14 +315,18 @@ export function renderUsage(props: UsageProps) {
   ];
   const applyPreset = (days: number) => {
     const end = new Date();
-    const start = new Date();
-    start.setDate(start.getDate() - (days - 1));
-    filterActions.onStartDateChange(formatIsoDate(start));
-    filterActions.onEndDateChange(formatIsoDate(end));
+    const start = new Date(end);
+    if (filters.timeZone === "utc") {
+      start.setUTCDate(start.getUTCDate() - (days - 1));
+    } else {
+      start.setDate(start.getDate() - (days - 1));
+    }
+    filterActions.onStartDateChange(formatIsoDate(start, filters.timeZone));
+    filterActions.onEndDateChange(formatIsoDate(end, filters.timeZone));
   };
   const applyAllRange = () => {
     filterActions.onStartDateChange("1970-01-01");
-    filterActions.onEndDateChange(formatIsoDate(new Date()));
+    filterActions.onEndDateChange(formatIsoDate(new Date(), filters.timeZone));
   };
   const renderFilterSelect = (key: string, label: string, options: string[]) => {
     if (options.length === 0) {

@@ -17,6 +17,10 @@ import {
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
 import {
+  createFreeBsdPkgOwnershipInspection,
+  type FreeBsdPkgOwnershipInspection,
+} from "../../infra/update-freebsd-pkg-ownership.js";
+import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   detectGlobalInstallManagerByPresence,
@@ -435,7 +439,11 @@ export async function resolveGlobalManager(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
   timeoutMs: number;
+  pkgOwnership?: FreeBsdPkgOwnershipInspection;
 }): Promise<GlobalInstallManager> {
+  await (
+    params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(params.timeoutMs)
+  ).assertUnowned(params.root);
   if (params.installKind === "package") {
     const diagnostics: string[] = [];
     const detected = await detectGlobalInstallManagerForRoot(

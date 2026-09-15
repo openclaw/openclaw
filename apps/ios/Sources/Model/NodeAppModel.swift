@@ -631,7 +631,7 @@ final class NodeAppModel {
         if self.isAppleReviewDemoModeEnabled {
             return LocalFixtureChatTransport(fixture: .appleReviewDemo)
         }
-        let mediaArtifactLoader = IOSMediaArtifactLoader { [weak self] in
+        let connectionProvider: IOSMediaArtifactLoader.ConnectionProvider = { [weak self] in
             guard let config = self?.activeGatewayConnectConfig else { return nil }
             return IOSMediaArtifactLoader.Connection(
                 config: config,
@@ -644,7 +644,9 @@ final class NodeAppModel {
             widgetGateway: self.nodeGateway,
             globalAgentId: self.chatDeliveryAgentId,
             outboxGatewayID: outboxGatewayID,
-            mediaArtifactLoader: mediaArtifactLoader)
+            mediaArtifactLoader: IOSMediaArtifactLoader(connectionProvider: connectionProvider),
+            sourceResourceLoader: IOSSourceResourceLoader(
+                gateway: self.operatorSession, connectionProvider: connectionProvider))
     }
 
     /// Gateway identity the transcript cache is scoped to: the active

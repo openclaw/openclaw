@@ -181,6 +181,46 @@ describe("readConfiguredLogTail", () => {
     });
   });
 
+  it.each([false, true])(
+    "recovers when rotation removes the file before open (follow=%s)",
+    async (follow) => {
+      const { readConfiguredLogTail } = await import("./log-tail.js");
+      const file = path.join(tempDirs.make("openclaw-log-tail-open-"), "configured.log");
+      await fs.writeFile(file, "first record\n");
+      setLoggerOverride({ file });
+      const cursor = follow ? (await readConfiguredLogTail()).cursor : undefined;
+      await fs.appendFile(file, "retired record\n");
+      const realOpen = fs.open.bind(fs);
+      let moved = false;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (!moved && String(args[0]) === file && args[1] === "r") {
+          moved = true;
+          await fs.rename(file, `${file}.retired`);
+        }
+        return realOpen(...args);
+      });
+      const gap = await readConfiguredLogTail({ cursor });
+      expect(moved).toBe(true);
+      expect(gap).toMatchObject({ cursor: 0, size: 0, lines: [], reset: follow, truncated: false });
+      await fs.writeFile(file, "replacement record\n");
+      expect(await readConfiguredLogTail({ cursor: gap.cursor })).toMatchObject({
+        lines: ["replacement record"],
+        reset: false,
+      });
+      expect(await fs.readFile(`${file}.retired`, "utf8")).toBe("first record\nretired record\n");
+    },
+  );
+
+  it("preserves operational failures from file open", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const file = path.join(tempDirs.make("openclaw-log-tail-open-"), "configured.log");
+    await fs.writeFile(file, "first record\n");
+    setLoggerOverride({ file });
+    const error = Object.assign(new Error("open failed"), { code: "EIO" });
+    vi.spyOn(fs, "open").mockRejectedValueOnce(error);
+    await expect(readConfiguredLogTail()).rejects.toBe(error);
+  });
+
   it("holds an unterminated record until a later read completes it", async () => {
     const { readConfiguredLogTail } = await import("./log-tail.js");
     const tempDir = tempDirs.make("openclaw-log-tail-");

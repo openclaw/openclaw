@@ -445,6 +445,38 @@ describe("session roster refresh", () => {
   );
 
   it.each([
+    { kind: "background", options: { backgroundHydrate: true } },
+    { kind: "append", options: { append: true, offset: 1 } },
+  ] as const)(
+    "settles loading when remembered reconciliation follows a queued explicit $kind",
+    async ({ options }) => {
+      const initialList = createDeferred<SessionsListResult>();
+      const refreshed = sessionsResult(
+        [{ key: "agent:main:latest", kind: "direct", updatedAt: 2 }],
+        2,
+      );
+      const request = vi.fn().mockReturnValueOnce(initialList.promise).mockResolvedValue(refreshed);
+      const { sessions } = createSessionCapabilityHarness(request);
+      const active = sessions.refresh({ agentId: "main", force: true });
+      const queued = sessions.refresh({ agentId: "main", limit: 25, force: true, ...options });
+      const remembered = sessions.refreshReplacement();
+      try {
+        expect(sessions.state.loading).toBe(true);
+        initialList.resolve(sessionsResult([], 1));
+        await Promise.all([active, queued, remembered]);
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(sessions.state.loading).toBe(false);
+        expect(sessions.state.result?.sessions).toEqual(refreshed.sessions);
+        expect(sessions.state.error).toBeNull();
+      } finally {
+        initialList.resolve(sessionsResult([], 1));
+        sessions.dispose();
+        await Promise.all([active, queued, remembered]);
+      }
+    },
+  );
+
+  it.each([
     { weakKind: "append", weakOptions: { offset: 25, append: true } },
     { weakKind: "background", weakOptions: { backgroundHydrate: true } },
   ] as const)(
@@ -676,6 +708,7 @@ describe("session roster refresh", () => {
       const active = sessions.refresh({ search: "active", force: true });
       const first = sessions.refreshReplacement("unissued-first").then(retired);
       const second = sessions.refreshReplacement("unissued-second").then(retired);
+      const remembered = sessions.refreshReplacement().then(retired);
 
       try {
         expect(request).toHaveBeenCalledTimes(1);
@@ -687,8 +720,8 @@ describe("session roster refresh", () => {
             publish(true, retirement === "same-client reconnect" ? client : replacement);
           }
         }
-        await waitForFast(() => expect(retired).toHaveBeenCalledTimes(2));
-        expect(retired.mock.calls).toEqual([[null], [null]]);
+        await waitForFast(() => expect(retired).toHaveBeenCalledTimes(3));
+        expect(retired.mock.calls).toEqual([[null], [null], [null]]);
         if (retirement.endsWith("reconnect")) {
           await waitForFast(() => expect(sessions.state.result?.ts).toBe(2));
         } else {
@@ -716,7 +749,7 @@ describe("session roster refresh", () => {
       } finally {
         activeList.resolve(sessionsResult([], 1));
         sessions.dispose();
-        await Promise.all([active, first, second]);
+        await Promise.all([active, first, second, remembered]);
       }
     },
   );

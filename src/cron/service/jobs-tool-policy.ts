@@ -11,6 +11,19 @@ import type {
   CronToolsAllowExecTargetRequirement,
   CronToolsAllowProvenance,
 } from "../types.js";
+import type { CronAddOptions, CronUpdateOptions } from "./state.js";
+
+export function consumeRuntimeAuthorityMutationOptions(
+  opts: CronAddOptions | CronUpdateOptions | undefined,
+): Pick<Parameters<typeof reconcileRuntimeAuthority>[0], "captured" | "runtimeAuthority"> {
+  // Validation-only guards must not look like an empty fresh capture: that
+  // would erase an existing runtime ceiling during an otherwise routine edit.
+  opts?.commitGuard?.();
+  return {
+    captured: opts?.captureRuntimeAuthority !== undefined,
+    runtimeAuthority: opts?.captureRuntimeAuthority?.(),
+  };
+}
 
 function stampScheduledToolPolicy(
   job: CronStoredJob,

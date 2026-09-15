@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import * as bundledSources from "./bundled-sources.js";
 import { attachPluginInstallOwnerMigrations } from "./install-transaction.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
@@ -82,6 +83,7 @@ function installedIndex(params: {
 describe("plugin release cohort package reconciliation", () => {
   const tempDirs: string[] = [];
   afterEach(() => cleanupTrackedTempDirs(tempDirs));
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.resetAllMocks();
     collectMissingPluginInstallPayloadsMock.mockResolvedValue([]);
@@ -99,6 +101,7 @@ describe("plugin release cohort package reconciliation", () => {
   });
 
   it("keeps updates and payload verification active without initial install owners", async () => {
+    const sourceDiscovery = vi.spyOn(bundledSources, "resolveSourceCheckoutBundledPluginIds");
     const config = { plugins: { entries: { unrelated: { enabled: false } } } };
     const records = {
       introduced: {
@@ -145,6 +148,7 @@ describe("plugin release cohort package reconciliation", () => {
       remainingMissingPayloads: remaining,
     });
     expect(loadInstalledPluginIndexMock).not.toHaveBeenCalled();
+    expect(sourceDiscovery).not.toHaveBeenCalled();
   });
 
   it.each(["missing", "replaced", "replaced after sync introduces its owner"] as const)(

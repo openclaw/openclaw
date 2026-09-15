@@ -13,6 +13,76 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Activity recap and screenshot polish" });
 
 suite.define(() => {
+  it.each([1440, 390])("retains the screenshot grid while refreshing at %s px", async (width) => {
+    await suite.withPage(
+      { viewport: { width, height: 1000 }, colorScheme: "light", locale: "en-US" },
+      async ({ page }) => {
+        const fixture = activityPolishFixture();
+        const gateway = await installMockGateway(page, fixture.scenario);
+        await page.goto(`${suite.server.baseUrl}activity`);
+        await gateway.waitForRequest("sessions.list", {
+          match: { includeActivitySummary: true },
+        });
+        const images = await activityPolishImages(page);
+        await gateway.setMethodResponse("artifacts.list", {
+          cases: [
+            { match: { sessionKey: activityPolishKeys.current, type: "image" }, response: images },
+            { response: { artifacts: [] } },
+          ],
+        });
+        await gateway.resolveDeferred("sessions.list", fixture.list);
+        const row = page.locator(".activity-feed__session-row").filter({
+          has: page.locator(`[data-activity-session="${activityPolishKeys.current}"]`),
+        });
+        const thumbnails = row.locator(".chat-message-image-button");
+        await expect.poll(() => thumbnails.count()).toBe(4);
+        await expect
+          .poll(() =>
+            thumbnails
+              .locator("img")
+              .evaluateAll((elements) =>
+                elements.every(
+                  (element) =>
+                    element instanceof HTMLImageElement &&
+                    element.complete &&
+                    element.naturalWidth > 0,
+                ),
+              ),
+          )
+          .toBe(true);
+        const match = { sessionKey: activityPolishKeys.current, type: "image" };
+        const requests = (await gateway.getRequests("artifacts.list", match)).length;
+        await gateway.deferNext("artifacts.list", match);
+        const label = "Repair duplicate notifications: checking follow-up";
+        await gateway.setSessionsListResponse({
+          ...fixture.list,
+          sessions: fixture.list.sessions.map((session) =>
+            session.key === activityPolishKeys.current
+              ? Object.assign({}, session, { label, updatedAt: Date.now() })
+              : session,
+          ),
+        });
+        await gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey: activityPolishKeys.current,
+          reason: "update",
+        });
+        await expect.poll(() => row.textContent()).toContain(label);
+        await expect
+          .poll(async () => (await gateway.getRequests("artifacts.list", match)).length)
+          .toBe(requests + 1);
+        try {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `refresh-gallery-${width}.png`),
+          });
+          expect(await thumbnails.count()).toBe(4);
+        } finally {
+          await gateway.resolveDeferred("artifacts.list", images);
+        }
+        await expect.poll(() => thumbnails.count()).toBe(4);
+      },
+    );
+  });
+
   it.each([
     { width: 1440, height: 1100, colorScheme: "light" as const },
     { width: 390, height: 844, colorScheme: "dark" as const },

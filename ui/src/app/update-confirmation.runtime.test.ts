@@ -130,8 +130,15 @@ it("shows the git target when no package version is available", async () => {
   const { settled } = startUpdate({
     updateAvailable: null,
     updateSchedule: {
-      target: { commitsBehind: 3, kind: "git" },
-    } as unknown as UpdateScheduleState,
+      channel: "dev",
+      autoEnabled: false,
+      target: {
+        commitsBehind: 3,
+        kind: "git",
+        upstreamRef: "origin/main",
+        upstreamSha: "abc1234",
+      },
+    },
   });
   const { modal } = await getRenderedModalDialog(document.body);
 

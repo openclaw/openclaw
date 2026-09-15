@@ -342,14 +342,14 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       call.args,
     );
   };
-  const beginGatewayCapture = (captureKey: string | undefined) => {
+  const beginGatewayCapture = (captureKey: string | undefined, assertCurrent: () => void) => {
     if (!captureKey || gatewayCaptureKey === captureKey) {
       return;
     }
     if (gatewayCaptureKey) {
       throw new Error("CLI MCP capture key changed during an active attempt");
     }
-    context.preparedBackend.mcpClientGrantCapture?.activate(captureKey);
+    context.preparedBackend.mcpClientGrantCapture?.activate(captureKey, assertCurrent);
     gatewayCaptureKey = captureKey;
     const isPotentialDelivery = (toolName: string) =>
       isMessagingTool(normalizeCliMessagingToolName(toolName));

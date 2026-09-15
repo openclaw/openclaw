@@ -15,7 +15,7 @@ import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import type { NestedToolActivity } from "../../../sessions/nested-tool-activity.js";
-import { createOpenClawCodingTools } from "../../agent-tools.js";
+import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import { createSkillInstructionDeliveryCache } from "../../agent-tools.read.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
@@ -376,6 +376,23 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   });
 
   return {
+    toolHookContext: {
+      agentId: params.setup.sessionAgentId,
+      config: attempt.config,
+      cwd: params.setup.effectiveCwd,
+      sessionKey: params.setup.sandboxSessionKey,
+      sessionId: attempt.sessionId,
+      runId: attempt.runId,
+      approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
+      channelId: attempt.currentChannelId,
+      trace: params.runTrace,
+      loopDetection: resolveToolLoopDetectionConfig({
+        cfg: attempt.config,
+        agentId: params.setup.sessionAgentId,
+      }),
+      onToolOutcome: attempt.onToolOutcome,
+      allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
+    },
     get toolAbortSignal() {
       return toolAbortSignal;
     },

@@ -45,6 +45,11 @@ export function historicalV15AgentSchemaSql(): string {
     "\n-- Accepted input stays outside the active transcript until its exact turn owns execution.",
   );
   let sql = restoreHistoricalAgentLeaseSchema(withoutPendingInputs)
+    .replace(
+      "-- Legacy ACP provenance is private import evidence carried with its logical session.\n",
+      "",
+    )
+    .replace("  legacy_acp_migration_json TEXT,\n", "")
     .replace("  entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),\n", "")
     .replace("  project_id TEXT,\n", "")
     .replace("  route_context_json TEXT,\n", "")

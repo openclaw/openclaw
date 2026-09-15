@@ -50,12 +50,18 @@ it.each([true, false, undefined])(
     const store: Record<string, SessionEntry> = {
       "agent:main:subagent:recent": {
         sessionId: "subagent-recent",
-        updatedAt: 5,
+        updatedAt: 6,
         createdActor: { type: "human", source: "profile", id: "profile-bob" },
       },
       "Subagent:legacy": {
         sessionId: "subagent-legacy",
+        updatedAt: 5,
+        createdActor: { type: "human", source: "profile", id: "profile-bob" },
+      },
+      "agent:main:legacy-child": {
+        sessionId: "legacy-child",
         updatedAt: 4,
+        spawnedBy: "agent:main:discussion",
         createdActor: { type: "human", source: "profile", id: "profile-bob" },
       },
       "agent:main:discussion": {
@@ -89,8 +95,8 @@ it.each([true, false, undefined])(
         : ["agent:main:subagent:recent", "Subagent:legacy"],
     );
     expect(result).toMatchObject({
-      totalCount: excludeSubagents ? 3 : 5,
-      peopleSessionCount: excludeSubagents ? 3 : 5,
+      totalCount: excludeSubagents ? 3 : 6,
+      peopleSessionCount: excludeSubagents ? 3 : 6,
       nextOffset: 2,
       hasMore: true,
     });
@@ -99,7 +105,7 @@ it.each([true, false, undefined])(
         ? [["profile-ada", 3]]
         : [
             ["profile-ada", 3],
-            ["profile-bob", 2],
+            ["profile-bob", 3],
           ],
     );
     expect(result.owners?.map((owner) => owner.id)).toEqual(

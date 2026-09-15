@@ -1588,12 +1588,48 @@ describe("config io write prepare", () => {
       tools: { alsoAllow: ["exec", "fetch", "read"] },
     };
     const before = structuredClone(input);
+    const result = applyUnsetPathsForWrite(input, [
+      ["commands", "ownerDisplay"],
+      ["tools", "alsoAllow", "1"],
+    ]);
+    expect(result).toEqual({ gateway: { mode: "local" }, tools: { alsoAllow: ["exec", "read"] } });
+    expect(result).not.toBe(input);
+    expect(result.gateway).toBe(input.gateway);
+    expect(result.tools).not.toBe(input.tools);
+    expect(input).toEqual(before);
+  });
+
+  it.each([
+    {
+      name: "prunes empty objects inside arrays",
+      values: [{ value: "remove" }, { value: "keep" }],
+      paths: [["0", "value"]],
+      expected: [{ value: "keep" }],
+    },
+    {
+      name: "retains emptied arrays",
+      values: ["remove"],
+      paths: [["0"]],
+      expected: [],
+    },
+    {
+      name: "interprets successive indexes against the updated array",
+      values: ["first", "second", "third"],
+      paths: [["0"], ["1"]],
+      expected: ["second"],
+    },
+  ])("$name during explicit unsets", ({ values, paths, expected }) => {
+    const input = { plugins: { entries: { example: { config: { values } } } } };
+    const before = structuredClone(input);
+    const prefix = ["plugins", "entries", "example", "config", "values"];
     expect(
-      applyUnsetPathsForWrite(input, [
-        ["commands", "ownerDisplay"],
-        ["tools", "alsoAllow", "1"],
-      ]),
-    ).toEqual({ gateway: { mode: "local" }, tools: { alsoAllow: ["exec", "read"] } });
+      applyUnsetPathsForWrite(
+        input,
+        paths.map((parts) => [...prefix, ...parts]),
+      ),
+    ).toEqual({
+      plugins: { entries: { example: { config: { values: expected } } } },
+    });
     expect(input).toEqual(before);
   });
 

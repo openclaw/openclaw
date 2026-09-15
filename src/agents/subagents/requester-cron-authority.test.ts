@@ -79,7 +79,14 @@ function createBatch(requesterTurnRunId: string, count = 1): SubagentRunRecord[]
   });
 }
 
-async function inAdminRun<T>(runId: string, run: () => Promise<T>, isCurrent?: () => boolean) {
+async function inAdminRun<T>(
+  runId: string,
+  run: () => Promise<T>,
+  isCurrent?: () => boolean,
+  entitlement: NonNullable<
+    NonNullable<ReturnType<typeof createCronCreatorAuthorityCapability>>["managementEntitlement"]
+  > = { source: "control-ui-admin" },
+) {
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   registerAgentRunContext(runId, {
@@ -90,7 +97,7 @@ async function inAdminRun<T>(runId: string, run: () => Promise<T>, isCurrent?: (
   const capability = createCronCreatorAuthorityCapability(
     runId,
     { kind: "unknown" },
-    true,
+    entitlement,
     isCurrent,
   )!;
   try {
@@ -174,6 +181,76 @@ function consume(batch: SubagentRunRecord[], runId = "continuation") {
 }
 
 describe("requester cron authority lifetime", () => {
+  it.each(["before dispatch", "after admission", "after second yield"])(
+    "rechecks original channel ownership %s without retaining a closed run",
+    async (when) => {
+      let owner = true;
+      const entitlement = { source: "channel-owner" as const, isCurrent: () => owner };
+      const first = createBatch("owner-original");
+      await inAdminRun(
+        "owner-original",
+        async () => expect(mark(first)).toBe(1),
+        undefined,
+        entitlement,
+      );
+      expect(settle(first)).toBe(true);
+      if (when === "before dispatch") {
+        owner = false;
+      }
+      await dispatch(first, async () => {
+        const admission = consume(first);
+        if (when === "before dispatch") {
+          expect(admission).toBeUndefined();
+          return;
+        }
+        expect(admission?.managementEntitlement.source).toBe("channel-owner");
+        expect(admission?.callerOrigin).toEqual({ kind: "unknown" });
+        expect(admission?.isCurrent()).toBe(true);
+        if (when === "after admission") {
+          owner = false;
+          expect(admission?.isCurrent()).toBe(false);
+          return;
+        }
+        const next = createBatch("continuation");
+        await inAdminRun(
+          "continuation",
+          async () => expect(mark(next)).toBe(1),
+          admission!.isCurrent,
+          admission!.managementEntitlement,
+        );
+        expect(settle(next)).toBe(true);
+        await dispatch(
+          next,
+          async () => {
+            const second = consume(next, "second-continuation");
+            expect(second?.isCurrent()).toBe(true);
+            owner = false;
+            expect(second?.isCurrent()).toBe(false);
+          },
+          "second-continuation",
+        );
+      });
+    },
+  );
+
+  it("does not admit an arbitrary child message from the expected child", async () => {
+    const batch = await capture();
+    await dispatch(batch, async () => {
+      expect(
+        consumeRequesterCronAuthorityAdmission({
+          runId: "continuation",
+          sessionKey: SESSION,
+          sessionId: "requester-session",
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceSessionKey: batch[0]!.childSessionKey,
+          },
+        }),
+      ).toBeUndefined();
+      expect(consume(batch)).toBeDefined();
+    });
+  });
   it("transfers cleanup to the exact successor scope without losing session revocation", async () => {
     const batch = await capture();
     await dispatch(batch, async () => {
@@ -181,7 +258,7 @@ describe("requester cron authority lifetime", () => {
       const scope = createCronCreatorAuthorityCapability(
         "continuation",
         { kind: "unknown" },
-        true,
+        admission.managementEntitlement,
         admission.isCurrent,
       )!;
       admission.bindRunScope(scope);

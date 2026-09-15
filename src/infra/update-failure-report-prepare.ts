@@ -151,7 +151,7 @@ function resolveFailedSteps(input: UpdateFailureReportInput): ReportedFailedStep
         ? [
             {
               name: step.step,
-              exitCode: null,
+              exitCode: step.exitCode ?? null,
               failureFacts: step.failureFacts,
               detail: step.detail,
             },
@@ -179,7 +179,8 @@ function resolveUpdateTarget(
   input: UpdateFailureReportInput,
   context: UpdateFailureReportContext,
 ): string {
-  const explicit = input.target?.trim();
+  const explicit =
+    input.target?.trim() || input.recordedRun?.target?.sha || input.recordedRun?.target?.version;
   if (explicit) {
     // update.run records these two display forms from validated campaign facts.
     // Revalidate their scalar payloads before adding the fixed display words.
@@ -322,6 +323,7 @@ export async function prepareUpdateFailureReport(
     result: {
       ...request.result,
       reason: request.result.reason ?? recordedRun?.reason ?? undefined,
+      after: request.result.after ?? recordedRun?.after,
     },
   };
   const env = options.env ?? process.env;

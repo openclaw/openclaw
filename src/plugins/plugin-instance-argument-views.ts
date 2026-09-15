@@ -69,8 +69,7 @@ function restorePluginArgumentViews(
           }
         }
       }
-    }
-    if (parent) {
+    } else if (parent) {
       const previous = parents.get(value);
       if (!previous) {
         parents.set(value, parent);

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { ensureColumn, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
@@ -88,6 +89,27 @@ export class UserProfileOwnerError extends Error {
 const ensuredDatabases = new WeakSet<DatabaseSync>();
 const roleEnsuredDatabases = new WeakSet<DatabaseSync>();
 
+function rememberEnsuredSchema(database: DatabaseSync, cache: WeakSet<DatabaseSync>): void {
+  if (cache.has(database)) {
+    return;
+  }
+  const remember = () => {
+    cache.add(database);
+  };
+  // A nested ensure is valid in its transaction but must disappear with its savepoint.
+  if (
+    !stageSqliteTransactionState(database, {
+      stage: remember,
+      rollback: () => {
+        cache.delete(database);
+      },
+      commit: remember,
+    })
+  ) {
+    remember();
+  }
+}
+
 export function ensureUserProfilesSchema(
   options: OpenClawStateDatabaseOptions,
   database = openOpenClawStateDatabase(options),
@@ -106,9 +128,9 @@ export function ensureUserProfilesSchema(
     { operationLabel: "user-profiles.schema.ensure" },
   );
   // A rolled-back ensure must retry rather than caching a missing table/column.
-  ensuredDatabases.add(database.db);
+  rememberEnsuredSchema(database.db, ensuredDatabases);
   if (hasRoleColumn) {
-    roleEnsuredDatabases.add(database.db);
+    rememberEnsuredSchema(database.db, roleEnsuredDatabases);
   }
 }
 
@@ -128,8 +150,8 @@ export function ensureUserProfileRoleSchema(
     options,
     { operationLabel: "user-profiles.role.schema.ensure" },
   );
-  // Cache only a committed ensure so rolled-back additions remain retryable.
-  roleEnsuredDatabases.add(database.db);
+  // Keep the cache aligned with both nested rollback and the outer commit.
+  rememberEnsuredSchema(database.db, roleEnsuredDatabases);
 }
 
 export function hasEnsuredUserProfileRoleSchema(database: DatabaseSync): boolean {

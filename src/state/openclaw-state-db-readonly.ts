@@ -403,6 +403,32 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
   );
 }
 
+/** Publication guards need current rows, never an inherited discovery snapshot. */
+export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
+  operation: (database: OpenClawStateReadOnlyDatabase) => T,
+  options: OpenClawStateDatabaseOptions = {},
+): T | undefined {
+  return stateSnapshotReads.exit(() => {
+    const pathname = resolveReadOnlyPath(options);
+    const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);
+    if (reused.reused) {
+      return reused.value;
+    }
+    if (existingPathOrUndefined(pathname) === undefined) {
+      return undefined;
+    }
+    openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+      pathname,
+      options.env ?? process.env,
+    );
+    return withOpenClawStateReadOnlyLocation(
+      operation,
+      pathname,
+      prepareSqliteReadOnlyLocationSync(pathname),
+    );
+  });
+}
+
 /** Preserve source artifacts while allowing the caller to progress during snapshot preparation. */
 export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,

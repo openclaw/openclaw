@@ -457,13 +457,14 @@ export function projectChatTranscript(
       if (!firstGroup) {
         return nothing;
       }
-      if (item.groups.length === 1) {
-        return renderMessageGroup(firstGroup, renderGroupOptions(firstGroup));
-      }
-      return renderActivityGroup(item.groups, renderGroupOptions(firstGroup));
+      return item.groups.length === 1
+        ? renderMessageGroup(firstGroup, renderGroupOptions(firstGroup))
+        : renderActivityGroup(item.groups, renderGroupOptions(firstGroup));
     }
     if (item.kind === "agent-run-frame") {
       return renderAgentRunFrame(item, {
+        basePath: props.basePath,
+        sessionPublicOrigin: props.sessionPublicOrigin,
         streamOptions: streamGroupOptions,
         renderGroupOptions,
         isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
@@ -678,6 +679,8 @@ export function projectChatTranscript(
     showOwnSenderName,
     props.userAvatar,
     props.resourceBasePath,
+    props.basePath,
+    props.sessionPublicOrigin,
     mediaPolicyKey,
     props.assistantAttachmentAuthToken,
     props.connectionEpoch,

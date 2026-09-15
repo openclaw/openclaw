@@ -10,6 +10,8 @@ export type TerminationReason =
 
 /** Producer-owned activity; a settled result does not establish descendant extinction. */
 export type ProcessRunActivity = {
+  /** Absolute deadline accepted when the supervisor armed the overall timeout. */
+  readonly deadlineAtMs?: number;
   readonly resultSettled: boolean;
   readonly lastOutputAtMs: number;
 };
@@ -107,6 +109,8 @@ type SpawnBaseInput = {
   maxCapturedOutputChars?: number;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
+  /** Revoke caller-owned capabilities when cancellation starts, before native termination. */
+  onCancel?: (reason: TerminationReason) => void;
 };
 
 type SpawnChildInput = SpawnBaseInput & {

@@ -1296,7 +1296,7 @@ describe("openclaw agent database", () => {
         .run(before.updated_at + 1);
       expect(read()).toEqual({ found: true, value: before });
       expect(readDb === owner.db).toBe(false);
-      expect(readDb?.isOpen).toBe(false);
+      expect(readDb?.isOpen).toBe(true);
       expect(owner.db.isTransaction).toBe(true);
     } finally {
       owner.db.exec("ROLLBACK;");

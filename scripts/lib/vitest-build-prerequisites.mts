@@ -26,6 +26,15 @@ export type VitestRuntimeTestSelection = {
 // while unrelated workers may still be importing its public plugin facades.
 const runtimeConsumers = [
   {
+    file: "src/gateway/setup-inference.first-signin.integration.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "src/gateway",
+  },
+  {
     file: "src/plugins/loader.test.ts",
     configs: ["test/vitest/vitest.bundled.config.ts"],
     mode: "runtime",

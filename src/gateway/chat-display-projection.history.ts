@@ -78,6 +78,15 @@ function readAssistantTtsSupplementMarker(
   return hasSupplementBlock ? marker : undefined;
 }
 
+/** Recognize stored supplements using the same display content as full history. */
+export function isAssistantTtsSupplementMessage(message: unknown): boolean {
+  const record = readRecord(message);
+  return (
+    record !== undefined &&
+    readAssistantTtsSupplementMarker(projectAssistantDisplayContent(record)) !== undefined
+  );
+}
+
 function readTtsSupplementTargetText(message: Record<string, unknown>): string {
   return asRoleContentMessage(message)?.role === "assistant" &&
     !isProjectedSessionsSendForwardedMessage(message) &&

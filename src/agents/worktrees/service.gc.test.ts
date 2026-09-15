@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
+import * as pidAlive from "../../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as worktreeGit from "./git.js";
 import { requireGit } from "./git.js";
@@ -290,13 +291,69 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(getRegistryWorktree(env, inactive.id)?.removedAt).toBeDefined();
   });
 
-  it("protects foreign locks during idle garbage collection", async () => {
-    const created = await materializeRunOwnedFixture("foreign-lock", "session");
-    await git(repo, "worktree", "lock", "--reason", "other-tool", created.path);
+  it("shares one fresh lock inventory across idle and limit prefilters for a repository", async () => {
+    const records = [];
+    for (let index = 0; index < 3; index++) {
+      const record = await materializeRunOwnedFixture(`foreign-lock-${index}`, "session");
+      await git(repo, "worktree", "lock", "--reason", "other-tool", record.path);
+      records.push(record);
+    }
     now += IDLE_GC_MS + 1;
+    const inventories = vi.spyOn(worktreeGit, "listGitWorktrees");
+    const warnLogs = createWarnLogCapture("openclaw-worktree-gc-lock-inventory");
+    try {
+      expect((await service.gc({ limits: { maxCount: 1 } })).removed).toEqual([]);
+      expect(inventories).toHaveBeenCalledTimes(1);
+      for (const record of records) {
+        expect(await fs.stat(record.path)).toBeTruthy();
+      }
+      // A later collection must discover an externally released lock.
+      await git(repo, "worktree", "unlock", records[0]!.path);
+      expect((await service.gc()).removed).toEqual([records[0]!.id]);
+    } finally {
+      inventories.mockRestore();
+      warnLogs.cleanup();
+    }
+  });
 
-    expect((await service.gc()).removed).toEqual([]);
-    expect(await fs.stat(created.path)).toBeTruthy();
+  it("rechecks a lock acquired after the GC prefilter before removing the checkout", async () => {
+    const record = await materializeRunOwnedFixture("late-foreign-lock", "session");
+    now += IDLE_GC_MS + 1;
+    const readInventory = worktreeGit.listGitWorktrees;
+    const inventories = vi
+      .spyOn(worktreeGit, "listGitWorktrees")
+      .mockImplementationOnce(async (...args) => {
+        const entries = await readInventory(...args);
+        await git(repo, "worktree", "lock", "--reason", "acquired after inspection", record.path);
+        return entries;
+      });
+    const warnLogs = createWarnLogCapture("openclaw-worktree-gc-late-lock");
+    try {
+      expect((await service.gc()).removed).toEqual([]);
+      expect(inventories.mock.calls.length).toBeGreaterThan(1);
+      expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
+      expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
+      expect(await warnLogs.findText("acquired after inspection")).toBeDefined();
+    } finally {
+      inventories.mockRestore();
+      warnLogs.cleanup();
+    }
+  });
+
+  it("checks process liveness only for the requested GC candidates", async () => {
+    const manual = await materializeDownstreamFixture("unrelated-live-lock");
+    const candidate = await materializeRunOwnedFixture("candidate-live-lock", "session");
+    await git(repo, "worktree", "lock", "--reason", `openclaw pid=${process.ppid}`, manual.path);
+    await git(repo, "worktree", "lock", "--reason", `openclaw pid=${process.pid}`, candidate.path);
+    now += IDLE_GC_MS + 1;
+    const liveness = vi.spyOn(pidAlive, "isPidDefinitelyDead");
+    try {
+      expect((await service.gc()).removed).toEqual([]);
+      expect(liveness).toHaveBeenCalledWith(process.pid);
+      expect(liveness).not.toHaveBeenCalledWith(process.ppid);
+    } finally {
+      liveness.mockRestore();
+    }
   });
 
   it("protects a visible nested repository while collecting another idle worktree", async () => {

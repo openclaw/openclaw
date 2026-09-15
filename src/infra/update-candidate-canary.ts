@@ -160,6 +160,7 @@ export async function validateUpdateCandidateCanary(params: {
         .map((line) => line.slice(-512)),
     );
     logTail.splice(0, Math.max(0, logTail.length - 40));
+    return safe;
   };
   const launch = (entry: string, args: string[]) => {
     params.assertCurrent?.();
@@ -172,6 +173,18 @@ export async function validateUpdateCandidateCanary(params: {
     });
     let stdout = "";
     let firstStderrLine: string | undefined;
+    let cliReason: string | undefined;
+    const captureStderr = (line: string) => {
+      if (!line.trim()) {
+        return;
+      }
+      const safe = redactSupportDiagnosticLine(line, { env, stateDir: params.stateDir });
+      firstStderrLine ??= safe;
+      // The CLI prints a generic heading before its actual failure reason.
+      if (line.startsWith("[openclaw] Reason: ")) {
+        cliReason ??= safe.replace(/^\[openclaw\] Reason: /u, "");
+      }
+    };
     let stdoutBytes = 0;
     let outputExceeded = false;
     const flushers = [child.stdout, child.stderr].map((stream) => {
@@ -193,11 +206,8 @@ export async function validateUpdateCandidateCanary(params: {
         const lines = pending.split(/\r?\n/u);
         pending = lines.pop() ?? "";
         for (const line of lines) {
-          if (stream === child.stderr && line.trim()) {
-            firstStderrLine ??= redactSupportDiagnosticLine(line, {
-              env,
-              stateDir: params.stateDir,
-            });
+          if (stream === child.stderr) {
+            captureStderr(line);
           }
           capture(line);
         }
@@ -213,11 +223,8 @@ export async function validateUpdateCandidateCanary(params: {
       });
       return () => {
         if (pending) {
-          if (stream === child.stderr && pending.trim()) {
-            firstStderrLine ??= redactSupportDiagnosticLine(pending, {
-              env,
-              stateDir: params.stateDir,
-            });
+          if (stream === child.stderr) {
+            captureStderr(pending);
           }
           capture(pending);
           pending = "";
@@ -256,7 +263,7 @@ export async function validateUpdateCandidateCanary(params: {
       closed,
       hasExited: () => exited,
       stdout: () => stdout,
-      firstStderrLine: () => firstStderrLine,
+      firstStderrLine: () => cliReason ?? firstStderrLine,
       outputExceeded: () => outputExceeded,
     };
   };
@@ -579,6 +586,7 @@ export async function validateUpdateCandidateCanary(params: {
         signal: params.signal,
         assertCurrent: params.assertCurrent,
         hasExited: running.hasExited,
+        getExitReason: running.firstStderrLine,
         env,
         stateDir: params.stateDir,
         onEndpoint: (endpoint) => {
@@ -619,8 +627,9 @@ export async function validateUpdateCandidateCanary(params: {
       steps,
     };
   } catch (error) {
-    capture(
-      `${phase}: ${error instanceof Error ? error.message : String(error)} (${Date.now() - started}ms)`,
+    const durationMs = Date.now() - started;
+    const failureLine = capture(
+      `${phase}: ${error instanceof Error ? error.message : String(error)} (${durationMs}ms)`,
     );
     let failed = steps.at(-1);
     if (!failed || failed.exitCode === 0 || failed.advisory) {
@@ -636,7 +645,6 @@ export async function validateUpdateCandidateCanary(params: {
       };
       steps.push(failed);
     }
-    failed.stderrTail = logTail.join("\n");
     if (error instanceof UpdateSnapshotCapacityError) {
       failed.snapshotCapacity = error.capacity;
     }
@@ -651,6 +659,11 @@ export async function validateUpdateCandidateCanary(params: {
         env,
       ),
     ];
+    // Keep the aggregate log, but do not replay a complete fact as generated timing metadata.
+    const repeatsFact = failed.failureFacts.some(
+      (fact) => failureLine === `${phase}: ${fact.message} (${durationMs}ms)`,
+    );
+    failed.stderrTail = logTail.slice(0, repeatsFact ? -1 : undefined).join("\n");
     params.onStep?.(failed);
     return {
       status: "error",

@@ -51,6 +51,7 @@ export function normalizeReferenceInputs(params: {
     pluralKey: params.pluralKey,
     maxCount: params.maxCount,
     label: `reference ${params.pluralKey}`,
+    dedupe: false,
   });
 }
 

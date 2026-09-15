@@ -80,6 +80,7 @@ export const UpdateRunRecordSchema = closedObject({
       status: Type.Enum(UPDATE_RUN_STEP_STATUSES),
       startedAtMs: Type.Optional(timestamp),
       endedAtMs: Type.Optional(timestamp),
+      exitCode: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
       detail: Type.Optional(text),
       failureFacts: Type.Optional(
         Type.Array(

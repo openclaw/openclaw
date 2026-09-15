@@ -326,7 +326,7 @@ describe("ModelProvidersPage profile actions", () => {
 
   it("cancels safely and logs out only the confirmed account's credential owner", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
-    const { agentSelection, context, notifySelection, publishPhase, request, snapshot } =
+    const { settingsAgentSelection, context, notifySelection, publishPhase, request, snapshot } =
       createHarness("writer");
     snapshot.hello = {
       ...snapshot.hello,
@@ -405,7 +405,7 @@ describe("ModelProvidersPage profile actions", () => {
 
       for (const invalidate of [
         () => {
-          agentSelection.state.selectedId = "main";
+          settingsAgentSelection.state.selectedId = "main";
           notifySelection();
         },
         () => publishPhase("connecting"),
@@ -419,7 +419,7 @@ describe("ModelProvidersPage profile actions", () => {
         );
         confirm.click();
         expect(requestCount(request, "models.authLogout")).toBe(0);
-        agentSelection.state.selectedId = "writer";
+        settingsAgentSelection.state.selectedId = "writer";
         notifySelection();
         publishPhase("connected");
         if (!page.isConnected) {

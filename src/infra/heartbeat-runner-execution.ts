@@ -31,14 +31,11 @@ import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { getAgentEventLifecycleGeneration } from "./agent-events.js";
 import { formatErrorMessage } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
+import { tryResolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
+import { resolveHeartbeatForWake, type HeartbeatConfig } from "./heartbeat-config.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
-import {
-  heartbeatLog as log,
-  resolveHeartbeatForWake,
-  shouldUseHeartbeatResponseToolPrompt,
-  tryResolveAmbientHeartbeatAgentId,
-  type HeartbeatConfig,
-} from "./heartbeat-runner-config.js";
+import { heartbeatLog as log } from "./heartbeat-log.js";
+import { shouldUseHeartbeatResponseToolPrompt } from "./heartbeat-runner-config.js";
 import {
   resolveHeartbeatPreflight,
   resolveHeartbeatRunPrompt,

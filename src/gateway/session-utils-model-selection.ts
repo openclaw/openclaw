@@ -1,9 +1,10 @@
 import { readSessionRuntimeOwnership } from "../agents/harness/session-runtime-ownership.js";
-import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import type { ModelManifestNormalizationContext } from "../agents/model-ref-shared.js";
+import { resolveSessionModelRefCore } from "../agents/session-model-ref.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
-  resolveStoredModelOverride,
+  resolveStoredModelOverrideCore,
   type StoredModelOverride,
 } from "../sessions/stored-model-overrides.js";
 import type {
@@ -11,14 +12,16 @@ import type {
   SessionListRowContext,
 } from "./session-utils-contracts.js";
 
-export function resolveSessionSelectedModelRef(params: {
-  cfg: OpenClawConfig;
-  source: GatewaySessionModelSource;
-  agentId: string;
-  sessionKey?: string;
-  rowContext?: Pick<SessionListRowContext, "selectedModelByOverrideRef">;
-  allowPluginNormalization?: boolean;
-}): ReturnType<typeof resolveSessionModelRef> & {
+export function resolveSessionSelectedModelRef(
+  params: {
+    cfg: OpenClawConfig;
+    source: GatewaySessionModelSource;
+    agentId: string;
+    sessionKey?: string;
+    rowContext?: Pick<SessionListRowContext, "selectedModelByOverrideRef">;
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+): ReturnType<typeof resolveSessionModelRefCore> & {
   storedOverrideSource: StoredModelOverride["source"] | null;
 } {
   // Ownership is session-specific; never reuse the ordinary override cache for native tuples.
@@ -35,12 +38,13 @@ export function resolveSessionSelectedModelRef(params: {
   const defaultKey = `${cachePrefix}\0\0`;
   let configuredDefault = params.rowContext?.selectedModelByOverrideRef.get(defaultKey);
   if (!configuredDefault) {
-    configuredDefault = resolveSessionModelRef(params.cfg, undefined, params.agentId, {
+    configuredDefault = resolveSessionModelRefCore(params.cfg, undefined, params.agentId, {
       allowPluginNormalization: params.allowPluginNormalization,
+      manifestPlugins: params.manifestPlugins,
     });
     params.rowContext?.selectedModelByOverrideRef.set(defaultKey, configuredDefault);
   }
-  const storedOverride = resolveStoredModelOverride({
+  const storedOverride = resolveStoredModelOverrideCore({
     // A prepared miss is authoritative; the presentation store can contain another owner's alias.
     loadSessionEntry: params.source.loadSessionEntry,
     sessionEntry: params.source.entry,
@@ -48,6 +52,7 @@ export function resolveSessionSelectedModelRef(params: {
     parentSessionKey: params.source.entry?.parentSessionKey,
     defaultProvider: configuredDefault.provider,
     allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
   });
   if (!storedOverride) {
     return { ...configuredDefault, storedOverrideSource: null };
@@ -68,8 +73,9 @@ export function resolveSessionSelectedModelRef(params: {
   if (cached) {
     return { ...cached, storedOverrideSource: storedOverride.source };
   }
-  const selected = resolveSessionModelRef(params.cfg, selectedEntry, params.agentId, {
+  const selected = resolveSessionModelRefCore(params.cfg, selectedEntry, params.agentId, {
     allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
   });
   params.rowContext?.selectedModelByOverrideRef.set(key, selected);
   return { ...selected, storedOverrideSource: storedOverride.source };

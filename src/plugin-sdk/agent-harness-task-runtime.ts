@@ -246,13 +246,10 @@ export async function deliverAgentHarnessTaskCompletion(params: {
   const deliver = () =>
     deliverSubagentAnnouncement({
       requesterSessionKey,
-      announceId: params.announceId,
       triggerMessage: prompt,
       steerMessage: prompt,
       internalEvents,
-      summaryLine: taskLabel,
       requesterSessionOrigin: scope.requesterOrigin,
-      requesterOrigin: completionDirectOrigin ?? directOrigin,
       completionDirectOrigin: completionDirectOrigin ?? directOrigin,
       directOrigin,
       sourceSessionKey: childSessionKey,

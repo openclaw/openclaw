@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../../config/types.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
   collectDoctorConfigRepairPluginIds,
+  isPluginDoctorMigrationDeferred,
 } from "../../../plugins/doctor-contract-registry.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { isRecord } from "./legacy-config-record-shared.js";
@@ -76,6 +77,9 @@ function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: strin
 function resolveBundledChannelCompatibilityNormalizer(
   channelId: string,
 ): ChannelDoctorCompatibilityNormalizer | undefined {
+  if (isPluginDoctorMigrationDeferred(channelId)) {
+    return undefined;
+  }
   const contractNormalizer =
     loadBundledChannelDoctorContractApi(channelId)?.normalizeCompatibilityConfig;
   if (typeof contractNormalizer === "function") {

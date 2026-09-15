@@ -527,6 +527,12 @@ async function migrateSource(
         // blocking every later Gateway startup.
         return retainNotice(`its session is owned by agent harness ${owner.agentHarnessId}`);
       }
+      const readEvidence = params.context.readSessionIdentityEvidenceBatch;
+      const canonicalOwner =
+        owner && readEvidence
+          ? (await readEvidence([{ agentId: owner.agentId, sessionId: owner.sessionId }]))[0]
+          : undefined;
+      const canCreateOwner = !readEvidence || canonicalOwner?.state === "unknown";
       const sourceSessionFile =
         typeof raw.sessionFile === "string" && raw.sessionFile.trim()
           ? raw.sessionFile
@@ -642,7 +648,16 @@ async function migrateSource(
         }
       }
       if (owner) {
-        const ownershipWarning = await recordSessionOwner(owner, params.env);
+        const ownershipResult = await recordSessionOwner(owner, params.env, {
+          canCreateOwner,
+          readEvidence,
+        });
+        const ownershipWarning =
+          typeof ownershipResult === "string"
+            ? ownershipResult
+            : ownershipResult
+              ? "its canonical session was deleted"
+              : undefined;
         if (ownershipWarning) {
           if (sessionEntry?.value.state === "active") {
             const update = store.update;
@@ -672,11 +687,14 @@ async function migrateSource(
           // Imported active session state is retired before reaching here.
           // The remaining sidecar may belong to the new owner, so preserve it
           // as a note; failed retirement and revalidation stay warnings above.
-          return retainNotice(ownershipWarning);
-        }
-        for (const entry of entries) {
-          if (!hasExpected(await store.lookup(entry.key), entry.value)) {
-            return retain(`canonical plugin state changed at ${entry.key}`);
+          if (typeof ownershipResult === "string") {
+            return retainNotice(ownershipWarning);
+          }
+        } else {
+          for (const entry of entries) {
+            if (!hasExpected(await store.lookup(entry.key), entry.value)) {
+              return retain(`canonical plugin state changed at ${entry.key}`);
+            }
           }
         }
       }
@@ -709,7 +727,11 @@ async function migrateSource(
 async function recordSessionOwner(
   owner: LegacyBindingOwner,
   env: NodeJS.ProcessEnv,
-): Promise<string | undefined> {
+  options: {
+    canCreateOwner: boolean;
+    readEvidence: MigrationParams["context"]["readSessionIdentityEvidenceBatch"];
+  },
+): Promise<string | { deleted: true } | undefined> {
   const { patchSessionEntry } = await import("openclaw/plugin-sdk/session-store-runtime");
   const currentIndex = await readLegacySessionIndex(owner.storePath);
   if ("failure" in currentIndex) {
@@ -747,20 +769,26 @@ async function recordSessionOwner(
   }
 
   let observedForeignHarness: string | undefined;
+  let observedCanonicalEntry = false;
   const updated = await patchSessionEntry({
     agentId: owner.agentId,
     env,
-    fallbackEntry: {
-      sessionId: owner.sessionId,
-      updatedAt: currentOwner.entry.updatedAt ?? owner.updatedAt ?? 0,
-      ...(owner.lifecycleRevision ? { lifecycleRevision: owner.lifecycleRevision } : {}),
-    },
+    ...(options.canCreateOwner
+      ? {
+          fallbackEntry: {
+            sessionId: owner.sessionId,
+            updatedAt: currentOwner.entry.updatedAt ?? owner.updatedAt ?? 0,
+            ...(owner.lifecycleRevision ? { lifecycleRevision: owner.lifecycleRevision } : {}),
+          },
+        }
+      : {}),
     preserveActivity: true,
     requireWriteSuccess: true,
     skipMaintenance: true,
     storePath: owner.storePath,
     sessionKey: owner.sessionKey,
-    update: (entry) => {
+    update: (entry, { existingEntry }) => {
+      observedCanonicalEntry = existingEntry !== undefined;
       if (
         entry.sessionId.trim() !== owner.sessionId ||
         entry.lifecycleRevision !== owner.lifecycleRevision
@@ -780,6 +808,14 @@ async function recordSessionOwner(
     },
   });
   if (!updated) {
+    if (!options.canCreateOwner && !observedCanonicalEntry && options.readEvidence) {
+      const current = (
+        await options.readEvidence([{ agentId: owner.agentId, sessionId: owner.sessionId }])
+      )[0];
+      if (current?.state === "absent") {
+        return { deleted: true };
+      }
+    }
     return observedForeignHarness
       ? `its session is owned by agent harness ${observedForeignHarness}`
       : "its session owner changed before Codex ownership could be recorded";

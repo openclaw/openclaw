@@ -6,6 +6,7 @@ import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { serveCompanion } from "./native-desktop.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Native desktop Gateways E2E" });
 const companionFile = (file: string) =>
@@ -68,37 +69,6 @@ async function capture(page: Page, directory: string | undefined, name: string) 
   if (directory) {
     await page.screenshot({ path: path.join(directory, name), animations: "disabled" });
   }
-}
-
-async function serveCompanion(page: Page) {
-  await page.route("**/companion/**", (route) => {
-    const { pathname } = new URL(route.request().url());
-    const file = pathname.slice(pathname.indexOf("/companion/") + "/companion/".length);
-    const sharedFont = [
-      "instrument-sans-latin.woff2",
-      "instrument-sans-latin-ext.woff2",
-      "instrument-sans-OFL.txt",
-    ].includes(file);
-    return route.fulfill({
-      contentType: file.endsWith(".js")
-        ? "text/javascript"
-        : file.endsWith(".css")
-          ? "text/css"
-          : file.endsWith(".svg")
-            ? "image/svg+xml"
-            : file.endsWith(".woff2")
-              ? "font/woff2"
-              : file.endsWith(".txt")
-                ? "text/plain"
-                : "text/html",
-      body: readFileSync(
-        new URL(
-          sharedFont ? `../../public/fonts/${file}` : `../../../apps/linux/ui/${file}`,
-          import.meta.url,
-        ),
-      ),
-    });
-  });
 }
 
 suite.define(() => {

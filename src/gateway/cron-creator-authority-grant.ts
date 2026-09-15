@@ -25,11 +25,18 @@ const activeManagement = new AsyncLocalStorage<{
   assertActive: () => void;
 }>();
 
+/** Admission fact, independent of a run lifetime so an authorized yield can transfer it. */
+export type CronManagementEntitlement =
+  | Readonly<{ source: "control-ui-admin" }>
+  | Readonly<{ source: "channel-owner"; isCurrent: () => boolean }>;
+
 export type CronCreatorAuthorityRunScope = {
   readonly runId: string;
   readonly callerOrigin: CronScheduledToolCallerOrigin;
   readonly signal: AbortSignal;
   readonly grantTokens: Set<string>;
+  readonly managementEntitlement?: CronManagementEntitlement;
+  /** @deprecated Read managementEntitlement. Harness source compatibility lasts through 2026-10-12. */
   readonly controlUiAdmin?: true;
   readonly isCurrent?: () => boolean;
   active: boolean;
@@ -58,7 +65,7 @@ function expiredAuthorityError(): Error & { status: number } {
 export function createCronCreatorAuthorityRunScope(
   runId: string,
   callerOrigin: CronScheduledToolCallerOrigin = { kind: "unknown" },
-  controlUiAdmin?: true,
+  managementEntitlement?: CronManagementEntitlement,
   isCurrent?: () => boolean,
 ): CronCreatorAuthorityRunScope {
   const abortController = new AbortController();
@@ -67,7 +74,10 @@ export function createCronCreatorAuthorityRunScope(
     callerOrigin: normalizeCronScheduledToolCallerOrigin(callerOrigin),
     signal: abortController.signal,
     grantTokens: new Set(),
-    ...(controlUiAdmin ? { controlUiAdmin } : {}),
+    ...(managementEntitlement ? { managementEntitlement } : {}),
+    get controlUiAdmin(): true | undefined {
+      return managementEntitlement?.source === "control-ui-admin" ? true : undefined;
+    },
     ...(isCurrent ? { isCurrent } : {}),
     active: true,
     abort: () => abortController.abort(expiredAuthorityError()),
@@ -84,18 +94,20 @@ export function mintCronCreatorAuthorityGrant(
     !scope.active ||
     scope.signal.aborted ||
     operationSignal?.aborted ||
-    scope.isCurrent?.() === false
+    scope.isCurrent?.() === false ||
+    (scope.managementEntitlement?.source === "channel-owner" &&
+      !scope.managementEntitlement.isCurrent())
   ) {
     throw management ? expiredManagementError() : expiredAuthorityError();
   }
-  if (!management && scope.controlUiAdmin && scope.callerOrigin.kind === "unknown") {
+  if (!management && scope.managementEntitlement && scope.callerOrigin.kind === "unknown") {
     throw new TypeError(
       "Automation creation is not granted to this turn. Use the Automations page to create an automation.",
     );
   }
   if (
     management &&
-    (!scope.controlUiAdmin ||
+    (!scope.managementEntitlement ||
       !CRON_MANAGEMENT_METHODS.some((method) => method === management.method) ||
       management.authority.operationalRunInstance.runId !== scope.runId ||
       !validateAgentRunDelegatedAuthority(management.authority))
@@ -165,6 +177,9 @@ export function consumeCronCreatorAuthorityGrant(
     !scope.active ||
     scope.signal.aborted ||
     entry.operationSignal?.aborted ||
+    scope.isCurrent?.() === false ||
+    (scope.managementEntitlement?.source === "channel-owner" &&
+      !scope.managementEntitlement.isCurrent()) ||
     scope.runId !== runId
   ) {
     if (!scope.active || scope.signal.aborted || entry.operationSignal?.aborted) {
@@ -178,7 +193,7 @@ export function consumeCronCreatorAuthorityGrant(
 
 function expiredManagementError(): TypeError {
   return new TypeError(
-    "Automation admin grant is missing, expired, or already used. Retry from a fresh authenticated Control UI administrator turn, or use the Automations page.",
+    "Automation admin grant is missing, expired, or already used. Retry from a fresh authenticated configured channel owner or Control UI administrator turn, or use the Automations page.",
   );
 }
 
@@ -212,6 +227,8 @@ export async function withCronManagementGrant<T>(
       entry.scope.signal.aborted ||
       entry.operationSignal?.aborted ||
       entry.scope.isCurrent?.() === false ||
+      (entry.scope.managementEntitlement?.source === "channel-owner" &&
+        !entry.scope.managementEntitlement.isCurrent()) ||
       Date.now() >= management.expiresAtMs ||
       !validateAgentRunDelegatedAuthority(management.authority)
     ) {

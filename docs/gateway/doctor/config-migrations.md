@@ -9,6 +9,27 @@ read_when:
 Checks 0-2 cover config normalization and the legacy config key migrations,
 plus how doctor publishes shared-state schema during an update.
 
+## Missing plugins during migration
+
+A configured plugin that is missing or cannot finish installation does not block
+Doctor, updates, or Gateway startup. OpenClaw records a warning that names the
+plugin, its pending migration, and the command to finish installation or repair.
+The Gateway continues serving the available plugins.
+
+Deferred migrations keep their state and legacy config inputs in place. Config
+repairs can still update unrelated settings, while the pending plugin's retired
+fields remain inactive. After installing or repairing the plugin, run
+`openclaw doctor --fix` to complete its migration and clear the pending warning.
+During an update driven by an older version, plugin installation can remain
+deferred until that updater finishes; its pending inputs receive the same
+protection.
+Session edits and deletions made after the core import remain authoritative when
+the plugin migration resumes.
+
+While a migration is pending, explicit config edits that would change or remove
+its retained inputs are refused with the recovery command. Unrelated settings
+remain writable. Complete the plugin migration before editing those inputs.
+
 ## Schema publication during a 2026.9.2 update
 
 When OpenClaw 2026.9.2 drives an update that needs a newer shared-state schema,

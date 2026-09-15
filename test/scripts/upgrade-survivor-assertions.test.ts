@@ -17,6 +17,8 @@ import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../../src/config/types.plugins.js";
+import type { PluginUpdateOutcome } from "../../src/plugins/update.js";
+import { withEnv } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   writePluginInspectFixture,
@@ -218,6 +220,56 @@ function withPluginResult(patch: Record<string, unknown>) {
   };
 }
 
+function missingCodexUpdateResult() {
+  const message =
+    'Failed to install missing configured plugin "codex" from @openclaw/codex: Package not found on npm: @openclaw/codex@2026.9.4. See https://docs.openclaw.ai/tools/plugin for installable plugins.';
+  const outcomes: PluginUpdateOutcome[] = [
+    {
+      pluginId: "discord",
+      status: "updated",
+      nextVersion: "2026.9.4",
+      message: "Repaired Discord.",
+    },
+    {
+      pluginId: "whatsapp",
+      status: "updated",
+      nextVersion: "2026.9.4",
+      message: "Repaired WhatsApp.",
+    },
+    { pluginId: "codex", status: "error", message },
+  ];
+  const errors: string[] = [];
+  const integrityDrifts: Array<{ pluginId: string }> = [];
+  return {
+    status: "ok",
+    before: { version: "2026.9.2" },
+    after: { version: "2026.9.4" },
+    steps: [
+      { name: "global update", exitCode: 0 },
+      { name: "global install swap", exitCode: 0 },
+      { name: "openclaw doctor", exitCode: 0 },
+    ],
+    run: { status: "succeeded" },
+    postUpdate: {
+      plugins: {
+        status: "warning",
+        warnings: [
+          {
+            pluginId: "codex",
+            reason: message,
+            message:
+              'Plugin "codex" could not be updated. Run `openclaw plugins update codex` to retry.',
+            guidance: ["openclaw plugins update codex"],
+          },
+        ],
+        sync: { errors },
+        npm: { outcomes },
+        integrityDrifts,
+      },
+    },
+  };
+}
+
 describe("upgrade recovery result assertions", () => {
   it("recovers consent warnings emitted after a historical successful core update", () => {
     const core = {
@@ -362,6 +414,170 @@ describe("upgrade recovery result assertions", () => {
     expect(
       runPrefixedJsonAssertion("assert-successful-update-json", result, "2026.8.1").status,
     ).toBe(0);
+  });
+
+  describe("missing Codex migration update result", () => {
+    const scenarioEnv = {
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "missing-configured-plugin-migration",
+    };
+    const check = (report: ReturnType<typeof missingCodexUpdateResult>) =>
+      withEnv(scenarioEnv, () =>
+        runJsonAssertion("assert-successful-update-json", report, "2026.9.4"),
+      );
+
+    it("accepts the successful published update with its named unavailable-Codex warning", () => {
+      const result = check(missingCodexUpdateResult());
+      expect(result.status, result.stderr).toBe(0);
+    });
+
+    it("keeps the same failed-attempt history invalid for the base scenario", () => {
+      const result = withEnv({ OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base" }, () =>
+        runJsonAssertion("assert-successful-update-json", missingCodexUpdateResult(), "2026.9.4"),
+      );
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("successful update failed plugin convergence");
+    });
+
+    const invalidReports: Array<{
+      name: string;
+      mutate: (report: ReturnType<typeof missingCodexUpdateResult>) => void;
+    }> = [
+      {
+        name: "failed update",
+        mutate: (report) => {
+          report.status = "error";
+        },
+      },
+      {
+        name: "unfinished update run",
+        mutate: (report) => {
+          report.run.status = "running";
+        },
+      },
+      {
+        name: "wrong candidate",
+        mutate: (report) => {
+          report.after.version = "2026.9.2";
+        },
+      },
+      {
+        name: "failed core step",
+        mutate: (report) => {
+          report.steps.push({ name: "openclaw doctor", exitCode: 1 });
+        },
+      },
+      {
+        name: "missing final warning status",
+        mutate: (report) => {
+          report.postUpdate.plugins.status = "ok";
+        },
+      },
+      {
+        name: "failed plugin result",
+        mutate: (report) => {
+          report.postUpdate.plugins.status = "error";
+        },
+      },
+      {
+        name: "missing named failure",
+        mutate: (report) => {
+          report.postUpdate.plugins.npm.outcomes = report.postUpdate.plugins.npm.outcomes.filter(
+            (outcome) => outcome.pluginId !== "codex",
+          );
+        },
+      },
+      {
+        name: "unrelated failed plugin",
+        mutate: (report) => {
+          report.postUpdate.plugins.npm.outcomes.push({
+            pluginId: "slack",
+            status: "error",
+            message: "Slack failed.",
+          });
+        },
+      },
+      {
+        name: "Codex consent failure",
+        mutate: (report) => {
+          report.postUpdate.plugins.npm.outcomes = report.postUpdate.plugins.npm.outcomes.map(
+            (outcome) =>
+              outcome.pluginId === "codex" && outcome.status === "error"
+                ? { ...outcome, code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED" }
+                : outcome,
+          );
+        },
+      },
+      {
+        name: "different Codex failure",
+        mutate: (report) => {
+          report.postUpdate.plugins.npm.outcomes = report.postUpdate.plugins.npm.outcomes.map(
+            (outcome) =>
+              outcome.pluginId === "codex"
+                ? { ...outcome, message: "Codex package integrity mismatch." }
+                : outcome,
+          );
+          report.postUpdate.plugins.warnings = report.postUpdate.plugins.warnings.map(
+            (warning) => ({ ...warning, reason: "Codex package integrity mismatch." }),
+          );
+        },
+      },
+      {
+        name: "missing warning",
+        mutate: (report) => {
+          report.postUpdate.plugins.warnings = [];
+        },
+      },
+      {
+        name: "warning for another plugin",
+        mutate: (report) => {
+          report.postUpdate.plugins.warnings = report.postUpdate.plugins.warnings.map(
+            (warning) => ({ ...warning, pluginId: "slack" }),
+          );
+        },
+      },
+      {
+        name: "mismatched warning reason",
+        mutate: (report) => {
+          report.postUpdate.plugins.warnings = report.postUpdate.plugins.warnings.map(
+            (warning) => ({ ...warning, reason: "A different failure." }),
+          );
+        },
+      },
+      {
+        name: "missing recovery guidance",
+        mutate: (report) => {
+          report.postUpdate.plugins.warnings = report.postUpdate.plugins.warnings.map(
+            (warning) => ({ ...warning, guidance: [] }),
+          );
+        },
+      },
+      {
+        name: "missing actionable message",
+        mutate: (report) => {
+          report.postUpdate.plugins.warnings = report.postUpdate.plugins.warnings.map(
+            (warning) => ({ ...warning, message: "Codex is unavailable." }),
+          );
+        },
+      },
+      {
+        name: "sync error",
+        mutate: (report) => {
+          report.postUpdate.plugins.sync.errors.push("Registry unavailable.");
+        },
+      },
+      {
+        name: "integrity drift",
+        mutate: (report) => {
+          report.postUpdate.plugins.integrityDrifts.push({ pluginId: "discord" });
+        },
+      },
+    ];
+    it.each(invalidReports)("rejects $name", ({ mutate }) => {
+      const report = missingCodexUpdateResult();
+      mutate(report);
+      const result = check(report);
+      expect(result.status).not.toBe(0);
+    });
   });
 
   it("accepts only a completed core swap stranded on capability consent", () => {

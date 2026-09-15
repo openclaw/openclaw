@@ -539,8 +539,12 @@ gc_pr_worktrees() {
         if ! require_worktree_cleanup_evidence "$dir"; then
           echo "skipping $dir (merge evidence preserved)"
         elif [ "$dry_run" = "true" ]; then
-          echo "would remove $dir (PR #$pr state=$state)"
-          removed=$((removed + 1))
+          if remove_worktree_if_present "$dir" true; then
+            echo "would remove $dir (PR #$pr state=$state)"
+            removed=$((removed + 1))
+          else
+            echo "skipping $dir (cleanup incomplete)"
+          fi
         elif cleanup_pr_worktree "$dir"; then
           echo "removed $dir (PR #$pr state=$state)"
           removed=$((removed + 1))

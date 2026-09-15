@@ -299,7 +299,8 @@ async function readSystemdJournalFallback(params: {
   if (typeof params.cursor === "string" && params.cursor.trim().length > 0) {
     args.push(`--after-cursor=${params.cursor}`);
   } else if (params.since) {
-    args.push(`--since=${params.since}`);
+    // journalctl requires its own timestamp syntax, not the ISO poll timestamp.
+    args.push(`--since=${params.since.replace("T", " ").replace("Z", " UTC")}`);
   } else {
     args.push("-n", String(limit));
   }
@@ -419,7 +420,7 @@ function formatLogLine(
   if (!parsed) {
     return raw;
   }
-  const label = parsed.subsystem ?? parsed.module ?? "";
+  const label = parsed.subsystem ?? parsed.module ?? parsed.plugin ?? "";
   const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain", opts.localTime);
   const level = parsed.level ?? "";
   const levelLabel = level.padEnd(5).trim();

@@ -195,7 +195,7 @@ describe("CronService", () => {
       writer.state.timer = null;
     }
     const previousRevision = cronStoreModule.getCronJobsStoreRevision(store.storePath);
-    const persist = vi.spyOn(cronStoreModule, "saveCronJobsStore");
+    const persist = vi.spyOn(cronStoreModule, "saveCronJobsStoreWithRevision");
     persist.mockClear();
 
     await expect(remove(stale.state, "missing-job")).resolves.toEqual({

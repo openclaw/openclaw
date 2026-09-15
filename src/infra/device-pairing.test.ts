@@ -1669,6 +1669,42 @@ describe("device pairing tokens", () => {
       issuer: { kind: "shared-gateway-auth", generation: "new-generation" },
     });
 
+    const upgrade = await requestDevicePairing(
+      {
+        deviceId: "browser-device-1",
+        publicKey: "public-key-browser-1",
+        clientId: "openclaw-control-ui",
+        clientMode: "webchat",
+        role: "operator",
+        scopes: ["operator.admin"],
+      },
+      baseDir,
+    );
+    const approved = await approveDevicePairing(
+      upgrade.request.requestId,
+      { callerScopes: ["operator.admin"] },
+      baseDir,
+    );
+    expect(approved?.status).toBe("approved");
+    const upgraded = await getPairedDevice("browser-device-1", baseDir);
+    const upgradedToken = requireToken(upgraded?.tokens?.operator?.token);
+    for (const generation of ["new-generation", "later-generation"]) {
+      await expect(
+        verifyDeviceToken({
+          deviceId: "browser-device-1",
+          token: upgradedToken,
+          role: "operator",
+          scopes: ["operator.admin"],
+          requiredSharedGatewaySessionGeneration: generation,
+          baseDir,
+        }),
+      ).resolves.toEqual(
+        generation === "new-generation"
+          ? { ok: true, issuer: { kind: "shared-gateway-auth", generation } }
+          : { ok: false, reason: "issuer-generation-stale" },
+      );
+    }
+
     const rotated = await rotateDeviceToken({
       deviceId: "browser-device-1",
       role: "operator",

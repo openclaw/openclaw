@@ -191,7 +191,13 @@ describePosix("native hosted merge handoff", () => {
     );
     expect(
       JSON.parse(f.git(f.canonical, "show", "refs/openclaw/pr-merge-outcomes/42:outcome.json")),
-    ).toMatchObject({ head: f.head, route: "immediate", phase: "complete" });
+    ).toMatchObject({ head: f.head, route: "immediate", phase: "commented" });
+    // The deliberately modified PR helper is unfinished local work, not disposable proof.
+    expect(existsSync(f.worktree)).toBe(true);
+    expect(readFileSync(join(f.worktree, "scripts/verify-pr-hosted-gates.mjs"), "utf8")).toBe(
+      "throw new Error('PR helper executed');\n",
+    );
+    expect(result.stdout + result.stderr).toContain("worktree has local changes or is locked");
     expect(
       f
         .events()

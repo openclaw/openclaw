@@ -144,7 +144,6 @@ export function loadPluginManifest(
   rejectHardlinks = true,
   rootRealPath?: string,
 ): PluginManifestLoadResult {
-  const manifestPath = path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
   const file = readPluginCacheFile({
     rootDir,
     relativePath: PLUGIN_MANIFEST_FILENAME,
@@ -152,6 +151,9 @@ export function loadPluginManifest(
     maxBytes: MAX_PLUGIN_MANIFEST_BYTES,
     rejectHardlinks,
   });
+  // Aliased roots share this cached result, so retain the checked file's identity
+  // rather than the first caller's path for canonical-root registry/hash reads.
+  const manifestPath = file.ok ? file.path : path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
   if (!file.ok) {
     return matchRootFileOpenFailure(file.failure, {
       path: () => ({

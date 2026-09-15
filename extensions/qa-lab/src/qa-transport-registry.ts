@@ -117,6 +117,9 @@ export function qaTransportSupportsModuleFlows(
   factories: readonly QaTransportAdapterFactory[] | undefined,
   context: Pick<QaTransportFactoryContext, "channelId" | "driver">,
 ): boolean {
+  if (context.driver === "crabline" && context.channelId === "discord") {
+    return true;
+  }
   return factories?.find((factory) => factory.matches(context))?.supportsModuleFlows === true;
 }
 

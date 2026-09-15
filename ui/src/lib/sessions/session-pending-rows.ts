@@ -28,15 +28,22 @@ type SessionReadFields = {
   lastReadAt: number | undefined;
   markedUnreadAt: number | undefined;
 };
+export type SessionArchiveFields = Pick<
+  GatewaySessionRow,
+  "archivedAt" | "archivedBy" | "archiveReason"
+> & { archived: boolean } & Partial<SessionPinFields>;
 export type SessionPatchRowFact = {
   key: string;
   agentId: string;
   sessionId: string;
   updatedAt: number | null;
+  readCutoff?: number;
   fields:
     | SessionPinFields
+    | { pinned: true }
     | SessionReadFields
     | (SessionPinFields & SessionReadFields)
+    | SessionArchiveFields
     | { boardPresentation: GatewaySessionRow["boardPresentation"] };
 };
 export type PendingRowTarget = Readonly<{

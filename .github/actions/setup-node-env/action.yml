@@ -197,6 +197,16 @@ runs:
           -mindepth 1 -maxdepth 2 \( -type d -o -type l \) -name node_modules \
           -exec rm -rf -- {} +
 
+    # hashFiles still traverses excluded dependency trees. Resolve before restore.
+    # Embedded step env is evaluated before its condition; keep the scan guarded
+    # and share its result across cache restore and configuration.
+    - name: Resolve Vitest transform cache generation
+      id: vitest-cache-generation
+      if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
+      shell: bash
+      run: |
+        echo "value=${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}" >> "$GITHUB_OUTPUT"
+
     - name: Restore exact dependency cache
       id: dependency-cache
       if: inputs.cache-mode != 'off' && inputs.dependency-cache == 'true'
@@ -236,15 +246,6 @@ runs:
         # the complete store. Every miss can seed it from the coarser cache,
         # including legacy Blacksmith callers that disabled that old fallback.
         cache-mode: ${{ inputs.cache-mode != 'off' && (inputs.dependency-cache != 'true' || steps.dependency-cache.outputs.cache-hit != 'true') && 'restore' || 'off' }}
-
-    # Embedded step env is evaluated before its condition. Keep this scan in a
-    # guarded script and share its result across cache restore and configuration.
-    - name: Resolve Vitest transform cache generation
-      id: vitest-cache-generation
-      if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
-      shell: bash
-      run: |
-        echo "value=${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**') }}" >> "$GITHUB_OUTPUT"
 
     - name: Restore Vitest transform cache
       id: vitest-cache

@@ -1,9 +1,11 @@
 import { html, type ReactiveController, type ReactiveControllerHost } from "lit";
-import type { ProviderLoginOption } from "../../api/types.ts";
+import type { ModelAuthStatusResult, ProviderLoginOption } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { renderWizardSingleChoice } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import "../../styles/model-setup.css";
 import { initialWizardValue, type ModelSetupWizardState } from "../model-setup/state.ts";
 import {
@@ -13,17 +15,26 @@ import {
 import { renderModelSetupWizard } from "../model-setup/wizard-view.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import type { ModelProviderCard } from "./data.ts";
-import type { ModelProvidersData } from "./load.ts";
+registerSettingsEnglish();
 
 type LoginControllerOptions = {
-  getScope: () => { context: ApplicationContext; agentId: string; data: ModelProvidersData | null };
+  getScope: () => {
+    context: ApplicationContext;
+    agentId: string | null;
+    authStatus?: ModelAuthStatusResult | null;
+  };
   canStart: () => boolean;
   canContinue: () => boolean;
-  refresh: () => Promise<void>;
+  refresh: () => Promise<unknown>;
 };
 
 export class ModelProviderLoginController implements ReactiveController {
-  private picker: { providers?: string[] } | null = null;
+  private picker:
+    | { phase: "loading" }
+    | { phase: "ready"; choices: ProviderLoginOption[]; isCurrent: () => boolean }
+    | { phase: "error"; message: string }
+    | null = null;
+  private inventoryRequest: AbortController | undefined;
   private state: ModelSetupWizardState = { phase: "idle" };
   private value: unknown;
   private generation = 0;
@@ -82,15 +93,18 @@ export class ModelProviderLoginController implements ReactiveController {
     return {
       selectedAgentId: this.options.getScope().agentId,
       onConnect: () => this.open(),
-      connectDisabled: !this.options.canStart() || this.busy || this.loginOptions().length === 0,
+      connectDisabled: !this.options.canStart() || this.busy,
       login: this.render(),
       loginMessage: this.message,
     };
   }
 
-  private loginOptions(providers?: string[]): ProviderLoginOption[] {
+  private loginOptions(
+    providers?: string[],
+    authStatus = this.options.getScope().authStatus,
+  ): ProviderLoginOption[] {
     const choices = new Map<string, ProviderLoginOption>();
-    for (const capability of this.options.getScope().data?.authStatus?.providerCapabilities ?? []) {
+    for (const capability of authStatus?.providerCapabilities ?? []) {
       if (providers && !providers.includes(capability.provider)) {
         continue;
       }
@@ -101,17 +115,67 @@ export class ModelProviderLoginController implements ReactiveController {
     return [...choices.values()].toSorted((a, b) => Number(b.featured) - Number(a.featured));
   }
 
-  open(providers?: string[]): void {
-    if (!this.options.canStart() || this.busy || !this.loginOptions(providers).length) {
+  async open(providers?: string[]): Promise<void> {
+    if (!this.options.canStart() || this.busy) {
       return;
     }
-    this.picker = { providers };
+    const scope = this.options.getScope();
+    const { client, hello } = scope.context.gateway.snapshot;
+    if (!client || !scope.agentId) {
+      return;
+    }
+    const generation = ++this.generation;
+    const controller = new AbortController();
+    this.inventoryRequest = controller;
+    const isCurrent = () => {
+      const current = this.options.getScope();
+      return (
+        generation === this.generation &&
+        current.context.gateway.snapshot.client === client &&
+        current.context.gateway.snapshot.hello === hello &&
+        current.agentId === scope.agentId &&
+        this.options.canContinue()
+      );
+    };
+    this.picker = { phase: "loading" };
     this.message = undefined;
     this.host.requestUpdate();
+    try {
+      const authStatus =
+        scope.authStatus ??
+        (await loadModelAuthStatus(client, {
+          agentId: scope.agentId,
+          signal: controller.signal,
+        }));
+      if (isCurrent()) {
+        this.picker = {
+          phase: "ready",
+          choices: this.loginOptions(providers, authStatus),
+          isCurrent,
+        };
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        this.picker = {
+          phase: "error",
+          message: formatUiError(error, t("modelProviders.requestFailed")),
+        };
+      }
+    } finally {
+      if (generation === this.generation) {
+        this.inventoryRequest = undefined;
+        if (!isCurrent()) {
+          this.picker = null;
+        }
+        this.host.requestUpdate();
+      }
+    }
   }
 
   reset(): void {
     this.generation += 1;
+    this.inventoryRequest?.abort();
+    this.inventoryRequest = undefined;
     this.picker = null;
     this.mutationActive = false;
     this.cancellationPending = false;
@@ -130,7 +194,7 @@ export class ModelProviderLoginController implements ReactiveController {
   render() {
     const picker = this.picker;
     if (picker) {
-      const choices = this.loginOptions(picker.providers);
+      const choices = picker.phase === "ready" ? picker.choices : [];
       return html`
         <openclaw-modal-dialog
           label=${t("modelProviders.login.title")}
@@ -142,26 +206,34 @@ export class ModelProviderLoginController implements ReactiveController {
             </div>
             <div class="model-setup-wizard__body">
               <p>${t("modelProviders.login.description")}</p>
-              ${renderWizardSingleChoice({
-                label: t("modelSetup.manual.provider"),
-                options: choices.map((option) => ({
-                  value: option.id,
-                  label: option.label,
-                  hint: option.hint,
-                })),
-                busy: !this.options.canStart(),
-                onAnswer: (value) => {
-                  const selected = choices.find((option) => option.id === value);
-                  if (!selected || !this.options.canStart()) {
-                    return;
-                  }
-                  this.picker = null;
-                  this.cancellationNotice = null;
-                  this.refreshWarning = null;
-                  this.runner.prepareSignIn(selected.kind);
-                  void this.run(() => this.runner.start(selected.id, "models.authLogin"));
-                },
-              })}
+              ${
+                picker.phase === "loading"
+                  ? html`<div role="status">${t("common.loading")}</div>`
+                  : picker.phase === "error"
+                    ? html`<div role="alert">${picker.message}</div>`
+                    : choices.length === 0
+                      ? html`<div role="status">${t("modelProviders.login.noOptions")}</div>`
+                      : renderWizardSingleChoice({
+                          label: t("modelSetup.manual.provider"),
+                          options: choices.map((option) => ({
+                            value: option.id,
+                            label: option.label,
+                            hint: option.hint,
+                          })),
+                          busy: !this.options.canContinue(),
+                          onAnswer: (value) => {
+                            const selected = choices.find((option) => option.id === value);
+                            if (!selected || picker.phase !== "ready" || !picker.isCurrent()) {
+                              return;
+                            }
+                            this.picker = null;
+                            this.cancellationNotice = null;
+                            this.refreshWarning = null;
+                            this.runner.prepareSignIn(selected.kind, selected.label);
+                            void this.run(() => this.runner.start(selected.id, "models.authLogin"));
+                          },
+                        })
+              }
             </div>
             <div class="model-setup-wizard__footer">
               <button class="btn" @click=${() => this.reset()}>${t("common.cancel")}</button>
@@ -226,10 +298,11 @@ export class ModelProviderLoginController implements ReactiveController {
   }
 
   private async complete(): Promise<void> {
+    const label = this.state.authLabel;
     this.runner.close();
     this.message = {
       kind: "success",
-      text: t("modelProviders.login.done"),
+      text: [label, t("modelProviders.login.done")].filter(Boolean).join(": "),
       ...(this.refreshWarning ? { warning: this.refreshWarning } : {}),
     };
     this.host.requestUpdate();

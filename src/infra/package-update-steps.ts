@@ -29,6 +29,10 @@ import {
   type UpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
 import { createUpdateFailureFact } from "./update-failure-facts.js";
+import {
+  createFreeBsdPkgOwnershipInspection,
+  FreeBsdPkgOwnershipError,
+} from "./update-freebsd-pkg-ownership.js";
 import { readBuiltGatewayBuildId, type GitRuntimeIdentity } from "./update-git-runtime.js";
 import {
   collectInstalledGlobalPackageErrors,
@@ -734,13 +738,17 @@ export async function runGlobalPackageUpdateSteps(params: {
   postVerifyStep?: (packageRoot: string) => Promise<UpdateStepResult | null>;
   validateCandidate?: (packageRoot: string) => Promise<UpdateStepResult[]>;
   beforeActivate?: () => Promise<void>;
+  assertCurrent?: () => void;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
   expectedGitCheckout?: GitRuntimeIdentity;
   activateGitRoot?: string;
   localOverrides?: { reapply: boolean; env?: NodeJS.ProcessEnv };
 }): Promise<PackageUpdateStepsResult> {
   // Transaction callbacks must never silently become an in-place manager install.
+  // FreeBSD pkg ownership also needs staging's exact project and launcher targets;
+  // an in-place package-manager command does not expose that replacement set.
   const requireStaging = Boolean(
+    process.platform === "freebsd" ||
     params.validateCandidate ||
     params.beforeActivate ||
     params.onTransaction ||
@@ -798,6 +806,14 @@ export async function runGlobalPackageUpdateSteps(params: {
   };
 
   try {
+    if (process.platform === "freebsd") {
+      if (!params.installTarget.packageRoot) {
+        throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "paths");
+      }
+      const inspection = createFreeBsdPkgOwnershipInspection(params.timeoutMs);
+      await inspection.assertUnowned(params.packageRoot);
+      await inspection.assertUnowned(params.installTarget.packageRoot);
+    }
     const npmPreflight = await resolveNpmUpdateLifecyclePolicy({
       installTarget: params.installTarget,
     });
@@ -1271,6 +1287,7 @@ export async function runGlobalPackageUpdateSteps(params: {
           packageName: params.packageName,
           postVerifyStep: params.postVerifyStep,
           beforeActivate: params.beforeActivate,
+          assertCurrent: params.assertCurrent,
           onLiveMutation: () => {
             liveTreeMutated = true;
           },
@@ -1351,6 +1368,9 @@ export async function runGlobalPackageUpdateSteps(params: {
   } catch (error) {
     if (error instanceof PackageUpdateActivationError) {
       throw error.cause;
+    }
+    if (error instanceof FreeBsdPkgOwnershipError) {
+      throw error;
     }
     const failedStep: UpdateStepResult = {
       name: "package update",

@@ -395,9 +395,13 @@ describe("Gateway repeated-request provider timeout", () => {
       );
       const completed = events.filter((event) => event.type === "session.recovery.completed");
 
-      expect(stalled).toHaveLength(1);
-      expect(stalled[0]?.ageMs).toEqual(expect.any(Number));
-      expect(stalled[0]?.ageMs as number).toBeGreaterThanOrEqual(PRODUCTION_RECOVERY_BOUND_MS);
+      // The heartbeat can report the same stall again while the provider owns its
+      // request deadline. Every report must still respect the no-progress bound.
+      expect(stalled.length).toBeGreaterThan(0);
+      for (const event of stalled) {
+        expect(event.ageMs).toEqual(expect.any(Number));
+        expect(event.ageMs as number).toBeGreaterThanOrEqual(PRODUCTION_RECOVERY_BOUND_MS);
+      }
       expect(requested).toEqual([]);
       expect(completed).toEqual([]);
       expect(

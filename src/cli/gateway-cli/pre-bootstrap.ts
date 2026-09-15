@@ -366,7 +366,14 @@ async function guardGatewayRunSelectedConfig(
       environment: process.env,
       managedKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
       presentKeys: trustedEnvLoad.dotenvPresentKeys,
-      preserveKeys: collectEnvSecretRefIds(trustedSnapshot.sourceConfig),
+      // Startup repair may relocate a referenced setting, which retires the recorded path along
+      // with it. The read that produced this snapshot still names every variable the config
+      // depends on, and keeping a key one boot too long only defers cleanup, while dropping a
+      // live one refuses startup outright.
+      preserveKeys: new Set([
+        ...collectEnvSecretRefIds(trustedSnapshot.sourceConfig),
+        ...collectEnvSecretRefIds(snapshot.sourceConfig),
+      ]),
     });
     const selectionSignature = resolveGatewayConfigSelectionSignature(process.env);
     applySelectedConfigEnv(trustedSnapshot);

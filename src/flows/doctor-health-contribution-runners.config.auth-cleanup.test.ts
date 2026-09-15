@@ -28,7 +28,8 @@ vi.mock("../config/config.js", async (importOriginal) => ({
       { snapshot: createDoctorConfigSnapshot(), previousHash: null, attempt: 0 },
       {},
     );
-    return mocks.replaceConfigFile({ ...options, nextConfig });
+    await mocks.replaceConfigFile({ ...options, nextConfig });
+    return { nextConfig };
   },
 }));
 

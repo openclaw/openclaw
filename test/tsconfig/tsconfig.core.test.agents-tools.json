@@ -12,6 +12,8 @@
     "../../src/agents/worktrees/**/*.test.tsx",
     "../../src/security/**/*.test.ts",
     "../../src/security/**/*.test.tsx",
+    "../../src/secrets/**/*.test.ts",
+    "../../src/secrets/**/*.test.tsx",
     "../../src/agents/bash-tools*.test.ts",
     "../../src/agents/bash-tools*.test.tsx",
     "../../src/agents/code-mode*.test.ts",

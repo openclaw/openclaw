@@ -63,7 +63,9 @@ Transcript persistence and call close wait for ongoing database maintenance.
 Canceled client transcript requests and replaced chat sessions cannot add new
 speech after that wait. Closing a Gateway-controlled call still drains final
 speech already accepted by its provider owner; failed persistence remains
-retryable before the logical call closes.
+retryable before the logical call closes. Stale-call recovery leaves transcript
+admission open while waiting for maintenance, so a resumed call can retain new
+final speech. An explicit hangup still stops new transcript admission immediately.
 
 Gateway-controlled native WebRTC calls receive shared-session history as quoted
 historical background in their instructions, not as the new call's own user or

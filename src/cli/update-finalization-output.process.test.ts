@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { prepareUpdateFailureReport } from "../infra/update-failure-report-prepare.js";
 import { listUpdateRuns } from "../infra/update-run-ledger.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import {
@@ -30,6 +31,7 @@ const scenarios = [
   "json",
   "inherited-json",
   "doctor-error",
+  "doctor-warning",
   "plugin-error",
   "human",
   "human-plugin-error",
@@ -330,6 +332,42 @@ describe.each(["repair", "finalize"])("update %s process output", (command) => {
         expect(output).toMatchObject({
           ok: false,
           error: { type: "cli_error", message: expect.stringContaining("Doctor repair failed") },
+        });
+        const run = readRun()!;
+        expect(run, failure).toMatchObject({
+          status: "failed",
+          reason: "doctor-failed",
+          target: { kind: "package", version: "2026.9.4" },
+          steps: expect.arrayContaining([
+            expect.objectContaining({ step: "finalize:doctor", status: "failed", exitCode: 1 }),
+          ]),
+        });
+        const report = await prepareUpdateFailureReport(
+          {
+            attemptId: run.runId,
+            recordedRun: run,
+            result: { status: "error", mode: "unknown", steps: [], durationMs: 0 },
+          },
+          { env: { HOME: root, OPENCLAW_STATE_DIR: state }, stateDir: state },
+        );
+        expect(report.body).toContain("Update target: 2026.9.4");
+        expect(report.body).toContain("Update mode: package");
+        expect(report.body).toContain("Reason code: doctor-failed");
+        expect(report.body).toContain("Failed phase finalize:doctor: exit 1");
+        expect(report.body).toContain(
+          "Recovery outcome: package rollback not needed: no package mutation",
+        );
+      } else if (scenario === "doctor-warning") {
+        const warning = "Optional probe failed; run openclaw doctor after updating.";
+        expect(output).toMatchObject({
+          status: "warning",
+          postUpdate: { doctor: { status: "warning", warnings: [warning] } },
+        });
+        expect(readRun(), failure).toMatchObject({
+          status: "succeeded",
+          steps: expect.arrayContaining([
+            expect.objectContaining({ step: "warning:finalize:doctor:0", detail: warning }),
+          ]),
         });
       } else {
         expect(output).toMatchObject({

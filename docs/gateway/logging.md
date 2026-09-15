@@ -186,7 +186,9 @@ The gateway prints WebSocket protocol logs in two modes:
 - **Verbose mode (`--verbose`)**: prints all WS request/response traffic.
 
 With `diagnostics.enabled: true` and warning logging enabled, `sessions.list`
-handlers taking at least one second also emit `slow session list`. The record
+handlers and `sessions.subscribe` snapshot handlers taking at least one second
+also emit `slow session list`. The `operation` field identifies which request
+produced the record. The record
 includes process/thread identity, the request trace, and `cacheRole`: a completed
 cache hit, an in-flight follower, a projection owner, or `unreached` if the handler
 failed before selecting a cache path. Followers can include `workTraceId` and

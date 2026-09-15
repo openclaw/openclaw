@@ -26,6 +26,7 @@ export type QaMockProviderFailure = {
   type: string;
   code?: string;
   message: string;
+  retryAfterSeconds?: number;
   presentation?: "anthropic-thinking";
 };
 

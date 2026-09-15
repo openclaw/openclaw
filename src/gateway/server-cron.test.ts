@@ -11,7 +11,10 @@ import { AgentDeletionCommitUncertainError } from "../agents/agent-lifecycle-reg
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { onTimer as onCronTimer } from "../cron/service/timer.test-support.js";
 import { resolveSkillCollectionReviewMonitorSpecs } from "../cron/skill-collection-review-monitor.js";
+import { loadCronStore } from "../cron/store.js";
+import { cronStoreKey } from "../cron/store/key.js";
 import { resolveHeartbeatSession } from "../infra/heartbeat-runner-session.js";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import {
@@ -28,6 +31,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
   abortSignal?: AbortSignal;
@@ -534,7 +538,9 @@ describe("buildGatewayCronService", () => {
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } satisfies OpenClawConfig;
     const state = loadCronService(cfg);
-    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, { schedulerSeed: "test-seed" });
+    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
+      schedulerSeed: "test-seed",
+    });
 
     if (!spec) {
       throw new Error("expected the skill collection review monitor spec");
@@ -4197,6 +4203,132 @@ describe("buildGatewayCronService", () => {
       expect(resolveGatewayContext).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
+    }
+  });
+
+  it("cleans a failed scheduled activation before a later cron-expression tick executes", async () => {
+    vi.useFakeTimers();
+    const now = Date.parse("2026-08-13T18:15:00.000Z");
+    vi.setSystemTime(now);
+    const cfg = createCronConfig("server-cron-activation-write-failure");
+    const state = loadCronService(cfg);
+    const cronState = getCronState(state);
+    try {
+      const database = openOpenClawStateDatabase().db;
+      try {
+        await state.cron.start();
+        const job = await addAgentTurnJob(state, "activation-failure", "run it", {
+          agentId: "main",
+          deleteAfterRun: false,
+          delivery: { mode: "none" },
+          schedule: { kind: "cron", expr: "* * * * *", staggerMs: 0 },
+        });
+        const storeKey = cronStoreKey(cronState.deps.storePath);
+        const receipts = () =>
+          database
+            .prepare(
+              "SELECT receipt_id, status FROM cron_run_receipts WHERE store_key = ? AND job_id = ? ORDER BY receipt_id",
+            )
+            .all(storeKey, job.id);
+        expect(receipts()).toEqual([]);
+        // Real reservation/activation writes; only this synthetic fault is injected.
+        database.exec(`
+          CREATE TEMP TRIGGER fail_gateway_cron_activation
+          AFTER UPDATE OF state_json ON cron_jobs
+          WHEN NEW.store_key = '${storeKey.replaceAll("'", "''")}'
+            AND NEW.job_id = '${job.id}'
+            AND json_extract(OLD.state_json, '$.queuedAtMs') IS NOT NULL
+            AND json_extract(NEW.state_json, '$.runningAtMs') IS NOT NULL
+          BEGIN
+            SELECT RAISE(ABORT, 'injected scheduled activation failure');
+          END;
+        `);
+        vi.setSystemTime(now + 60_000);
+        // The published timer-test entry calls the real scheduler and joins the tick.
+        await expect(onCronTimer(cronState)).rejects.toThrow(
+          "injected scheduled activation failure",
+        );
+        const failedReceipts = receipts();
+        expect(failedReceipts).toHaveLength(1);
+        expect(failedReceipts[0]).toMatchObject({ status: "skipped" });
+        expect(cronState.queuedRunReservationsByJobId.has(job.id)).toBe(false);
+        expect(cronState.runAdmission.active).toBe(0);
+        expect(cronState.activeTimerTicks).toBe(0);
+        const afterFailure = (await loadCronStore(cronState.deps.storePath)).jobs.find(
+          (entry) => entry.id === job.id,
+        );
+        expect(afterFailure?.state.queuedAtMs).toBeUndefined();
+        expect(afterFailure?.state.runningAtMs).toBeUndefined();
+        expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+        database.exec("DROP TRIGGER fail_gateway_cron_activation");
+
+        vi.setSystemTime(now + 120_000);
+        await onCronTimer(cronState);
+        expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledOnce();
+        expectIsolatedRunFields({ job: expect.objectContaining({ id: job.id }) });
+        const afterTick = (await loadCronStore(cronState.deps.storePath)).jobs.find(
+          (entry) => entry.id === job.id,
+        );
+        expect(afterTick?.state).toMatchObject({ lastRunStatus: "ok" });
+        expect(afterTick?.state.queuedAtMs).toBeUndefined();
+        expect(afterTick?.state.runningAtMs).toBeUndefined();
+        expect(receipts()).toHaveLength(2);
+        expect(receipts()).toEqual(
+          expect.arrayContaining([failedReceipts[0], expect.objectContaining({ status: "ok" })]),
+        );
+        expect(cronState.queuedRunReservationsByJobId.has(job.id)).toBe(false);
+        expect(cronState.runAdmission.active).toBe(0);
+        expect(cronState.activeTimerTicks).toBe(0);
+      } finally {
+        database.exec("DROP TRIGGER IF EXISTS fail_gateway_cron_activation");
+      }
+    } finally {
+      state.cron.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  // Retain holny's execution-failure sibling control separately from activation failure.
+  it("does not skip due cron-expression siblings after an execution failure", async () => {
+    vi.useFakeTimers();
+    const now = Date.parse("2026-08-13T18:15:00.000Z");
+    vi.setSystemTime(now);
+    const cfg = createCronConfig("server-cron-batch-sibling-failure");
+    const state = loadCronService(cfg);
+    try {
+      await state.cron.start();
+      const jobIds: string[] = [];
+      for (const name of ["batch-job-a", "batch-job-b", "batch-job-c"]) {
+        const job = await addAgentTurnJob(state, name, `run ${name}`, {
+          agentId: "main",
+          delivery: { mode: "none" },
+          schedule: { kind: "cron", expr: "* * * * *", staggerMs: 0 },
+        });
+        jobIds.push(job.id);
+      }
+      runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+        throw new Error("first sibling execution failure");
+      });
+      vi.setSystemTime(now + 60_000);
+      await onCronTimer(getCronState(state));
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(3);
+      const attemptedIds = runCronIsolatedAgentTurnMock.mock.calls.map(
+        (_, index) =>
+          requireRecord(
+            requireRecord(
+              callArg(runCronIsolatedAgentTurnMock, index, 0, "scheduled sibling"),
+              "scheduled sibling",
+            ).job,
+            "scheduled sibling job",
+          ).id,
+      );
+      expect(new Set(attemptedIds)).toEqual(new Set(jobIds));
+      expect(getCronState(state).queuedRunReservationsByJobId.size).toBe(0);
+      expect(getCronState(state).runAdmission.active).toBe(0);
+      expect(getCronState(state).activeTimerTicks).toBe(0);
+    } finally {
+      state.cron.stop();
+      vi.useRealTimers();
     }
   });
 });

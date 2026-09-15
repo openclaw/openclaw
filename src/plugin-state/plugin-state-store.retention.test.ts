@@ -291,7 +291,7 @@ describe("plugin state keyed store", () => {
           journalOptions: { namespace: "memory-host.events", maxEntries: 10_000 },
           journalKeyPrefix: "event-",
           journalKeyRange: { keyStartInclusive: "event-", keyEndExclusive: "event." },
-          journalValue: (sequence) => ({ sequence }),
+          journalValue: {},
         }),
       ).toBe(existingCursor ? 10 : 11);
 

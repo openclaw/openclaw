@@ -31,6 +31,7 @@ import type { createSessionMutations } from "./session-mutations.ts";
 import type { SessionPatchRowFact } from "./session-pending-rows.ts";
 import type { createSessionPermissionProjection } from "./session-permission-projection.ts";
 import type { createSessionRosterRefresh } from "./session-roster-refresh.ts";
+import { createSessionWriteObservation, type FieldObservation } from "./session-row-provenance.ts";
 import type { createSessionThinkingClaims } from "./session-thinking-claims.ts";
 
 type Host = {
@@ -45,7 +46,11 @@ type Host = {
   >;
   mutations: Pick<
     ReturnType<typeof createSessionMutations>,
-    "observeArchiveState" | "applyPendingRow" | "observePendingFields"
+    | "observeArchiveState"
+    | "confirmArchiveState"
+    | "applyPendingRow"
+    | "observePendingFields"
+    | "applyConfirmedArchiveRow"
   >;
   thinkingClaims: Pick<ReturnType<typeof createSessionThinkingClaims>, "observeEvent">;
   decorate: (result: SessionsListResult | null) => SessionsListResult | null;
@@ -67,7 +72,7 @@ type Host = {
     | "stageObservedRows"
     | "registerRow"
     | "inherit"
-    | "observeEvent"
+    | "observeFields"
     | "stageManagedResults"
     | "projectRows"
     | "invalidateManagedLists"
@@ -76,6 +81,7 @@ type Host = {
     | "rowRevision"
     | "hasLiveObservation"
     | "projectFields"
+    | "fieldObservation"
   >;
 };
 
@@ -109,6 +115,30 @@ export function createSessionReconciliation(host: Host) {
         return;
       }
       const fields = Object.keys(fact.fields);
+      const observation = createSessionWriteObservation(
+        captured.revision,
+        fact.updatedAt,
+        fact.readCutoff,
+      );
+      let matchedArchiveRow = false;
+      let archiveChanged = false;
+      const confirmArchive = (
+        row: Pick<GatewaySessionRow, "archived" | "archivedAt" | "archivedBy" | "archiveReason">,
+        projectedObservation: FieldObservation,
+      ) => {
+        archiveChanged =
+          host.mutations.confirmArchiveState(
+            owned.key,
+            row.archived === true,
+            {
+              sessionId: owned.sessionId,
+              archivedAt: row.archivedAt,
+              archivedBy: row.archivedBy,
+              archiveReason: row.archiveReason,
+            },
+            projectedObservation,
+          ) || archiveChanged;
+      };
       const reconcileRow = (row: GatewaySessionRow, ownerAgentId?: string | null) => {
         const parsedAgentId = parseAgentSessionKey(row.key)?.agentId;
         const sourceAgentId = parsedAgentId ?? row.agentId ?? ownerAgentId;
@@ -130,14 +160,13 @@ export function createSessionReconciliation(host: Host) {
           }
         }
         host.roster.inheritRow(source, row);
-        const select = host.roster.observeEvent(
-          source,
-          fields,
-          captured.revision,
-          fact.updatedAt,
-          owned.agentId,
-        );
+        const select = host.roster.observeFields(source, fields, observation, owned.agentId);
         const projected = projectRowFields(source, owned.agentId);
+        if ("archived" in fact.fields) {
+          matchedArchiveRow = true;
+          // Field provenance may prefer a newer restore over this acknowledgement.
+          confirmArchive(projected, host.roster.fieldObservation(projected, "archived"));
+        }
         host.mutations.observePendingFields(
           source,
           select(projected, pendingFields),
@@ -161,13 +190,16 @@ export function createSessionReconciliation(host: Host) {
         (entry) => reconcileResult(entry.snapshot.result, entry.snapshot.agentId),
         (entry) => ({
           row: entry.row ? reconcileRow(entry.row, entry.target.agentId) : null,
-          observationRevision: captured.revision,
         }),
       );
       if (!current()) {
         return;
       }
-      if (result !== state.result) {
+      if (!matchedArchiveRow && "archived" in fact.fields) {
+        // An archived row may have left every list before its batch Undo returns.
+        confirmArchive(fact.fields, observation);
+      }
+      if (result !== state.result || archiveChanged) {
         host.publish({ ...state, result: host.decorate(result) });
       }
       staged.notify();
@@ -289,7 +321,9 @@ export function createSessionReconciliation(host: Host) {
         deletions.deletionState(row.key, owned.agentId, row.sessionId)
           ? null
           : host.mutations.applyPendingRow(
-              host.permissions.applyRow(row, roster.rowRevision(row), owned.agentId),
+              host.mutations.applyConfirmedArchiveRow(
+                host.permissions.applyRow(row, roster.rowRevision(row), owned.agentId),
+              ),
               owned.agentId,
             ),
     });
@@ -451,14 +485,16 @@ export function createSessionReconciliation(host: Host) {
         : admitted;
       roster.inheritRow(corrected, previousRow);
       const source = roster.inheritRow({ ...corrected }, corrected);
-      const select = roster.observeEvent(
+      const select = roster.observeFields(
         source,
         fields,
-        eventObservation.revision,
-        eventInfo?.updatedAt ?? null,
+        createSessionWriteObservation(eventObservation.revision, eventInfo?.updatedAt ?? null),
         ownerAgentId,
       );
       const projected = projectRowFields(source, ownerAgentId);
+      if (eventInfo && eventInfo.archived !== null) {
+        mutations.observeArchiveState(projected.key, projected.archived === true, projected);
+      }
       mutations.observePendingFields(source, select(projected, pendingFields), ownerAgentId);
       return projected;
     };
@@ -482,13 +518,6 @@ export function createSessionReconciliation(host: Host) {
         // A primary admission keeps its claim policy; managed-only members must
         // not be mistaken for a created row that no list has observed yet.
         acceptedResult ??= result;
-        if (result.key && eventInfo) {
-          mutations.observeArchiveState(
-            result.key,
-            eventInfo.archived === null ? null : result.admittedRow?.archived === true,
-            result.admittedRow,
-          );
-        }
       }
       return result;
     };
@@ -546,7 +575,6 @@ export function createSessionReconciliation(host: Host) {
         }
         return {
           row: reduced.row ?? null,
-          observationRevision: eventObservation.revision,
           ...(!reduced.deletedKey ? { invalidateRevision: eventObservation.revision } : {}),
         };
       },

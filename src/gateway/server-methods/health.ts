@@ -85,11 +85,11 @@ function cachedHealthDiffersFromRuntime(
 }
 
 /** Merges cheap live runtime facts into a cached health summary before responding. */
-function mergeCachedHealthRuntimeState(params: {
+async function mergeCachedHealthRuntimeState(params: {
   cached: HealthSummary;
   eventLoop?: HealthSummary["eventLoop"];
   configReloadHotReloadStatus?: GatewayHotReloadStatus;
-}): HealthSummary {
+}): Promise<HealthSummary> {
   const {
     contextEngines: _cachedContextEngines,
     deliveryQueues: _cachedDeliveryQueues,
@@ -97,7 +97,7 @@ function mergeCachedHealthRuntimeState(params: {
   } = params.cached;
   // Dead-letter counts are cheap live reads. Preserve the grouped pressure
   // aggregate for the cache interval so routine health RPCs do not amplify it.
-  const deliveryQueues = buildDeliveryQueueHealthSummary(
+  const deliveryQueues = await buildDeliveryQueueHealthSummary(
     _cachedDeliveryQueues?.ingressPressure ?? [],
   );
   const contextEngines = buildContextEngineHealthSummary();
@@ -141,7 +141,7 @@ export const healthHandlers: GatewayRequestHandlers = {
     ) {
       respond(
         true,
-        mergeCachedHealthRuntimeState({
+        await mergeCachedHealthRuntimeState({
           cached,
           eventLoop: context.getEventLoopHealth?.(),
           configReloadHotReloadStatus: context.getConfigReloaderHotReloadStatus?.(),

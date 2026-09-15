@@ -42,7 +42,7 @@ export type ModelSetupWizardResult =
   | WizardNextResult
   | { done: true; status: "not-admitted"; error: string };
 
-export type ModelSetupWizardState =
+type ModelSetupWizardPhase =
   | { phase: "idle" }
   | { phase: "starting"; authChoice: string }
   | {
@@ -56,6 +56,8 @@ export type ModelSetupWizardState =
   | { phase: "done"; authChoice: string; preparedModelRef?: string }
   | { phase: "cancelled"; message: string }
   | { phase: "error"; message: string };
+
+export type ModelSetupWizardState = ModelSetupWizardPhase & { authLabel?: string };
 
 export function activationTimeoutForKind(kind: string): number {
   // Match the Gateway-owned provider-auth wizard lifetime, including user sign-in.

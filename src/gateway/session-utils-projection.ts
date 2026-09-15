@@ -15,6 +15,8 @@ import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessio
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-gateway.js";
 import { resolveConcreteSessionStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { SynchronousWork } from "../shared/synchronous-work.js";
 import type { SessionEntryPair } from "./session-list-order.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-usage.js";
@@ -28,6 +30,7 @@ import { resolveWorkerPlacementModelRuntime } from "./worker-environments/placem
 
 export function buildSessionListRowMetadataContext(params: {
   now: number;
+  sessionKeys?: readonly string[];
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
 }): SessionListRowContext {
   const catalogEntries = new WeakMap<
@@ -39,7 +42,7 @@ export function buildSessionListRowMetadataContext(params: {
     Map<string, ReturnType<typeof selectModelCatalogRuntimeEntry>>
   >();
   return {
-    subagentRuns: buildSubagentSessionListReadIndex(params.now),
+    subagentRuns: buildSubagentSessionListReadIndex(params.now, params.sessionKeys),
     selectedModelByOverrideRef: new Map(),
     thinkingMetadataByModelRef: new Map(),
     findModelCatalogEntry: (catalog, query) => {
@@ -155,41 +158,44 @@ export function resolveTranscriptUsageFallback(params: {
   };
 }
 
-export function populateSessionListAcpMetadata(params: {
+export function* populateSessionListAcpMetadataWork(params: {
   cfg: OpenClawConfig;
   entries: readonly SessionEntryPair[];
   targetsBySessionKey: GatewayStoredSessionTargets;
   rowContext?: SessionListRowContext;
-}): void {
+}): SynchronousWork<void> {
   const metadataByEntry = params.rowContext?.acpSessionMetaByEntry;
   if (!metadataByEntry || params.entries.length === 0) {
     return;
   }
-  const entries = params.entries
-    .filter(([, entry]) => !metadataByEntry.has(entry))
-    .map(([key, entry]) => {
-      const target = expectDefined(params.targetsBySessionKey.get(key), "ACP row owner");
-      const agentId = target.agentId;
-      return {
-        sessionKey: resolveStoredSessionKeyForAgentStore({
-          cfg: params.cfg,
+  // Ordinary rows need two database keys each; keep preparation and its reads bounded.
+  const batchSize = 250;
+  for (let start = 0; start < params.entries.length; start += batchSize) {
+    const entries = params.entries
+      .slice(start, start + batchSize)
+      .filter(([, entry]) => !metadataByEntry.has(entry))
+      .map(([key, entry]) => {
+        const target = expectDefined(params.targetsBySessionKey.get(key), "ACP row owner");
+        const agentId = target.agentId;
+        return {
+          sessionKey: resolveStoredSessionKeyForAgentStore({
+            cfg: params.cfg,
+            agentId,
+            sessionKey: target.storeKey ?? key,
+          }),
           agentId,
-          sessionKey: target.storeKey ?? key,
-        }),
-        agentId,
-        entry,
-      };
-    });
-  if (!entries.length) {
-    return;
-  }
-  const metadata = readAcpSessionMetaBatch({
-    entries,
-    cfg: params.cfg,
-  });
-  // Record absent metadata too, so selected rows do not repeat missing-store reads.
-  for (const { entry } of entries) {
-    metadataByEntry.set(entry, metadata.get(entry));
+          entry,
+        };
+      });
+    if (entries.length > 0) {
+      const metadata = readAcpSessionMetaBatch({ entries, cfg: params.cfg });
+      // Record absent metadata too, so selected rows do not repeat missing-store reads.
+      for (const { entry } of entries) {
+        metadataByEntry.set(entry, metadata.get(entry));
+      }
+    }
+    // The database read scope closes before the caller can yield to another request.
+    yield;
   }
 }
 
@@ -209,6 +215,7 @@ export function resolveGatewaySessionRuntimeProjection(params: {
   sessionKey: string;
   entry?: SessionEntry;
   rowContext?: SessionListRowContext;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }) {
   const { cfg, agentId, sessionKey, entry } = params;
   const cachedAcpMeta = params.rowContext?.acpSessionMetaByEntry;

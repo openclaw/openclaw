@@ -800,7 +800,9 @@ vi.mock("./doctor/channel-capabilities.js", () => {
   };
 });
 
-vi.mock("../plugins/doctor-contract-registry.js", async () => {
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
+  const { withDeferredPluginDoctorMigrations } =
+    await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
   const { asNullableRecord: readNullableRecord } =
     await import("@openclaw/normalization-core/record-coerce");
 
@@ -946,6 +948,7 @@ vi.mock("../plugins/doctor-contract-registry.js", async () => {
   };
   return {
     collectRelevantDoctorPluginIds,
+    withDeferredPluginDoctorMigrations,
     collectDoctorConfigRepairPluginIds: collectRelevantDoctorPluginIds,
     applyPluginDoctorCompatibilityMigrations: normalizeDiscordStreamingAliasesForTest,
     listPluginDoctorLegacyConfigRules: () => [

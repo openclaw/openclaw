@@ -845,7 +845,7 @@ class RoomChatCommandOutbox internal constructor(
     database.withWriteTransaction {
       ensureBranchStorageLocked()
       val dao = database.outboxDao()
-      val row = dao.allCommands().firstOrNull { it.id == id } ?: return@withWriteTransaction 0
+      val row = dao.command(id) ?: return@withWriteTransaction 0
       val delivery = readDeliveryStateLocked(id) ?: return@withWriteTransaction 0
       if (delivery.attemptVersion != expectedAttemptVersion) return@withWriteTransaction 0
       val scope = row.branchScope()

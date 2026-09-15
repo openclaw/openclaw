@@ -2,8 +2,31 @@ import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal
 import type {
   SubagentCompletionDeliveryState,
   SubagentCompletionState,
+  SubagentRunMaintenanceRecord,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
+
+/** Copy only protection facts; live memory retains its existing, unnormalized semantics. */
+export function projectSubagentRunForMaintenance(
+  entry: SubagentRunRecord,
+): SubagentRunMaintenanceRecord {
+  return {
+    runId: entry.runId,
+    childSessionKey: entry.childSessionKey,
+    requesterSessionKey: entry.requesterSessionKey,
+    createdAt: entry.createdAt,
+    cleanupCompletedAt: entry.cleanupCompletedAt,
+    expectsCompletionMessage: entry.expectsCompletionMessage,
+    killIntent: entry.killIntent ? { ...entry.killIntent } : entry.killIntent,
+    killReconciliation: entry.killReconciliation
+      ? { ...entry.killReconciliation }
+      : entry.killReconciliation,
+    execution: { status: entry.execution.status, endedAt: entry.execution.endedAt },
+    delivery: entry.delivery
+      ? { status: entry.delivery.status, suspendedAt: entry.delivery.suspendedAt }
+      : undefined,
+  };
+}
 
 export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRunRecord {
   const taskRunId = typeof entry.taskRunId === "string" ? entry.taskRunId.trim() : "";
@@ -123,6 +146,17 @@ export function clearDeliveryState(entry: SubagentRunRecord): void {
 /** Returns true when delivery is suspended with a durable timestamp. */
 export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
   return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
+}
+
+/** A finished requester without its required message receipt must not execute again implicitly. */
+export function isCompletedRequesterDeliveryBlocked(
+  entry: Pick<SubagentRunRecord, "delivery">,
+): boolean {
+  return (
+    isDeliverySuspended(entry) &&
+    entry.delivery?.suspendedReason === "permanent_failure" &&
+    entry.delivery.lastDropReason === "message_tool_delivery_missing"
+  );
 }
 
 /** Returns true when required delivery still owns the row after its child session is gone. */

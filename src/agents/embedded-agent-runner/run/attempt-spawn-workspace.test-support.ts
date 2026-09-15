@@ -29,7 +29,7 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
 import { buildToolLifecycleErrorResult } from "../../embedded-agent-tool-results.js";
-import type { AgentMessage, StreamFn } from "../../runtime/index.js";
+import type { Agent, AgentMessage, StreamFn } from "../../runtime/index.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { agentSessionSetPromptPreparation } from "../../sessions/agent-session-prompting.js";
 import type { CreateAgentSessionOptions } from "../../sessions/index.js";
@@ -1014,6 +1014,10 @@ type MutableSession = {
   [agentSessionSetPromptPreparation]: (prepare: (() => Promise<void>) | undefined) => void;
 };
 
+export type EmbeddedAttemptSession = Omit<MutableSession, "agent"> & {
+  agent: MutableSession["agent"] | Agent;
+};
+
 type SessionPromptOverride = (
   session: MutableSession,
   prompt: string,
@@ -1381,7 +1385,7 @@ export async function createContextEngineAttemptRunner(params: {
     info?: Partial<ContextEngineInfo>;
   };
   attemptOverrides?: Partial<Parameters<Awaited<ReturnType<typeof loadRunEmbeddedAttempt>>>[0]>;
-  createSession?: () => MutableSession;
+  createSession?: () => EmbeddedAttemptSession;
   sessionMessages?: AgentMessage[];
   sessionMessagesAfterRepair?: AgentMessage[];
   sessionPrompt?: SessionPromptOverride;

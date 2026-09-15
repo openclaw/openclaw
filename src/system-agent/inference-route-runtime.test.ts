@@ -1,8 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
+import {
+  AuthProfileMigrationRequiredError,
+  clearAuthProfileMigrationDiagnostics,
+  markAuthProfileMigrationRequired,
+} from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
+import { setRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "../agents/model-auth-runtime-config.js";
@@ -106,10 +112,83 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  clearAuthProfileMigrationDiagnostics();
   clearSecretsRuntimeSnapshot();
   vi.unstubAllEnvs();
   await temp?.restore();
 });
+
+it.each(["fixture", "unrelated"])(
+  "scopes verified setup binding to its selected provider when %s requires migration",
+  async (affectedProvider) => {
+    const cfg = (await readSnapshot()).sourceConfig;
+    const profileId = "fixture:selected";
+    const credential = { type: "api_key" as const, provider: "fixture", key };
+    const agentDir = resolveAgentDir(cfg, "main");
+    upsertAuthProfile({ agentDir, profileId, credential });
+    setRuntimeAuthProfileStoreSnapshot(
+      { version: 1, profiles: { [profileId]: credential } },
+      agentDir,
+    );
+    cfg.agents!.defaults!.model = `fixture/test-model@${profileId}`;
+    cfg.auth = { profiles: { [profileId]: { provider: "fixture", mode: "api_key" } } };
+    const provider = cfg.models?.providers?.fixture;
+    assert(provider);
+    delete provider.apiKey;
+    await fs.writeFile(configPath, JSON.stringify(cfg));
+    const snapshot = await readSnapshot();
+    const route = await resolveSystemAgentConfiguredRouteFromConfig(
+      snapshot.runtimeConfig,
+      "main",
+      { pluginMetadataPlugins: [] },
+      snapshot,
+    );
+    expect(route).not.toBeNull();
+    const auth = await resolveApiKeyForProviderCore({
+      provider: "fixture",
+      cfg: route!.runConfig,
+      agentDir,
+      profileId,
+      lockedProfile: true,
+      modelId: "test-model",
+      modelApi: "openai-responses",
+      secretSentinels: true,
+    });
+    const legacyPath = path.join(temp.home, "migration-source.json");
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify({
+        profiles: {
+          legacy: { type: "api_key", provider: affectedProvider, key: "synthetic-legacy-key" },
+        },
+      }),
+    );
+    markAuthProfileMigrationRequired(
+      agentDir,
+      new AuthProfileMigrationRequiredError({
+        agentDir,
+        sources: [{ kind: "auth-profiles", path: legacyPath }],
+      }),
+    );
+    const binding = createSystemAgentVerifiedInferenceBinding({
+      configuredRoute: route!,
+      executionRoute: route!,
+      auth: {
+        agentHarnessId: "openclaw",
+        authProfileId: profileId,
+        modelId: "test-model",
+        modelApi: "openai-responses",
+        authFingerprint: fingerprintResolvedProviderAuth(auth),
+      },
+      deps: { pluginMetadataPlugins: [] },
+    });
+    if (affectedProvider === "fixture") {
+      await expect(binding).rejects.toMatchObject({ code: "AUTH_PROFILE_MIGRATION_REQUIRED" });
+    } else {
+      await expect(binding).resolves.toMatchObject({ auth: { authProfileId: profileId } });
+    }
+  },
+);
 
 it("keeps protected credentials through a fresh setup read and verified-route revalidation", async () => {
   const snapshot = await readSnapshot();

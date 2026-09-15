@@ -1168,34 +1168,81 @@ exit 99
     },
   );
 
-  it("keeps merge wrapper modes delegated to the main PR helper", () => {
-    const script = readScript("scripts/pr-merge");
-
-    expect(script).toContain("scripts/pr-merge <PR>");
-    expect(script).toContain('exec "$base" merge-verify "$1"');
-    expect(script).toContain('exec "$base" merge-verify "$pr"');
-    expect(script).toContain('exec "$base" merge-run "$pr"');
-  });
-
-  it("keeps prepare wrapper modes delegated to the main PR helper", () => {
-    const script = readScript("scripts/pr-prepare");
-
-    expect(script).toContain("scripts/pr-prepare <init|validate-commit|gates|push|run> <PR>");
-    for (const mode of ["init", "validate-commit", "gates", "push", "run"]) {
-      expect(script).toContain(`${mode})`);
+  describe("alias wrapper trust delegation", () => {
+    function makeAliasFixture() {
+      const fixture = makeMismatchedWrapperRepo({ realModules: true });
+      fixture.git(fixture.linked, ["checkout", "--detach", "refs/remotes/origin/main"]);
+      for (const alias of ["pr-prepare", "pr-review", "pr-merge"]) {
+        cpSync(join("scripts", alias), join(fixture.linked, "scripts", alias));
+      }
+      fixture.git(fixture.canonical, ["checkout", "-b", "parked"]);
+      writeFileSync(
+        join(fixture.canonical, "scripts/pr"),
+        '#!/bin/sh\necho "stale canonical wrapper executed"\nexit 91\n',
+      );
+      fixture.git(fixture.canonical, ["add", "scripts/pr"]);
+      fixture.git(fixture.canonical, ["commit", "-m", "test: stale canonical wrapper"]);
+      // Stop at the real supervisor handoff, before locks or native PR actions.
+      const recorder = join(fixture.bin, "node");
+      writeFileSync(recorder, '#!/bin/sh\nprintf \'%s\\0\' "$PWD" "$@"\nexit 73\n');
+      chmodSync(recorder, 0o755);
+      const caller = join(fixture.root, "caller directory");
+      mkdirSync(caller);
+      return { ...fixture, caller };
     }
-    expect(script).toContain('exec "$base" prepare-init "$pr"');
-    expect(script).toContain('exec "$base" prepare-validate-commit "$pr"');
-    expect(script).toContain('exec "$base" prepare-gates "$pr"');
-    expect(script).toContain('exec "$base" prepare-push "$pr"');
-    expect(script).toContain('exec "$base" prepare-run "$pr"');
-  });
 
-  it("keeps review wrapper delegated to review-init", () => {
-    const script = readScript("scripts/pr-review");
+    itPosix.each([
+      ...["init", "validate-commit", "gates", "push", "run"].map(
+        (mode) => ["pr-prepare", [mode, "123"], [`prepare-${mode}`, "123"]] as const,
+      ),
+      [
+        "pr-review",
+        ["123", "argument with spaces", ""],
+        ["review-init", "123", "argument with spaces", ""],
+      ],
+      ["pr-merge", ["123"], ["merge-verify", "123"]],
+      ["pr-merge", ["verify", "123"], ["merge-verify", "123"]],
+      ["pr-merge", ["run", "123"], ["merge-run", "123"]],
+    ] as const)("%s delegates %j through the trusted sibling", (alias, args, mapped) => {
+      const fixture = makeAliasFixture();
+      const result = spawnSync(join(fixture.linked, "scripts", alias), args, {
+        cwd: fixture.caller,
+        encoding: "utf8",
+        env: fixture.env,
+      });
+      expect(result.status, result.stderr).toBe(73);
+      expect(result.stderr).toBe("");
+      expect(result.stdout.split("\0")).toEqual([
+        fixture.caller,
+        join(fixture.linked, "scripts/pr-lib/process-group-runner.mjs"),
+        fixture.canonical,
+        join(fixture.linked, "scripts/pr"),
+        ...mapped,
+        "",
+      ]);
+    });
 
-    expect(script).toContain('base="$script_dir/pr"');
-    expect(script).toContain('exec "$base" review-init "$@"');
+    itPosix.each([
+      ["pr-prepare", ["run", "123"]],
+      ["pr-review", ["123"]],
+      ["pr-merge", ["run", "123"]],
+    ] as const)(
+      "%s preserves refusal with a spoofed anchor and developer opt-in",
+      (alias, args) => {
+        const fixture = makeAliasFixture();
+        fixture.git(fixture.linked, ["branch", "origin/main", "refs/remotes/origin/main"]);
+        fixture.git(fixture.linked, ["update-ref", "-d", "refs/remotes/origin/main"]);
+        const result = spawnSync(join(fixture.linked, "scripts", alias), args, {
+          cwd: fixture.caller,
+          encoding: "utf8",
+          env: { ...fixture.env, OPENCLAW_PR_DEV_WRAPPER: "1" },
+        });
+        expect(result.status, result.stderr).toBe(1);
+        expect(result.stderr).toContain("Refusing to silently substitute");
+        expect(result.stderr).toContain("classified landing; dev-wrapper opt-in is unavailable");
+        expect(result.stdout).toBe("");
+      },
+    );
   });
 
   it("refuses to substitute a different canonical wrapper implementation", () => {

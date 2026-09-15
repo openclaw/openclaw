@@ -545,6 +545,7 @@ function buildPackageDistEntriesFromExports(packageDir: string): Record<string, 
 function buildLlmCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/llm-core/src/index.ts",
+    "model-contracts/anthropic": "packages/llm-core/src/model-contracts/anthropic.ts",
     types: "packages/llm-core/src/types.ts",
     "utils/diagnostics": "packages/llm-core/src/utils/diagnostics.ts",
     "utils/event-stream": "packages/llm-core/src/utils/event-stream.ts",
@@ -678,6 +679,7 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ),
     ...(shouldBuildPrivateQaEntries
       ? {
+          "plugin-sdk/qa-channel-protocol": "src/plugin-sdk/qa-channel-protocol.ts",
           "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
           "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
         }

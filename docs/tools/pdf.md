@@ -64,6 +64,9 @@ Notes:
 
 Other URI schemes (for example `ftp://`) return `details.error = "unsupported_pdf_reference"`. Remote `http(s)` URLs are rejected when the tool runs sandboxed. With workspace-only file policy enabled, local paths outside allowed roots are rejected; managed inbound refs and replayed paths under OpenClaw's inbound media store are still allowed.
 
+`data:` URLs are unsupported. Files identified as other document types, such as
+plain text or JSON, are rejected before model dispatch.
+
 Relative paths resolve from the task's working directory, including selected Git
 worktrees. Local reads use the session's approved filesystem root; see
 [Local media files](/tools/media-overview#local-media-files).

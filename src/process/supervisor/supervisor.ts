@@ -24,7 +24,7 @@ type OwnedRun = {
   runId: string;
   scopeKey?: string;
   terminationReason?: TerminationReason;
-  cancel?: (reason: TerminationReason) => void;
+  cancel: (reason: TerminationReason) => void;
   pending?: Promise<ManagedRun>;
   waitForExtinction?: () => Promise<void>;
   cleanupOwners: ScopeCleanupOwner[];
@@ -118,18 +118,10 @@ export function createProcessSupervisor(): ProcessSupervisor & {
   let shutdownPromise: Promise<void> | null = null;
   let cleanupFailure: { error: unknown } | undefined;
 
-  const cancelOwner = (current: OwnedRun, reason: TerminationReason) => {
-    if (current.cancel) {
-      current.cancel(reason);
-      return;
-    }
-    current.terminationReason ??= reason;
-  };
-
   const cancel = (runId: string, reason: TerminationReason = "manual-cancel") => {
     for (const current of ownedRuns) {
       if (current.runId === runId) {
-        cancelOwner(current, reason);
+        current.cancel(reason);
       }
     }
   };
@@ -137,7 +129,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
   const cancelActiveScope = (scopeKey: string, reason: TerminationReason) => {
     for (const current of ownedRuns) {
       if (current.waitForExtinction && current.scopeKey === scopeKey) {
-        cancelOwner(current, reason);
+        current.cancel(reason);
       }
     }
   };
@@ -148,7 +140,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     }
     for (const current of ownedRuns) {
       if (current.scopeKey === scopeKey) {
-        cancelOwner(current, reason);
+        current.cancel(reason);
       }
     }
   };
@@ -317,6 +309,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
 
     const requestCancel = (reason: TerminationReason) => {
       setForcedReason(reason);
+      input.onCancel?.(reason);
       cancelAdapter?.(reason);
       // Any cancel must abort construction: the relay may already be spawned
       // and waiting for ready, and a later deadline must not replace this reason.
@@ -597,6 +590,11 @@ export function createProcessSupervisor(): ProcessSupervisor & {
 
       const managedRun: ManagedRun = {
         activity: Object.freeze({
+          get deadlineAtMs() {
+            return overallDeadline.deadlineMs === null
+              ? undefined
+              : Date.now() + overallDeadline.deadlineMs - performance.now();
+          },
           get resultSettled() {
             return resultSettled;
           },
@@ -640,6 +638,10 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     const owner: OwnedRun = {
       runId,
       scopeKey,
+      cancel: (reason) => {
+        owner.terminationReason ??= reason;
+        input.onCancel?.(reason);
+      },
       cleanupOwners: scopeKey ? [...(scopeCleanupOwners.get(scopeKey) ?? [])] : [],
     };
     // Reserve cancellation before either adapter startup or a replacement
@@ -695,7 +697,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     return (shutdownPromise ??= Promise.resolve().then(async () => {
       while (ownedRuns.size) {
         for (const owner of ownedRuns) {
-          cancelOwner(owner, "manual-cancel");
+          owner.cancel("manual-cancel");
         }
         // A failed startup owns no live process; only failed owner extinction
         // must keep the process-wide supervisor fenced for operator recovery.

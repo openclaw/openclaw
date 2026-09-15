@@ -6,6 +6,7 @@ import {
 } from "../../packages/terminal-core/src/decorative-emoji.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import {
   hasMissingSkillRequirements,
   resolveSkillStatusEntry,
@@ -15,6 +16,7 @@ import {
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
+import { quoteCliArg } from "./quote-cli-arg.js";
 
 /** Options for rendering the skill list command. */
 export type SkillsListOptions = {
@@ -266,6 +268,9 @@ export function formatSkillInfo(
   }
 
   if (skill.primaryEnv && skill.missing.env.includes(skill.primaryEnv)) {
+    const apiKeyPath = quoteCliArg(
+      formatConcreteConfigPath(["skills", "entries", safeSkillKey, "apiKey"]),
+    );
     lines.push("");
     lines.push(theme.heading("API key setup:"));
     if (safeHomepage) {
@@ -274,9 +279,7 @@ export function formatSkillInfo(
     lines.push(
       `  Save via UI: ${theme.muted("Control UI → Skills → ")}${safeName}${theme.muted(" → Save key")}`,
     );
-    lines.push(
-      `  Save via CLI: ${formatCliCommand(`openclaw config set skills.entries.${safeSkillKey}.apiKey YOUR_KEY`)}`,
-    );
+    lines.push(`  Save via CLI: ${formatCliCommand(`openclaw config set ${apiKeyPath} YOUR_KEY`)}`);
     lines.push(
       `  Stored in: ${theme.muted("$OPENCLAW_CONFIG_PATH")} ${theme.muted("(default: ~/.openclaw/openclaw.json)")}`,
     );

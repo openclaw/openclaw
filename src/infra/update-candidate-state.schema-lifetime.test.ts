@@ -189,7 +189,7 @@ it.each(["", "-wal", "-shm", "-journal"])(
     await expect(
       readUpdateStateDatabaseSizes([file, path.join(root, "missing.sqlite")], {
         nodeRunner: process.execPath,
-        sourceEnv: { ...process.env, NODE_OPTIONS: `--require ${JSON.stringify(preload)}` },
+        sourceEnv: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
         stagingRoot: root,
       }),
     ).resolves.toEqual([{ path: file, sizeBytes: undefined }]);
@@ -211,7 +211,7 @@ it.each(["", "-wal", "-shm", "-journal"])(
       // No candidate worker exists: cancellation must happen during metadata inventory.
       root: path.join(root, "unavailable-candidate"),
       signal: controller.signal,
-      env: { ...process.env, NODE_OPTIONS: `--require ${JSON.stringify(preload)}` },
+      env: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
     });
     const rejected = expect(inspection).rejects.toThrow("metadata cancellation");
     let report: { pid: number; stagingRoot: string } | undefined;

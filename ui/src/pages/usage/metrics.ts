@@ -509,8 +509,11 @@ function renderUsageMosaic(
   );
 }
 
-function formatIsoDate(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+function formatIsoDate(date: Date, timeZone: "local" | "utc" = "local"): string {
+  const year = timeZone === "utc" ? date.getUTCFullYear() : date.getFullYear();
+  const month = (timeZone === "utc" ? date.getUTCMonth() : date.getMonth()) + 1;
+  const day = timeZone === "utc" ? date.getUTCDate() : date.getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 function parseYmdDate(dateStr: string): Date | null {

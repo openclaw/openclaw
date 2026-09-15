@@ -674,6 +674,7 @@ export async function finishUpdate(params: FinishUpdateParams): Promise<UpdateRu
     if (params.installKindChanged && resultWithPostUpdate.mode !== "git") {
       const retirement = await retireStandaloneGitWrapper({
         previousRoot: params.previousInstallRoot ?? params.root,
+        assertCurrent,
       });
       if (retirement.error) {
         defaultRuntime.error(retirement.error);

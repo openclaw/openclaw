@@ -65,13 +65,16 @@ const UpdatePostInstallDoctorResultSchema = z.discriminatedUnion("status", [
 export type UpdatePostInstallDoctorResult = z.infer<typeof UpdatePostInstallDoctorResultSchema>;
 
 export class UpdateDoctorError extends Error {
+  readonly exitCode: number | null | undefined;
+
   constructor(
     message: string,
     readonly failureFacts: UpdateFailureFact[],
-    options?: ErrorOptions,
+    options?: ErrorOptions & { exitCode?: number | null },
   ) {
     super(message, options);
     this.name = "UpdateDoctorError";
+    this.exitCode = options?.exitCode;
   }
 }
 

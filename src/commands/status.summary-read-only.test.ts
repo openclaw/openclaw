@@ -27,6 +27,7 @@ import {
 } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { formatStatusSummary } from "../tui/tui-status-summary.js";
 
 describe("getStatusSummary read-only session access", () => {
   const previousRegistry = getActivePluginRegistry();
@@ -378,6 +379,9 @@ describe("getStatusSummary read-only session access", () => {
           createStatusCommandOverviewRowsParams({ summary }),
         );
         expect(rows.find(({ Item }) => Item === "Sessions")?.Value).toMatch(/^4 stored · default /);
+        const tuiLines = formatStatusSummary(summary);
+        expect(tuiLines).toContain("Stored sessions: 4");
+        expect(tuiLines).not.toContain("Active sessions: 4");
       });
     },
   );

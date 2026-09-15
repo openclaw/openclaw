@@ -21,6 +21,7 @@ import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/sessi
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -132,8 +133,9 @@ function renderedMessages(messages: readonly unknown[]): unknown[] {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const directory of tempDirs.dirs) {
+    await closeOpenClawAgentDatabasesAsync(directory);
     closeOpenClawAgentDatabasesForTest(directory);
   }
   testState.sessionStorePath = undefined;

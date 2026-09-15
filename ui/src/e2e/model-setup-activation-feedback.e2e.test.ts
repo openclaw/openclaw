@@ -388,7 +388,7 @@ suite.define(() => {
           }
           expect(await failure.count()).toBe(1);
           expect(await failure.isVisible()).toBe(true);
-          expect(await failure.textContent()).toBe(
+          expect((await failure.textContent())?.trim()).toBe(
             "The model did not finish the setup test in time.",
           );
           await dialog.getByRole("button", { name: "Close", exact: true }).click();

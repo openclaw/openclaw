@@ -1,6 +1,9 @@
 import Foundation
 
 extension OpenClawChatViewModel {
+    public nonisolated static let defaultModelSelectionID = "__default__"
+    public nonisolated static let inheritedThinkingSelectionID = "__inherited__"
+
     func fetchModels(sessionSnapshot: SessionSnapshot? = nil) async {
         self.nextModelCatalogRequestID &+= 1
         let requestID = self.nextModelCatalogRequestID
@@ -263,8 +266,8 @@ extension OpenClawChatViewModel {
         currentSelectionID: String,
         choices: [OpenClawChatModelChoice]) -> Bool
     {
-        if selectionID == defaultModelSelectionID {
-            return currentSelectionID == defaultModelSelectionID
+        if selectionID == self.defaultModelSelectionID {
+            return currentSelectionID == self.defaultModelSelectionID
         }
         guard let choice = choices.first(where: { $0.selectionID == selectionID }) else {
             return currentSelectionID == selectionID

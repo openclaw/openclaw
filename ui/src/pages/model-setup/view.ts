@@ -7,6 +7,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/model-setup.css";
+import type { ModelProviderLoginController } from "../model-providers/login-controller.ts";
 import { renderModelSetupFailure, renderConfiguredModel } from "./configured-model.ts";
 import { renderProviderIcon } from "./model-setup-icon-loader.ts";
 import { listModelSetupPrepareOptions, type ModelSetupPrepareOption } from "./prepare-options.ts";
@@ -26,6 +27,7 @@ const MODEL_SETUP_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers"
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
 type ModelSetupViewProps = {
+  connection?: ModelProviderLoginController["pageActions"];
   page: ModelSetupPageState;
   activation: ModelSetupActivationState;
   verify: ModelSetupVerifyState;
@@ -276,13 +278,11 @@ function renderAuthRow(props: ModelSetupViewProps, option: AuthOption) {
         @click=${() => props.onStartAuth(option)}
       >
         ${
-          option.kind === "device-code"
-            ? t("modelSetup.signIn.pair")
-            : option.kind === "install"
-              ? t("modelSetup.signIn.install")
-              : option.kind === "custom"
-                ? t("modelSetup.signIn.custom")
-                : t("modelSetup.signIn.signIn")
+          option.kind === "install"
+            ? t("modelSetup.signIn.install")
+            : option.kind === "custom"
+              ? t("modelSetup.signIn.custom")
+              : t("modelSetup.signIn.verify")
         }
       </button>
     </div>
@@ -302,6 +302,7 @@ function renderSignIn(props: ModelSetupViewProps, result: SystemAgentSetupDetect
     <section class="settings-section">
       <div class="settings-section__header">
         <h2>${t("modelSetup.signIn.title")}</h2>
+        <p>${t("modelSetup.signIn.description")}</p>
       </div>
       <div class="model-setup__rows">${featured.map((option) => renderAuthRow(props, option))}</div>
       ${
@@ -608,6 +609,18 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
           <p>${t("modelSetup.intro")}</p>
         </div>
         ${
+          props.connection
+            ? html`<button
+                class="btn primary"
+                data-models-connect
+                ?disabled=${props.connection.connectDisabled}
+                @click=${props.connection.onConnect}
+              >
+                ${t("modelProviders.login.action")}
+              </button>`
+            : nothing
+        }
+        ${
           props.page.phase === "ready" &&
           !props.page.result.configuredModel &&
           props.activation.phase !== "success" &&
@@ -655,8 +668,23 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
             </div>`
           : nothing
       }
+      ${
+        props.connection?.loginMessage
+          ? html`<div class="callout success" role="status">
+                ${props.connection.loginMessage.text}
+              </div>
+              ${
+                props.connection.loginMessage.warning
+                  ? html`<div class="callout warning" role="status">
+                      ${props.connection.loginMessage.warning}
+                    </div>`
+                  : nothing
+              }`
+          : nothing
+      }
       ${body}
     </div>
+    ${props.connection?.login}
     ${renderModelSetupWizard({
       mode: props.wizardMode,
       state: props.wizard,

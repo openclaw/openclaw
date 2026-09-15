@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveManagedUnsetPathsForWrite } from "../config/config-path-mutation.js";
 import { replaceConfigFile } from "../config/config.js";
+import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
@@ -370,6 +371,7 @@ export async function runConfigOperations(params: {
           assertStrictConfigForMutation(
             currentConfig,
             mutationStart.writeOptions.basePluginMetadataSnapshot,
+            getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
           );
         }
         throw new Error(message);
@@ -423,6 +425,7 @@ export async function runConfigOperations(params: {
     configPath: snapshot.path,
     unchanged: params.successMode === "set" && isDeepStrictEqual(currentConfig, nextConfig),
     pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
+    deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
   });
   if (validation.kind === "dry-run") {
     printConfigDryRunResult(validation.result, runtime, options.json);

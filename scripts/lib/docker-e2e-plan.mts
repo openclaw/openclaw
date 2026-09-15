@@ -134,6 +134,10 @@ const UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES = ["@openclaw/codex"];
 // closed instead of requiring a dependency or reimplementing a JavaScript parser.
 const LEGACY_UPGRADE_SURVIVOR_SCENARIO_CATALOGS = new Map([
   [
+    "5e8821538f3722fdf0dc3b3917ae639853f305e4c7a9b84febb8905601a9b5c7",
+    "base msteams-polls abandoned-update legacy-operator-state mobile-pairing-reconnect acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs missing-configured-plugin-migration custom-plugin-siblings stale-source-plugin-shadow prerelease-plugin-registry tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume recovery-cleanup auth-profile-v2026-7-2-beta-5 watchos-direct-node",
+  ],
+  [
     "a4246e4fc65d037c173b38976f115faea015e476211f845bf328937805d81193",
     "base msteams-polls abandoned-update legacy-operator-state mobile-pairing-reconnect acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs custom-plugin-siblings stale-source-plugin-shadow prerelease-plugin-registry tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume recovery-cleanup auth-profile-v2026-7-2-beta-5 watchos-direct-node",
   ],

@@ -175,11 +175,11 @@ function truncateOversizedTrajectoryEvent(
 }
 
 function truncatedTrajectoryValue(reason: string, details: Record<string, unknown> = {}): unknown {
-  return {
-    truncated: true,
-    reason,
-    ...details,
-  };
+  const record = createDiagnosticRecord();
+  record.truncated = true;
+  record.reason = reason;
+  Object.assign(record, details);
+  return record;
 }
 
 function limitTrajectoryPayloadValue(

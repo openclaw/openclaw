@@ -189,6 +189,8 @@ actor GatewayConnection: Observable {
     private let clientShutdown: @Sendable (GatewayChannelActor) async -> Void
     private let decoder = JSONDecoder()
     private var browserSessionExpiryTask: Task<Void, Never>?
+    var sourceResources: (lease: ServerLease, revision: UInt64, loader: OpenClawChatSourceResources)?
+    var sourceResourceRevision: UInt64 = 0
     var managedMediaTransfers: [UUID: Task<(Data, URLResponse), Error>] = [:]
 
     private struct ConfiguredConnection {
@@ -1243,6 +1245,13 @@ extension GatewayConnection {
 // MARK: - Snapshot cache and subscriptions
 
 extension GatewayConnection {
+    func sourceResourceBearer(ifCurrentServerLease lease: ServerLease) async throws -> String? {
+        guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
+        let bearer = await lease.client.httpResourceBearer(ifCurrentConnectionGeneration: lease.socketGeneration)
+        guard await self.isCurrentServerLease(lease) else { throw CancellationError() }
+        return bearer
+    }
+
     func controlUiAutoAuthToken(config: Config) async -> String? {
         guard let endpoint = try? await currentEndpoint(),
               endpoint.browserSession == nil,
@@ -1364,6 +1373,7 @@ extension GatewayConnection {
     }
 
     private func retirePublication(disconnection: PushDelivery.Event?, retiresRoute: Bool) {
+        self.invalidateSourceResources()
         let lease = self.connectionPublication.withValue { publication -> ServerLease? in
             let lease: ServerLease? = switch publication {
             case let .connected(connection): connection.lease
@@ -1397,7 +1407,19 @@ extension GatewayConnection {
         }
     }
 
+    private func invalidateSourceResources() {
+        self.sourceResourceRevision &+= 1
+        let loader = self.sourceResources?.loader
+        self.sourceResources = nil
+        if let loader { Task { await loader.invalidate() } }
+    }
+
     private func broadcast(_ push: GatewayPush) {
+        if case let .event(event) = push,
+           event.event == "chat.metadata.changed" || event.event == "config.changed"
+        {
+            self.invalidateSourceResources()
+        }
         if case let .snapshot(snapshot) = push {
             self.lastSnapshot = snapshot
             if self.canvasPluginSurfaceURL == nil {

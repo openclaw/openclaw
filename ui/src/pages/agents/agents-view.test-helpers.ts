@@ -115,7 +115,6 @@ export function createAgentViewTestProps(
     modelCatalogStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
     pinnedAgentIds: [],
     onRefresh: () => undefined,
-    onSelectAgent: () => undefined,
     onCreateAgent: () => undefined,
     onSelectPanel: () => undefined,
     onLoadFiles: () => undefined,

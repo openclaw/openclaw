@@ -579,7 +579,6 @@ wa-popover.new-session-page__select::part(body) {
   box-shadow: var(--overlay-shadow);
 }
 
-.agent-select--compact .agent-select__menu-title,
 .new-session-page__menu-title {
   padding: 4px 8px 2px;
   color: var(--muted);

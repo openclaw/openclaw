@@ -104,20 +104,19 @@ it.each([true, false])(
             .soft(client.request("sessions.patch", { key, model }))
             .rejects.toThrow("model not allowed");
         }
-        await client.request("chat.send", {
+        const started = await client.request<{ runId: string }>("chat.send", {
           sessionKey: key,
           message: "/model default",
           idempotencyKey: `manual-policy-default-reset-${authenticated}`,
         });
-        await expect
-          .poll(async () => {
-            const history = await client.request<{ sessionInfo: { model: string } }>(
-              "chat.history",
-              { sessionKey: key },
-            );
-            return history.sessionInfo.model;
-          })
-          .toBe("automatic");
+        // chat.send only acknowledges admission; observe command completion before its effects.
+        await expect(client.request("agent.wait", { runId: started.runId })).resolves.toMatchObject(
+          { status: "ok" },
+        );
+        const history = await client.request<{ sessionInfo: { model: string } }>("chat.history", {
+          sessionKey: key,
+        });
+        expect(history.sessionInfo.model).toBe("automatic");
         await client.request("sessions.patch", { key, model: "fixture/manual" });
         await expect(client.request("sessions.patch", { key, model: null })).resolves.toBeDefined();
       } finally {

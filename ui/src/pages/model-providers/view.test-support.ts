@@ -50,6 +50,7 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     canViewProfiles: true,
     canMutate: true,
     mutationBlockedReason: null,
+    defaultsMutationBlockedReason: null,
     providerUsageStalled: false,
     probeAvailable: true,
     busy: {},

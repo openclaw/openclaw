@@ -209,6 +209,7 @@ export type QaRunnerCliRegistration = {
 
 /** Normalized options passed from live-transport QA CLIs into lane runners. */
 export type LiveTransportQaCommandOptions = {
+  channelDriver?: string;
   concurrency?: number;
   repoRoot?: string;
   outputDir?: string;
@@ -243,6 +244,7 @@ export type LiveTransportQaSuiteCommandOptions = {
 };
 
 type LiveTransportQaCommanderOptions = {
+  channelDriver?: string;
   concurrency?: number;
   repoRoot?: string;
   outputDir?: string;
@@ -282,7 +284,13 @@ export type LiveTransportQaCliRegistrationOptions = {
   defaultProviderMode: string;
   description: string;
   providerModeHelp: string;
+  /** When set, registers `--list-scenarios` with this help text. */
   listScenariosHelp?: string;
+  /**
+   * Preserve the standard command payload shape when selection flags are inactive.
+   * Specialized registrations may leave this false to preserve their legacy option shape.
+   */
+  normalizeInactiveSelectionOptions?: boolean;
   outputDirHelp: string;
   profileHelp?: string;
   failFastHelp?: string;
@@ -307,6 +315,51 @@ function collectLiveTransportQaStringOption(value: string, previous: string[]) {
   return trimmed ? [...previous, trimmed] : previous;
 }
 
+function mapLiveTransportQaCommanderOptions(
+  opts: LiveTransportQaCommanderOptions,
+  normalizeInactiveSelectionOptions: boolean,
+): LiveTransportQaCommandOptions {
+  if (!normalizeInactiveSelectionOptions) {
+    return {
+      ...(opts.channelDriver ? { channelDriver: opts.channelDriver } : {}),
+      concurrency: opts.concurrency,
+      repoRoot: opts.repoRoot,
+      outputDir: opts.outputDir,
+      providerMode: opts.providerMode,
+      primaryModel: opts.model,
+      alternateModel: opts.altModel,
+      fastMode: opts.fast,
+      allowFailures: opts.allowFailures,
+      failFast: opts.failFast,
+      profile: opts.profile,
+      scenarioIds: opts.scenario,
+      listScenarios: opts.listScenarios,
+      sutAccountId: opts.sutAccount,
+      credentialFile: opts.credentialFile,
+      credentialSource: opts.credentialSource,
+      credentialRole: opts.credentialRole,
+    };
+  }
+  return {
+    ...(opts.channelDriver ? { channelDriver: opts.channelDriver } : {}),
+    ...(opts.concurrency !== undefined ? { concurrency: opts.concurrency } : {}),
+    repoRoot: opts.repoRoot,
+    outputDir: opts.outputDir,
+    providerMode: opts.providerMode,
+    primaryModel: opts.model,
+    alternateModel: opts.altModel,
+    fastMode: opts.fast,
+    allowFailures: opts.allowFailures,
+    failFast: opts.failFast,
+    profile: opts.profile,
+    scenarioIds: opts.scenario,
+    listScenarios: opts.listScenarios || undefined,
+    sutAccountId: opts.sutAccount,
+    ...(opts.credentialFile ? { credentialFile: opts.credentialFile } : {}),
+    credentialSource: opts.credentialSource,
+    credentialRole: opts.credentialRole,
+  };
+}
 function registerLiveTransportQaCli(
   params: LiveTransportQaCliRegistrationOptions & {
     qa: Command;
@@ -366,24 +419,9 @@ function registerLiveTransportQaCli(
     if (command.getOptionValueSource("scenario") === "cli" && opts.scenario?.length === 0) {
       throw new Error("--scenario must name at least one non-empty scenario id.");
     }
-    await params.run({
-      concurrency: opts.concurrency,
-      repoRoot: opts.repoRoot,
-      outputDir: opts.outputDir,
-      providerMode: opts.providerMode,
-      primaryModel: opts.model,
-      alternateModel: opts.altModel,
-      fastMode: opts.fast,
-      allowFailures: opts.allowFailures,
-      failFast: opts.failFast,
-      profile: opts.profile,
-      scenarioIds: opts.scenario,
-      listScenarios: opts.listScenarios,
-      sutAccountId: opts.sutAccount,
-      credentialFile: opts.credentialFile,
-      credentialSource: opts.credentialSource,
-      credentialRole: opts.credentialRole,
-    });
+    await params.run(
+      mapLiveTransportQaCommanderOptions(opts, params.normalizeInactiveSelectionOptions === true),
+    );
   });
 }
 

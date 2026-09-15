@@ -86,6 +86,27 @@ describe("formatPluginSourceForTable", () => {
     createFormattedSourceExpectation("global", "global", "demo-global", "index.js"),
   ])("shortens $origin sources under the $sourceKey root", expectFormattedSourceCase);
 
+  it.each([
+    { origin: "bundled", rootKey: "stock", kind: "missing" },
+    { origin: "workspace", rootKey: "workspace", kind: "missing" },
+    { origin: "global", rootKey: "global", kind: "empty" },
+    { origin: "bundled", rootKey: "stock", kind: "exact" },
+    { origin: "workspace", rootKey: "workspace", kind: "sibling" },
+    { origin: "config", rootKey: "global", kind: "configured" },
+  ] as const)(
+    "keeps the fallback for $origin sources with $kind roots",
+    ({ origin, rootKey, kind }) => {
+      const root = path.resolve(path.sep, "plugins");
+      const source =
+        kind === "exact" ? root : path.join(kind === "sibling" ? `${root}-other` : root, "demo.ts");
+      const roots = {
+        global: root,
+        ...(kind === "missing" ? {} : { [rootKey]: kind === "empty" ? "" : root }),
+      };
+      expect(formatPluginSourceForTable({ origin, source }, roots)).toEqual({ value: source });
+    },
+  );
+
   it("middle-truncates long out-of-root source paths for table rows", () => {
     const longSource = path.join(
       path.sep,

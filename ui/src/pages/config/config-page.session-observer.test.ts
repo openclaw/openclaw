@@ -39,7 +39,7 @@ async function mount(client: GatewayBrowserClient) {
   const subscribe = () => () => undefined;
   const context = {
     gateway: source.gateway,
-    agentSelection: { state: { selectedId: "main" }, subscribe },
+    settingsAgentSelection: { state: { selectedId: "main" }, subscribe },
     runtimeConfig: { state: { configSnapshot: {}, configSchema: {} }, subscribe },
     theme: { serverSelection: null, subscribe },
     overlays: { snapshot: {}, subscribe },
@@ -130,7 +130,7 @@ describe("ConfigPage session observer models", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const { page, state, context } = await mount(client);
-    const selection = context.agentSelection.state as { selectedId: string | null };
+    const selection = context.settingsAgentSelection.state as { selectedId: string | null };
     selection.selectedId = "writer";
     page.requestUpdate();
     await settleLitElement(page);

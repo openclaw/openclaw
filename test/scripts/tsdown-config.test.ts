@@ -95,6 +95,25 @@ if (loaded.length) assert(loaded[0].startsWith(path.dirname(rootDir) + path.sep)
 `;
 
 describe("tsdown config", () => {
+  it("emits every private Telegram QA harness entry only in private QA builds", async () => {
+    const expectedEntries = {
+      "plugin-sdk/qa-channel-protocol": "src/plugin-sdk/qa-channel-protocol.ts",
+      "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
+      "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
+    };
+    const defaultUnified = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+    expect(defaultUnified?.entry).not.toMatchObject(expectedEntries);
+
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    const { default: privateQaBuildConfigs } = await importFreshModule<
+      typeof import("../../tsdown.config.ts")
+    >(import.meta.url, "../../tsdown.config.ts?private-qa-entries");
+    const privateQaUnified = privateQaBuildConfigs.find(
+      (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
+    );
+    expect(privateQaUnified?.entry).toMatchObject(expectedEntries);
+  });
+
   it.each([
     "extensions/openai/setup-api",
     "extensions/openai/capability-catalog",

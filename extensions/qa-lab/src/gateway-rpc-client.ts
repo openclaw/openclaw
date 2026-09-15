@@ -15,6 +15,7 @@ type QaGatewayRpcRequestOptions = {
 };
 
 type QaGatewayRpcClient = {
+  readonly evidenceIdentity: { protocol: number; version: string } | null;
   request(method: string, rpcParams?: unknown, opts?: QaGatewayRpcRequestOptions): Promise<unknown>;
   stop(): Promise<void>;
 };
@@ -83,6 +84,7 @@ export async function startQaGatewayRpcClient(params: {
   const wrapError = (error: unknown) => formatQaGatewayRpcError(error, params.logs);
   let stopped = false;
   let connection = createQaGatewayConnectionGate();
+  let evidenceIdentity: QaGatewayRpcClient["evidenceIdentity"] = null;
   const assertNotStopped = () => {
     if (stopped) {
       throw new Error("gateway rpc client already stopped");
@@ -99,16 +101,20 @@ export async function startQaGatewayRpcClient(params: {
     ...(params.deviceIdentity ? { sharedStateMode: "read-only" as const } : {}),
     mode: "backend",
     scopes: params.scopes ?? ["operator.admin"],
-    onHelloOk: () => {
+    onHelloOk: (hello) => {
+      // Retain only target-observed protocol/version, never hello auth or tokens.
+      evidenceIdentity = { protocol: hello.protocol, version: hello.server.version };
       connection.connected = true;
       connection.resolve();
     },
     onClose: () => {
+      evidenceIdentity = null;
       if (!stopped && connection.connected) {
         connection = createQaGatewayConnectionGate();
       }
     },
     onReconnectPaused: (info) => {
+      evidenceIdentity = null;
       const error = new Error(
         `gateway reconnect paused (${info.code}): ${info.reason}${info.detailCode ? ` [${info.detailCode}]` : ""}`,
       );
@@ -135,6 +141,9 @@ export async function startQaGatewayRpcClient(params: {
   }
 
   return {
+    get evidenceIdentity() {
+      return evidenceIdentity ? { ...evidenceIdentity } : null;
+    },
     async request(method, rpcParams, opts) {
       try {
         assertNotStopped();
@@ -178,6 +187,7 @@ export async function startQaGatewayRpcClient(params: {
     },
     async stop() {
       stopped = true;
+      evidenceIdentity = null;
       connection.reject(new Error("gateway rpc client stopped"));
       await client.stopAndWait();
     },

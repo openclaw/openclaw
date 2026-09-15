@@ -171,6 +171,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const pluginMetadataSnapshotScope = createDoctorPluginMetadataSnapshotScope({
     getBaseSnapshot: () => pluginMetadataSnapshotState.current,
     env: process.env,
+    getDeferredPluginIds: () =>
+      preflight.deferredPluginMigrations?.map((pending) => pending.pluginId) ?? [],
   });
   const runWithPluginMetadataSnapshot = pluginMetadataSnapshotScope.run;
   const invalidatePluginMetadataSnapshot = () => {

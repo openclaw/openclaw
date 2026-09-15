@@ -209,6 +209,17 @@ export function completeDeliveryQueueEntryInDatabase(
 ): void {
   const now = Date.now();
   const current = loadDeliveryQueueEntryInDatabase(database, queueName, id, "pending");
+  completeLoadedDeliveryQueueEntryInDatabase(database, queueName, id, current, now);
+}
+
+/** Shared completion policy; reuse a prior read only while its write transaction remains held. */
+export function completeLoadedDeliveryQueueEntryInDatabase(
+  database: OpenClawStateDatabase,
+  queueName: string,
+  id: string,
+  current: DeliveryQueueEntryState | null,
+  now = Date.now(),
+): void {
   const requestedRetention = current?.completionRetention;
   const retention = parseDeliveryQueueCompletionRetention(requestedRetention, id);
   if (requestedRetention && !retention) {

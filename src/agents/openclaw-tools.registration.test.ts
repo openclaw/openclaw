@@ -27,6 +27,7 @@ import { textResult, type AnyAgentTool } from "./tools/common.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
+import * as sessionsSpawnTool from "./tools/sessions-spawn-tool.js";
 
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
@@ -322,6 +323,41 @@ describe("openclaw-tools progress_card gating", () => {
     expect(defaultTools).not.toContain("sessions_send");
     expect(gatewayBoundTools).toContain("sessions_spawn");
     expect(gatewayBoundTools).not.toContain("sessions_send");
+  });
+
+  it.each([
+    {
+      currentChannelId: "channel:111",
+      currentMessagingTarget: "user:222",
+      nativeChannelId: "111",
+      expectedTarget: "user:222",
+      expectedChannelId: "111",
+    },
+    {
+      currentChannelId: "telegram:-100:topic:77",
+      nativeChannelId: "-100",
+      expectedTarget: "telegram:-100:topic:77",
+      expectedChannelId: "-100",
+    },
+    {
+      currentChannelId: "channel:111",
+      expectedTarget: "channel:111",
+      expectedChannelId: "channel:111",
+    },
+  ])("keeps native spawn metadata separate from delivery ($expectedTarget)", (context) => {
+    const spawn = vi.spyOn(sessionsSpawnTool, "createSessionsSpawnTool");
+    try {
+      createTestOpenClawTools(context);
+
+      expect(spawn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          currentMessagingTarget: context.expectedTarget,
+          currentChannelId: context.expectedChannelId,
+        }),
+      );
+    } finally {
+      spawn.mockRestore();
+    }
   });
 
   it("advertises sessions_spawn from agents_list only when spawn is available", () => {

@@ -230,6 +230,7 @@ describe("doctor session transcript repair", () => {
       config: cfg,
       env,
       maintenanceAuthority: { assertCurrent: expect.any(Function) },
+      beforeCompletion: expect.any(Function),
     });
     expect(withDoctorSqliteMaintenanceLock).toHaveBeenCalledWith({
       env,
@@ -451,6 +452,7 @@ describe("doctor session transcript repair", () => {
       config: {},
       env: params.env,
       maintenanceAuthority: { assertCurrent: expect.any(Function) },
+      beforeCompletion: expect.any(Function),
       plannedActions: preparedPostSessionPluginMigration.plannedActions,
     });
     expect(first).toMatchObject({

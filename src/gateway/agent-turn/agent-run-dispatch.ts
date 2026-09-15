@@ -212,7 +212,7 @@ export function dispatchAgentRunFromGateway(params: {
     ? createCronCreatorAuthorityCapability(
         params.cronCreatorAuthority.runId,
         params.cronCreatorAuthority.callerOrigin,
-        params.cronCreatorAuthority.controlUiAdmin,
+        params.cronCreatorAuthority.managementEntitlement,
         params.cronCreatorAuthority.isCurrent,
       )
     : undefined;

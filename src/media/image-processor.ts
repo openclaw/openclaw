@@ -7,7 +7,11 @@ import {
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
-import { createLocalImageProcessor } from "./image-processor-config.js";
+import {
+  createLocalImageProcessor,
+  MAX_IMAGE_INPUT_PIXELS,
+  type ImageProcessorPixelLimits,
+} from "./image-processor-config.js";
 import type {
   ImageProcessorOperation,
   ImageProcessorReply,
@@ -25,10 +29,12 @@ async function runImageTask(
   input: ImageInput,
   operation: ImageProcessorOperation,
   signal?: AbortSignal,
+  limits?: ImageProcessorPixelLimits,
 ): Promise<ImageProcessorReply> {
   const reply = await pool.run(
     () => ({
       ...operation,
+      ...(limits ? { limits } : {}),
       // The caller may reuse its Buffer. Transfer a dedicated copy only after admission.
       input: Uint8Array.from(input instanceof ArrayBuffer ? new Uint8Array(input) : input),
     }),
@@ -48,11 +54,24 @@ async function runImageTask(
 
 /** Keep cheap probes local and move in-process image computation off the caller's event loop. */
 export function createImageProcessor(): Rastermill {
-  const local = createLocalImageProcessor("auto");
+  return createImageProcessorWithPixelLimits({
+    inputPixels: MAX_IMAGE_INPUT_PIXELS,
+    outputPixels: MAX_IMAGE_INPUT_PIXELS,
+  });
+}
+
+/** Internal operation-specific admission uses the same worker and native fallback owners. */
+export function createImageProcessorWithPixelLimits(params: ImageProcessorPixelLimits): Rastermill {
+  const limits = { inputPixels: params.inputPixels, outputPixels: params.outputPixels };
+  const local = createLocalImageProcessor("auto", limits);
+  const workerLimits =
+    limits.inputPixels === MAX_IMAGE_INPUT_PIXELS && limits.outputPixels === MAX_IMAGE_INPUT_PIXELS
+      ? undefined
+      : limits;
   return {
     probe: (input) => local.probe(input),
     transparency: async (input) => {
-      const reply = await runImageTask(input, { kind: "transparency" });
+      const reply = await runImageTask(input, { kind: "transparency" }, undefined, workerLimits);
       if (reply.kind === "failed") {
         throw reply.unavailable
           ? new RastermillUnavailableError("transparency", reply.error.message, [reply.error])
@@ -65,7 +84,12 @@ export function createImageProcessor(): Rastermill {
     },
     encode: async (input, options) => {
       const { signal, ...workerOptions } = options ?? {};
-      const reply = await runImageTask(input, { kind: "encode", options: workerOptions }, signal);
+      const reply = await runImageTask(
+        input,
+        { kind: "encode", options: workerOptions },
+        signal,
+        workerLimits,
+      );
       signal?.throwIfAborted();
       if (reply.kind === "failed") {
         if (!reply.unavailable) {

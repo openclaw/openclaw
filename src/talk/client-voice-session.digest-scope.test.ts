@@ -1,7 +1,10 @@
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  readSessionTranscriptMessageEvents,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-scope.js";
 import {
   emitTrustedDiagnosticEvent,
@@ -314,14 +317,18 @@ describe("voice close digest store custody", () => {
       });
     },
   );
-  it.each([false, true])(
-    "preserves a resumed call unless an explicit close joins recovery (explicit=%s)",
-    async (explicit) => {
+  it.each(["none", "before-speech", "after-speech"] as const)(
+    "preserves resumed-call speech accepted before an explicit hangup (hangup=%s)",
+    async (hangup) => {
+      const explicit = hangup !== "none";
       await withOpenClawTestState({ label: "voice-resumed-recovery" }, async () => {
         const agentId = "main";
         const sessionKey = "agent:main:voice";
         const voiceSessionId = "resumed-voice";
         const store = captureClientVoiceSessionStore(agentId);
+        const sessionTarget = { agentId, sessionKey, storePath: store.path };
+        const sessionId = "resumed-chat";
+        await replaceSessionEntry(sessionTarget, { sessionId, updatedAt: 1 });
         createOrResumeClientVoiceSession({
           agentId,
           sessionKey,
@@ -344,6 +351,7 @@ describe("voice close digest store custody", () => {
         const recovery = closeStaleClientVoiceSessions({ agentId, config: {}, now });
         void recovery.catch(() => {});
         let explicitClose: Promise<void> | undefined;
+        let transcript: Promise<unknown> | undefined;
         try {
           await setImmediate();
           expect(
@@ -355,21 +363,46 @@ describe("voice close digest store custody", () => {
               now,
             }),
           ).toBe(voiceSessionId);
-          if (explicit) {
-            explicitClose = closeClientVoiceSession({
+          const close = () =>
+            closeClientVoiceSession({
               agentId,
               sessionKey,
               voiceSessionId,
               config: {},
             });
+          if (hangup === "before-speech") {
+            explicitClose = close();
+          }
+          transcript = appendClientVoiceTranscript({
+            agentId,
+            sessionKey,
+            voiceSessionId,
+            sessionTarget,
+            entryId: "resumed-final",
+            role: "user",
+            text: "Synthetic resumed final speech",
+          }).catch((error: unknown) => error);
+          if (hangup === "after-speech") {
+            explicitClose = close();
+          }
+          if (explicitClose) {
             void explicitClose.catch(() => {});
           }
         } finally {
           gate.resolve();
-          await Promise.all([held, recovery, explicitClose]);
+          await Promise.all([held, recovery, explicitClose, transcript]);
         }
+        const messages = readSessionTranscriptMessageEvents({ ...sessionTarget, sessionId });
         if (!explicit) {
           expect(await recovery).toBe(0);
+        }
+        if (hangup !== "before-speech") {
+          expect(await transcript).toBeUndefined();
+          expect(messages).toHaveLength(1);
+          expect(JSON.stringify(messages[0])).toContain("Synthetic resumed final speech");
+        } else {
+          expect(await transcript).toBeInstanceOf(Error);
+          expect(messages).toEqual([]);
         }
         expect(readVoiceSessionRecord(agentId, voiceSessionId, store)?.status).toBe(
           explicit ? "closed" : "open",

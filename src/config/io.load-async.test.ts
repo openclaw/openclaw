@@ -1,15 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  readDeferredPluginMigrations,
+  recordDeferredPluginMigrations,
+} from "../infra/deferred-plugin-migrations.js";
 import {
   clearBundledDiscoveryModeMemo,
   prepareBundledDiscoveryMode,
 } from "../plugins/bundled-discovery-state.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.js";
 import * as configContext from "./io.context.js";
 import { createConfigIO } from "./io.factory.js";
 import * as configHealth from "./io.health-state.js";
@@ -63,34 +69,60 @@ it("strictly loads cold plugin metadata and records health without main-thread S
     env: { vars: { CONFIG_FIXTURE_VALUE: "accepted" } },
   });
   const { io, env, configPath, homedir, logger } = fixture(raw);
-  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-  const statements = (["get", "all", "run", "iterate"] as const).map((method) =>
-    vi.spyOn(StatementSync.prototype, method),
-  );
+  const mainSql = observeMainThreadSql();
   try {
     const config = await withPluginCache(createPluginCache(), () => io.loadConfigAsync());
     expect(config.gateway?.mode).toBe("local");
     expect(config.agents?.defaults?.compaction?.mode).toBe("safeguard");
     expect([...(getConfigResolutionFacts(config) ?? [])]).toContain("gateway.auth.token");
     expect(env.CONFIG_FIXTURE_VALUE).toBe("accepted");
-    expect(prepare).not.toHaveBeenCalled();
-    expect(exec).not.toHaveBeenCalled();
-    for (const statement of statements) {
-      expect(statement).not.toHaveBeenCalled();
-    }
+    mainSql.expectIdle();
   } finally {
-    prepare.mockRestore();
-    exec.mockRestore();
-    for (const statement of statements) {
-      statement.mockRestore();
-    }
+    mainSql.restore();
   }
   expect(
     configHealth.readConfigHealthStateFromStore({ env, homedir, logger }).entries?.[configPath]
       ?.lastKnownGood?.hash,
   ).toBe(hashConfigRaw(raw));
   expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+});
+
+it("loads retained migration inputs in an artifact-preserving async scope without parent SQL", async () => {
+  const raw = JSON.stringify({
+    gateway: { mode: "local" },
+    session: { store: "/srv/synthetic-session-state/sessions.json" },
+  });
+  const options = fixture(raw);
+  const pending = {
+    pluginId: "fixture-plugin",
+    reason: "The configured plugin is not installed.",
+    command: "openclaw plugins install @example/fixture-plugin",
+    configPaths: [["session", "store"]],
+    validationExcludedPaths: [["session", "store"]],
+  };
+  recordDeferredPluginMigrations({ env: options.env, pending: [pending] });
+  await closeOpenClawStateDatabaseAsync();
+  const databasePath = resolveOpenClawStateSqlitePath(options.env);
+  const family = [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
+  const familyBefore = family.map((file) => (fs.existsSync(file) ? fs.readFileSync(file) : null));
+  const mainSql = observeMainThreadSql();
+  try {
+    const config = await withArtifactPreservingStateReads(() =>
+      withPluginCache(createPluginCache(), () =>
+        createConfigIO({ ...options, observe: false }).loadConfigAsync(),
+      ),
+    );
+    expect(config.gateway?.mode).toBe("local");
+    expect(config).not.toHaveProperty("session.store");
+    mainSql.expectIdle();
+  } finally {
+    mainSql.restore();
+  }
+  expect(fs.readFileSync(options.configPath, "utf8")).toBe(raw);
+  expect(family.map((file) => (fs.existsSync(file) ? fs.readFileSync(file) : null))).toEqual(
+    familyBefore,
+  );
+  expect(readDeferredPluginMigrations({ env: options.env })).toEqual([pending]);
 });
 
 it("rejects an invalid async load and rolls back its injected config environment", async () => {
@@ -118,11 +150,7 @@ it.each(["full", "core-only"] as const)(
     const { env, configPath, homedir, logger } = fixture(
       JSON.stringify({ env: { shellEnv: { enabled: true } } }),
     );
-    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-    const statements = (["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    );
+    const mainSql = observeMainThreadSql();
     try {
       await withPluginCache(createPluginCache(), () =>
         createConfigIO({ env, configPath, homedir, logger, pluginValidation }).loadConfigAsync(),
@@ -136,17 +164,9 @@ it.each(["full", "core-only"] as const)(
           ]),
         }),
       );
-      expect(prepare).not.toHaveBeenCalled();
-      expect(exec).not.toHaveBeenCalled();
-      for (const statement of statements) {
-        expect(statement).not.toHaveBeenCalled();
-      }
+      mainSql.expectIdle();
     } finally {
-      prepare.mockRestore();
-      exec.mockRestore();
-      for (const statement of statements) {
-        statement.mockRestore();
-      }
+      mainSql.restore();
     }
   },
 );
@@ -336,12 +356,10 @@ it("keeps prepared discovery facts when another root loads during health observa
     };
   });
   const io = createConfigIO(first);
-  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+  const mainSql = observeMainThreadSql();
   const config = await withPluginCache(createPluginCache(), () => io.loadConfigAsync());
   expect(config.gateway?.port).toBe(19001);
-  expect(prepare).not.toHaveBeenCalled();
-  expect(exec).not.toHaveBeenCalled();
+  mainSql.expectIdle();
 });
 
 it("keeps core-only model defaults out of synchronous plugin discovery", async () => {
@@ -365,14 +383,12 @@ it("keeps core-only model defaults out of synchronous plugin discovery", async (
     vi.stubEnv(key, options.env[key]);
   }
   try {
-    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+    const mainSql = observeMainThreadSql();
     const config = await withPluginCache(createPluginCache(), () =>
       createConfigIO({ ...options, pluginValidation: "core-only" }).loadConfigAsync(),
     );
     expect(config.models?.providers?.["fixture-provider"]?.models[0]?.id).toBe("fixture-model");
-    expect(prepare).not.toHaveBeenCalled();
-    expect(exec).not.toHaveBeenCalled();
+    mainSql.expectIdle();
   } finally {
     vi.unstubAllEnvs();
   }

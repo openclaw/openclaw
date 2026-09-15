@@ -178,7 +178,7 @@ describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
         {
           runId: "run-local-chat",
           callerOrigin: { kind: isLocalClient ? "local" : "unknown" },
-          controlUiAdmin: true,
+          managementEntitlement: { source: "control-ui-admin" },
         },
       );
     },

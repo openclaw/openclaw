@@ -308,6 +308,9 @@ describe("package Telegram live Docker E2E", () => {
     expect(prepared.exports["./plugin-sdk/qa-lab"]).toEqual({
       default: "./dist/plugin-sdk/qa-lab.js",
     });
+    expect(prepared.exports["./plugin-sdk/qa-channel-protocol"]).toEqual({
+      default: "./dist/plugin-sdk/qa-channel-protocol.js",
+    });
     for (const subpath of privateLocalOnlyPluginSdkEntrypoints) {
       expect(prepared.exports[`./plugin-sdk/${subpath}`]).toEqual({
         default: `./dist/plugin-sdk/${subpath}.js`,

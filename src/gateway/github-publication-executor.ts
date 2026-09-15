@@ -21,6 +21,7 @@ import {
   GitHubPublicationAuthorityLostError,
 } from "./github-publication-execution-identity.js";
 import {
+  GitHubPublicationBranchChangedError,
   GitHubPublicationKnownFailure,
   GitHubPublicationWorkspaceChangedError,
   resolveGitHubPublicationFailure,
@@ -259,7 +260,57 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         "GitHub publication workspace changed after its accepted snapshot.",
       );
     }
-    await step(findPullRequest);
+    const httpsRemote = `https://github.com/${pushRepository}.git`;
+    identity = await refreshIdentity();
+    let transportEnv = {
+      ...identity.env,
+      GIT_CONFIG_GLOBAL: gitNullConfigPath(),
+      GIT_CONFIG_SYSTEM: gitNullConfigPath(),
+    };
+    const observeRemoteHead = async () => {
+      const result = await run(githubPublicationRemoteHeadArgs(httpsRemote, branch), {
+        cwd: worktree.path,
+        env: transportEnv,
+      });
+      if (result.code !== 0) {
+        throw new Error("GitHub publication remote branch could not be verified.");
+      }
+      const observed = result.stdout.toString("utf8").trim();
+      if (!observed) {
+        return "";
+      }
+      const fields = observed.split(/\s+/u);
+      if (
+        fields.length !== 2 ||
+        fields[1] !== `refs/heads/${branch}` ||
+        !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/iu.test(fields[0]!)
+      ) {
+        throw new Error("GitHub publication remote branch could not be verified.");
+      }
+      return fields[0]!;
+    };
+    // Observe ancestry before creating bookkeeping commits or installing the accepted index.
+    // Fetch objects only: do not move local refs, FETCH_HEAD, or the working tree.
+    let remoteHead = await step(observeRemoteHead);
+    if (remoteHead && remoteHead !== headCommit) {
+      const fetched = await run(githubPublicationBaseFetchArgs(pushRepository, remoteHead), {
+        cwd: worktree.path,
+        env: transportEnv,
+      });
+      if (fetched.code !== 0) {
+        throw new Error("GitHub publication remote branch could not be verified.");
+      }
+      const ancestry = await run(githubPublicationBaseLineageArgs(remoteHead, headCommit), {
+        cwd: worktree.path,
+      });
+      if (ancestry.code === 1) {
+        throw new GitHubPublicationBranchChangedError();
+      }
+      if (ancestry.code !== 0) {
+        throw new Error("GitHub publication remote branch could not be verified.");
+      }
+    }
+    const existingPullRequest = await step(findPullRequest);
     row = params.updatePublishingFacts({
       row,
       repository,
@@ -279,6 +330,29 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       storePath: loaded.storePath,
     });
     const contributorCredit = attribution?.logins.map((login) => `- @${login}`).join("\n");
+    const messageLines = currentMessage.split(/\r?\n/u);
+    if (
+      existingPullRequest &&
+      remoteHead === headCommit &&
+      currentTree === workspaceTree &&
+      sourceIndexTree === workspaceTree &&
+      messageLines.some((line) => line.startsWith(`${PUBLICATION_MARKER}: `)) &&
+      (attribution?.trailers ?? []).every((trailer) => messageLines.includes(trailer))
+    ) {
+      // The owned open PR already exposes this exact attributed tree. A new request
+      // needs a receipt, not a new commit marker or index transaction. First publication
+      // and missing contributor credit still use the request-owned recovery marker below.
+      return params.projectResult(
+        params.complete(row, {
+          requestId: row.request_id,
+          status: "published",
+          url: existingPullRequest,
+          repository,
+          branch,
+          headCommit,
+        }),
+      );
+    }
     const previousBranchHead = headCommit;
     let updateBranchRef: (() => Promise<void>) | undefined;
     if (!markerPresent) {
@@ -346,22 +420,14 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     });
 
     await step(() => assertSafeGitPublicationWorkspace(worktree.path, runCommand));
-    const httpsRemote = `https://github.com/${pushRepository}.git`;
     identity = await refreshIdentity();
-    let transportEnv = {
+    transportEnv = {
       ...identity.env,
       GIT_CONFIG_GLOBAL: gitNullConfigPath(),
       GIT_CONFIG_SYSTEM: gitNullConfigPath(),
     };
     const pushArgs = githubPublicationPushArgs(httpsRemote, headCommit, branch);
-    const observeRemoteHead = async () => {
-      const observed = await requireCommand(githubPublicationRemoteHeadArgs(httpsRemote, branch), {
-        cwd: worktree.path,
-        env: transportEnv,
-      });
-      return observed.split(/\s+/u)[0] ?? "";
-    };
-    let remoteHead = await step(observeRemoteHead);
+    remoteHead = await step(observeRemoteHead);
     if (remoteHead !== headCommit) {
       assertAuthority();
       params.recordEffect?.("push");

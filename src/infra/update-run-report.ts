@@ -45,7 +45,7 @@ type UpdateRunIdentity =
   | { kind: "unavailable" }
   | { kind: "mismatch"; field: "version" | "build" };
 
-function resolveUpdateRunIdentity(
+export function resolveUpdateRunIdentity(
   facts: UpdateRunRecord["verification"],
   expected: UpdateRunRecord["after"],
 ): UpdateRunIdentity {

@@ -20,6 +20,7 @@ export async function waitForUpdateCandidateReadiness(
     signal?: AbortSignal;
     assertCurrent?: () => void;
     hasExited: () => boolean;
+    getExitReason: () => string | undefined;
     onEndpoint: (endpoint: "startupz" | "readyz") => void;
     capture: (message: string) => void;
   },
@@ -31,7 +32,7 @@ export async function waitForUpdateCandidateReadiness(
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
     if (params.hasExited()) {
-      throw new Error("Candidate gateway exited before readiness");
+      throw new Error(params.getExitReason() ?? "Candidate gateway exited before readiness");
     }
   };
   try {

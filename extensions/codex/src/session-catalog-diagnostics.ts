@@ -5,6 +5,12 @@ import {
   areDiagnosticsEnabledForProcess,
   createSubsystemLogger,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import type {
+  CodexControlRequestFailure,
+  CodexControlRequestFailureCategory,
+  CodexControlRequestObservation,
+  CodexControlRequestPhase,
+} from "./app-server/request-observation.js";
 
 const log = createSubsystemLogger("gateway/session-catalog");
 const listScope = new AsyncLocalStorage<CodexCatalogListDiagnostics | undefined>();
@@ -48,8 +54,15 @@ type PageFields = {
   origin: "cold" | "refresh" | "uncached";
   listOperationId?: string;
   controlRequestCalls: number;
+  controlFailurePhase?: CodexControlRequestPhase;
+  controlFailureCategory?: CodexControlRequestFailureCategory;
   inclusiveControlRequestWaitMs?: number;
   inclusiveControlRequestWaitMaxMs?: number;
+  controlLoadMs?: number;
+  controlPrepareMs?: number;
+  controlAcquireClientMs?: number;
+  controlClientRequestMs?: number;
+  controlReleaseClientMs?: number;
   postResponseMs?: number;
   provenanceChecks: number;
   provenanceCacheHits: number;
@@ -60,6 +73,14 @@ type PageFields = {
 
 export type CodexCatalogListDiagnostics = Observation<ListFields>;
 export type CodexCatalogPageDiagnostics = Observation<PageFields>;
+
+const CONTROL_PHASE_FIELDS = {
+  "load-control": "controlLoadMs",
+  prepare: "controlPrepareMs",
+  "acquire-client": "controlAcquireClientMs",
+  "client-request": "controlClientRequestMs",
+  "release-client": "controlReleaseClientMs",
+} as const satisfies Record<CodexControlRequestPhase, keyof PageFields>;
 
 function enabled(): boolean {
   return areDiagnosticsEnabledForProcess() && log.isEnabled("warn");
@@ -146,7 +167,8 @@ export function currentCodexCatalogListDiagnostics(): CodexCatalogListDiagnostic
   return observation?.closed ? undefined : observation;
 }
 
-export function runCodexCatalogListDiagnostics<T>(run: () => Promise<T>): Promise<T> {
+/** One logical list scope survives admission pauses; finishing drops its captured context. */
+export function createCodexCatalogListScope() {
   const observation = start<ListFields>("list phases", {
     controlPageCalls: 0,
     coldStarts: 0,
@@ -157,19 +179,23 @@ export function runCodexCatalogListDiagnostics<T>(run: () => Promise<T>): Promis
     exclusionMarkCalls: 0,
     adoptionCalls: 0,
   });
-  if (!observation) {
-    return run();
-  }
-  return listScope.run(observation, async () => {
-    let outcome: "resolved" | "rejected" = "rejected";
-    try {
-      const result = await run();
-      outcome = "resolved";
-      return result;
-    } finally {
-      observation.finish(outcome);
-    }
-  });
+  let captured: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined = listScope.run(
+    observation,
+    () => AsyncLocalStorage.snapshot(),
+  );
+  return {
+    run<T>(run: () => T): T {
+      if (!captured) {
+        throw new Error("Codex catalog diagnostic scope is closed");
+      }
+      return captured(run);
+    },
+    finish(outcome: "resolved" | "rejected"): void {
+      const finishInScope = captured;
+      captured = undefined;
+      finishInScope?.(() => observation?.finish(outcome));
+    },
+  };
 }
 
 export function startCodexCatalogPageDiagnostics(origin: PageFields["origin"]) {
@@ -205,4 +231,47 @@ export function waitForCodexCatalogPage<T>(
       observation.finish(outcome);
     }
   })();
+}
+
+export function startCodexCatalogControlRequestDiagnostics(
+  page: CodexCatalogPageDiagnostics | null | undefined,
+) {
+  if (!page) {
+    return undefined;
+  }
+  let state: "active" | "failed" | "closed" = "active";
+  let phase: CodexControlRequestPhase = "load-control";
+  let phaseStarted = performance.now();
+  const finishPhase = () => {
+    const now = performance.now();
+    const field = CONTROL_PHASE_FIELDS[phase];
+    page.fields[field] = (page.fields[field] ?? 0) + (now - phaseStarted);
+    phaseStarted = now;
+  };
+  const observation = {
+    phase(next: CodexControlRequestPhase) {
+      if (state === "active" && !page.closed) {
+        finishPhase();
+        phase = next;
+      }
+    },
+    failed(failure: CodexControlRequestFailure) {
+      if (state === "active" && !page.closed) {
+        finishPhase();
+        state = "failed";
+        page.fields.controlFailurePhase = failure.phase;
+        page.fields.controlFailureCategory = failure.category;
+      }
+    },
+    rejected() {
+      observation.failed({ phase, category: "other" });
+    },
+    close() {
+      if (state === "active" && !page.closed) {
+        finishPhase();
+      }
+      state = "closed";
+    },
+  } satisfies CodexControlRequestObservation & { rejected(): void; close(): void };
+  return observation;
 }

@@ -103,6 +103,7 @@ FAILURE_MESSAGE=""
 FAILURE_SIGNAL=""
 gateway_pid=""
 plugin_registry_pid=""
+missing_plugin_registry_pid=""
 clawhub_fixture_pid=""
 mock_openai_pid=""
 restart_mock_pid=""
@@ -486,6 +487,7 @@ watchos_reconnect_restarted_candidate() {
 cleanup() {
   stop_gateway
   openclaw_e2e_stop_process "${plugin_registry_pid:-}"
+  openclaw_e2e_stop_process "${missing_plugin_registry_pid:-}"
   openclaw_e2e_stop_process "${clawhub_fixture_pid:-}"
   openclaw_e2e_stop_process "${mock_openai_pid:-}"
   openclaw_e2e_stop_process "${restart_mock_pid:-}"
@@ -1930,6 +1932,12 @@ fi
 phase validate-baseline-config validate_baseline_config
 phase resolve-candidate resolve_candidate_version
 phase resolve-candidate-install-mode resolve_candidate_install_mode
+if [ "$SCENARIO" = "missing-configured-plugin-migration" ]; then
+  source scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.sh
+  run_missing_configured_plugin_migration
+  run_completed="1"
+  exit 0
+fi
 if companion_survivor_scenario || [ "$SCENARIO" = "legacy-operator-state" ]; then
   unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
 else

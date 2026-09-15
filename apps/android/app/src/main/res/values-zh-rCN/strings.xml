@@ -550,6 +550,7 @@
     <string name="native_4ba5121d4d1be174" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"设备"</string>
     <string name="native_4bc652d0bc018e69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"适用于 Android 的 OpenClaw。"</string>
     <string name="native_4bcf240ace02f19c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"功能授权待批准"</string>
+    <string name="native_4c086c788ad0fdab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"搜索摘要"</string>
     <string name="native_4c09c146861e92a9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"在运行、启用、禁用、删除或刷新此自动化任务之前，请保存或撤销编辑。"</string>
     <string name="native_4c27eb153d751834" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"暂无自动化任务。"</string>
     <string name="native_4c2dd6654a535240" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"此技能需要完成 %1$s 项设置。 Android 仅显示已安装的内容; 设置/配置仍需在桌面端或 CLI 中更改。"</string>
@@ -660,7 +661,7 @@
     <string name="native_5bb88b338f9e14ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"无输出——工具执行失败。"</string>
     <string name="native_5bcf311b19d80c56" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"测试连接"</string>
     <string name="native_5c0c8c9aa658f4a0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OPENCLAW"</string>
-    <string name="native_5c1acea9c9b0e704" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Web Fetch"</string>
+    <string name="native_5c1acea9c9b0e704" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"网页抓取"</string>
     <string name="native_5c39123805ffb4e2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"提示词"</string>
     <string name="native_5c944156b5353428" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"批准设备？"</string>
     <string name="native_5cc60967e044ee0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"关闭附件警告"</string>
@@ -738,6 +739,7 @@
     <string name="native_674b38cae72bb0c8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"未分组"</string>
     <string name="native_674eb55d9c353900" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"计划详情"</string>
     <string name="native_67528858c36397f7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手机功能"</string>
+    <string name="native_67a0d2e0dab41fca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"打开来源"</string>
     <string name="native_67a926f7008e2b0e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"不可用"</string>
     <string name="native_67b696468610b879" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"仪表盘"</string>
     <string name="native_67fa416afa64d304" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"粘贴令牌"</string>
@@ -844,6 +846,7 @@
     <string name="native_75081b593d15cf6e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已禁用"</string>
     <string name="native_752ae6f8d8349c75" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"仍在等待批准"</string>
     <string name="native_75419062daafab8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"无法加载后台任务"</string>
+    <string name="native_75573d44b7620f81" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"页面摘录"</string>
     <string name="native_757bfc36ce2e0428" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"检查 OpenClaw 是否能在这部手机上清晰播报。"</string>
     <string name="native_75c4bbf668b72cbf" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"工作中 · %1$s 个运行中的任务"</string>
     <string name="native_75db671fb2e8cca9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"命令工作目录"</string>
@@ -971,7 +974,6 @@
     <string name="native_88e0c9e9615456f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"没有突出显示的项目"</string>
     <string name="native_88e6e8384a7fc7ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"会话目标"</string>
     <string name="native_893a3e37d71c4563" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 已记录拒绝操作。"</string>
-    <string name="native_89713b9c9c1b8f65" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"接受"</string>
     <string name="native_8998824610d49175" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"向 OpenClaw 提问任何问题"</string>
     <string name="native_89bbfe23c3917a3f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"重新连接以继续"</string>
     <string name="native_8a20f46d5276b474" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 个已配对"</string>
@@ -1298,6 +1300,7 @@
     <string name="native_b906e4f5d8dd6128" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"尚未加载任何智能体。"</string>
     <string name="native_b93a70717669740b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"搜索 ClawHub"</string>
     <string name="native_b96a4e034aae9cd8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"需要配对"</string>
+    <string name="native_b99fa6c061504f00" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"预览不可用"</string>
     <string name="native_b9cf97697898d132" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在运行的任务"</string>
     <string name="native_b9d5d026db17b9e4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"失败 — %1$s"</string>
     <string name="native_ba19e9c3d5f49882" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"红色"</string>
@@ -1417,6 +1420,7 @@
     <string name="native_ca7981b46ecf2c17" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"关闭"</string>
     <string name="native_cae7d57bc067a514" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"停止"</string>
     <string name="native_cae98462b30650eb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"暂无匹配的对话。"</string>
+    <string name="native_caf85b0888d78f1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"来源"</string>
     <string name="native_cba62d81f910c7f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 配对成功。\n请在操作员界面中批准此手机的节点功能。"</string>
     <string name="native_cc4b66e7e22230c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"此技能已安装, 但目前不满足运行条件。 请使用桌面端或 CLI 更改配置。"</string>
     <string name="native_cc5f45fb30a26e07" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"识别器繁忙"</string>
@@ -1449,7 +1453,7 @@
     <string name="native_d01da77df594cd2c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"无法加载更多会话。"</string>
     <string name="native_d03262ba19b05a7d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"显示行号"</string>
     <string name="native_d0329dd25d4401f9" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"另外 %1$s 个工作进程"</string>
-    <string name="native_d04fc7d7e19702f8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Web Search"</string>
+    <string name="native_d04fc7d7e19702f8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"网页搜索"</string>
     <string name="native_d053ba98d8bbcec1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"试试聊天、语音、话题、提供商或设置。"</string>
     <string name="native_d056177742e27cf5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 活跃"</string>
     <string name="native_d0cda6559bb347db" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"navigate"</string>

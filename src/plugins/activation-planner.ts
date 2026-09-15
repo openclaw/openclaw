@@ -3,7 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizePluginsConfig } from "./config-state.js";
+import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import {
   hasExplicitManifestOwnerTrust,
   isBundledManifestOwner,
@@ -62,6 +62,7 @@ type PluginActivationPlan = {
 type ResolveManifestActivationPlanParams = {
   trigger: PluginActivationPlannerTrigger;
   config?: OpenClawConfig;
+  normalizedConfig?: NormalizedPluginsConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   origin?: PluginOrigin;
@@ -84,7 +85,8 @@ export function resolveManifestActivationPlan(
         env: params.env,
         includeDisabled: true,
       });
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  const normalizedConfig =
+    params.normalizedConfig ?? normalizePluginsConfig(params.config?.plugins);
   const entries = registry.plugins
     .flatMap((plugin) => {
       if (params.origin && plugin.origin !== params.origin) {

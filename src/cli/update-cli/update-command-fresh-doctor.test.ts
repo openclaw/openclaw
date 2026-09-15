@@ -399,7 +399,7 @@ describe("post-plugin update readiness", () => {
         result: { status: "error", failureFacts },
       });
       throw Object.assign(new Error("Doctor exited"), {
-        exitCode: 1,
+        exitCode: 23,
         stderr: "Last cleanup message",
       });
     });
@@ -408,7 +408,7 @@ describe("post-plugin update readiness", () => {
         ...updateOptions,
         phase: "pre-plugin",
       }),
-    ).rejects.toMatchObject({ failureFacts });
+    ).rejects.toMatchObject({ failureFacts, exitCode: 23 });
     const result = await completePostCorePluginUpdate(updateOptions);
     expect(result.pluginUpdate).toMatchObject({ status: "error", failureFacts });
   });

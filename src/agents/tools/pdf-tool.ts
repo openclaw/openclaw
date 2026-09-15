@@ -4,10 +4,8 @@
  * Loads local/web PDFs, extracts pages/text, and analyzes them with native or fallback media-understanding models.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeMimeType } from "@openclaw/media-core/mime";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
@@ -509,7 +507,7 @@ export function createPdfTool(options?: {
       // aborted, so a dead run cannot keep pulling remote PDFs.
       signal?.throwIfAborted();
       const trimmed = normalizeMediaReferenceSource(pdfRaw);
-      const refInfo = classifyMediaReferenceSource(trimmed);
+      const refInfo = classifyMediaReferenceSource(trimmed, { allowDataUrl: false });
       const { isHttpUrl } = refInfo;
 
       if (refInfo.hasUnsupportedScheme) {
@@ -557,12 +555,8 @@ export function createPdfTool(options?: {
             ...(signal ? { requestInit: { signal } } : {}),
           });
 
-      if (media.kind !== "document") {
-        // Check MIME type more specifically
-        const ct = normalizeLowercaseStringOrEmpty(media.contentType);
-        if (!ct.includes("pdf") && !ct.includes("application/pdf")) {
-          throw new Error(`Expected PDF but got ${media.contentType ?? media.kind}: ${pdfRaw}`);
-        }
+      if (normalizeMimeType(media.contentType) !== "application/pdf") {
+        throw new Error(`Expected PDF but got ${media.contentType ?? media.kind}: ${pdfRaw}`);
       }
 
       const filename =

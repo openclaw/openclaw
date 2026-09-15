@@ -229,22 +229,13 @@ describe("AppSidebar session mutation feedback", () => {
     );
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
 
-    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
+    expect(harness.patch).toHaveBeenCalledTimes(2);
     expect(setSessionKey).not.toHaveBeenCalled();
     expect(harness.patch).toHaveBeenNthCalledWith(
       2,
       archivedRow.key,
-      { archived: false },
-      {
-        agentId: "main",
-        expectedSessionId: `session:${archivedRow.key}`,
-        deferListRefresh: true,
-      },
-    );
-    expect(harness.patch).toHaveBeenNthCalledWith(
-      3,
-      archivedRow.key,
-      { pinned: true },
+      { archived: false, pinned: true },
       {
         agentId: "main",
         expectedSessionId: `session:${archivedRow.key}`,
@@ -252,7 +243,6 @@ describe("AppSidebar session mutation feedback", () => {
       },
     );
     expect(harness.patchMany).not.toHaveBeenCalled();
-    expect(harness.refreshReplacement).toHaveBeenCalledOnce();
     expect(navigate).not.toHaveBeenCalled();
   });
 

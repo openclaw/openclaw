@@ -107,10 +107,7 @@ export async function readCodexSessionMeta(
   return undefined;
 }
 
-/**
- * Codex 0.147 reports OpenClaw app-server rollouts as `vscode`, so the rollout's
- * immutable session metadata is the authoritative historical provenance.
- */
+/** Passive local listing uses native creation provenance, with rollout fallback for older records. */
 export async function isOpenClawManagedCodexThread(
   thread: CodexThread,
   localSessionsRoot: string | undefined,
@@ -124,6 +121,9 @@ export async function isOpenClawManagedCodexThread(
     const rolloutPath = typeof thread.path === "string" ? thread.path.trim() : "";
     if (!localSessionsRoot || !rolloutPath) {
       return false;
+    }
+    if (typeof thread.originator === "string" && thread.originator.length > 0) {
+      return thread.originator === "openclaw";
     }
     const cacheKey = `${localSessionsRoot}\0${rolloutPath}`;
     const cached = provenanceByPath.get(cacheKey);

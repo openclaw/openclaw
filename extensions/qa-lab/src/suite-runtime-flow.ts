@@ -184,7 +184,10 @@ type QaSuiteScenarioFlowApiParams = QaSuiteScenarioDepsParams & {
   };
 };
 
-function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
+function createQaSuiteScenarioDeps(
+  params: QaSuiteScenarioDepsParams,
+  webOpenPage: ReturnType<typeof webRuntime.createQaWebPageOpener>,
+) {
   const waitForAccountOutboundMessage: typeof suiteRuntimeTransport.waitForOutboundMessage = (
     state,
     predicate,
@@ -231,14 +234,7 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     browserOpenTab: browserRuntime.qaBrowserOpenTab,
     browserSnapshot: browserRuntime.qaBrowserSnapshot,
     browserAct: browserRuntime.qaBrowserAct,
-    webOpenPage: async (webParams: Parameters<typeof webRuntime.qaWebOpenPage>[0]) => {
-      const opened = await webRuntime.qaWebOpenPage({
-        ...webParams,
-        repoRoot: params.env.repoRoot,
-      });
-      params.env.webSessionIds.add(opened.pageId);
-      return opened;
-    },
+    webOpenPage,
     webWait: webRuntime.qaWebWait,
     webType: webRuntime.qaWebType,
     webSnapshot: webRuntime.qaWebSnapshot,
@@ -294,22 +290,23 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
 function createQaSuiteScenarioFlowApi(
   params: QaSuiteScenarioFlowApiParams & { signal: AbortSignal },
 ) {
-  return {
+  const createWebPageOpener = (signal?: AbortSignal) => {
+    const open = webRuntime.createQaWebPageOpener(params.env.webSessionIds, signal);
+    return (webParams: Parameters<typeof webRuntime.qaWebOpenPage>[0]) =>
+      open({ ...webParams, repoRoot: params.env.repoRoot });
+  };
+  const api = {
     ...createQaScenarioRuntimeApi({
       env: params.env,
       scenario: params.scenario,
-      deps: createQaSuiteScenarioDeps({
-        env: params.env,
-        runScenario: params.runScenario,
-        splitModelRef: params.splitModelRef,
-        formatErrorMessage: params.formatErrorMessage,
-        liveTurnTimeoutMs: params.liveTurnTimeoutMs,
-        resolveQaLiveTurnTimeoutMs: params.resolveQaLiveTurnTimeoutMs,
-      }),
+      deps: createQaSuiteScenarioDeps(params, createWebPageOpener(params.signal)),
       constants: params.constants,
     }),
     signal: params.signal,
   };
+  // DSL finally actions may need a new page after the scenario deadline.
+  // They share the suite owner and seal, but not the expired acquisition signal.
+  return { api, cleanupApi: { ...api, webOpenPage: createWebPageOpener() } };
 }
 
 function createQaScenarioDeadline(timeoutMs?: number) {
@@ -414,7 +411,7 @@ export async function runQaSuiteScenarioDefinition(params: QaSuiteScenarioFlowAp
   const vars: Record<string, unknown> = {};
   const deadline = createQaScenarioDeadline(params.scenario.execution.timeoutMs);
   try {
-    const api = createQaSuiteScenarioFlowApi({
+    const { api, cleanupApi } = createQaSuiteScenarioFlowApi({
       ...params,
       signal: deadline.signal,
       runScenario: createQaSuiteScenarioStepRunner(params.env, params.scenario, vars, deadline, {
@@ -424,6 +421,7 @@ export async function runQaSuiteScenarioDefinition(params: QaSuiteScenarioFlowAp
     });
     return await runScenarioFlow({
       api,
+      cleanupApi,
       flow: params.scenario.execution.flow,
       scenarioTitle: params.scenario.title,
       vars,

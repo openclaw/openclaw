@@ -974,6 +974,9 @@ export class ChatComposerPersistence {
         attachment.browserAnnotation
           ? { browserAnnotation: Object.assign({}, attachment.browserAnnotation) }
           : {},
+        attachment.selectionAnnotation
+          ? { selectionAnnotation: Object.assign({}, attachment.selectionAnnotation) }
+          : {},
       ),
     );
     const durable = durableScope

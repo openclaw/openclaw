@@ -1,7 +1,7 @@
 is_mainline_drift_critical_path_for_merge() {
   local path="$1"
   case "$path" in
-    package.json|pnpm-lock.yaml|pnpm-workspace.yaml|.npmrc|.oxlintrc.json|.oxfmtrc.json|tsconfig.json|tsconfig.*.json|vitest.config.ts|vitest.*.config.ts|scripts/*|.github/workflows/*)
+    package.json|pnpm-lock.yaml|pnpm-workspace.yaml|.npmrc|.oxlintrc.json|.oxfmtrc.json|tsconfig.json|tsconfig.*.json|test/tsconfig/*|vitest.config.ts|vitest.*.config.ts|scripts/*|.github/workflows/*)
       return 0
       ;;
   esac
@@ -130,6 +130,7 @@ mainline_drift_requires_sync() (
   export LC_ALL=C
   local mainline_base="$1"
   local prepared_head_sha="$2"
+  local comparison_head_sha="${3:-$PR_MAIN_SHA}"
 
   if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "${mainline_base}^{commit}" 2>/dev/null; then
     echo "Mainline drift relevance: unable to read mainline base $mainline_base locally." >&2
@@ -151,7 +152,7 @@ mainline_drift_requires_sync() (
   # Compare only mainline commits since the prepared lineage base. The remote
   # GraphQL commit has a different parent but its verified tree shares this
   # lineage, so its PR files must not look like incoming mainline drift.
-  git diff --name-only "${mainline_base}..${PR_MAIN_SHA}" | sed '/^$/d' | sort -u > "$delta_file" || return 2
+  git diff --name-only "${mainline_base}..${comparison_head_sha}" | sed '/^$/d' | sort -u > "$delta_file" || return 2
   git diff --name-only "${mainline_base}..${prepared_head_sha}" | sed '/^$/d' | sort -u > "$prepared_files_file" || return 2
   comm -12 "$delta_file" "$prepared_files_file" > "$overlap_file" || return 2
   : > "$critical_file" || return 2
@@ -182,7 +183,7 @@ mainline_drift_requires_sync() (
   if [ "$overlap_count" -gt 0 ] || [ "$critical_count" -gt 0 ]; then
     print_file_list_with_limit "Mainline files overlapping prepared files" "$overlap_file" || return 2
     print_file_list_with_limit "Mainline files touching merge-critical infrastructure" "$critical_file" || return 2
-    echo "Mainline drift relevance: sync required before merge." || return 2
+    echo "Mainline drift relevance: relevant input changes found." || return 2
     return 0
   fi
 
@@ -203,6 +204,11 @@ merge_verify() {
   # shellcheck disable=SC1091
   source .local/prep.env || return 1
   verify_prep_branch_matches_prepared_head "$pr" "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}" || return 1
+  # GitHub publication can preserve the tree while assigning a new commit ID.
+  local local_tree hosted_tree
+  local_tree=$(git rev-parse "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}^{tree}") || return 1
+  hosted_tree=$(git rev-parse "$PREP_HEAD_SHA^{tree}") || return 1
+  [ "$local_tree" = "$hosted_tree" ] || { echo "Local and hosted prepared trees differ." >&2; return 1; }
 
   local json
   json=$(gh_plain pr view "$pr" --json state,isDraft,headRefOid) || return 1
@@ -695,8 +701,10 @@ merge_run() {
   attempt=$(node -e 'process.stdout.write(require("node:crypto").randomUUID())') || return 1
   intent=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -c --argjson repo "$MERGE_REPO" \
     --arg method "$merge_method" --arg route "$route" --arg attempt "$attempt" \
+    --arg localHead "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}" \
     --argjson review "$CLAWSWEEPER_REVIEW_EVIDENCE" '
     {version:1,repo:$repo,pr:.pr.number,prId:.pr.id,base:.pr.baseRefName,head:.pr.headRefOid,
+     localHead:$localHead,
      main:.main,method:$method,route:$route,attempt:$attempt,phase:"intent",accepted:false,landed:null,
      clawsweeperReview:$review}
   ') || return 1

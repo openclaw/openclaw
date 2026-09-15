@@ -1,9 +1,31 @@
 import { execFileSync } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { withUpdateRepairEnvironment } from "./update-repair-agent.runtime.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import {
+  prepareUpdateRepairInference,
+  withUpdateRepairEnvironment,
+} from "./update-repair-agent.runtime.js";
 
 describe("repair rehearsal environment", () => {
+  it("preserves a configuration failure instead of blaming model setup", async () => {
+    await withOpenClawTestState({ layout: "home" }, async (state) => {
+      await state.writeConfig({ plugins: { enabled: false } });
+      const location = state.statePath("state", "openclaw.sqlite");
+      await fs.mkdir(path.dirname(location), { recursive: true });
+      const database = openNodeSqliteDatabase(location);
+      database.exec("PRAGMA user_version = 999999");
+      database.close();
+      await expect(
+        withUpdateRepairEnvironment({ ...state, installRoot: state.workspaceDir }, () =>
+          prepareUpdateRepairInference(new AbortController().signal, 1_000),
+        ),
+      ).rejects.toThrow(/newer schema version 999999/u);
+    });
+  });
+
   it("keeps disposable selectors but rejects hostile overrides before child execution", async () => {
     await withOpenClawTestState({ layout: "home" }, async (state) => {
       const before = { ...process.env };

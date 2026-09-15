@@ -2,11 +2,13 @@ import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import type { LegacyAcpMigrationSource } from "../../infra/legacy-acp-migration-source.js";
 import {
   runOpenClawAgentWriteTransaction,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { recordLegacyAcpMigrationSources } from "./session-accessor.sqlite-acp-provenance.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import type { SessionAccessScope, TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
@@ -53,6 +55,7 @@ type SqliteSessionImportRowsParams = Pick<
   ) => void;
   skipIfExists?: boolean;
   entry: SessionEntry;
+  legacyAcpMigrationSource?: LegacyAcpMigrationSource;
   readTranscriptEvents?: (append: (event: TranscriptEvent) => void) => void | (() => void);
   transcriptMtimeMs?: number;
 };
@@ -148,6 +151,11 @@ function importSqliteSessionRowsInTransaction(
       allowStoredAliases: true,
       previousEntry: currentEntry ?? null,
     });
+    if (params.legacyAcpMigrationSource) {
+      recordLegacyAcpMigrationSources(database.db, resolved.sessionKey, [
+        params.legacyAcpMigrationSource,
+      ]);
+    }
   }
   // Only trusted SQLite handoffs can transfer ownership and hash exact ordered rows;
   // parsing, deduping, or trusting JSON ownership would break the migration boundary.

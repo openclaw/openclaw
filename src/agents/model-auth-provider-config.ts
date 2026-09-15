@@ -20,6 +20,7 @@ import { canResolveEnvSecretRefInReadOnlyPath } from "../plugin-sdk/secret-ref-r
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
@@ -103,7 +104,9 @@ export function resolveProviderConfigSecretInput(
   sourceConfig = resolveProviderSourceConfig(cfg, provider),
 ) {
   const entry = resolveMergedModelProviderEntry(sourceConfig, provider);
-  const path = entry ? `models.providers.${entry.providerKey}.apiKey` : "";
+  const path = entry
+    ? `${appendConfigPathSegment("models.providers", entry.providerKey)}.apiKey`
+    : "";
   const resolvedEnvRef = entry ? getResolvedConfigEnvSecretRef(sourceConfig, path) : null;
   return {
     providerConfig: resolveProviderConfig(cfg, provider),

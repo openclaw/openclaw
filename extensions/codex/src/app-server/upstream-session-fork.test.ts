@@ -6,7 +6,9 @@ import {
   resetPluginRuntimeStateForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -72,7 +74,9 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   resetPluginRuntimeStateForTest();

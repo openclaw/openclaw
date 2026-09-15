@@ -26,6 +26,23 @@ the old Gateway serves, then activates and verifies the update.
 openclaw update
 ```
 
+<Note>
+On FreeBSD, OpenClaw 2026.9.4 can stop before staging an update with
+`managed handoff process start identity is unavailable`. Changing the target or
+adding `--no-restart` cannot repair the installed updater.
+
+For a pkg or Ports installation, update through pkg or Ports; do not overwrite
+its files with npm. For an npm-owned installation, use the
+[manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+from a separate shell, with the same owning npm, installation prefix, and
+Gateway state/configuration. Select a published version whose release notes
+include the FreeBSD fixes; changes on `main` are not a published release.
+
+Stop and start the Gateway through its actual supervisor or foreground process
+owner around the manual replacement. This recovery does not add CLI-managed
+FreeBSD rc.d service updates.
+</Note>
+
 An already-installed registry package version or Git target SHA still runs plugin maintenance, repairs eligible old OpenClaw release pins, and restarts a running managed Gateway only when plugins change and `--no-restart` is not set; unchanged runs finish as `skipped` / `already-current`.
 
 Plugin maintenance does not fail an otherwise successful core update. If a plugin

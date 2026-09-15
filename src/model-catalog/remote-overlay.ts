@@ -8,10 +8,11 @@ import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-ca
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../config/version.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { VERSION } from "../version.js";
 import { bundledCatalogGeneratedAt } from "./bundled-catalog-stamp.js";
 import { isRemoteModelCatalogRefreshEnabled, resolveRemoteCatalogUrl } from "./remote-config.js";
-import { readRemoteModelCatalog } from "./remote-store.js";
+import { readRemoteModelCatalog, readRemoteModelCatalogAsync } from "./remote-store.js";
 
 type RemoteModelCatalogOverlay = Readonly<Record<string, ModelCatalogProvider>>;
 type ActiveRemoteModelCatalog = {
@@ -24,6 +25,7 @@ type ActiveRemoteModelCatalog = {
 const STARTUP_SNAPSHOT_KEY = "openclaw.remoteModelCatalogStartupSnapshot";
 let readBundledGeneratedAt = bundledCatalogGeneratedAt;
 let readStoredCatalog = readRemoteModelCatalog;
+let readStoredCatalogAsync = readRemoteModelCatalogAsync;
 
 function isCompatible(bundle: RemoteModelCatalogBundle): boolean {
   if (!bundle.minVersion) {
@@ -38,7 +40,13 @@ function readCompatibleRemoteModelCatalog(): ActiveRemoteModelCatalog | null {
   if (bundledGeneratedAt === undefined) {
     return null;
   }
-  const stored = readStoredCatalog();
+  return selectCompatibleRemoteModelCatalog(readStoredCatalog(), bundledGeneratedAt);
+}
+
+function selectCompatibleRemoteModelCatalog(
+  stored: ReturnType<typeof readRemoteModelCatalog>,
+  bundledGeneratedAt: number,
+): ActiveRemoteModelCatalog | null {
   if (!stored) {
     return null;
   }
@@ -54,23 +62,69 @@ function readCompatibleRemoteModelCatalog(): ActiveRemoteModelCatalog | null {
   };
 }
 
-export function captureRemoteModelCatalogStartupSnapshot(): ActiveRemoteModelCatalog | null {
+function inheritedRemoteModelCatalogStartupSnapshot() {
   // SAFETY: This module alone sets the key to a record containing a validated snapshot or null.
-  const inherited = getEnvironmentData(STARTUP_SNAPSHOT_KEY) as
+  return getEnvironmentData(STARTUP_SNAPSHOT_KEY) as
     | { catalog: ActiveRemoteModelCatalog | null }
     | undefined;
+}
+
+function publishRemoteModelCatalogStartupSnapshot(
+  snapshot: ActiveRemoteModelCatalog | null,
+): ActiveRemoteModelCatalog | null {
+  const inherited = inheritedRemoteModelCatalogStartupSnapshot();
   if (inherited !== undefined) {
     return inherited.catalog;
   }
   // New workers inherit the startup pair, including absence, rather than later downloads.
+  setEnvironmentData(STARTUP_SNAPSHOT_KEY, { catalog: snapshot });
+  return snapshot;
+}
+
+export function captureRemoteModelCatalogStartupSnapshot(): ActiveRemoteModelCatalog | null {
+  const inherited = inheritedRemoteModelCatalogStartupSnapshot();
+  if (inherited !== undefined) {
+    return inherited.catalog;
+  }
   let snapshot: ActiveRemoteModelCatalog | null;
   try {
     snapshot = readCompatibleRemoteModelCatalog();
   } catch {
     snapshot = null;
   }
-  setEnvironmentData(STARTUP_SNAPSHOT_KEY, { catalog: snapshot });
-  return snapshot;
+  return publishRemoteModelCatalogStartupSnapshot(snapshot);
+}
+
+/** Prepare the same first-winner startup pair without host-thread SQLite reads. */
+export async function prepareRemoteModelCatalogStartupSnapshot(
+  options: { env?: NodeJS.ProcessEnv } = {},
+): Promise<ActiveRemoteModelCatalog | null> {
+  const inherited = inheritedRemoteModelCatalogStartupSnapshot();
+  if (inherited !== undefined) {
+    return inherited.catalog;
+  }
+  let bundledGeneratedAt: number | undefined;
+  try {
+    bundledGeneratedAt = readBundledGeneratedAt();
+  } catch {
+    return publishRemoteModelCatalogStartupSnapshot(null);
+  }
+  if (bundledGeneratedAt === undefined) {
+    return publishRemoteModelCatalogStartupSnapshot(null);
+  }
+  const context = captureOpenClawStateWorkerContext(options);
+  let snapshot: ActiveRemoteModelCatalog | null;
+  try {
+    snapshot = selectCompatibleRemoteModelCatalog(
+      await readStoredCatalogAsync(context),
+      bundledGeneratedAt,
+    );
+  } catch {
+    snapshot = null;
+  }
+  // Optional read/parse failures are absence; retired work cannot publish that absence.
+  context.admission.assertCurrent();
+  return publishRemoteModelCatalogStartupSnapshot(snapshot);
 }
 
 function getActiveRemoteModelCatalog(config: OpenClawConfig): ActiveRemoteModelCatalog | undefined {
@@ -125,6 +179,10 @@ function setRemoteModelCatalogOverlaySourcesForTest(sources?: {
   setEnvironmentData(STARTUP_SNAPSHOT_KEY, undefined);
   readBundledGeneratedAt = sources?.bundledGeneratedAt ?? bundledCatalogGeneratedAt;
   readStoredCatalog = sources?.readStoredCatalog ?? readRemoteModelCatalog;
+  const readTestCatalog = sources?.readStoredCatalog;
+  readStoredCatalogAsync = readTestCatalog
+    ? async () => readTestCatalog()
+    : readRemoteModelCatalogAsync;
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

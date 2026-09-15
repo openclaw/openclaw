@@ -512,7 +512,6 @@ export async function executeQueuedCronRun(params: {
   | { kind: "completed"; outcome: TimedCronRunOutcome; handled: boolean }
 > {
   const { state } = params;
-  let activated = false;
   const executeAdmitted = async () => {
     const started = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
@@ -578,7 +577,6 @@ export async function executeQueuedCronRun(params: {
       if (activation.kind !== "activated") {
         return undefined;
       }
-      activated = true;
       params.onActivated?.();
       return {
         job: activation.job,
@@ -667,13 +665,13 @@ export async function executeQueuedCronRun(params: {
     executeAdmitted,
     params.admissionRelease,
   ).catch(async (error: unknown) => {
-    if (activated) {
-      await cleanupQueuedCronRunReservations({
-        state,
-        reservations: [{ jobId: params.jobId, reservationIdentity: params.reservationIdentity }],
-        recompute: "maintenance",
-      });
-    }
+    // Release this producer's exact reservation even when admission or activation
+    // failed before execution; callers' batch cleanup is only a safety net.
+    await cleanupQueuedCronRunReservations({
+      state,
+      reservations: [{ jobId: params.jobId, reservationIdentity: params.reservationIdentity }],
+      recompute: "maintenance",
+    });
     throw error;
   });
   if (admission.kind === "stopped") {

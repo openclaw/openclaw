@@ -53,16 +53,24 @@ describe("bindActiveOperatorTurnAuthority", () => {
 });
 
 describe("bindCronManagementGrant", () => {
-  it.each(["local", "unknown"] as const)(
-    "keeps %s admin admission within its original creator and operator authority",
-    async (kind) => {
+  it.each([
+    ["local", "control-ui-admin"],
+    ["unknown", "control-ui-admin"],
+    ["unknown", "channel-owner"],
+  ] as const)(
+    "keeps %s management admission from %s within its original creator and operator authority",
+    async (kind, source) => {
       const runId = "control-ui-scope-run";
       const { operationalRunInstance } = createTestAdmittedRunContext(runId);
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
       onTestFinished(() => {
         releaseAgentRunDelegatedAuthority(authority);
       });
-      const capability = createCronCreatorAuthorityCapability(runId, { kind }, true)!;
+      const capability = createCronCreatorAuthorityCapability(
+        runId,
+        { kind },
+        source === "channel-owner" ? { source, isCurrent: () => true } : { source },
+      )!;
       const resolveCreator = vi.fn(async () => ({
         tools: ["read"],
         provenance: { version: 1 as const, source: "final-executable-surface" as const },
@@ -131,7 +139,11 @@ describe("bindCronManagementGrant", () => {
     onTestFinished(() => {
       releaseAgentRunDelegatedAuthority(authority);
     });
-    const capability = createCronCreatorAuthorityCapability(runId, { kind: "local" }, true);
+    const capability = createCronCreatorAuthorityCapability(
+      runId,
+      { kind: "local" },
+      { source: "control-ui-admin" },
+    );
     if (!capability) {
       throw new Error("expected admin capability");
     }
@@ -162,7 +174,7 @@ describe("bindCronManagementGrant", () => {
           async () => {
             expect(getGatewayToolCallerIdentity()?.approvalAuthority).toBe(replacementAuthority);
             expect(() => mint!("cron.get")).toThrow(
-              "Retry from a fresh authenticated Control UI administrator turn",
+              "Retry from a fresh authenticated configured channel owner or Control UI administrator turn",
             );
           },
         );

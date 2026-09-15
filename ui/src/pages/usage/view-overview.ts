@@ -169,6 +169,7 @@ function renderCostWindowComparison(
   daily: CostDailyEntry[],
   rangeStartDate: string,
   rangeEndDate: string,
+  timeZone: "local" | "utc",
 ) {
   const range = buildUsageCostWindowSummary(daily, rangeStartDate, rangeEndDate);
   if (!range || daily.length === 0) {
@@ -176,7 +177,7 @@ function renderCostWindowComparison(
   }
 
   const windows = buildUsageCostWindows(daily, rangeStartDate, rangeEndDate);
-  const today = formatIsoDate(new Date());
+  const today = formatIsoDate(new Date(), timeZone);
   const labelForWindow = (days: number, endDate: string) => {
     if (days === 1) {
       return endDate === today ? t("usage.presets.today") : formatDayLabel(endDate);

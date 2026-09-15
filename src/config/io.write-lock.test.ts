@@ -12,7 +12,10 @@ import {
   captureManagedUpdateLeaseDatabaseIdentity,
   createManagedHandoffLeaseDatabase,
 } from "../infra/update-managed-service-handoff-database.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createConfigIO, writeConfigFile } from "./io.js";
 import {
@@ -26,7 +29,8 @@ import {
 import { withConfigWriteLock } from "./write-lock.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
   });

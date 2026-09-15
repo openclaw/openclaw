@@ -1,4 +1,5 @@
 // xAI plugin module implements SuperGrok provider usage behavior.
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   buildUsageHttpErrorSnapshot,
@@ -20,10 +21,6 @@ const SUPERGROK_CLIENT_VERSION = "1.0.4";
 const MAX_PLAN_CHARS = 128;
 const MAX_EXACT_INTEGER = 9_007_199_254_740_991;
 
-type BillingPeriod = {
-  type?: unknown;
-  end?: unknown;
-};
 type BillingConfig = Record<string, unknown>;
 
 function parseCentValue(value: unknown): number | undefined {
@@ -65,14 +62,6 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-function parseResetAt(value: unknown): number | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const ms = Date.parse(value);
-  return Number.isFinite(ms) ? ms : undefined;
-}
-
 function parsePercent(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
     return undefined;
@@ -80,18 +69,8 @@ function parsePercent(value: unknown): number | undefined {
   return clampPercent(value);
 }
 
-function parseCurrentPeriod(value: unknown): BillingPeriod | undefined {
-  const period = asOptionalRecord(value);
-  return period
-    ? {
-        type: period.type,
-        end: period.end,
-      }
-    : undefined;
-}
-
 function resolveUsageWindow(config: BillingConfig): UsageWindow | undefined {
-  const currentPeriod = parseCurrentPeriod(config["currentPeriod"] ?? config["current_period"]);
+  const currentPeriod = asOptionalRecord(config["currentPeriod"] ?? config["current_period"]);
   const explicitPercent = parsePercent(
     config["creditUsagePercent"] ?? config["credit_usage_percent"],
   );
@@ -115,7 +94,7 @@ function resolveUsageWindow(config: BillingConfig): UsageWindow | undefined {
         config["billing_period_end"] !== undefined
       ? "Monthly"
       : "Usage";
-  const resetAt = parseResetAt(
+  const resetAt = parseDateStringTimestampMs(
     currentPeriod?.end ?? config["billingPeriodEnd"] ?? config["billing_period_end"],
   );
   return {

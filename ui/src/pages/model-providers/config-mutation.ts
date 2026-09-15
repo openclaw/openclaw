@@ -1,6 +1,8 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { DefaultModelSelection } from "./data.ts";
@@ -160,6 +162,23 @@ type ModelProviderConfigMutationOwner = {
   setBusy: (busy: boolean) => void;
   setMessage: (message: ModelProviderRowMessage | null) => void;
 };
+
+export function modelProviderConfigMutationBlockedReason(
+  context: Pick<ApplicationContext, "gateway" | "runtimeConfig">,
+): string | null {
+  const snapshot = context.gateway.snapshot;
+  if (snapshot.phase !== "connected") {
+    return t("modelProviders.readOnly.disconnected");
+  }
+  if (context.runtimeConfig.canPatch !== true) {
+    return t("modelProviders.readOnly.adminRequired");
+  }
+  const config = context.runtimeConfig.state;
+  if (!snapshot.client || config.client !== snapshot.client || !currentConfigObject(config)) {
+    return t("modelProviders.configUnavailable");
+  }
+  return null;
+}
 
 export function modelProviderErrorMessage(error: unknown): string {
   return formatUiError(error, t("modelProviders.requestFailed"));

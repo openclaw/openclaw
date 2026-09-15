@@ -45,7 +45,10 @@ import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { buildNonSensitiveProbeFailure, resolveHealthAccountContext } from "./account-context.js";
 import { buildContextEngineHealthSummary } from "./context-engine.js";
-import { buildDeliveryQueueHealthSummary } from "./delivery-queue.js";
+import {
+  buildDeliveryQueueHealthSummary,
+  captureDeliveryQueueHealthContext,
+} from "./delivery-queue.js";
 import type {
   AgentHealthSummary,
   ChannelAccountHealthSummary,
@@ -478,6 +481,7 @@ export async function collectGatewayHealthSnapshot(params: {
   eventLoop?: HealthSummary["eventLoop"];
   configReloadHotReloadStatus?: GatewayHotReloadStatus;
 }): Promise<HealthSummary> {
+  const stateContext = captureDeliveryQueueHealthContext();
   const start = Date.now();
   const timeoutMs = Math.min(
     resolveTimerTimeoutMs(params.timeoutMs, HEALTH_COLLECTION_TIMEOUT_MS, 50),
@@ -623,7 +627,7 @@ export async function collectGatewayHealthSnapshot(params: {
 
   const pluginHealth = buildPluginHealthSummary(cfg);
   const contextEngineHealth = buildContextEngineHealthSummary();
-  const deliveryQueueHealth = buildDeliveryQueueHealthSummary();
+  const deliveryQueueHealth = await buildDeliveryQueueHealthSummary(undefined, stateContext);
   return {
     ok: true,
     ts: Date.now(),

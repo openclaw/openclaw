@@ -18,7 +18,7 @@ import {
   reserveSwarmRun,
 } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
-import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
@@ -29,7 +29,10 @@ import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import {
+  loadGatewaySessionEntryReadOnly,
+  loadGatewaySessionLifecycleSnapshot,
+} from "./session-utils.js";
 import { useQueuedCollectorFixture } from "./session-utils.queued-collector.test-support.js";
 
 const {
@@ -303,6 +306,17 @@ describe("queued collector session projection", () => {
 
   it("rejects stale copies, replaced owners, and lost reservations without losing compact status", async () => {
     const { entry, registration } = await createQueuedReservation();
+    await replaceSessionEntry(
+      { sessionKey: parentKey, storePath: loadGatewaySessionEntryReadOnly(parentKey).storePath },
+      { sessionId: "parent-session", updatedAt: Date.now() },
+    );
+    const afterStaleGrace = Date.now() + 3 * 60 * 60_000;
+    const exactChild = () =>
+      loadGatewaySessionLifecycleSnapshot(entry.childSessionKey, { now: afterStaleGrace }).row;
+    const exactParent = () =>
+      loadGatewaySessionLifecycleSnapshot(parentKey, { now: afterStaleGrace }).row;
+    expect(exactChild()).toMatchObject({ status: "queued", hasActiveSubagentRun: true });
+    expect(exactParent()?.hasActiveSubagentRun).toBe(true);
     const compact = expectDefined(
       loadSubagentSessionListRunsFromSqlite().get(entry.runId),
       "compact queued record",
@@ -317,6 +331,8 @@ describe("queued collector session projection", () => {
     expect(replacement).not.toBe(entry);
     expect(isSubagentRunQueued(entry)).toBe(false);
     expect(isSubagentRunQueued(replacement)).toBe(false);
+    expect(exactChild()?.hasActiveSubagentRun).toBe(false);
+    expect(exactParent()?.hasActiveSubagentRun).not.toBe(true);
     expect((await listChildren(requestContext())).sessions[0]?.hasActiveRun).toBe(false);
 
     removeQueuedSwarmRun(entry.runId);
@@ -329,8 +345,12 @@ describe("queued collector session projection", () => {
     registerSubagentRun(registration);
     const current = expectDefined(subagentRuns.get(entry.runId), "new reservation owner");
     expect(isSubagentRunQueued(current)).toBe(true);
+    expect(exactChild()?.hasActiveSubagentRun).toBe(true);
+    expect(exactParent()?.hasActiveSubagentRun).toBe(true);
     schedulerTesting.reset();
     expect(isSubagentRunQueued(current)).toBe(false);
+    expect(exactChild()?.hasActiveSubagentRun).toBe(false);
+    expect(exactParent()?.hasActiveSubagentRun).not.toBe(true);
     expect((await listChildren(requestContext())).sessions[0]?.hasActiveRun).toBe(false);
   });
 

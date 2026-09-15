@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { startDeliveryProducerLease } from "./delivery-queue-lease.js";
 
 describe("delivery producer lease", () => {
@@ -18,10 +19,37 @@ describe("delivery producer lease", () => {
     expect(renew).toHaveBeenCalledTimes(4);
     expect(lease.signal.aborted).toBe(false);
 
-    lease.stop();
-    lease.stop();
+    await lease.stop();
+    await lease.stop();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(renew).toHaveBeenCalledTimes(4);
+  });
+
+  it("joins an accepted renewal before every stop completes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const renewal = createDeferredCore<number>();
+    const renew = vi
+      .fn<() => Promise<number | undefined>>()
+      .mockResolvedValueOnce(61_000)
+      .mockReturnValueOnce(renewal.promise);
+    const lease = await startDeliveryProducerLease({ id: "joined-owner", renew });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(renew).toHaveBeenCalledTimes(2);
+    let stopped = 0;
+    const first = lease.stop().then(() => {
+      stopped += 1;
+    });
+    const second = lease.stop().then(() => {
+      stopped += 1;
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(stopped).toBe(0);
+    expect(renew).toHaveBeenCalledTimes(2);
+    renewal.resolve(Date.now() + 60_000);
+    await Promise.all([first, second]);
+    expect(stopped).toBe(2);
+    expect(lease.signal.aborted).toBe(false);
   });
 
   it("aborts with the stable claim error when renewal definitively loses ownership", async () => {
@@ -56,7 +84,7 @@ describe("delivery producer lease", () => {
 
     expect(renew).toHaveBeenCalledTimes(4);
     expect(lease.signal.aborted).toBe(false);
-    lease.stop();
+    await lease.stop();
   });
 
   it("aborts when transient renewal failures outlive the last confirmed lease", async () => {

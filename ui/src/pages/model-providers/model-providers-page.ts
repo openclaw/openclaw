@@ -8,7 +8,7 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
-import { normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import * as modelCatalog from "../../lib/model-catalog-store.ts";
@@ -25,6 +25,7 @@ import {
   isMissingMethodError,
   mergeProbeResults,
   modelProviderApiKeySuccess,
+  modelProviderConfigMutationBlockedReason,
   modelDefaultsActions,
   modelProviderErrorMessage,
   readModelBehaviorConfig,
@@ -184,7 +185,11 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     getConfig: () => this.context.runtimeConfig,
   });
   private readonly login = new ModelProviderLoginController(this, {
-    getScope: () => ({ context: this.context, agentId: this.selectedAgentId, data: this.data }),
+    getScope: () => ({
+      context: this.context,
+      agentId: this.selectedAgentId,
+      authStatus: this.data?.authStatus ?? null,
+    }),
     canStart: () => this.canMutate(),
     canContinue: () => this.mutationBlockedReason() === null,
     refresh: () => this.refresh("replacement"),
@@ -217,7 +222,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       () => this.syncSelectedAgent(),
     )
     .effect(
-      () => this.context?.agentSelection,
+      () => this.context?.settingsAgentSelection,
       (selection) => selection.subscribe(() => this.syncSelectedAgent()),
     );
 
@@ -240,6 +245,8 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       this.setSelectedAgent(this.resolveSelectedAgentId());
       if (
         (this.routeData.agentId ?? "") === this.selectedAgentId &&
+        this.routeData.selectionIntentRevision ===
+          this.context.settingsAgentSelection.intentRevision &&
         this.gateway.isRouteDataCurrent(this.routeData)
       ) {
         this.supplemental.adoptCoreData(this.routeData.client, this.routeData.data);
@@ -313,7 +320,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private resolveSelectedAgentId(): string {
-    const selected = this.context.agentSelection.state.selectedId;
+    const selected = this.context.settingsAgentSelection.state.selectedId;
     return selected ? normalizeAgentId(selected) : "";
   }
 
@@ -355,23 +362,10 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private mutationBlockedReason(): string | null {
-    const snapshot = this.context.gateway.snapshot;
-    if (snapshot.phase !== "connected") {
-      return t("modelProviders.readOnly.disconnected");
-    }
-    if (this.context.runtimeConfig.canPatch !== true) {
-      return t("modelProviders.readOnly.adminRequired");
-    }
-    const config = this.context.runtimeConfig.state;
-    if (
-      !snapshot.client ||
-      !this.selectedAgentId ||
-      config.client !== snapshot.client ||
-      !currentConfigObject(config)
-    ) {
-      return t("modelProviders.configUnavailable");
-    }
-    return null;
+    return (
+      modelProviderConfigMutationBlockedReason(this.context) ??
+      (this.selectedAgentId ? null : t("agents.noAgents"))
+    );
   }
 
   private canMutate(): boolean {
@@ -406,7 +400,13 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     params: ModelProviderConfigMutation,
   ): Promise<ModelProviderConfigMutationResult> {
     const client = this.context.gateway.snapshot.client;
-    if (!client || !this.canMutate() || this.busy[params.key]) {
+    // Global defaults remain editable when the configured roster is empty.
+    if (
+      !client ||
+      modelProviderConfigMutationBlockedReason(this.context) ||
+      this.configBusy() ||
+      this.busy[params.key]
+    ) {
       return { ok: false };
     }
     const clientEpoch = this.gateway.epoch;
@@ -588,19 +588,15 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!defaults) {
       return;
     }
-    const agentEpoch = this.agentEpoch;
     const result = await this.patchConfig({
       key: "defaults",
       raw: buildDefaultsPatch(defaults),
       note: t("modelProviders.notes.defaultModel"),
       replacePaths: DEFAULT_MODELS_REPLACE_PATHS,
     });
-    // Keep the draft when fresh provider data is unavailable after commit.
-    if (
-      this.agentEpoch === agentEpoch &&
-      this.defaultsDraft === defaults &&
-      (!result.ok || !result.warning)
-    ) {
+    // Global defaults outlive agent selection. Connection resets clear the draft;
+    // object identity protects newer edits. Retain committed values if refresh failed.
+    if (this.defaultsDraft === defaults && (!result.ok || !result.warning)) {
       this.defaultsDraft = null;
     }
   }
@@ -610,11 +606,12 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const operatorAuth = gatewaySnapshot.hello?.auth;
     const agentsState = this.context.agents.state;
     const agents = agentsState.agentsList?.agents ?? [];
+    const noSelectableAgents =
+      agentsState.agentsList !== null && listSelectableAgents(agents).length === 0;
     const rosterError = agentsState.agentsList ? null : agentsState.agentsError;
     const selected = agents.find((agent) => normalizeAgentId(agent.id) === this.selectedAgentId);
     const data = this.data ?? EMPTY_MODEL_PROVIDERS_DATA;
-    const runtimeState = this.context.runtimeConfig.state;
-    const configObject = currentConfigObject(runtimeState);
+    const configObject = currentConfigObject(this.context.runtimeConfig.state);
     const config = readModelProviderConfig(configObject);
     const catalog =
       gatewaySnapshot.client && this.selectedAgentId
@@ -654,15 +651,19 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       usageClient: !this.mutationBlockedReason() && usageAvailable ? gatewaySnapshot.client : null,
       usageAgentId: this.selectedAgentId,
       connected: gatewaySnapshot.phase === "connected",
-      loading: gatewaySnapshot.phase === "connected" && this.data === null && !rosterError,
+      loading:
+        gatewaySnapshot.phase === "connected" &&
+        this.data === null &&
+        !rosterError &&
+        !noSelectableAgents,
       refreshing: this.core.loading,
-      error: rosterError ?? data.error,
+      error: rosterError ?? (noSelectableAgents ? t("agents.noAgents") : data.error),
       providerUsageFailed: data.providerUsage?.ok === false,
       supplementalLoading: this.loaderPending || this.supplemental.loading,
       updatedAt: data.updatedAt,
       costDays: MODEL_PROVIDERS_COST_DAYS,
       credentialAgentLabel: selected ? normalizeAgentLabel(selected) : this.selectedAgentId,
-      cards,
+      cards: noSelectableAgents ? [] : cards,
       configuredModels: buildSelectableDefaultModels(catalog?.models ?? null, defaults),
       defaultModels: defaults,
       authStatus: data.authStatus,
@@ -685,6 +686,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         operatorAuth?.scopes !== undefined &&
         hasOperatorAdminAccess(operatorAuth),
       mutationBlockedReason: this.mutationBlockedReason(),
+      defaultsMutationBlockedReason: modelProviderConfigMutationBlockedReason(this.context),
       providerUsageStalled: this.refreshPolicy.incompleteUsageExhausted,
       probeAvailable: !this.probeUnsupported && advertised !== false,
       busy: this.busy,
@@ -727,8 +729,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       ...this.login.providerActions,
     });
     return renderModelProvidersPageShell({
-      agentSelection: this.context.agentSelection,
-      agents,
       onOpenModelSetup: () => this.context.navigate("model-setup"),
       ...this.login.pageActions,
       body,

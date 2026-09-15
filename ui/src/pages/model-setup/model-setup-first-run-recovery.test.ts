@@ -154,10 +154,14 @@ describe("ModelSetupPage first-run application recovery", () => {
     await waitForFast(() => {
       expect(page.textContent).toContain("previous activation is unresolved");
       expect(page.textContent).toContain("Check again");
+      expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(true);
     });
+    page.querySelector<HTMLButtonElement>("[data-models-connect]")?.click();
     expect(relaunched.request).not.toHaveBeenCalled();
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 500_000);
-    page.querySelector<HTMLButtonElement>(".model-setup__intro .btn")?.click();
+    [...page.querySelectorAll<HTMLButtonElement>(".model-setup__intro .btn")]
+      .find((button) => button.textContent?.trim() === "Check again")
+      ?.click();
     await waitForFast(() => expect(page.querySelector(".model-setup__loading")).toBeNull());
     expect(relaunched.request.mock.calls.map(([method]) => method)).toEqual([
       "openclaw.setup.detect",

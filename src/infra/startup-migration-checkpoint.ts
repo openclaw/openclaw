@@ -459,6 +459,18 @@ export function recordSuccessfulStateMigrations(
   recordSuccessfulMigrationCheckpoints([STATE_MIGRATION_META_KEY], params);
 }
 
+/** Unfinished owner work cannot retain an earlier successful aggregate checkpoint. */
+export function invalidateSuccessfulMigrationCheckpointsInTransaction(
+  database: DatabaseSync,
+): void {
+  executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<StartupMigrationCheckpointDatabase>(database)
+      .deleteFrom("schema_meta")
+      .where("meta_key", "in", [STATE_MIGRATION_META_KEY, STARTUP_MIGRATION_META_KEY]),
+  );
+}
+
 export function recordSuccessfulStartupMigrations(
   params: RecordMigrationCheckpointParams = {},
 ): void {

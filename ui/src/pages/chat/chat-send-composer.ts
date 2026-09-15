@@ -37,7 +37,7 @@ export function clearSubmittedComposerState(
   submittedDraft: string,
   submittedAttachments: ChatAttachment[],
   submittedMentions: readonly HumanMention[] | undefined,
-  preserveBrowserAnnotations = false,
+  preserveAnnotations = false,
 ) {
   if (
     chatAttachmentDraftSignature(
@@ -52,8 +52,10 @@ export function clearSubmittedComposerState(
   }
   host.chatMessage = "";
   host.chatMentions = [];
-  host.chatAttachments = preserveBrowserAnnotations
-    ? host.chatAttachments.filter((attachment) => attachment.browserAnnotation)
+  host.chatAttachments = preserveAnnotations
+    ? host.chatAttachments.filter(
+        (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
+      )
     : [];
   resetChatInputHistoryNavigation(host);
   return {
@@ -164,14 +166,17 @@ function composerRetainsSubmittedAnnotations(
   host: ChatHost,
   submittedAttachments?: readonly ChatAttachment[],
 ): boolean {
-  const retained = submittedAttachments?.filter((attachment) => attachment.browserAnnotation);
+  const retained = submittedAttachments?.filter(
+    (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
+  );
   return Boolean(
     retained?.length &&
     retained.length === host.chatAttachments.length &&
     retained.every(
       (attachment, index) =>
         attachment.id === host.chatAttachments[index]?.id &&
-        attachment.browserAnnotation === host.chatAttachments[index]?.browserAnnotation,
+        attachment.browserAnnotation === host.chatAttachments[index]?.browserAnnotation &&
+        attachment.selectionAnnotation === host.chatAttachments[index]?.selectionAnnotation,
     ),
   );
 }

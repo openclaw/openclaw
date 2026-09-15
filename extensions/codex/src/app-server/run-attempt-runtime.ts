@@ -194,7 +194,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   const hasFreshCreatorAuthority =
     cronCreatorAuthorityCapability?.active === true &&
     !(
-      cronCreatorAuthorityCapability.controlUiAdmin &&
+      cronCreatorAuthorityCapability.managementEntitlement &&
       cronCreatorAuthorityCapability.callerOrigin.kind === "unknown"
     ) &&
     cronCreatorAuthorityCapability.runId === params.runId &&

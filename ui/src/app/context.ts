@@ -9,6 +9,7 @@ import type { ChatAttachment, ChatComposerMemoryFallback } from "../lib/chat/cha
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { LiveActivity } from "../pages/activity/live-activity.ts";
+import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ControlUiPluginCapability } from "../plugins/control-ui-capability.ts";
 import type { AgentSelectionCapability } from "./agent-selection.ts";
 import type { ApplicationChatSubmissions } from "./chat-submissions.ts";
@@ -80,6 +81,7 @@ export type ApplicationChatAttachmentHandoff = {
       fallbacks: Readonly<Record<string, ChatComposerMemoryFallback>>;
       message?: string;
       mentions?: readonly HumanMention[];
+      newSessionDraft?: NewSessionDraftHandoff;
     },
   ): void;
   consume(handoff: ChatAttachmentHandoffKey): {
@@ -87,6 +89,7 @@ export type ApplicationChatAttachmentHandoff = {
     fallbacks: Record<string, ChatComposerMemoryFallback>;
     message?: string;
     mentions?: readonly HumanMention[];
+    newSessionDraft?: NewSessionDraftHandoff;
   } | null;
   retireScope(scopeKey: string, beforeRevision: number): void;
   clearPane(paneId: string): void;
@@ -104,6 +107,8 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly agents: AgentCapability;
   readonly agentIdentity: AgentIdentityCapability;
   readonly agentSelection: AgentSelectionCapability;
+  /** Configured agent targeted by Settings, independent of chat/session selection. */
+  readonly settingsAgentSelection: AgentSelectionCapability;
   readonly channels: ChannelCapability;
   readonly config: ApplicationConfigCapability;
   readonly scopeUpgrade: ScopeUpgradeCapability;

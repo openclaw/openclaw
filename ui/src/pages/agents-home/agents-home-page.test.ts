@@ -120,6 +120,7 @@ function createPage(pageSize = 2) {
     return () => eventListeners.delete(listener);
   };
   const agentSelection: ApplicationContext["agentSelection"] = {
+    intentRevision: 0,
     state: { selectedId: "harbor", scopeId: null },
     set: () => undefined,
     setScope: () => undefined,

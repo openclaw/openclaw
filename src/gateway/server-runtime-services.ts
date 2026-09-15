@@ -7,13 +7,10 @@ import {
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-sqlite.js";
 import { computeBackoffMs } from "../infra/delivery-recovery.shared.js";
-import {
-  resolveHeartbeatAgents,
-  startHeartbeatRunner,
-  type HeartbeatRunner,
-  runHeartbeatOnce,
-} from "../infra/heartbeat-runner.js";
-import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
+import { resolveHeartbeatAgents, resolveHeartbeatIntervalMs } from "../infra/heartbeat-config.js";
+import type { runHeartbeatOnce } from "../infra/heartbeat-runner-run.js";
+import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner-scheduler.js";
+import { getHeartbeatWakeAbortSignal } from "../infra/heartbeat-wake.js";
 import type { DeliverOutboundPayloadsParams } from "../infra/outbound/deliver.js";
 import {
   schedulePendingSessionDeliveries,
@@ -24,6 +21,7 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { assertQueuedConversationDeliveryAttemptAuthorized } from "./conversation-route-ownership.js";
@@ -44,6 +42,10 @@ export {
   startGatewayChannelHealthMonitor,
   type GatewayChannelManager,
 } from "./server-runtime-startup-services.js";
+
+const loadHeartbeatExecution = createLazyRuntimeModule(
+  () => import("../infra/heartbeat-runner-run.js"),
+);
 
 type GatewayPostReadyLogger = {
   warn: (message: string) => void;
@@ -433,16 +435,25 @@ export function activateGatewayScheduledServices(params: {
   const heartbeatGatewayContextResolver = fenceScheduledGatewayContextResolver(
     params.resolveGatewayContext,
   );
+  let heartbeatStopped = false;
   const heartbeatRunner = startHeartbeatRunner({
     cfg: params.cfgAtStart,
     readCurrentConfig: getRuntimeConfig,
     ...(heartbeatGatewayContextResolver
       ? {
-          runOnce: async (opts: Parameters<typeof runHeartbeatOnce>[0]) =>
-            await runWithScheduledGatewayContext({
+          runOnce: async (opts: Parameters<typeof runHeartbeatOnce>[0]) => {
+            const wakeSignal = getHeartbeatWakeAbortSignal();
+            const { runHeartbeatOnce } = await loadHeartbeatExecution();
+            // A stopped service or replaced wake must not enter execution after
+            // the import settles; the wake owner handles canceled work.
+            if (heartbeatStopped || wakeSignal?.aborted) {
+              return { status: "skipped", reason: "disabled" };
+            }
+            return await runWithScheduledGatewayContext({
               resolveGatewayContext: heartbeatGatewayContextResolver,
               run: async () => await runHeartbeatOnce(opts),
-            }),
+            });
+          },
         }
       : {}),
   });
@@ -480,6 +491,7 @@ export function activateGatewayScheduledServices(params: {
   const heartbeatRunnerWithUpstreamMonitor: HeartbeatRunner = {
     updateConfig: heartbeatRunner.updateConfig,
     stop: () => {
+      heartbeatStopped = true;
       void stopDeliveryRecovery();
       sessionUpstreamMonitor.stop();
       heartbeatRunner.stop();

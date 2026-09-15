@@ -160,7 +160,9 @@ export async function moveMigrationArtifact(
   targetPath: string,
   expected: MigrationArtifactIdentity,
   onPublished?: () => undefined,
+  publishSourceRemoval?: (remove: () => void, retainSource: () => void) => void,
 ): Promise<void> {
+  let createdPublication = false;
   if (!fs.lstatSync(targetPath, { bigint: true, throwIfNoEntry: false })) {
     if (!sameMigrationArtifact(readMigrationArtifactIdentity(sourcePath), expected)) {
       throw new Error("artifact changed before publication");
@@ -173,6 +175,7 @@ export async function moveMigrationArtifact(
       onSyncFailure: "preserve",
     });
     requireDirectorySync(published.directorySync, "Recovery artifact publication");
+    createdPublication = true;
   } else {
     // A preserved link may have outlived a failed directory sync. Make its name durable
     // before an interrupted move can remove the original name.
@@ -181,12 +184,37 @@ export async function moveMigrationArtifact(
       "Recovery artifact publication",
     );
   }
-  assertMigrationArtifactPublication(sourcePath, targetPath, expected);
-  if (onPublished) {
-    onPublished();
+  const removeSource = () => {
     assertMigrationArtifactPublication(sourcePath, targetPath, expected);
+    if (onPublished) {
+      onPublished();
+      assertMigrationArtifactPublication(sourcePath, targetPath, expected);
+    }
+    fs.unlinkSync(sourcePath);
+  };
+  let retainedSource = false;
+  const retainSource = () => {
+    if (!createdPublication) {
+      throw new Error("Cannot discard a recovery publication created by an earlier run.");
+    }
+    assertMigrationArtifactPublication(sourcePath, targetPath, expected);
+    fs.unlinkSync(targetPath);
+    retainedSource = true;
+  };
+  try {
+    if (publishSourceRemoval) {
+      publishSourceRemoval(removeSource, retainSource);
+    } else {
+      removeSource();
+    }
+  } finally {
+    if (retainedSource) {
+      requireDirectorySync(
+        await syncDirectory(path.dirname(targetPath)),
+        "Recovery artifact deferral",
+      );
+    }
   }
-  fs.unlinkSync(sourcePath);
   requireDirectorySync(await syncDirectory(path.dirname(sourcePath)), "Recovery artifact source");
   if (!sameMigrationArtifact(readMigrationArtifactIdentity(targetPath), expected)) {
     throw new Error("artifact changed during publication");

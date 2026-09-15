@@ -449,13 +449,14 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         return;
       }
       const { saveModelProviderApiKey } = await import("../../commands/models/auth-api-key.js");
-      const profileId = await saveModelProviderApiKey({
+      const { profileId, warning: configWarning } = await saveModelProviderApiKey({
         config,
         provider,
         apiKey: params.apiKey,
         agentDir: scope.agentDir,
       });
-      const warning = await refreshAfterCredentialMutation(context, "update", scope.agentId);
+      const refreshWarning = await refreshAfterCredentialMutation(context, "update", scope.agentId);
+      const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");
       const result: ModelsAuthSetApiKeyResult = {
         provider,
         profileId,

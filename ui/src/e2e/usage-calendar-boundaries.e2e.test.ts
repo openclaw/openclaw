@@ -7,6 +7,220 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Usage calendar boundaries" });
 
 suite.define(() => {
+  it.each([
+    {
+      timezoneId: "Asia/Shanghai",
+      instant: "2026-09-13T16:30:00Z",
+      utcDate: "2026-09-13",
+      localDate: "2026-09-14",
+    },
+    {
+      timezoneId: "America/Los_Angeles",
+      instant: "2026-09-14T02:30:00Z",
+      utcDate: "2026-09-14",
+      localDate: "2026-09-13",
+    },
+    {
+      timezoneId: "Asia/Shanghai",
+      instant: "2026-09-14T04:30:00Z",
+      utcDate: "2026-09-14",
+      localDate: "2026-09-14",
+    },
+  ])(
+    "uses the selected calendar for date presets in $timezoneId at $instant",
+    async ({ timezoneId, instant, utcDate, localDate }) => {
+      const updatedAt = Date.parse(instant);
+      const emptyTotals = {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      };
+      const totals = {
+        ...emptyTotals,
+        input: 1200,
+        totalTokens: 1200,
+        totalCost: 0.12,
+        inputCost: 0.12,
+      };
+      const messages = {
+        total: 1,
+        user: 0,
+        assistant: 1,
+        toolCalls: 0,
+        toolResults: 0,
+        errors: 0,
+      };
+      const aggregates = {
+        messages,
+        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+        byModel: [],
+        byProvider: [],
+        byAgent: [],
+        byChannel: [],
+        daily: [],
+      };
+      const calendars = [
+        { timeZone: "utc", date: utcDate, mode: "utc" },
+        { timeZone: "local", date: localDate, mode: "specific" },
+      ] as const;
+      await suite.withPage(
+        {
+          locale: "en-US",
+          timezoneId,
+          serviceWorkers: "block",
+          viewport: { width: 1440, height: 1000 },
+        },
+        async ({ page }) => {
+          await page.clock.setFixedTime(new Date(instant));
+          const gateway = await installMockGateway(page, {
+            methodResponses: {
+              "agents.list": {
+                defaultId: "main",
+                mainKey: "main",
+                scope: "per-sender",
+                agents: [
+                  { id: "main", name: "OpenClaw" },
+                  { id: "research", name: "Research" },
+                ],
+              },
+              "sessions.usage": {
+                cases: [
+                  ...calendars.map(({ date, mode }) => ({
+                    match: { endDate: date, mode },
+                    response: {
+                      updatedAt,
+                      startDate: date,
+                      endDate: date,
+                      sessions: [
+                        {
+                          key: "agent:main:calendar-boundary",
+                          label: "Calendar-boundary session",
+                          agentId: "main",
+                          updatedAt,
+                          usage: { ...totals, activityDates: [date], messageCounts: messages },
+                        },
+                      ],
+                      totals,
+                      aggregates,
+                    },
+                  })),
+                  {
+                    match: {},
+                    response: { updatedAt, sessions: [], totals: emptyTotals, aggregates },
+                  },
+                ],
+              },
+              "usage.cost": {
+                cases: [
+                  ...calendars.map(({ date, mode }) => ({
+                    match: { endDate: date, mode },
+                    response: { updatedAt, days: 1, daily: [{ date, ...totals }], totals },
+                  })),
+                  { match: {}, response: { updatedAt, days: 1, daily: [], totals: emptyTotals } },
+                ],
+              },
+              "usage.status": { updatedAt, providers: [] },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}usage`);
+          const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
+          await agentScope.locator(".agent-select__trigger").click();
+          await agentScope
+            .locator("wa-dropdown-item[data-agent-option]")
+            .filter({ hasText: "All agents" })
+            .click();
+          await gateway.waitForRequest("sessions.usage", { match: { agentScope: "all" } });
+          for (const { timeZone, date, mode } of calendars) {
+            const initialRequests = (await gateway.getRequests("sessions.usage")).length;
+            await page.locator(".usage-select").selectOption(timeZone);
+            await gateway.waitForRequest("sessions.usage", { after: initialRequests });
+            for (const [label, days] of [
+              ["Today", 1],
+              ["7d", 7],
+              ["30d", 30],
+              ["90d", 90],
+              ["1y", 365],
+              ["All", null],
+            ] as const) {
+              const startDate =
+                days === null
+                  ? "1970-01-01"
+                  : new Date(Date.parse(`${date}T12:00:00Z`) - (days - 1) * 86_400_000)
+                      .toISOString()
+                      .slice(0, 10);
+              const requestsBefore = (await gateway.getRequests("sessions.usage")).length;
+              await page
+                .locator(".usage-presets")
+                .getByRole("button", { name: label, exact: true })
+                .click();
+              const request = await gateway.waitForRequest("sessions.usage", {
+                after: requestsBefore,
+              });
+              await expect
+                .poll(() => page.locator(".usage-page .usage-loading-spinner").count())
+                .toBe(0);
+              if (label === "Today" && process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
+                await page.mouse.move(0, 0);
+                await page.screenshot({
+                  path: path.join(suite.artifactDir, `${timeZone}-today.png`),
+                });
+                await writeFile(
+                  path.join(suite.artifactDir, `${timeZone}-today.json`),
+                  JSON.stringify(
+                    {
+                      timezoneId,
+                      instant,
+                      expectedDate: date,
+                      request,
+                      dates: await page
+                        .locator(".usage-date-input")
+                        .evaluateAll((inputs) =>
+                          inputs.map((input) => (input as HTMLInputElement).value),
+                        ),
+                    },
+                    null,
+                    2,
+                  ),
+                );
+              }
+              expect(request.params).toMatchObject({ startDate, endDate: date, mode });
+              expect((await gateway.getRequests("usage.cost")).at(-1)?.params).toMatchObject({
+                startDate,
+                endDate: date,
+                mode,
+              });
+              expect(
+                await page
+                  .locator(".usage-date-input")
+                  .evaluateAll((inputs) =>
+                    inputs.map((input) => (input as HTMLInputElement).value),
+                  ),
+              ).toEqual([startDate, date]);
+              await expect
+                .poll(() => page.locator(".usage-metric-badge strong").first().textContent())
+                .toBe("1.2K");
+              if (label === "7d") {
+                expect(
+                  (await page.locator(".cost-window-card__label").allTextContents()).map(
+                    (windowLabel) => windowLabel.trim(),
+                  ),
+                ).toContain("Today");
+              }
+            }
+          }
+        },
+      );
+    },
+  );
+
   it("keeps hour filtering responsive across the repeated local hour", async () => {
     const date = "2026-11-01";
     const start = Date.parse("2026-11-01T08:30:00Z");

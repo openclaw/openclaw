@@ -23,7 +23,11 @@ import {
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
 import type { NarrativePhaseData } from "./dreaming-narrative.js";
-import { formatErrorMessage, includesSystemEventToken } from "./dreaming-shared.js";
+import {
+  formatErrorMessage,
+  formatRecallRepairDetails,
+  includesSystemEventToken,
+} from "./dreaming-shared.js";
 import { resolveMemoryPromotionFileMaxChars } from "./memory-budget.js";
 import type { PromotionRejectionCategory } from "./short-term-promotion-types.js";
 
@@ -108,16 +112,7 @@ function formatRepairSummary(repair: {
 }): string {
   const actions: string[] = [];
   if (repair.rewroteStore) {
-    const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
-    const details = [
-      repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
-      (repair.removedDanglingEntries ?? 0) > 0
-        ? `-${repair.removedDanglingEntries} dangling`
-        : null,
-      removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
-    ]
-      .filter(Boolean)
-      .join(", ");
+    const details = formatRecallRepairDetails(repair);
     actions.push(`rewrote recall store${details ? ` (${details})` : ""}`);
   }
   if (repair.removedStaleLock) {

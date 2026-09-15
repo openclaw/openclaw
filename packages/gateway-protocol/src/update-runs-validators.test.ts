@@ -91,6 +91,9 @@ describe("update run wire contract", () => {
   });
 
   it.each([
+    { exitCode: 23 },
+    { exitCode: 0 },
+    { exitCode: null },
     {
       snapshotCapacity: {
         reason: "snapshot-location-unavailable",

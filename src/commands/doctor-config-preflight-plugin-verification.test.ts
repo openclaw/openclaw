@@ -10,7 +10,7 @@ import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fix
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import {
   formatStartupPluginVerificationFailure,
-  runStartupUpgradeConvergence,
+  runDoctorPluginConvergence,
 } from "./doctor-config-preflight-plugin-verification.js";
 import { runPostCorePluginConvergence } from "./doctor/shared/post-core-plugin-convergence.js";
 
@@ -51,6 +51,7 @@ describe("update canary plugin verification", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it("keeps an unavailable copied plugin nonblocking without fetching a replacement", async () => {
+    npmInstall.mockClear();
     const root = tempDirs.make("openclaw-canary-plugin-");
     const env = {
       ...buildUpdateRehearsalPathEnv(root),
@@ -65,9 +66,24 @@ describe("update canary plugin verification", () => {
       { config: cfg, env },
     );
     await withPluginCache(createPluginCache(), async () => {
-      expect(await runStartupUpgradeConvergence({ cfg, env })).toEqual({
+      const result = await runDoctorPluginConvergence({ cfg, env });
+      expect(npmInstall).not.toHaveBeenCalled();
+      expect(result).toEqual({
         blockingDiagnostic: null,
         quarantinedPlugins: [],
+        migrationInspection: {
+          requiredPluginIds: [],
+          inspectionRequiredPluginIds: [],
+          statelessPluginIds: [],
+        },
+        deferredPlugins: [
+          {
+            pluginId: "canary-fixture",
+            reason:
+              "Package convergence must wait until the updating parent releases its install records.",
+            command: "openclaw update repair",
+          },
+        ],
       });
     });
   });
@@ -78,11 +94,11 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
   afterEach(() => npmInstall.mockReset());
 
   async function converge(
-    cfg: Parameters<typeof runStartupUpgradeConvergence>[0]["cfg"],
+    cfg: Parameters<typeof runDoctorPluginConvergence>[0]["cfg"],
     env: NodeJS.ProcessEnv,
   ) {
     if (first === "startup") {
-      expect(await runStartupUpgradeConvergence({ cfg, env })).toEqual({
+      expect(await runDoctorPluginConvergence({ cfg, env })).toEqual({
         blockingDiagnostic: null,
         quarantinedPlugins: [],
       });

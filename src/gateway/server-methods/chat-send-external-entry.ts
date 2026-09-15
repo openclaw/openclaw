@@ -28,7 +28,7 @@ const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
       ? createCronCreatorAuthorityCapability(
           authority.runId,
           authority.callerOrigin,
-          authority.controlUiAdmin,
+          authority.managementEntitlement,
         )
       : undefined;
   },

@@ -72,6 +72,7 @@ import {
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import {
+  hasSessionEntriesByStatus,
   readSessionEntriesByStatus,
   selectSessionEntryRows,
 } from "./session-accessor.sqlite-status.js";
@@ -276,19 +277,10 @@ export function hasSessionEntriesByStatusReadOnly(
     return false;
   }
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    const db = getSessionKysely(database.db);
-    return Boolean(
-      executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("session_nodes")
-          .select("session_key")
-          .where("status", "in", selectedStatuses)
-          .limit(1),
-      ),
-    );
-  }, toDatabaseOptions(resolved));
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => hasSessionEntriesByStatus(database, selectedStatuses),
+    toDatabaseOptions(resolved),
+  );
   return result.found ? result.value : result.reason !== "database-missing";
 }
 

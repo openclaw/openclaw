@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import * as configState from "./config-state.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   clearPluginLoaderCache,
@@ -112,6 +113,33 @@ afterEach(clearPluginLoaderCache);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("provider selection registration coverage", () => {
+  it("normalizes policy once for provider refs and keeps empty selections lazy", () => {
+    const proof = fixture("setup");
+    const loaded = proof.load("full");
+    withPluginRuntimeGenerationScope(
+      { metadataSnapshot: proof.snapshot, pluginRegistry: loaded },
+      () => {
+        const normalize = vi.spyOn(configState, "normalizePluginsConfig");
+        try {
+          expect(resolvePluginProvidersCore(proof.query).map((provider) => provider.label)).toEqual(
+            ["Helper", "Other"],
+          );
+          expect(normalize).toHaveBeenCalledExactlyOnceWith(proof.query.config.plugins);
+          normalize.mockClear();
+          expect(
+            resolvePluginProvidersCore({ ...proof.query, providerRefs: [] }).map(
+              (provider) => provider.label,
+            ),
+          ).toEqual(["Helper", "Other"]);
+          expect(normalize).not.toHaveBeenCalled();
+        } finally {
+          normalize.mockRestore();
+        }
+      },
+    );
+    expect(proof.registrations()).toBe("registered");
+  });
+
   it.each(["active", "request", "retained"] as const)(
     "keeps current policy separate from a mixed %s receiver projection",
     (scope) => {
@@ -323,6 +351,26 @@ describe("provider selection registration coverage", () => {
         "Helper",
         "Other",
       ]);
+    },
+  );
+
+  it.each(["setup", "activation"] as const)(
+    "reuses a complete active registry after a partial request with %s metadata",
+    (declaration) => {
+      const proof = fixture(declaration);
+      const partial = proof.load("setup");
+      const complete = proof.load("full");
+      setActivePluginRegistry(complete, "complete-active");
+      expect(partial.providers.map(({ provider }) => provider.label)).toEqual(["Other"]);
+      withPluginRuntimeRegistryScope(partial, () => {
+        expect(
+          resolveLoadedProviderPluginsForHooks(proof.query)?.map((provider) => provider.label),
+        ).toEqual(["Helper", "Other"]);
+        expect(
+          resolveProviderPluginsForHooks(proof.query).map((provider) => provider.label),
+        ).toEqual(["Helper", "Other"]);
+      });
+      expect(proof.registrations()).toBe("registered");
     },
   );
 

@@ -550,6 +550,7 @@
     <string name="native_4ba5121d4d1be174" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cihazlar"</string>
     <string name="native_4bc652d0bc018e69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Android için OpenClaw."</string>
     <string name="native_4bcf240ace02f19c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Yetenek onayı bekleniyor"</string>
+    <string name="native_4c086c788ad0fdab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Arama sonucu alıntısı"</string>
     <string name="native_4c09c146861e92a9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bu otomasyonu çalıştırmadan, etkinleştirmeden, devre dışı bırakmadan, silmeden veya yenilemeden önce düzenlemelerinizi kaydedin ya da geri alın."</string>
     <string name="native_4c27eb153d751834" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Henüz otomasyon yok."</string>
     <string name="native_4c2dd6654a535240" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bu Skills için %1$s kurulum öğesi gerekiyor. Android, nelerin yüklü olduğunu gösterir; kurulum/yapılandırma değişiklikleri yalnızca masaüstü uygulamasından veya CLI üzerinden yapılabilir."</string>
@@ -660,7 +661,7 @@
     <string name="native_5bb88b338f9e14ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Çıktı yok — araç başarısız oldu."</string>
     <string name="native_5bcf311b19d80c56" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bağlantıyı test et"</string>
     <string name="native_5c0c8c9aa658f4a0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OPENCLAW"</string>
-    <string name="native_5c1acea9c9b0e704" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Web Fetch"</string>
+    <string name="native_5c1acea9c9b0e704" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Web\'den Getir"</string>
     <string name="native_5c39123805ffb4e2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"İstem"</string>
     <string name="native_5c944156b5353428" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cihaz onaylansın mı?"</string>
     <string name="native_5cc60967e044ee0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ek uyarısını kapat"</string>
@@ -738,6 +739,7 @@
     <string name="native_674b38cae72bb0c8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gruplandırılmamış"</string>
     <string name="native_674eb55d9c353900" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zamanlama Ayrıntısı"</string>
     <string name="native_67528858c36397f7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefon Özellikleri"</string>
+    <string name="native_67a0d2e0dab41fca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kaynağı aç"</string>
     <string name="native_67a926f7008e2b0e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kullanılamıyor"</string>
     <string name="native_67b696468610b879" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gösterge Paneli"</string>
     <string name="native_67fa416afa64d304" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Belirteci yapıştırın"</string>
@@ -844,6 +846,7 @@
     <string name="native_75081b593d15cf6e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Devre dışı"</string>
     <string name="native_752ae6f8d8349c75" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Hâlâ onay bekleniyor"</string>
     <string name="native_75419062daafab8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Arka plan görevleri yüklenemedi"</string>
+    <string name="native_75573d44b7620f81" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sayfadan alıntı"</string>
     <string name="native_757bfc36ce2e0428" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw\'un bu telefonda net konuşabildiğini kontrol edin."</string>
     <string name="native_75c4bbf668b72cbf" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Çalışıyor · %1$s etkin çalıştırma"</string>
     <string name="native_75db671fb2e8cca9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Komut çalışma dizini"</string>
@@ -971,7 +974,6 @@
     <string name="native_88e0c9e9615456f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Vurgulanan öğe yok"</string>
     <string name="native_88e6e8384a7fc7ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Oturum Hedefi"</string>
     <string name="native_893a3e37d71c4563" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway bir reddetme kaydetti."</string>
-    <string name="native_89713b9c9c1b8f65" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kabul et"</string>
     <string name="native_8998824610d49175" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw\'a istediğinizi sorun"</string>
     <string name="native_89bbfe23c3917a3f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Devam etmek için yeniden bağlanın"</string>
     <string name="native_8a20f46d5276b474" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s eşleştirildi"</string>
@@ -1298,6 +1300,7 @@
     <string name="native_b906e4f5d8dd6128" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Henüz hiçbir ajan yüklenmedi."</string>
     <string name="native_b93a70717669740b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ClawHub\'da ara"</string>
     <string name="native_b96a4e034aae9cd8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Eşleştirme gerekli"</string>
+    <string name="native_b99fa6c061504f00" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Önizleme kullanılamıyor"</string>
     <string name="native_b9cf97697898d132" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Etkin Çalıştırmalar"</string>
     <string name="native_b9d5d026db17b9e4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Başarısız — %1$s"</string>
     <string name="native_ba19e9c3d5f49882" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kırmızı"</string>
@@ -1417,6 +1420,7 @@
     <string name="native_ca7981b46ecf2c17" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kapalı"</string>
     <string name="native_cae7d57bc067a514" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Durdur"</string>
     <string name="native_cae98462b30650eb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Henüz eşleşen ileti dizisi yok."</string>
+    <string name="native_caf85b0888d78f1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kaynaklar"</string>
     <string name="native_cba62d81f910c7f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway eşleştirmesi başarılı oldu.\nBu telefonun düğüm özelliklerini bir operatör kullanıcı arayüzünden onaylayın."</string>
     <string name="native_cc4b66e7e22230c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bu Skills yüklü ancak şu anda çalıştırılmaya uygun değil. Yapılandırma değişiklikleri için masaüstü uygulamasını veya CLI\'ı kullanın."</string>
     <string name="native_cc5f45fb30a26e07" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tanıyıcı meşgul"</string>
@@ -1449,7 +1453,7 @@
     <string name="native_d01da77df594cd2c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Daha fazla oturum yüklenemedi."</string>
     <string name="native_d03262ba19b05a7d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Satır numaralarını göster"</string>
     <string name="native_d0329dd25d4401f9" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s işçi daha"</string>
-    <string name="native_d04fc7d7e19702f8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Web Search"</string>
+    <string name="native_d04fc7d7e19702f8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Web Araması"</string>
     <string name="native_d053ba98d8bbcec1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sohbet, Ses, Konular, Sağlayıcılar veya Ayarlar\'ı deneyin."</string>
     <string name="native_d056177742e27cf5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw Etkin"</string>
     <string name="native_d0cda6559bb347db" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"navigate"</string>

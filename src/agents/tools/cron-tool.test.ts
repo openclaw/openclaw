@@ -750,7 +750,9 @@ describe("cron tool", () => {
       expect(result.details).toEqual({
         ...page,
         scope: "caller",
-        scopeHint: expect.stringContaining("fresh authenticated Control UI administrator turn"),
+        scopeHint: expect.stringContaining(
+          "fresh authenticated configured channel owner or Control UI administrator turn",
+        ),
       });
     }
   });
@@ -946,7 +948,7 @@ describe("cron tool", () => {
       // #137418 / #123982: pin the non-revealing recovery guidance delivered to
       // the model, not a guarantee that every model will follow it.
       expect(tool.description).toContain(
-        "Control UI administrator turns can list/get/update/run/remove any Gateway automation",
+        "configured channel owner and Control UI administrator turns can list/get/update/run/remove any Gateway automation",
       );
       expect(tool.description).toContain(
         "totals/counts and hasMore describe that scoped view, not global inventory",
@@ -959,7 +961,7 @@ describe("cron tool", () => {
         "Never recreate or replace a known automation to satisfy an update/remove or reconciliation request solely because of these results",
       );
       expect(tool.description).toContain(
-        "ask an authorized administrator to check through a fresh authenticated Control UI administrator turn or the Automations page",
+        "ask an authorized administrator to check through a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page",
       );
       expect(tool.description).toContain("do not bypass caller scope");
       expect(tool.description).toContain(

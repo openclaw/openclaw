@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // Measures gateway watch idle CPU and dist/runtime artifact churn.
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { readProcessTreeCpuMs } from "./lib/gateway-bench-probes.ts";
@@ -15,8 +16,8 @@ import {
   writeBuildStamp,
   writeRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mts";
+import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
 import { parseStrictNonNegativeDecimal as readNonNegativeInteger } from "./lib/numeric-options.mjs";
-import { sleep } from "./lib/sleep.mjs";
 import { resolveBuildRequirement } from "./run-node.mts";
 
 const DEFAULTS = {
@@ -76,31 +77,11 @@ type TreeSnapshot = {
   apparentBytes: number;
 };
 type Timing = { userSeconds: number; sysSeconds: number; elapsedSeconds: number };
-type WatchSignal = "SIGKILL" | "SIGTERM";
-type WatchStream = {
-  destroy?: unknown;
-  on?(event: "data", listener: (chunk: Uint8Array | string) => void): unknown;
-};
-type SpawnedWatchChild = {
-  exitCode?: number | null;
-  once(event: "error", listener: (error: Error) => void): unknown;
-  once(event: "exit", listener: (code: number | null, signal: string | null) => void): unknown;
-  signalCode?: string | null;
-  stderr?: WatchStream | null;
-  stdin?: WatchStream | null;
-  stdout?: WatchStream | null;
-  unref?: unknown;
-};
 type TimedWatchOptions = Pick<
   WatchOptions,
   "readySettleMs" | "readyTimeoutMs" | "sigkillGraceMs" | "windowMs"
 > &
   Partial<Pick<WatchOptions, "sigkillExitGraceMs">>;
-type WatchSpawnOptions = {
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  stdio: ["ignore", "pipe", "pipe"];
-};
 type TimedWatchResult = {
   exit: WatchExit | null;
   spawnError: string | null;
@@ -120,21 +101,20 @@ type TimedWatchDeps = {
   allocateLoopbackPort?: () => Promise<number>;
   parseTimingFile?: (filePath: string) => Timing;
   readProcessTreeCpuMs?: (pid: number) => number | null;
-  sleep?: (ms: number) => Promise<void>;
-  spawn?: (command: string, args: string[], options: WatchSpawnOptions) => SpawnedWatchChild;
-  stopTimedWatchChild?: (
-    child: SpawnedWatchChild,
-    watchPid: number | null,
-    options: TimedWatchOptions,
-  ) => Promise<WatchExit>;
-  waitForGatewayReady?: (readText: () => string, timeoutMs: number) => Promise<boolean>;
+  // Wait overrides must settle when the phase signal aborts.
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
+  waitForGatewayReady?: (
+    readText: () => string,
+    timeoutMs: number,
+    signal: AbortSignal,
+  ) => Promise<boolean>;
 };
 type BuildRequirementSummary = { shouldBuild?: boolean; reason?: string };
 type WatchFindingResult = {
   exit?: WatchExit | null;
   exitedBeforeReady?: boolean;
   exitedBeforeStop?: boolean;
-  idleCpuMs?: number | null;
+  idleCpuMs: number | null;
   readyBeforeWindow: boolean;
   spawnError: string | null;
   timingFileMissing: boolean;
@@ -456,13 +436,18 @@ export function hasGatewayReadyLog(text: string): boolean {
   return /\[gateway\] (?:http server listening|ready(?:\b|\s*\())/.test(normalized);
 }
 
-async function waitForGatewayReady(readText: () => string, timeoutMs: number): Promise<boolean> {
+async function waitForGatewayReady(
+  readText: () => string,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    signal.throwIfAborted();
     if (hasGatewayReadyLog(readText())) {
       return true;
     }
-    await sleep(100);
+    await delay(100, undefined, { signal });
   }
   return false;
 }
@@ -514,6 +499,11 @@ export function buildTimedWatchCommand(
 ) {
   const isolatedStateDir = path.join(isolatedHomeDir, ".openclaw");
   const isolatedConfigPath = path.join(isolatedStateDir, "openclaw.json");
+  const configJson = JSON.stringify({
+    gateway: { controlUi: { enabled: false } },
+    logging: { file: path.join(isolatedStateDir, "gateway.log") },
+    plugins: { enabled: false },
+  });
   // CI env hooks can contain bash-only `declare` lines; running the watch shell
   // under sh delays gateway readiness behind stderr noise before the idle window.
   const shellPath = deps.shellPath ?? resolveTimedWatchShell(deps);
@@ -521,7 +511,7 @@ export function buildTimedWatchCommand(
   const shellSource = [
     'echo "$$" > "$OPENCLAW_WATCH_PID_FILE"',
     'mkdir -p "$OPENCLAW_STATE_DIR"',
-    `printf '%s\n' '{"gateway":{"controlUi":{"enabled":false}},"plugins":{"enabled":false}}' > "$OPENCLAW_CONFIG_PATH"`,
+    `printf '%s\n' ${shellQuote(configJson)} > "$OPENCLAW_CONFIG_PATH"`,
     `exec ${shellQuote(nodeExecPath)} scripts/watch-node.mjs gateway --force --allow-unconfigured --port ${String(port)} --token watch-regression-token`,
   ].join("\n");
   const nodeBinDir = path.dirname(nodeExecPath);
@@ -599,15 +589,14 @@ export async function runTimedWatch(
   const allocatePort = deps.allocateLoopbackPort ?? allocateLoopbackPort;
   const parseTiming = deps.parseTimingFile ?? parseTimingFile;
   const readCpuMs = deps.readProcessTreeCpuMs ?? readProcessTreeCpuMs;
-  const sleepMs = deps.sleep ?? sleep;
-  const spawnCommand: NonNullable<TimedWatchDeps["spawn"]> =
-    deps.spawn ?? ((command, args, spawnOptions) => spawn(command, args, spawnOptions));
-  const stopChild = deps.stopTimedWatchChild ?? stopTimedWatchChild;
+  const sleepMs =
+    deps.sleep ?? ((ms: number, signal: AbortSignal) => delay(ms, undefined, { signal }));
   const waitReady = deps.waitForGatewayReady ?? waitForGatewayReady;
   const pidFilePath = path.join(outputDir, "watch.pid");
   const timeFilePath = path.join(outputDir, "watch.time.log");
   const isolatedHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-watch-"));
   fs.writeFileSync(path.join(outputDir, "watch.home.txt"), `${isolatedHomeDir}\n`, "utf8");
+  let retainIsolatedHome = false;
   try {
     const stdoutPath = path.join(outputDir, "watch.stdout.log");
     const stderrPath = path.join(outputDir, "watch.stderr.log");
@@ -622,11 +611,6 @@ export async function runTimedWatch(
       isolatedHomeDir,
       port,
     );
-    const child = spawnCommand(command, args, {
-      cwd: process.cwd(),
-      env: { ...process.env, ...env },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
 
     let stdout = "";
     let stderr = "";
@@ -637,103 +621,261 @@ export async function runTimedWatch(
       triggered: false,
       reason: null,
     };
-    child.stdout?.on?.("data", (chunk) => {
-      const next = appendBoundedWatchLog(stdout, chunk);
-      stdout = next.text;
-      stdoutTruncated ||= next.truncated;
-      buildDetection = updateWatchBuildDetection(buildDetection, chunk);
-    });
-    child.stderr?.on?.("data", (chunk) => {
-      const next = appendBoundedWatchLog(stderr, chunk);
-      stderr = next.text;
-      stderrTruncated ||= next.truncated;
-      buildDetection = updateWatchBuildDetection(buildDetection, chunk);
-    });
-
-    let spawnErrorMessage: string | null = null;
+    let childAcquiredPid = false;
+    let spawnError: Error | undefined;
+    let observedExit: WatchExit | null = null;
+    let interruptedBy: NodeJS.Signals | undefined;
+    let managedSettled = false;
+    const cancellation = new AbortController();
+    let resolveSpawnError!: (value: WatchExit) => void;
     const spawnErrorExit = new Promise<WatchExit>((resolve) => {
-      child.once("error", (error) => {
-        spawnErrorMessage = error.message;
-        resolve({ code: null, signal: null, error: error.message });
-      });
+      resolveSpawnError = resolve;
     });
+    let resolveChildExit!: (value: WatchExit) => void;
     const childExit = new Promise<WatchExit>((resolve) => {
-      child.once("exit", (code, signal) => resolve({ code, signal }));
+      resolveChildExit = resolve;
     });
-    const raceChildLifecycle = async <Value,>(operation: Value | PromiseLike<Value>) =>
-      await Promise.race([
-        Promise.resolve(operation).then((value) => ({ type: "value" as const, value })),
+    const managedOutcome = runManagedCommand({
+      bin: command,
+      args,
+      cwd: process.cwd(),
+      env: { ...process.env, ...env },
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      requireProcessTreeExit: process.platform !== "win32",
+      signal: cancellation.signal,
+      // The watch protocol gets its graceful window before managed fallback starts.
+      abortKillGraceMs: 0,
+      cleanupDrainTimeoutMs: options.sigkillExitGraceMs ?? DEFAULTS.sigkillExitGraceMs,
+      onSignal: (signal) => {
+        interruptedBy = signal;
+      },
+      onReady: (owned) => {
+        childAcquiredPid = owned.pid !== undefined;
+        owned.stdout?.on("data", (chunk: Uint8Array | string) => {
+          const next = appendBoundedWatchLog(stdout, chunk);
+          stdout = next.text;
+          stdoutTruncated ||= next.truncated;
+          buildDetection = updateWatchBuildDetection(buildDetection, chunk);
+        });
+        owned.stderr?.on("data", (chunk: Uint8Array | string) => {
+          const next = appendBoundedWatchLog(stderr, chunk);
+          stderr = next.text;
+          stderrTruncated ||= next.truncated;
+          buildDetection = updateWatchBuildDetection(buildDetection, chunk);
+        });
+        owned.once("error", (error) => {
+          spawnError = error;
+          resolveSpawnError({ code: null, signal: null, error: error.message });
+          if (owned.pid && !managedSettled) {
+            cancellation.abort();
+          }
+        });
+        owned.once("exit", (code, signal) => {
+          observedExit = { code, signal };
+          resolveChildExit(observedExit);
+        });
+      },
+    }).then(
+      () => {
+        managedSettled = true;
+        return { type: "completed" as const };
+      },
+      (error: unknown) => {
+        managedSettled = true;
+        if (!childAcquiredPid) {
+          resolveSpawnError({ code: null, signal: null, error: String(error) });
+        }
+        return { type: "failed" as const, error };
+      },
+    );
+    const errors: unknown[] = [];
+    const raceChildLifecycle = async <Value,>(
+      operation: (signal: AbortSignal) => Value | PromiseLike<Value>,
+    ) => {
+      const measurementCancellation = new AbortController();
+      const pending = Promise.resolve()
+        .then(() => operation(measurementCancellation.signal))
+        .then(
+          (value) => ({ type: "value" as const, value }),
+          (error: unknown) => ({ type: "operation-error" as const, error }),
+        );
+      const outcome = await Promise.race([
+        pending,
         spawnErrorExit.then((value) => ({ type: "spawn-error" as const, value })),
         childExit.then((value) => ({ type: "child-exit" as const, value })),
+        managedOutcome.then((result) => {
+          if (result.type === "failed") {
+            return { type: "managed-error" as const, error: result.error };
+          }
+          return observedExit
+            ? { type: "child-exit" as const, value: observedExit }
+            : {
+                type: "managed-error" as const,
+                error: new Error("Managed watch command completed without an observed exit"),
+              };
+        }),
       ]);
+      // Measurement waits have no process authority; retire their timers before proceeding.
+      measurementCancellation.abort();
+      const settled = await pending;
+      const expectedCancellation =
+        settled.type === "operation-error" &&
+        (settled.error === measurementCancellation.signal.reason ||
+          (settled.error instanceof Error &&
+            settled.error.name === "AbortError" &&
+            settled.error.cause === measurementCancellation.signal.reason));
+      if (outcome.type === "managed-error") {
+        if (
+          settled.type === "operation-error" &&
+          !expectedCancellation &&
+          settled.error !== outcome.error
+        ) {
+          errors.push(settled.error);
+        }
+        throw outcome.error;
+      }
+      if (settled.type === "operation-error" && !expectedCancellation) {
+        throw settled.error;
+      }
+      if (outcome.type === "operation-error") {
+        throw outcome.error;
+      }
+      return outcome;
+    };
 
     let watchPid: number | null = null;
     let exit: WatchExit | null = null;
     let exitedBeforeReady = false;
     let exitedBeforeStop = false;
-    for (let attempt = 0; attempt < 50; attempt += 1) {
-      if (fs.existsSync(pidFilePath)) {
-        watchPid = Number(fs.readFileSync(pidFilePath, "utf8").trim());
-        break;
-      }
-      const waitResult = await raceChildLifecycle(sleepMs(100));
-      if (waitResult.type === "spawn-error") {
-        exit = waitResult.value;
-        break;
-      }
-      if (waitResult.type === "child-exit") {
-        exit = waitResult.value;
-        exitedBeforeReady = true;
-        exitedBeforeStop = true;
-        break;
-      }
-    }
-
     let readyBeforeWindow = false;
     let idleCpuStartMs: number | null = null;
     let idleCpuEndMs: number | null = null;
-    if (!exit) {
-      const readyResult = await raceChildLifecycle(
-        waitReady(() => `${stdout}\n${stderr}`, options.readyTimeoutMs),
-      );
-      if (readyResult.type === "spawn-error") {
-        exit = readyResult.value;
-      } else if (readyResult.type === "child-exit") {
-        exit = readyResult.value;
-        exitedBeforeReady = true;
-        exitedBeforeStop = true;
-      } else {
-        readyBeforeWindow = readyResult.value;
+    try {
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        if (fs.existsSync(pidFilePath)) {
+          watchPid = Number(fs.readFileSync(pidFilePath, "utf8").trim());
+          break;
+        }
+        const waitResult = await raceChildLifecycle((signal) => sleepMs(100, signal));
+        if (waitResult.type === "spawn-error") {
+          exit = waitResult.value;
+          break;
+        }
+        if (waitResult.type === "child-exit") {
+          exit = waitResult.value;
+          exitedBeforeReady = true;
+          exitedBeforeStop = true;
+          break;
+        }
       }
-    }
-    if (!exit && readyBeforeWindow && options.readySettleMs > 0) {
-      const settleResult = await raceChildLifecycle(sleepMs(options.readySettleMs));
-      if (settleResult.type === "spawn-error") {
-        exit = settleResult.value;
-      } else if (settleResult.type === "child-exit") {
-        exit = settleResult.value;
-        exitedBeforeStop = true;
+
+      if (!exit) {
+        const readyResult = await raceChildLifecycle((signal) =>
+          waitReady(() => `${stdout}\n${stderr}`, options.readyTimeoutMs, signal),
+        );
+        if (readyResult.type === "spawn-error") {
+          exit = readyResult.value;
+        } else if (readyResult.type === "child-exit") {
+          exit = readyResult.value;
+          exitedBeforeReady = true;
+          exitedBeforeStop = true;
+        } else {
+          readyBeforeWindow = readyResult.value;
+        }
       }
-    }
-    if (!exit) {
-      idleCpuStartMs = watchPid ? readCpuMs(watchPid) : null;
-      const windowResult = await raceChildLifecycle(sleepMs(options.windowMs));
-      if (windowResult.type === "spawn-error") {
-        exit = windowResult.value;
-      } else if (windowResult.type === "child-exit") {
-        exit = windowResult.value;
-        exitedBeforeStop = true;
-      } else {
-        idleCpuEndMs = watchPid ? readCpuMs(watchPid) : null;
+      if (!exit && readyBeforeWindow && options.readySettleMs > 0) {
+        const settleResult = await raceChildLifecycle((signal) =>
+          sleepMs(options.readySettleMs, signal),
+        );
+        if (settleResult.type === "spawn-error") {
+          exit = settleResult.value;
+        } else if (settleResult.type === "child-exit") {
+          exit = settleResult.value;
+          exitedBeforeStop = true;
+        }
       }
-    }
-    if (!exit) {
-      const stopResult = await raceChildLifecycle(stopChild(child, watchPid, options));
-      exit = stopResult.value as WatchExit;
+      if (!exit && readyBeforeWindow) {
+        idleCpuStartMs = watchPid ? readCpuMs(watchPid) : null;
+        const windowResult = await raceChildLifecycle((signal) =>
+          sleepMs(options.windowMs, signal),
+        );
+        if (windowResult.type === "spawn-error") {
+          exit = windowResult.value;
+        } else if (windowResult.type === "child-exit") {
+          exit = windowResult.value;
+          exitedBeforeStop = true;
+        } else {
+          idleCpuEndMs = watchPid ? readCpuMs(watchPid) : null;
+        }
+      }
+    } catch (error) {
+      errors.push(error);
     }
 
-    fs.writeFileSync(stdoutPath, formatCapturedWatchLog(stdout, stdoutTruncated), "utf8");
-    fs.writeFileSync(stderrPath, formatCapturedWatchLog(stderr, stderrTruncated), "utf8");
+    try {
+      if (!managedSettled && !observedExit) {
+        if (watchPid && !cancellation.signal.aborted) {
+          // Leave /usr/bin/time alive to collect the watcher's normal exit and timing.
+          try {
+            process.kill(watchPid, "SIGTERM");
+          } catch {
+            // Managed fallback still owns a child whose protocol stop could not be sent.
+          }
+          let graceTimer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            const joined = await Promise.race([
+              managedOutcome.then(() => true),
+              new Promise<boolean>((resolve) => {
+                graceTimer = setTimeout(() => resolve(false), options.sigkillGraceMs);
+              }),
+            ]);
+            if (!joined && !observedExit) {
+              cancellation.abort();
+            }
+          } finally {
+            clearTimeout(graceTimer);
+          }
+        } else {
+          cancellation.abort();
+        }
+      }
+      const outcome = await managedOutcome;
+      if (outcome.type === "failed") {
+        const expectedAbort =
+          cancellation.signal.aborted &&
+          outcome.error instanceof Error &&
+          "code" in outcome.error &&
+          outcome.error.code === "ABORT_ERR";
+        if (!expectedAbort && (outcome.error !== spawnError || childAcquiredPid)) {
+          throw outcome.error;
+        }
+      }
+      exit ??= observedExit;
+      if (interruptedBy) {
+        throw new Error(`gateway:watch interrupted by ${interruptedBy}`);
+      }
+    } catch (error) {
+      if (!errors.includes(error)) {
+        errors.push(error);
+      }
+    }
+    retainIsolatedHome = errors.some(hasUnjoinedWork);
+
+    try {
+      fs.writeFileSync(stdoutPath, formatCapturedWatchLog(stdout, stdoutTruncated), "utf8");
+      fs.writeFileSync(stderrPath, formatCapturedWatchLog(stderr, stderrTruncated), "utf8");
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Gateway watch measurement or cleanup failed", {
+        cause: errors.find(hasUnjoinedWork) ?? errors.at(-1),
+      });
+    }
     const timingFileMissing = !fs.existsSync(timeFilePath);
     const timing = timingFileMissing
       ? { userSeconds: Number.NaN, sysSeconds: Number.NaN, elapsedSeconds: Number.NaN }
@@ -741,7 +883,7 @@ export async function runTimedWatch(
 
     return {
       exit,
-      spawnError: spawnErrorMessage,
+      spawnError: spawnError?.message ?? null,
       timingFileMissing,
       timing,
       readyBeforeWindow,
@@ -758,73 +900,9 @@ export async function runTimedWatch(
       watchBuildReason: buildDetection.reason,
     };
   } finally {
-    fs.rmSync(isolatedHomeDir, { force: true, recursive: true });
-  }
-}
-
-/**
- * Stops the timed watch child process with TERM/KILL fallback.
- */
-export async function stopTimedWatchChild(
-  child: SpawnedWatchChild,
-  watchPid: number | null,
-  options: Pick<WatchOptions, "sigkillGraceMs"> & Partial<Pick<WatchOptions, "sigkillExitGraceMs">>,
-  deps: { killProcess?: (pid: number, signal: WatchSignal) => unknown } = {},
-): Promise<WatchExit> {
-  const killProcess =
-    deps.killProcess ?? ((pid: number, signal: WatchSignal) => process.kill(pid, signal));
-  const currentExit = (): WatchExit | null => {
-    const code = child.exitCode;
-    const signal = child.signalCode;
-    return typeof code === "number" || typeof signal === "string"
-      ? { code: code ?? null, signal: signal ?? null }
-      : null;
-  };
-  const exited = new Promise<WatchExit>((resolve) => {
-    child.once("exit", (code, signal) => resolve({ code, signal }));
-  });
-  const waitForExit = async (ms: number): Promise<WatchExit | null> =>
-    currentExit() ?? (await Promise.race([exited, sleep(ms).then(() => null)]));
-  const signalWatchProcess = (signal: WatchSignal) => {
-    if (!watchPid) {
-      return;
+    if (!retainIsolatedHome) {
+      fs.rmSync(isolatedHomeDir, { force: true, recursive: true });
     }
-    try {
-      killProcess(watchPid, signal);
-    } catch {
-      // ignore
-    }
-  };
-
-  const existingExit = currentExit();
-  if (existingExit) {
-    return existingExit;
-  }
-
-  signalWatchProcess("SIGTERM");
-  const gracefulExit = await waitForExit(options.sigkillGraceMs);
-  if (gracefulExit) {
-    return gracefulExit;
-  }
-
-  signalWatchProcess("SIGKILL");
-  const killedExit = await waitForExit(options.sigkillExitGraceMs ?? DEFAULTS.sigkillExitGraceMs);
-  if (killedExit) {
-    return killedExit;
-  }
-
-  releaseUnsettledWatchChild(child);
-  return { code: null, signal: "SIGKILL" };
-}
-
-function releaseUnsettledWatchChild(child: SpawnedWatchChild) {
-  for (const stream of [child.stdin, child.stdout, child.stderr]) {
-    if (typeof stream?.destroy === "function") {
-      stream.destroy();
-    }
-  }
-  if (typeof child.unref === "function") {
-    child.unref();
   }
 }
 
@@ -915,7 +993,6 @@ export function calculateDistRuntimeByteGrowth(beforeBytes: number, afterBytes: 
  * Collects pass/fail findings for the bounded gateway watch regression run.
  */
 export function collectGatewayWatchFindings(params: {
-  cpuMs: number;
   distRuntimeByteGrowth: number;
   distRuntimeFileGrowth: number;
   removedPaths: number;
@@ -928,7 +1005,6 @@ export function collectGatewayWatchFindings(params: {
   watchTriggeredBuild: boolean;
 }): { failures: string[]; warnings: string[] } {
   const {
-    cpuMs,
     distRuntimeByteGrowth,
     distRuntimeFileGrowth,
     removedPaths,
@@ -983,16 +1059,21 @@ export function collectGatewayWatchFindings(params: {
       `dist-runtime apparent byte growth ${distRuntimeByteGrowth} exceeded max ${options.distRuntimeByteGrowthMax}`,
     );
   }
-  if (!Number.isFinite(cpuMs)) {
-    failures.push("failed to parse CPU timing from the bounded gateway:watch run");
-  } else if (cpuMs > options.cpuFailMs) {
-    failures.push(
-      `LOUD ALARM: gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above loud-alarm threshold ${options.cpuFailMs}ms`,
-    );
-  } else if (cpuMs > options.cpuWarnMs) {
-    warnings.push(
-      `gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above target ${options.cpuWarnMs}ms`,
-    );
+  if (watchResult.readyBeforeWindow) {
+    const cpuMs = watchResult.idleCpuMs;
+    if (cpuMs === null || !Number.isFinite(cpuMs)) {
+      if (!watchResult.exitedBeforeStop && !watchResult.spawnError) {
+        failures.push("failed to collect idle CPU timing from the ready gateway:watch window");
+      }
+    } else if (cpuMs > options.cpuFailMs) {
+      failures.push(
+        `LOUD ALARM: gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above loud-alarm threshold ${options.cpuFailMs}ms`,
+      );
+    } else if (cpuMs > options.cpuWarnMs) {
+      warnings.push(
+        `gateway:watch used ${cpuMs}ms CPU in ${options.windowMs}ms window, above target ${options.cpuWarnMs}ms`,
+      );
+    }
   }
   return { failures, warnings };
 }
@@ -1092,7 +1173,6 @@ async function main() {
   const totalCpuMs = Math.round(
     (watchResult.timing.userSeconds + watchResult.timing.sysSeconds) * 1000,
   );
-  const cpuMs = watchResult.idleCpuMs ?? totalCpuMs;
   const watchTriggeredBuild = watchResult.watchTriggeredBuild;
   const watchBuildReason = watchResult.watchBuildReason;
 
@@ -1100,7 +1180,7 @@ async function main() {
     windowMs: options.windowMs,
     watchTriggeredBuild,
     watchBuildReason,
-    cpuMs,
+    cpuMs: watchResult.idleCpuMs,
     totalCpuMs,
     readyBeforeWindow: watchResult.readyBeforeWindow,
     exitedBeforeReady: watchResult.exitedBeforeReady,
@@ -1131,7 +1211,6 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2));
 
   const { failures, warnings } = collectGatewayWatchFindings({
-    cpuMs,
     distRuntimeByteGrowth,
     distRuntimeFileGrowth,
     removedPaths: summary.removedPaths,

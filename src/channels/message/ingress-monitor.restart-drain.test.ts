@@ -6,13 +6,19 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
+import { runDetachedWebhookWork } from "../../plugin-sdk/webhook-request-guards.js";
+import { PluginInstance } from "../../plugins/plugin-instance.js";
 import {
   beginGatewayRestartSignalAdmission,
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   getGatewaySuspendAdmissionPhase,
+  isGatewaySubordinateWorkAdmissionClosed,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
+import { getAsyncWorkSignal, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
@@ -349,5 +355,148 @@ it("propagates a rejected pump wrapper without spinning idle or stop waits", asy
 
     await expect(monitor.waitForIdle()).rejects.toBe(rejection);
     await expect(monitor.stop()).rejects.toBe(rejection);
+  });
+});
+
+it("retains adopted webhook delivery through restart while plugin cleanup owns its separate tail", async () => {
+  await withQueue(async (queue) => {
+    const adoptGate = createDeferredCore();
+    let adopted = false;
+    const dispatchGate = createDeferredCore();
+    const cleanupStarted = createDeferredCore();
+    const cleanupGate = createDeferredCore();
+    const cancelled = createDeferredCore();
+    const instance = new PluginInstance("ingress-cleanup");
+    const activity: boolean[] = [];
+    const delivered: string[] = [];
+    const pumpSignals: AbortSignal[] = [];
+    let stoppingSettled = false;
+    let dispatchRetainedRoot = false;
+    let dispatchAdmissionClosed = false;
+    let cleanupSettled = false;
+    let disposalSettled = false;
+    const first: RawEvent = { id: "adopted", lane: "a", text: "already delivered" };
+    const interrupted: RawEvent = { id: "cancelled", lane: "b", text: "resume once" };
+    const next: RawEvent = { id: "next", lane: "b", text: "next queued delivery" };
+    const monitor = createMonitor(
+      queue,
+      async (raw, lifecycle) => {
+        delivered.push(raw.id);
+        if (raw.id === first.id) {
+          await adoptGate.promise;
+          await trackAsyncWork(() =>
+            instance.run(() => {
+              instance.lifecycle.onDispose(async () => {
+                cleanupStarted.resolve();
+                await cleanupGate.promise;
+                await trackAsyncWork(() => {
+                  cleanupSettled = true;
+                });
+              });
+            }),
+          );
+          await lifecycle.onAdopted();
+          adopted = true;
+          await dispatchGate.promise;
+          dispatchRetainedRoot =
+            getActiveGatewayRootWorkCount({ excludeCurrent: true }) <
+            getActiveGatewayRootWorkCount();
+          dispatchAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
+          return;
+        }
+        await new Promise<void>((resolve) => {
+          lifecycle.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        await lifecycle.onCancelled?.();
+        cancelled.resolve();
+      },
+      (active) => activity.push(active),
+      (work) =>
+        runDetachedWebhookWork(async () => {
+          const signal = getAsyncWorkSignal();
+          expect(signal).toBeDefined();
+          if (signal) {
+            pumpSignals.push(signal);
+          }
+          await work();
+        }),
+    );
+    const replacement = createMonitor(queue, async (raw, lifecycle) => {
+      delivered.push(raw.id);
+      await lifecycle.onAdopted();
+    });
+    let signal: ReturnType<typeof beginGatewayRestartSignalAdmission> = null;
+    try {
+      await monitor.admit(first);
+      monitor.start();
+      await monitor.waitForPumpIdle();
+      await vi.waitFor(() => expect(pumpSignals[0]?.aborted).toBe(true));
+      adoptGate.resolve();
+      await vi.waitFor(() => expect(adopted).toBe(true));
+      await expect(queue.listClaims()).resolves.toEqual([]);
+      await monitor.waitForPumpIdle();
+      await vi.waitFor(() =>
+        expect(getActiveGatewayRootWorkHolders()).toEqual(["webhook:detached"]),
+      );
+      expect(activity.at(-1)).toBe(true);
+
+      await monitor.admit(interrupted);
+      await monitor.admit(next);
+      await monitor.waitForPumpIdle();
+      expect(delivered).toEqual([first.id, interrupted.id]);
+      signal = beginGatewayRestartSignalAdmission();
+      expect(signal).not.toBeNull();
+      markGatewayRestartDraining();
+      const cleanup = instance.dispose().then((result) => {
+        disposalSettled = true;
+        return result;
+      });
+      await cleanupStarted.promise;
+      const stopping = monitor.stop().then(() => {
+        stoppingSettled = true;
+      });
+      await cancelled.promise;
+      expect(stoppingSettled).toBe(false);
+      expect(activity.at(-1)).toBe(true);
+      expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+
+      dispatchGate.resolve();
+      await stopping;
+      expect(dispatchRetainedRoot).toBe(true);
+      expect(dispatchAdmissionClosed).toBe(true);
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expect(activity.at(-1)).toBe(false);
+      expect(cleanupSettled).toBe(false);
+      expect(disposalSettled).toBe(false);
+      expect(instance.disposing).toBe(true);
+      await expect(queue.listClaims()).resolves.toEqual([]);
+      await expect(queue.listPending()).resolves.toEqual([
+        expect.objectContaining({ id: interrupted.id, attempts: 0 }),
+        expect.objectContaining({ id: next.id, attempts: 0 }),
+      ]);
+
+      cleanupGate.resolve();
+      await expect(cleanup).resolves.toEqual({ errors: [] });
+      expect(cleanupSettled).toBe(true);
+      resetGatewayWorkAdmission();
+      replacement.start();
+      await replacement.waitForIdle();
+      await expect(replacement.admit(first)).resolves.toMatchObject({
+        kind: "durable",
+        queueResult: { kind: "completed", duplicate: true },
+      });
+      await replacement.waitForIdle();
+      expect(delivered).toEqual([first.id, interrupted.id, interrupted.id, next.id]);
+      await expect(queue.listPending()).resolves.toEqual([]);
+      await expect(queue.listClaims()).resolves.toEqual([]);
+    } finally {
+      adoptGate.resolve();
+      dispatchGate.resolve();
+      cleanupGate.resolve();
+      signal?.rollback();
+      await monitor.stop();
+      await replacement.stop();
+      await instance.dispose();
+    }
   });
 });

@@ -5,6 +5,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
+import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import { defaultRuntime } from "../../runtime.js";
 import * as processIdentity from "../../shared/pid-alive.js";
@@ -68,6 +69,7 @@ export function installFreshUpdateFixture() {
       discoveredRoot: fixture.root,
       installKind: "package",
       servicePlan: { rootRedirect: null, nodeRunner: fixture.managedServiceNodeRunner },
+      pkgOwnership: createFreeBsdPkgOwnershipInspection(5_000),
     }));
     vi.spyOn(servicePlan, "isGatewayServiceManagementAllowedForUpdate").mockReturnValue(false);
     vi.spyOn(databaseContext, "inspectUpdateDatabaseContexts").mockImplementation(async () => ({

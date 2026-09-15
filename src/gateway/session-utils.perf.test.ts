@@ -396,7 +396,7 @@ describe("session list resolver cache", () => {
             ];
           }),
         );
-        const resolver = vi.spyOn(sessionModelRef, "resolveSessionModelRef");
+        const resolver = vi.spyOn(sessionModelRef, "resolveSessionModelRefCore");
         try {
           const result = await listSessionFixture({
             cfg,
@@ -573,6 +573,8 @@ describe("session list resolver cache", () => {
       orderingWorkMs: 1,
       limit: 300,
     },
+    { name: "wide ACP metadata preparation", metadataWorkMs: 1, limit: 600 },
+    { name: "runtime-search ACP metadata", metadataWorkMs: 1, search: "unmatched", limit: 1 },
   ])(
     "shares the event loop for $name",
     async ({
@@ -580,6 +582,8 @@ describe("session list resolver cache", () => {
       storeWorkMs = 0,
       preparationWorkMs = 0,
       orderingWorkMs = 0,
+      metadataWorkMs = 0,
+      search,
       keepRows = true,
       limit = 100,
       shouldYield = true,
@@ -594,12 +598,20 @@ describe("session list resolver cache", () => {
         let orderingCalls = 0;
         let orderingCallsAtControl = 0;
         let orderingCallsBeforeRows: number | undefined;
+        const metadataEntriesRead = new Set<number>();
+        let metadataCallsAtControl = 0;
+        const entryCount = orderingWorkMs > 0 ? 2051 : metadataWorkMs > 0 ? 600 : 32;
         const store = Object.fromEntries(
-          Array.from({ length: orderingWorkMs > 0 ? 2051 : 32 }, (_, index) => [
+          Array.from({ length: entryCount }, (_, index) => [
             `agent:main:budget-${index}`,
             {
               sessionId: `budget-${index}`,
               updatedAt: index + 1,
+              get acp() {
+                metadataEntriesRead.add(index);
+                workMs += metadataWorkMs;
+                return undefined;
+              },
               // Pin reads charge ordering work before any row is projected.
               get pinnedAt() {
                 orderingCalls++;
@@ -628,6 +640,7 @@ describe("session list resolver cache", () => {
             controlRan = true;
             preparationCallsAtControl = preparationCalls;
             orderingCallsAtControl = orderingCalls;
+            metadataCallsAtControl = metadataEntriesRead.size;
             resolve();
           });
         });
@@ -643,10 +656,10 @@ describe("session list resolver cache", () => {
               workMs += preparationWorkMs;
               return keepRows;
             },
-            opts: { limit },
+            opts: { limit, search },
           });
           expect(result.sessions.map((row) => row.key)).toEqual(
-            keepRows ? Object.keys(store).toReversed().slice(0, limit) : [],
+            keepRows && !search ? Object.keys(store).toReversed().slice(0, limit) : [],
           );
           expect(controlRan).toBe(shouldYield);
           expect(controlBeforePreparation).toBe(false);
@@ -657,6 +670,10 @@ describe("session list resolver cache", () => {
             expect(orderingCallsAtControl).toBeLessThan(
               expectDefined(orderingCallsBeforeRows, "row projection started"),
             );
+          }
+          if (metadataWorkMs > 0) {
+            expect(metadataCallsAtControl).toBeGreaterThan(0);
+            expect(metadataCallsAtControl).toBeLessThan(entryCount);
           }
         } finally {
           rows.mockRestore();

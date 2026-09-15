@@ -4,7 +4,6 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   parseRecorderReady,
@@ -16,14 +15,15 @@ import { startTelegramTestApiProxy } from "./telegram-test-api-proxy.mjs";
 import { acquireTelegramTestCredential } from "./telegram-test-credential.mjs";
 
 const SKILL_DIR =
-  process.env.TELEGRAM_E2E_SKILL_DIR || resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const USER_DRIVER_PATH = resolve(SKILL_DIR, "scripts/user-driver.py");
-const USER_RECORD_PATH = resolve(SKILL_DIR, "scripts/user-record.py");
-const TELEGRAM_API_IGNORE_ABORT_PRELOAD_PATH = resolve(
+  process.env.TELEGRAM_E2E_SKILL_DIR ||
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const USER_DRIVER_PATH = path.resolve(SKILL_DIR, "scripts/user-driver.py");
+const USER_RECORD_PATH = path.resolve(SKILL_DIR, "scripts/user-record.py");
+const TELEGRAM_API_IGNORE_ABORT_PRELOAD_PATH = path.resolve(
   SKILL_DIR,
   "scripts/telegram-api-ignore-abort-preload.mjs",
 );
-const FOLLOWUP_DRAIN_CONTROL_PRELOAD_PATH = resolve(
+const FOLLOWUP_DRAIN_CONTROL_PRELOAD_PATH = path.resolve(
   SKILL_DIR,
   "scripts/followup-drain-control-preload.mjs",
 );
@@ -85,17 +85,11 @@ export function summarizeScenarioCommand({ action, result, elapsedMs, durationMs
   };
 }
 
-export function createGatewayEnvironment({
-  baseEnv = process.env,
-  configPath,
-  stateDir,
-  sutToken,
-}) {
+export function createGatewayEnvironment({ baseEnv = process.env, configPath, stateDir }) {
   return {
     ...sanitizeChildEnvironment(baseEnv),
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
-    TELEGRAM_BOT_TOKEN: sutToken,
     OPENAI_API_KEY: "openclaw-e2e-mock-key",
   };
 }
@@ -259,7 +253,7 @@ function parseArgs(argv) {
     if (args.textProvided || args.photos.length) {
       throw new Error("Use --scenario instead of --text/--photo for the driven turn.");
     }
-    args.scenario = readScenarioFile(resolve(args.scenarioPath));
+    args.scenario = readScenarioFile(path.resolve(args.scenarioPath));
   }
   if (!args.expectPassed) args.expect.push("OPENCLAW_E2E_OK");
   return args;
@@ -346,7 +340,7 @@ function readConfigPatch(name) {
 }
 
 function writePrivateJson(pathname, data) {
-  fs.mkdirSync(dirname(pathname), { recursive: true });
+  fs.mkdirSync(path.dirname(pathname), { recursive: true });
   fs.writeFileSync(pathname, `${JSON.stringify(data, null, 2)}\n`);
   fs.chmodSync(pathname, 0o600);
 }
@@ -489,10 +483,15 @@ function writeConfig(params) {
       allow: usesClaudeCli ? ["telegram", "anthropic"] : ["telegram", "openai"],
       entries: pluginEntries,
     },
+    secrets: {
+      providers: {
+        telegram: { source: "file", path: params.credentialsPath, mode: "json" },
+      },
+    },
     channels: {
       telegram: {
         enabled: true,
-        botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+        botToken: { source: "file", provider: "telegram", id: "/sutBotToken" },
         apiRoot: params.telegramApiRoot,
         dmPolicy: "allowlist",
         allowFrom: [params.testerId],
@@ -1024,7 +1023,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
     sutUsername: sut.username,
     testerId: tester.id,
   });
-  const evidenceDir = args.output ? dirname(resolve(args.output)) : "";
+  const evidenceDir = args.output ? path.dirname(path.resolve(args.output)) : "";
   if (evidenceDir) fs.mkdirSync(evidenceDir, { recursive: true });
   const temp = writeConfig({
     ...creds,
@@ -1042,7 +1041,9 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
   const requestLog = evidenceDir
     ? path.join(evidenceDir, "mock-openai-requests.ndjson")
     : path.join(temp.root, "mock-openai-requests.ndjson");
-  const outputPath = args.output ? resolve(args.output) : path.join(temp.root, "probe-result.json");
+  const outputPath = args.output
+    ? path.resolve(args.output)
+    : path.join(temp.root, "probe-result.json");
   const normalizedScenarioPath = args.scenario ? path.join(temp.root, "scenario.json") : "";
   const scenarioBarrierDir = args.scenario ? path.join(temp.root, "scenario-barriers") : "";
   const followupControlCommandPath = path.join(temp.root, "followup-control-command.json");
@@ -1087,7 +1088,6 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
     const gatewayEnv = createGatewayEnvironment({
       configPath: temp.configPath,
       stateDir: temp.stateDir,
-      sutToken: creds.sutToken,
     });
     const heldTelegramMethods = [
       ...new Set(

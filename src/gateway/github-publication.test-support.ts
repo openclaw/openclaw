@@ -328,7 +328,7 @@ export function installGitHubPublicationTestHarness(): void {
         worktree: { id: "worktree-1", branch: BRANCH, repoRoot: "/repo" },
       },
     }));
-    let remoteLookup = 0;
+    let remotePublished = false;
     mocks.runCommand
       .mockReset()
       .mockImplementation(async (argv: string[], options?: { input?: string }) => {
@@ -414,8 +414,11 @@ export function installGitHubPublicationTestHarness(): void {
             "git -c credential.helper= -c credential.helper=!gh auth git-credential ls-remote",
           )
         ) {
-          remoteLookup += 1;
-          return commandResult(remoteLookup === 1 ? "" : `${NEW_HEAD}\trefs/heads/${BRANCH}\n`);
+          return commandResult(remotePublished ? `${NEW_HEAD}\trefs/heads/${BRANCH}\n` : "");
+        }
+        if (argv.includes("push")) {
+          remotePublished = true;
+          return commandResult();
         }
         if (command.includes(" repos/openclaw/openclaw/pulls ") && command.includes("state=all")) {
           return commandResult("[]\n");
@@ -444,7 +447,7 @@ export function installGitHubPublicationTestHarness(): void {
 
 /** Real local Git/index with synthetic remote effects; no credential helper reaches a subprocess. */
 export async function createRealPublicationWorkspace(
-  interruptAt: "push" | "observe" | "index" | "create",
+  interruptAt?: "push" | "observe" | "index" | "create",
 ) {
   const { runCommandBuffered } =
     await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");

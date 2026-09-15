@@ -1,9 +1,11 @@
 import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
+  QaEvidenceOccurrence,
   QaEvidenceRttMeasurement,
   QaEvidenceTiming,
   QaEvidenceSummaryJson,
+  QaEvidenceSummaryV3Json,
 } from "./evidence-summary.js";
 import type { QaCliBackendAuthMode, QaGatewayChildCommand } from "./gateway-child.js";
 import type { QaLabServerHandle, QaLabServerStartParams } from "./lab-server.types.js";
@@ -34,6 +36,8 @@ export type QaSuiteStep = {
 export type QaSuiteScenarioResult = {
   name: string;
   status: "pass" | "fail" | "skip";
+  // The lifecycle owner carries this through retries and post-run checks.
+  evidenceOccurrenceId?: string;
   steps: QaReportCheck[];
   details?: string;
   timing?: QaEvidenceTiming;
@@ -55,6 +59,11 @@ export type QaSuiteRunParams = {
   adapterFactories?: readonly QaTransportAdapterFactory[];
   channelId?: string;
   evidenceMode?: QaScorecardEvidenceMode;
+  evidenceAnchors?: readonly QaEvidenceOccurrence[];
+  // Only the current parent invocation supplies captured retry/child evidence.
+  evidenceContinuation?: QaEvidenceSummaryV3Json;
+  // Parents retain child observations even when result publication later throws.
+  onEvidence?: (summary: QaEvidenceSummaryV3Json) => void;
   repoRoot?: string;
   sutOpenClawCommand?: QaGatewayChildCommand;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;

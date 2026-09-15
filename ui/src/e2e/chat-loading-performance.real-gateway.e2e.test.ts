@@ -14,6 +14,7 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionPath } from "../test-helpers/control-ui-e2e.ts";
+import { installChatLoadingReadinessObserver } from "./chat-loading-readiness.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const selectedKey = "agent:main:loading-proof-12345678-0000-4000-8000-000000000001";
@@ -29,11 +30,13 @@ let config: OpenClawConfig;
 let originalAvatarBytes = 0;
 
 type RpcMetric = {
+  requestId: string;
   method: string;
   sentMs: number;
   receivedMs?: number;
   responseBytes?: number;
   sessionKey?: string;
+  agentId?: string;
   shortId?: string;
   limit?: number;
   maxBytes?: number;
@@ -41,6 +44,8 @@ type RpcMetric = {
   messages?: number;
   historyBytes?: number;
   resolvedKey?: string;
+  resolvedAgentId?: string;
+  resolutionOk?: boolean;
   inlineAvatar?: boolean;
 };
 
@@ -257,6 +262,7 @@ suite.define(() => {
         ...(captureUiProof ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
       },
       async ({ page, context }) => {
+        await installChatLoadingReadinessObserver(page);
         await page.addInitScript(() => {
           const sample: BrowserPerformanceSample = {
             lcpMs: null,
@@ -353,9 +359,11 @@ suite.define(() => {
             }
             const params = isRecord(frame.params) ? frame.params : {};
             const metric: RpcMetric = {
+              requestId: frame.id,
               method: frame.method,
               sentMs: Date.now() - startedAt,
               ...(typeof params.sessionKey === "string" ? { sessionKey: params.sessionKey } : {}),
+              ...(typeof params.agentId === "string" ? { agentId: params.agentId } : {}),
               ...(typeof params.shortId === "string" ? { shortId: params.shortId } : {}),
               ...(typeof params.limit === "number" ? { limit: params.limit } : {}),
               ...(typeof params.maxBytes === "number" ? { maxBytes: params.maxBytes } : {}),
@@ -386,6 +394,8 @@ suite.define(() => {
             }
             if (metric.method === "sessions.resolve" && typeof body.key === "string") {
               metric.resolvedKey = body.key;
+              metric.resolvedAgentId = typeof body.agentId === "string" ? body.agentId : undefined;
+              metric.resolutionOk = frame.ok === true && body.ok === true;
             }
             metric.inlineAvatar = JSON.stringify(body).includes("data:image/");
           });
@@ -458,6 +468,7 @@ suite.define(() => {
           await page.screenshot({ path: path.join(artifactDir, "02-selected-and-home-ready.png") });
         }
         const startupMetrics = structuredClone(rpc);
+        const startupIdentity = await page.evaluate(() => window.chatLoadingReadiness);
         const images = await page
           .locator(".sidebar-agent-card__avatar img")
           .evaluateAll((elements) =>
@@ -596,6 +607,7 @@ suite.define(() => {
             homeAuthoritativeMs: narrowHomeAuthoritativeMs,
             performance,
             startup: structuredClone(rpc.slice(requestStart)),
+            identity: await page.evaluate(() => window.chatLoadingReadiness),
           };
         };
         const narrowHomeOpen = await captureNarrowReload("04-narrow-home-restored", true);
@@ -618,6 +630,7 @@ suite.define(() => {
               homeAuthoritativeMs,
               performanceAtReady,
               startup: startupMetrics,
+              startupIdentity,
               pagination: paginationMetrics,
               narrowHomeOpen,
               narrowHomeClosed,
@@ -636,12 +649,50 @@ suite.define(() => {
           (metric) => metric.method === "chat.startup" && metric.sessionKey === selectedKey,
         );
         expect(selectedStartup).toBeDefined();
-        const resolutions = startupMetrics.filter((metric) => metric.method === "sessions.resolve");
-        expect(resolutions).toHaveLength(1);
-        expect(resolutions[0]?.resolvedKey).toBe(selectedKey);
-        expect(selectedStartup?.sentMs).toBeGreaterThanOrEqual(
-          resolutions[0]?.receivedMs ?? Infinity,
-        );
+        for (const { metrics, identity } of [
+          { metrics: startupMetrics, identity: startupIdentity },
+          { metrics: narrowHomeOpen.startup, identity: narrowHomeOpen.identity },
+          { metrics: narrowHomeClosed.startup, identity: narrowHomeClosed.identity },
+        ]) {
+          const resolutions = metrics.filter((metric) => metric.method === "sessions.resolve");
+          expect(resolutions).toHaveLength(1);
+          const resolved = resolutions[0]!;
+          expect(resolved).toMatchObject({
+            agentId: "main",
+            shortId: "12345678",
+            resolutionOk: true,
+            resolvedKey: selectedKey,
+            resolvedAgentId: "main",
+          });
+          const selected = metrics.filter(
+            (metric) => metric.method === "chat.startup" && metric.sessionKey === selectedKey,
+          );
+          expect(selected).toHaveLength(1);
+          const startup = selected[0]!;
+          expect(identity.connects).toBe(1);
+          expect(identity.observerAttached).toBe(true);
+          const observations = identity.startups.filter(
+            (entry) => entry.requestId === startup.requestId,
+          );
+          expect(observations).toHaveLength(1);
+          const observed = observations[0]!;
+          expect(observed.sessionKey).toBe(selectedKey);
+          expect(observed.agentId ?? "main").toBe("main");
+          expect(observed.resolutionRequestId).toBe(resolved.requestId);
+          if (startup.sentMs >= (resolved.receivedMs ?? Infinity)) {
+            expect(observed.resolutionSourceCurrent).toBe(true);
+          } else {
+            // Early startup needs accepted identity from this connection, not only a wire event.
+            expect(observed.prepared).toMatchObject({
+              plainUrl: true,
+              sourceCurrent: true,
+              scope: { agentId: "main", sessionKey: selectedKey },
+            });
+            expect(observed.prepared?.target).toEqual(identity.target);
+            expect(identity.target).toMatchObject({ agentId: "main", shortId: "12345678" });
+            expect(observed.prepared?.acceptedAtMs).toBeLessThanOrEqual(observed.sentAtMs);
+          }
+        }
         expect(selectedStartup?.messages).toBeLessThanOrEqual(80);
         expect(selectedStartup?.historyBytes).toBeLessThanOrEqual(256 * 1024);
         const homeStartup = startupMetrics.find(

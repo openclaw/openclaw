@@ -9,8 +9,31 @@ export type PluginStateEntry<T> = {
   expiresAt?: number;
 };
 
+/** An opaque comparison of one store/key's live value and storage metadata, not ownership. */
+export type PluginStateObservation<T> = {
+  value: T | undefined;
+  comparison: string;
+};
+
+export type PluginStateCompareIntent<T> =
+  | { operation: "update"; action: "set"; value: T; ttlMs?: number }
+  | { operation: "update" | "delete"; action: "keep" }
+  | { operation: "delete"; action: "delete" };
+
+export type PluginStateCompareResult<T> =
+  | { status: "applied" | "unchanged" }
+  | { status: "conflict"; current: PluginStateObservation<T> };
+
 /** Async plugin state API exposed to plugin runtimes. */
 export type PluginStateKeyedStore<T> = {
+  /** Prepares a mutation observation through canonical writable admission; may create state. */
+  observe?: (key: string) => Promise<PluginStateObservation<T>>;
+  /** Compares the observed row before applying prepared data; only explicit conflicts may retry. */
+  compareAndApply?: (
+    key: string,
+    comparison: string,
+    intent: PluginStateCompareIntent<T>,
+  ) => Promise<PluginStateCompareResult<T>>;
   register(key: string, value: T, opts?: { ttlMs?: number }): Promise<void>;
   registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): Promise<boolean>;
   /**

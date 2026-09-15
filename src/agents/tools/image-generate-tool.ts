@@ -1,9 +1,6 @@
 /** Runs image generation, persistence, and detached completion. */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { Type } from "typebox";
-import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveImageGenerationMaxInputImages } from "../../image-generation/capabilities.js";
 import type {
   ImageGenerationOpenAIOptions,
   ImageGenerationProvider,
@@ -12,7 +9,6 @@ import type {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseImageGenerationModelRef } from "../../media-generation/model-ref.js";
 import { withImageGenerationProviders } from "../../media-generation/registry.js";
-import { resolveCapabilityModelCandidates } from "../../media-generation/runtime-shared.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
@@ -59,7 +55,6 @@ import type { AnyAgentTool } from "./tool-runtime.helpers.js";
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
-const DEFAULT_MAX_INPUT_IMAGES = 10;
 const MAX_REFERENCE_IMAGE_INPUTS = 16;
 const SUPPORTED_QUALITIES = ["low", "medium", "high", "xhigh", "max", "auto"] as const;
 const SUPPORTED_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
@@ -282,29 +277,6 @@ function resolveSelectedImageGenerationModelId(params: {
   return params.imageGenerationModelConfig.primary ?? params.selectedProvider?.defaultModel;
 }
 
-function resolveReachableImageGenerationMaxInputImages(params: {
-  providers: ImageGenerationProvider[];
-  candidates: readonly { provider: string; model: string }[];
-}): number | undefined {
-  const limits = params.candidates.flatMap((candidate) => {
-    const provider = findCapabilityProviderById({
-      providers: params.providers,
-      providerId: candidate.provider,
-      normalizeProviderId,
-    });
-    if (!provider?.capabilities.edit.enabled) {
-      return [];
-    }
-    return [
-      resolveImageGenerationMaxInputImages({
-        provider,
-        model: candidate.model,
-      }) ?? DEFAULT_MAX_INPUT_IMAGES,
-    ];
-  });
-  return limits.length > 0 ? Math.max(...limits) : undefined;
-}
-
 function modelDisablesImageResolution(
   provider: ImageGenerationProvider | undefined,
   modelId?: string,
@@ -315,11 +287,10 @@ function modelDisablesImageResolution(
   return provider.capabilities.geometry?.resolutionsByModel?.[modelId]?.length === 0;
 }
 
-function validateImageGenerationCapabilities(params: {
+function validateImageGenerationCount(params: {
   provider: ImageGenerationProvider | undefined;
   count: number;
   inputImageCount: number;
-  maxInputImages?: number;
 }) {
   const provider = params.provider;
   if (!provider) {
@@ -332,21 +303,6 @@ function validateImageGenerationCapabilities(params: {
     throw new ToolInputError(
       `${provider.id} ${isEdit ? "edit" : "generate"} supports at most ${maxCount} output image${maxCount === 1 ? "" : "s"}.`,
     );
-  }
-
-  if (isEdit) {
-    if (!provider.capabilities.edit.enabled) {
-      throw new ToolInputError(`${provider.id} does not support reference-image edits.`);
-    }
-    const maxInputImages =
-      params.maxInputImages ??
-      provider.capabilities.edit.maxInputImages ??
-      DEFAULT_MAX_INPUT_IMAGES;
-    if (params.inputImageCount > maxInputImages) {
-      throw new ToolInputError(
-        `${provider.id} edit supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}.`,
-      );
-    }
   }
 }
 
@@ -473,19 +429,6 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
             explicitModelRef,
             primaryModelRef,
           });
-          const imageGenerationCandidates = resolveCapabilityModelCandidates({
-            cfg: effectiveCfg,
-            modelConfig: effectiveCfg.agents?.defaults?.mediaModels?.image,
-            modelOverride: model,
-            parseModelRef: parseImageGenerationModelRef,
-            agentDir: options?.agentDir,
-            listProviders: () => imageGenerationProviders,
-            autoProviderFallback: explicitModelConfig ? false : undefined,
-          });
-          const maxInputImages = resolveReachableImageGenerationMaxInputImages({
-            providers: imageGenerationProviders,
-            candidates: imageGenerationCandidates,
-          });
           const count = resolveRequestedCount(params);
           const requestKey = buildMediaGenerationRequestKey({
             tool: "image_generate",
@@ -518,11 +461,10 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
           }
           signal?.throwIfAborted();
           acquired.assertOpen();
-          validateImageGenerationCapabilities({
+          validateImageGenerationCount({
             provider: selectedProvider,
             count,
             inputImageCount: imageInputs.length,
-            maxInputImages,
           });
           const referenceMaxBytes = resolveGeneratedMediaMaxBytes(effectiveCfg, "image");
           const loadedReferenceImages = await loadImageGenerationReferences({
@@ -552,12 +494,6 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
             modelDisablesImageResolution(selectedProvider, selectedModelId)
               ? undefined
               : inferredResolution);
-          validateImageGenerationCapabilities({
-            provider: selectedProvider,
-            count,
-            inputImageCount: inputImages.length,
-            maxInputImages,
-          });
           return {
             kind: "task" as const,
             params: {

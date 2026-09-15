@@ -60,6 +60,7 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
     {
       step: text(step.name),
       status: step.exitCode === 0 || step.advisory ? "completed" : "failed",
+      exitCode: step.exitCode,
       ...(step.failureFacts?.length && !step.advisory
         ? { failureFacts: step.failureFacts.slice(0, 5) }
         : {}),

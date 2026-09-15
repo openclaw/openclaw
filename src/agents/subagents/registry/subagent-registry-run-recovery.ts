@@ -4,7 +4,6 @@ import {
 } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-/** Owns steer replacement and restart-recovery receipt transitions. */
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -264,38 +263,6 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       ...[...killReconciliationSnapshots.keys()].map((entry) => entry.runId),
       ...[...wakeSnapshots.keys()].map((entry) => entry.runId),
     ];
-    const rollbackReplacement = () => {
-      this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
-      for (const [member, wake] of wakeSnapshots) {
-        member.requesterSettleWake = wake;
-      }
-      this.options.runs.delete(nextRunId);
-      this.options.runs.set(previousRunId, source);
-    };
-    const adoptSuccessorOwner = () => {
-      if (!taskActivation) {
-        subagentRuns.commitOwnership(next);
-      }
-      if (previousRunId !== nextRunId) {
-        this.options.clearPendingLifecycleError(previousRunId);
-        this.options.resumedRuns.delete(previousRunId);
-        if (this.shouldDeleteAttachments(source)) {
-          void safeRemoveAttachmentsDir(source);
-        }
-        if (
-          source.execution.transcriptTarget &&
-          source.execution.transcriptTarget !== replaceParams.transcriptTarget
-        ) {
-          void removeInternalSessionEffectsSession(source.execution.transcriptTarget);
-        }
-      }
-      this.options.ensureListener();
-      // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
-      this.options.startSweeper();
-      if (!next.execution.restartRecovery) {
-        void this.waitForSubagentCompletion(nextRunId, waitTimeoutMs, next);
-      }
-    };
     const canReconcileAcceptedReceipt = () => {
       // Staging replaces the map entry before commit. Only this exact
       // live acceptance may bridge its failed write, never a restored copy.
@@ -330,7 +297,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           session.lifecycleRevision === acceptedReceipt.sessionLifecycleRevision)
       );
     };
-    const persistReplacement = (): void => {
+    try {
       if (taskActivation) {
         commitSubagentTaskReplacement({
           runs: this.options.runs,
@@ -340,14 +307,16 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           task: taskActivation,
           canReconcileAcceptedReceipt,
         });
-        return;
+      } else {
+        this.options.persistOrThrow(...changedRunIds);
       }
-      this.options.persistOrThrow(...changedRunIds);
-    };
-    try {
-      persistReplacement();
     } catch (error) {
-      rollbackReplacement();
+      this.restoreKillReconciliationSnapshots(killReconciliationSnapshots);
+      for (const [member, wake] of wakeSnapshots) {
+        member.requesterSettleWake = wake;
+      }
+      this.options.runs.delete(nextRunId);
+      this.options.runs.set(previousRunId, source);
       log.warn("failed to persist replacement subagent recovery run; restored source lease", {
         error,
         previousRunId,
@@ -372,7 +341,28 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
       next,
       preserve: replaceParams.preserveRequesterSettleWake === true,
     });
-    adoptSuccessorOwner();
+    if (!taskActivation) {
+      subagentRuns.commitOwnership(next);
+    }
+    if (previousRunId !== nextRunId) {
+      this.options.clearPendingLifecycleError(previousRunId);
+      this.options.resumedRuns.delete(previousRunId);
+      if (this.shouldDeleteAttachments(source)) {
+        void safeRemoveAttachmentsDir(source);
+      }
+      if (
+        source.execution.transcriptTarget &&
+        source.execution.transcriptTarget !== replaceParams.transcriptTarget
+      ) {
+        void removeInternalSessionEffectsSession(source.execution.transcriptTarget);
+      }
+    }
+    this.options.ensureListener();
+    // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
+    this.options.startSweeper();
+    if (!next.execution.restartRecovery) {
+      void this.waitForSubagentCompletion(nextRunId, waitTimeoutMs, next);
+    }
     return true;
   };
 

@@ -10,12 +10,14 @@ let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
 @MainActor
 @Observable
 public final class OpenClawChatViewModel {
-    public nonisolated static let defaultModelSelectionID = "__default__"
-    public nonisolated static let inheritedThinkingSelectionID = "__inherited__"
     static let maxAttachmentBytes = 5_000_000
     static let sessionListFetchLimit = 200
 
-    public internal(set) var messages: [OpenClawChatMessage] = []
+    public internal(set) var messages: [OpenClawChatMessage] = [] {
+        didSet { self.sourcePreviewState.update(self.messages) }
+    }
+
+    let sourcePreviewState = ChatSourcePreviewState()
 
     public var input: String = "" {
         didSet {
@@ -596,6 +598,7 @@ public final class OpenClawChatViewModel {
     public func detachTransport() {
         guard !self.isTransportDetached else { return }
         self.isTransportDetached = true
+        self.invalidateSourceContext()
         self.endPendingToolActivities()
         self.eventTask?.cancel()
         self.bootstrapTask?.cancel()

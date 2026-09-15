@@ -582,8 +582,8 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
   const configMigrations: SetupConfigMigrationEntry[] = [];
   const autoEnableProbes: SetupAutoEnableProbeEntry[] = [];
   const diagnostics: PluginSetupRegistryDiagnostic[] = [];
-  let providerKeys = new Set<string>();
-  let cliBackendKeys = new Set<string>();
+  const providerKeys = new Set<string>();
+  const cliBackendKeys = new Set<string>();
 
   const plugins =
     params?.manifestRegistry == null
@@ -615,15 +615,15 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
     const recordCliBackends: SetupCliBackendEntry[] = [];
     const recordConfigMigrations: SetupConfigMigrationEntry[] = [];
     const recordAutoEnableProbes: SetupAutoEnableProbeEntry[] = [];
-    const recordProviderKeys = new Set(providerKeys);
-    const recordCliBackendKeys = new Set(cliBackendKeys);
+    const recordProviderKeys = new Set<string>();
+    const recordCliBackendKeys = new Set<string>();
     const api = buildSetupPluginApi({
       record,
       setupSource: setupRegistration.setupSource,
       handlers: {
         registerProvider(provider) {
           const key = `${record.id}:${normalizeProviderId(provider.id)}`;
-          if (recordProviderKeys.has(key)) {
+          if (providerKeys.has(key) || recordProviderKeys.has(key)) {
             return;
           }
           recordProviderKeys.add(key);
@@ -634,7 +634,7 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
         },
         registerCliBackend(backend) {
           const key = `${record.id}:${normalizeProviderId(backend.id)}`;
-          if (recordCliBackendKeys.has(key)) {
+          if (cliBackendKeys.has(key) || recordCliBackendKeys.has(key)) {
             return;
           }
           recordCliBackendKeys.add(key);
@@ -678,8 +678,12 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
     cliBackends.push(...recordCliBackends);
     configMigrations.push(...recordConfigMigrations);
     autoEnableProbes.push(...recordAutoEnableProbes);
-    providerKeys = recordProviderKeys;
-    cliBackendKeys = recordCliBackendKeys;
+    for (const key of recordProviderKeys) {
+      providerKeys.add(key);
+    }
+    for (const key of recordCliBackendKeys) {
+      cliBackendKeys.add(key);
+    }
     pushSetupDescriptorDriftDiagnostics({
       record,
       providers: recordProviders.map((entry) => entry.provider),

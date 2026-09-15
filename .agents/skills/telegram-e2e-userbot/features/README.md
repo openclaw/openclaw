@@ -46,16 +46,18 @@ The whole point of an audit lane is exercising config the default path never use
 | `--pre-send '<text>'`       | posts as the QA user before the driven turn, for history-scoped rows                                                            |
 
 Scenario action `command` runs argv without an implicit shell in the leased
-test environment. It receives the leased TDLib state, SUT bot token,
+test environment. It receives the leased TDLib state, private credential file location,
 `TELEGRAM_E2E_TEST_API_ROOT`, Gateway config, and Gateway state. Set `cwd` to
 `repo`, `workspace`, `state`, or `root`. The summary keeps only status, timing,
 exit code, and timeout. The command writes any deliberately sanitized artifact
 it needs. Invoke a shell explicitly when the test needs shell syntax.
 
-Call any Test Bot API method at
-`$TELEGRAM_E2E_TEST_API_ROOT/bot$TELEGRAM_E2E_SUT_BOT_TOKEN/<method>`.
-The local proxy forwards the method, query, headers, and body to Telegram's
-Test Server.
+Read `sutBotToken` from
+`$TELEGRAM_E2E_STATE_DIR/credentials.local.json` inside the command process.
+Use that value with `TELEGRAM_E2E_TEST_API_ROOT` to call any Test Bot API method.
+Gateway resolves the same private JSON file through a file SecretRef. The
+runner passes file locations to children and keeps leased tokens out of their
+environments. The local proxy forwards requests to Telegram's Test Server.
 
 Command actions stay in the runner-owned process group by default. A command
 that deliberately creates a new process session owns that session and stops it

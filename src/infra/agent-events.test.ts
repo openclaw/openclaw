@@ -91,6 +91,16 @@ describe("agent-events sequencing", () => {
     registerAgentRunContext("projected-run", { verboseLevel: "full" });
     expect(readAgentRunIndexVersion()).toBe(version);
 
+    for (const update of [
+      { agentId: "work" },
+      { isControlUiVisible: false },
+      { projectSessionLifecycle: false },
+    ]) {
+      registerAgentRunContext("projected-run", update);
+      expect(readAgentRunIndexVersion()).toBeGreaterThan(version);
+      version = readAgentRunIndexVersion();
+    }
+
     const claimId = claimAgentRunContext(
       "owned-projected-run",
       {

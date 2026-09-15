@@ -62,6 +62,40 @@ function session(key: string, fields: Partial<GatewaySessionRow> = {}): GatewayS
 }
 
 describe("Systems inventory projection", () => {
+  it("omits completed worker history while keeping running workers and unresolved cleanup", () => {
+    const states = ["attached", "destroying", "orphaned", "destroyed", "failed"] as const;
+    const workers: EnvironmentSummary[] = states.map((state) => ({
+      id: `worker:${state}`,
+      type: "worker",
+      status: state === "attached" ? "available" : "unavailable",
+      worker: {
+        state,
+        profileId: "cloud",
+        providerId: "crabbox",
+        ...(state !== "failed" ? { leaseId: `lease:${state}` } : {}),
+        ageMs: 1_000,
+        attachedSessionIds: [],
+        tunnelStatus: "stopped",
+      },
+    }));
+    const rows = projectSystemsInventory({ ...inventory, environments: workers }, [
+      session("archived", {
+        archivedAt: 2,
+        placement: {
+          state: "reclaimed",
+          ...timing,
+          environmentId: "worker:destroyed",
+          activeOwnerEpoch: 1,
+        },
+      }),
+    ]);
+    expect(rows.map((row) => row.environment.id)).toEqual([
+      "worker:attached",
+      "worker:destroying",
+      "worker:orphaned",
+    ]);
+  });
+
   it("keeps headless, offline and same-named targets without resurrecting managed node rows", () => {
     const rows = projectSystemsInventory(inventory, []);
     expect(rows.map((row) => row.environment.id)).toEqual(environments.map((entry) => entry.id));

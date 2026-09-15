@@ -1,7 +1,42 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { FSWatcherEventMap } from "chokidar";
-import { expect, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+
+export function useSkillsWatcherFixture() {
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+      const { closeSkillsWatchers } = await import("./refresh.js");
+      await closeSkillsWatchers(true);
+      cleanup();
+    }),
+  );
+  let fixtureRoot: string;
+  let workspaceDir: string;
+
+  async function createFixtureDirectory(relativePath: string): Promise<string> {
+    const directory = path.join(fixtureRoot, relativePath);
+    await fs.mkdir(directory, { recursive: true });
+    return directory;
+  }
+
+  beforeEach(async () => {
+    fixtureRoot = tempDirs.make("openclaw-watch-fixture-");
+    workspaceDir = await createFixtureDirectory("workspace");
+    await createFixtureDirectory("workspace/skills");
+  });
+
+  return {
+    createFixtureDirectory,
+    get workspaceDir() {
+      return workspaceDir;
+    },
+  };
+}
 
 type WatchEvent = keyof FSWatcherEventMap;
 type WatchCallback = (...args: unknown[]) => void;

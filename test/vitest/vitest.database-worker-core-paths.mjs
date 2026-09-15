@@ -27,6 +27,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor/auth-alias-preservation.test.ts",
   "src/commands/doctor/shared/missing-configured-plugin-install.test.ts",
   "src/plugins/registry-refresh.test.ts",
+  "src/plugins/loader.trust-diagnostics.test.ts",
   "src/plugins/setup-registry.lifecycle.test.ts",
   "src/plugins/installed-plugin-index-store-write.receipt.test.ts",
   "src/plugins/install-record-commit.retention.test.ts",
@@ -47,6 +48,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/status.runtime-inspection.test.ts",
 
   "src/plugins/plugin-metadata-state-worker.test.ts",
+  "src/infra/session-cost-usage-metadata.test.ts",
   "src/plugins/installed-plugin-index-records.test.ts",
   "src/acp/runtime/session-meta-doctor.test.ts",
   "src/agents/agent-tools.at-prefixed-remote-paths.test.ts",
@@ -59,8 +61,11 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor-maintenance.worker.test.ts",
   "src/entry.memory-json.test.ts",
   "src/gateway/server-methods/memory-search.test.ts",
+  "src/logging/diagnostic-session-context.test.ts",
+  "src/logging/diagnostic-stuck-session-recovery.runtime.test.ts",
   "src/memory/memory-artifact-provenance.test.ts",
   "src/plugin-sdk/memory-host-core.test.ts",
+  "src/plugin-sdk/memory-host-event-export.test.ts",
   "src/plugin-sdk/memory-host-events.test.ts",
   "src/plugin-sdk/outbound-media.test.ts",
   "src/plugin-sdk/outbound-media.bulk.test.ts",
@@ -69,10 +74,12 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugin-sdk/provider-auth-copilot-cache.test.ts",
   "src/plugins/doctor-contract-registry.load-paths.test.ts",
   "src/state/openclaw-memory-write-admission.test.ts",
+  "src/state/openclaw-state-db.test.ts",
   "src/state/openclaw-state-maintenance-resources.test.ts",
   "src/tasks/task-registry.test.ts",
   "test/plugins/beam-http-identity.test.ts",
   "src/plugin-sdk/runtime-doctor-migrations.test.ts",
+  "src/plugin-state/plugin-state-store.doctor-repair.test.ts",
   "src/plugin-state/plugin-state-store.test.ts",
   "src/plugin-state/plugin-state-store.bulk.test.ts",
   "src/plugin-state/plugin-state-store.errors.test.ts",
@@ -92,6 +99,7 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["src/logging/diagnostic-stuck-session-recovery.runtime.test.ts", "unitFast"],
   ["src/flows/search-setup.test.ts", "unitFastIsolated"],
   ["src/security/audit-config-symlink.test.ts", "unitFastIsolated"],
   ["src/security/audit-filesystem-windows.test.ts", "unitFastIsolated"],

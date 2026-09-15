@@ -366,17 +366,14 @@ export function redactJsonRecord(
   origins: RedactionOrigins,
   patternPhases: readonly [ResolvedRedactPattern[], ResolvedRedactPattern[]],
   getEdit: RedactionEditSelector,
-  legacyFieldEdits: (field: RedactionField, original: string) => RedactionEdit[],
+  legacyFieldEdits: (field: RedactionField, currentValue: string) => RedactionEdit[],
   fieldEdits: (field: RedactionField) => RedactionEdit[],
   prepEdits: (field: RedactionField) => RedactionEdit[],
-  preserveDecodedField: (field: RedactionField) => boolean,
+  skipDecodedPatterns: (field: RedactionField, currentValue: string) => boolean,
   message?: RedactionMessage,
   batch?: { preserveLines: boolean },
 ): string {
   let tokens = batch ? [] : readScalarTokens(input, origins);
-  const decodedTokens = tokens.filter(
-    (token) => !token.isKey && token.string && !preserveDecodedField(token),
-  );
   const messageToken = message
     ? tokens.find((token) => !token.isKey && token.path.length === 1 && token.key === "message")
     : undefined;
@@ -393,6 +390,9 @@ export function redactJsonRecord(
   if (prepared.size > 0) {
     current = updateCurrentRecord(input, current, tokens, prepared);
   }
+  const decodedTokens = tokens.filter(
+    (token) => !token.isKey && token.string && !skipDecodedPatterns(token, token.currentValue),
+  );
   const projectMessage = (): boolean => {
     if (!messageToken || !message) {
       return false;
@@ -446,12 +446,12 @@ export function redactJsonRecord(
   };
   for (const [phase, patterns] of patternPhases.entries()) {
     const changed = new Set<ScalarToken>();
+    const pending = new Set<ScalarToken>();
+    const add = (token: ScalarToken, edit: RedactionEdit) => {
+      (token.pending ??= []).push(edit);
+      pending.add(token);
+    };
     for (const pattern of patterns) {
-      let pending: Set<ScalarToken> | undefined;
-      const add = (token: ScalarToken, edit: RedactionEdit) => {
-        (token.pending ??= []).push(edit);
-        (pending ??= new Set()).add(token);
-      };
       if (phase === 0) {
         for (const token of decodedTokens) {
           for (const edit of getPatternRedactionEdits(token.currentValue, pattern, getEdit)) {
@@ -548,7 +548,7 @@ export function redactJsonRecord(
           }
         }
       }
-      if (!pending) {
+      if (pending.size === 0) {
         continue;
       }
       for (const token of pending) {
@@ -562,10 +562,11 @@ export function redactJsonRecord(
       if (phase !== 0 && pending.size > 0) {
         current = updateCurrentRecord(input, current, tokens, pending);
       }
+      pending.clear();
     }
     for (const token of tokens) {
       if (phase === 0) {
-        token.pending = legacyFieldEdits({ ...token, value: token.currentValue }, token.value);
+        token.pending = legacyFieldEdits(token, token.currentValue);
         if (commitPatternEdits(token)) {
           changed.add(token);
         }

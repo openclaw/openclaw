@@ -54,7 +54,10 @@ function fixture() {
   const git = (args: string[], input?: string) =>
     execFileSync("git", args, { cwd: repo, env, input, encoding: "utf8" }).trim();
   git(["init", "-q", "-b", "main"]);
-  git(["commit", "-q", "--allow-empty", "-m", "Synthetic fixture"]);
+  writeFileSync(join(repo, ".gitignore"), ".local/\nnode_modules/\n");
+  writeFileSync(join(repo, "tracked.txt"), "original\n");
+  git(["add", ".gitignore", "tracked.txt"]);
+  git(["commit", "-q", "-m", "Synthetic fixture"]);
   git(["remote", "add", "origin", repo]);
   const head = git(["rev-parse", "HEAD"]);
   const branches = () => git(["for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/"]);
@@ -135,7 +138,7 @@ ${commands.join("\n")}
     );
     return { ...result, output: result.stdout + result.stderr };
   };
-  const record = (pr: number, phase = "intent") => {
+  const record = (pr: number, phase = "intent", preparedHead = head, localHead?: string) => {
     const value = {
       version: 1,
       repo: {
@@ -146,7 +149,8 @@ ${commands.join("\n")}
       pr,
       prId: `fixture-pr-${pr}`,
       base: "main",
-      head,
+      head: preparedHead,
+      ...(localHead ? { localHead } : {}),
       main: head,
       attempt: "11111111-1111-4111-8111-111111111111",
       method: "squash",
@@ -183,6 +187,74 @@ function evidence(dir: string, captureName = "merge-output.log") {
 }
 
 describePosix("native worktree cleanup preserves merge evidence", () => {
+  it.each(["tracked.txt", "unpublished.txt"])("retains dirty %s and local branches", (file) => {
+    const f = fixture();
+    const dir = f.add(910001);
+    writeFileSync(join(dir, file), "unpublished work\n");
+    const branches = f.branches();
+    const registrations = f.worktrees();
+    const dry = f.run(["gc_pr_worktrees true"], "MERGED");
+    expect(dry.output).not.toContain("would remove .worktrees/pr-910001");
+    expect(f.branches()).toBe(branches);
+    expect(f.worktrees()).toBe(registrations);
+    const result = f.run(["gc_pr_worktrees false"], "MERGED");
+    expect(result.status, result.output).toBe(0);
+    expect(existsSync(join(dir, file)), result.output).toBe(true);
+    expect(readFileSync(join(dir, file), "utf8")).toBe("unpublished work\n");
+    expect(f.branches()).toBe(branches);
+    expect(f.worktrees()).toBe(registrations);
+    expect(result.output).toContain("cleanup incomplete");
+  });
+
+  it("removes clean worktrees with ignored generated artifacts", () => {
+    const f = fixture();
+    const dir = f.add(910001);
+    mkdirSync(join(dir, "node_modules"));
+    writeFileSync(join(dir, "node_modules", "generated"), "disposable\n");
+    const result = f.run(["gc_pr_worktrees false"], "MERGED");
+    expect(result.status, result.output).toBe(0);
+    expect(existsSync(dir)).toBe(false);
+    expect(result.output).toContain("removed .worktrees/pr-910001");
+  });
+
+  it.each(["none", "intent", "complete", "advanced", "configured", "local", "local-advanced"])(
+    "deletes only published or completed-receipt branch tips (%s)",
+    (receipt) => {
+      const f = fixture();
+      f.add(910001);
+      const tree = f.git(["rev-parse", "HEAD^{tree}"]);
+      const prepared = f.git(["commit-tree", tree, "-p", f.head], "Reviewed source\n");
+      const localHead = receipt.startsWith("local")
+        ? f.git(["commit-tree", tree, "-p", f.head], "Local prepared source\n")
+        : undefined;
+      if (receipt !== "none") {
+        f.record(910001, receipt === "intent" ? "intent" : "complete", prepared, localHead);
+      }
+      const tip =
+        receipt === "advanced" || receipt === "configured" || receipt === "local-advanced"
+          ? f.git(["commit-tree", tree, "-p", localHead ?? prepared], "Unpublished follow-up\n")
+          : (localHead ?? prepared);
+      f.git(["update-ref", "refs/heads/pr-910001-prep", tip]);
+      if (receipt === "configured") {
+        f.git(["update-ref", "refs/heads/published", tip]);
+        f.git(["update-ref", "refs/remotes/origin/published", f.head]);
+        f.git(["config", "branch.pr-910001-prep.remote", "origin"]);
+        f.git(["config", "branch.pr-910001-prep.merge", "refs/heads/published"]);
+      }
+      const outcomes = f.outcomes();
+      const result = f.run(["gc_pr_worktrees false"], "MERGED");
+      expect(result.status, result.output).toBe(0);
+      expect(f.outcomes()).toBe(outcomes);
+      if (receipt === "complete" || receipt === "local") {
+        expect(f.branches()).not.toContain("refs/heads/pr-910001-prep");
+        expect(result.output).toContain("removed .worktrees/pr-910001");
+      } else {
+        expect(f.branches(), result.output).toContain(`refs/heads/pr-910001-prep ${tip}`);
+        expect(result.output).toContain("cleanup incomplete");
+      }
+    },
+  );
+
   it.each(
     ["CLOSED", "MERGED"].flatMap((state) =>
       ["merge-output.log", "merge-output.11111111-1111-4111-8111-111111111111.log"].map(
@@ -272,12 +344,16 @@ describePosix("native worktree cleanup preserves merge evidence", () => {
     },
   );
 
-  it.each(["corrupt", "symbolic", "wrong-pr", "unretained"])(
+  it.each(["corrupt", "symbolic", "wrong-pr", "unretained", "local-tree"])(
     "refuses GC with %s outcome",
     (fault) => {
       const f = fixture();
       const dir = f.add(910001, "populated");
-      const ref = f.record(910001);
+      const localHead =
+        fault === "local-tree"
+          ? f.git(["commit-tree", f.git(["mktree"], ""), "-p", f.head], "Different local tree\n")
+          : undefined;
+      const ref = f.record(910001, "intent", f.head, localHead);
       if (fault === "corrupt") {
         f.git(["update-ref", ref, f.git(["hash-object", "-w", "--stdin"], "bad")]);
       }

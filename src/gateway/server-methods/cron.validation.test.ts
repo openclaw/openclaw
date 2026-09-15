@@ -7,7 +7,13 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import {
+  bindCronManagementGrant,
+  runWithCronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
 import { updateCronJobFromAgentTool } from "../../agents/tools/cron-tool-write.js";
+import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import {
   applyLegacyCronStoreRepair,
@@ -149,6 +155,11 @@ function createEnablementHostileChannelPlugin(id: string): ChannelPlugin {
 function setCronValidationTestRegistry(): void {
   setActivePluginRegistry(
     createTestRegistry([
+      {
+        pluginId: "discord",
+        plugin: createPrefixOnlyChannelPlugin("discord", ["discord"]),
+        source: "test:discord",
+      },
       {
         pluginId: "telegram",
         plugin: createPrefixOnlyChannelPlugin("telegram", ["telegram", "tg"]),
@@ -644,29 +655,45 @@ function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void 
 }
 
 describe("cron method validation", () => {
-  it.each([
-    ["cron.list", false],
-    ["cron.get", false],
-    ["cron.update", false],
-    ["cron.run", false],
-    ["cron.remove", false],
-    ["cron.remove", true],
-  ] as const)(
-    "Control UI admin grant manages a different channel's automation through %s (close after commit: %s)",
-    async (method, closeAfterCommit) => {
+  it.each(
+    (
+      [
+        ["cron.list", false],
+        ["cron.get", false],
+        ["cron.update", false],
+        ["cron.run", false],
+        ["cron.remove", false],
+        ["cron.remove", true],
+      ] as const
+    ).flatMap(([method, closeAfterCommit]) =>
+      (["control-ui-admin", "channel-owner"] as const).flatMap((source) =>
+        ([false, true] as const).map(
+          (trusted) => [method, closeAfterCommit, source, trusted] as const,
+        ),
+      ),
+    ),
+  )(
+    "%s manages a foreign automation (close after commit: %s, source: %s, trusted: %s)",
+    async (method, closeAfterCommit, source, trusted) => {
       const client = callerClient("main");
       const identity = client.internal!.agentRuntimeIdentity!;
       const authority = claimAgentRunDelegatedAuthority(identity.operationalRunInstance);
       identity.delegatedAuthority = { kind: "local", ...authority };
+      setRuntimeConfig({ commands: { ownerAllowFrom: ["discord:owner-1"] } });
       const scope = createCronCreatorAuthorityRunScope(
         identity.operationalRunInstance.runId,
-        { kind: "local" },
-        true,
+        source === "channel-owner" ? { kind: "external", channel: "discord" } : { kind: "local" },
+        source === "channel-owner"
+          ? {
+              source,
+              isCurrent: () =>
+                isConfiguredCommandOwner(getRuntimeConfig(), {
+                  channel: "discord",
+                  senderId: "owner-1",
+                }),
+            }
+          : { source },
       );
-      identity.cronManagementGrant = mintCronCreatorAuthorityGrant(scope, undefined, undefined, {
-        method,
-        authority,
-      });
       const job = createCronJob({
         agentId: "telegram-agent",
         owner: {
@@ -681,8 +708,11 @@ describe("cron method validation", () => {
           ownerAccountId: "telegram",
         },
       });
+      if (trusted) {
+        job.scheduledToolPolicy = { version: 1, mode: "trusted" };
+      }
       const context = createCronContext(job);
-      if (method === "cron.update") {
+      if (method === "cron.update" && !trusted) {
         job.payload = { kind: "agentTurn", message: "operator-created task without a cap" };
         delete job.scheduledToolPolicy;
       }
@@ -694,15 +724,20 @@ describe("cron method validation", () => {
         });
       }
       try {
-        const { respond } = await invokeCron(
-          method,
-          {
-            ...(method === "cron.list" ? { compact: true } : { id: job.id }),
-            ...(method === "cron.update"
-              ? { patch: { payload: { kind: "agentTurn", message: "updated by admin" } } }
-              : {}),
-          },
-          { client, context },
+        const { respond } = await runWithCronCreatorAuthorityCapability(scope, () =>
+          withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, async () => {
+            identity.cronManagementGrant = bindCronManagementGrant(scope.runId)!.mint(method);
+            return await invokeCron(
+              method,
+              {
+                ...(method === "cron.list" ? { compact: true } : { id: job.id }),
+                ...(method === "cron.update"
+                  ? { patch: { payload: { kind: "agentTurn", message: "updated by admin" } } }
+                  : {}),
+              },
+              { client, context },
+            );
+          }),
         );
         expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
         if (method === "cron.list") {

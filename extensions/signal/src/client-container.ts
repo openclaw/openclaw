@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import {
   parseStrictNonNegativeInteger,
+  resolvePositiveTimerTimeoutMs,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -476,7 +477,10 @@ export async function streamContainerEvents(params: {
     };
 
     try {
-      ws = new WebSocket(wsUrl, { maxPayload: WS_MAX_PAYLOAD, handshakeTimeout: WS_HANDSHAKE_MS });
+      ws = new WebSocket(wsUrl, {
+        maxPayload: WS_MAX_PAYLOAD,
+        handshakeTimeout: resolvePositiveTimerTimeoutMs(params.timeoutMs, WS_HANDSHAKE_MS),
+      });
     } catch (err) {
       logError(`[signal-ws] failed to create WebSocket: ${coerceErrorMessage(err)}`);
       reject(toErrorObject(err, "Non-Error rejection"));

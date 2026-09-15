@@ -215,8 +215,8 @@ setPhase("preparation");
     }
     if (bytes !== artifact.bytes || hash.digest("hex") !== artifact.sha256) throw new Error("Cloud worker bootstrap archive failed integrity verification");
   };
-  const downloadArchive = async (artifact, token, archive) => {
-    setPhase("download connection");
+  const downloadArchive = async (artifact, token, archive, reportPhase = setPhase) => {
+    reportPhase("download connection");
     if (!token) throw new Error("Cloud worker bootstrap download authority is unavailable");
     const url = new URL(artifact.url);
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.search || url.hash || (artifact.tlsFingerprint && url.protocol !== "https:")) throw new Error("Cloud worker bootstrap artifact transport is invalid");
@@ -230,8 +230,8 @@ setPhase("preparation");
     });
     // Observe transport progress without changing when the pinned request may send credentials.
     request.once("socket", (socket) => {
-      socket.once("connect", () => { setPhase(url.protocol === "https:" ? "download TLS" : "download HTTP response"); });
-      socket.once("secureConnect", () => { if (!pin) setPhase("download HTTP response"); });
+      socket.once("connect", () => { reportPhase(url.protocol === "https:" ? "download TLS" : "download HTTP response"); });
+      socket.once("secureConnect", () => { if (!pin) reportPhase("download HTTP response"); });
     });
     const pendingResponse = once(request, "response").then(([response]) => response);
     // Pinned private certificates authenticate the socket before any bearer bytes leave.
@@ -240,7 +240,7 @@ setPhase("preparation");
         const [socket] = await once(request, "socket");
         await once(socket, "secureConnect");
         if (normalizePin(socket.getPeerCertificate().fingerprint256 ?? "") !== pin) throw new Error("Cloud worker bootstrap TLS fingerprint mismatch");
-        setPhase("download HTTP response");
+        reportPhase("download HTTP response");
       }
       request.end();
     })().catch((error) => request.destroy(error));
@@ -248,7 +248,7 @@ setPhase("preparation");
     try {
       if (response.statusCode !== 200) throw new Error("Cloud worker bootstrap download failed with HTTP " + response.statusCode);
       if (response.headers["content-length"] !== undefined && Number(response.headers["content-length"]) !== artifact.bytes) throw new Error("Cloud worker bootstrap archive length does not match the Gateway");
-      setPhase("download body");
+      reportPhase("download body");
       const output = await fsp.open(archive, "wx", 0o600);
       try { await verifyArchive(response, artifact, output); }
       finally { await output.close(); }
@@ -302,14 +302,19 @@ setPhase("preparation");
   try {
     const archive = path.join(stage, "openclaw.tgz");
     if (!existingRuntime) await downloadArchive(bootstrap, tokens.nodeBootstrap, archive);
-    let downloadedWorker;
-    if (workerBundle) {
-      downloadedWorker = path.join(stage, "worker.tgz");
-      await downloadArchive(workerBundle, tokens.workerBundle, downloadedWorker);
-    }
+    const downloadedWorker = workerBundle ? path.join(stage, "worker.tgz") : undefined;
     const installDir = existingRuntime ? runtimeDir : path.join(stage, "runtime");
-    if (!existingRuntime) {
-      setPhase("installation");
+    const overlap = downloadedWorker && !existingRuntime;
+    if (overlap) setPhase("installation and worker download");
+    let workerPhase;
+    const preparation = await Promise.allSettled([
+      downloadedWorker ? downloadArchive(workerBundle, tokens.workerBundle, downloadedWorker, overlap ? (next) => { workerPhase = next; } : setPhase).catch((error) => {
+        if (!overlap) throw error;
+        throw new Error("Cloud worker archive " + workerPhase + " failed" + (error.code ? " (" + error.code + ")" : "") + ": " + error.message, { cause: error });
+      }) : undefined,
+      (async () => {
+      if (existingRuntime) return;
+      if (!overlap) setPhase("installation");
       fs.mkdirSync(installDir, directoryOptions);
       // npm 12 requires a project policy even when ignore-scripts is false.
       // Trust only the verified artifact; dependency script policy stays unchanged.
@@ -320,14 +325,22 @@ setPhase("preparation");
       try {
         const npmCli = path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
         if (process.platform === "win32" && !fs.existsSync(npmCli)) throw new Error("Cloud worker requires npm beside node.exe; update the Crabbox Windows bootstrap image and reprovision the worker");
-        installed = spawnSync(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), "install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, windowsHide: true, stdio: ["ignore", log, log], timeout: 600000 });
+        installed = await new Promise((resolve) => {
+          const child = spawn(process.platform === "win32" ? process.execPath : "npm", [...(process.platform === "win32" ? [npmCli] : []), "install", "--prefix", installDir, "--omit=dev", "--no-save", "--package-lock=false", "--no-audit", "--no-fund", "--ignore-scripts=false", archive], { cwd: stage, env: nodeEnv, windowsHide: true, stdio: ["ignore", log, log], timeout: 600000 });
+          let error;
+          child.once("error", (cause) => { error = cause; });
+          child.once("close", (status, signal) => resolve({ status, signal, error }));
+        });
       } finally { fs.closeSync(log); }
-      if (installed.status !== 0) {
+      if (installed.status !== 0 || installed.error) {
         const tail = fs.readFileSync(logPath, "utf8").slice(-2048);
-        throw new Error("Cloud worker bootstrap package installation failed: " + tail);
+        throw new Error("Cloud worker bootstrap package installation failed (" + (installed.error?.message || installed.signal || "exit code " + installed.status) + "): " + tail);
       }
-      verifyRuntime(installDir);
-    }
+      })(),
+    ]);
+    // Both the download and npm must stop writing before publication or staging cleanup.
+    for (const result of preparation) if (result.status === "rejected") throw result.reason;
+    if (!existingRuntime) verifyRuntime(installDir);
     publishWorkerArchive(installDir, downloadedWorker);
     // Archive publication completes before a fresh runtime becomes reusable or capture can begin.
     if (!existingRuntime) fs.renameSync(installDir, runtimeDir);

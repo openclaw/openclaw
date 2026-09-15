@@ -653,6 +653,12 @@ function advanceObservedMain(fixture: Fixture, fromSha: string, branch: string):
 
 function runAuthority(fixture: Fixture, phase: string, overrides: NodeJS.ProcessEnv = {}) {
   fs.writeFileSync(fixture.outputPath, "");
+  if (overrides.MOBILE_OPERATION === "inspect" && phase === "inspect") {
+    const candidatePath = path.join(fixture.trusted, ".ios-inspection-candidate");
+    if (!fs.existsSync(candidatePath)) {
+      fs.cpSync(fixture.workspace, candidatePath, { recursive: true });
+    }
+  }
   return spawnSync(process.execPath, ["--experimental-strip-types", fixture.scriptPath, phase], {
     encoding: "utf8",
     env: { ...fixture.env, ...overrides },
@@ -893,6 +899,78 @@ function expectOnlyAttemptOneLifecycleReads(
 }
 
 describe("mobile release authority", () => {
+  it("validates inspection without publication receipts, intents, attestations, or ref writes", () => {
+    const fixture = createFixture();
+    const result = runAuthority(fixture, "inspect", { MOBILE_OPERATION: "inspect" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readOutputs(fixture.outputPath)).toEqual({
+      inspection_validated: "true",
+      ios_app_store_version: "2026.9.20",
+    });
+    expect(fs.existsSync(path.join(fixture.runnerTemp, "mobile-release-ref-ios"))).toBe(false);
+    expect(fs.existsSync(path.join(fixture.runnerTemp, "mobile-release-intent-ios"))).toBe(false);
+    expect(
+      readGhTrace(fixture.ghLog).every(
+        ({ args }) =>
+          args[0] === "api" && !args.includes("POST") && !args[1]?.includes("/artifacts"),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    [
+      "cancelled",
+      { GH_CURRENT_STATUSES: "in_progress,completed", GH_CURRENT_CONCLUSIONS: 'null,"cancelled"' },
+    ],
+    ["rerun", { GH_CURRENT_ATTEMPTS: "1,2" }],
+    ["revoked actor", { GH_PERMISSIONS: "write,read" }],
+    ["moved candidate", { GH_TARGET_REFS: OTHER_SHA }],
+    ["wrong tooling", { MOBILE_WORKFLOW_SHA: OTHER_SHA }],
+    ["recovery", { MOBILE_RECOVERY: "true" }],
+    ["foreign run", { MOBILE_AUTHORITY_RUN_ID: "999" }],
+  ])("rejects inspection with %s before returning credential admission", (_label, overrides) => {
+    const fixture = createFixture();
+    const result = runAuthority(fixture, "inspect", { MOBILE_OPERATION: "inspect", ...overrides });
+    expect(result.status).toBe(1);
+    expect(readOutputs(fixture.outputPath)).toEqual({});
+    expect(readGhTrace(fixture.ghLog).some(({ args }) => args.includes("POST"))).toBe(false);
+  });
+
+  it("rejects dirty trusted tooling during inspection before admission", () => {
+    const fixture = createFixture();
+    fs.appendFileSync(
+      path.join(fixture.trusted, "scripts/lib/ios-release-plan.ts"),
+      "\n// unexpected tooling mutation\n",
+    );
+    const result = runAuthority(fixture, "inspect", { MOBILE_OPERATION: "inspect" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Trusted inspection tooling has tracked changes");
+    expect(readOutputs(fixture.outputPath)).toEqual({});
+    expect(readGhTrace(fixture.ghLog)).toEqual([]);
+  });
+
+  it("rejects dirty candidate data during inspection", () => {
+    const fixture = createFixture();
+    const candidatePath = path.join(fixture.trusted, ".ios-inspection-candidate");
+    fs.cpSync(fixture.workspace, candidatePath, { recursive: true });
+    fs.writeFileSync(path.join(candidatePath, "apps/ios/CHANGELOG.md"), "dirty\n");
+    const result = runAuthority(fixture, "inspect", { MOBILE_OPERATION: "inspect" });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("tracked changes");
+    expect(readOutputs(fixture.outputPath)).toEqual({});
+  });
+
+  it.each(["authorize", "revalidate", "validate-record", "record"])(
+    "inspection cannot enter %s",
+    (phase) => {
+      const fixture = createFixture();
+      const result = runAuthority(fixture, phase, { MOBILE_OPERATION: "inspect" });
+      expect(result.status).toBe(1);
+      expect(readOutputs(fixture.outputPath)).toEqual({});
+      expect(readGhTrace(fixture.ghLog)).toEqual([]);
+    },
+  );
+
   it("authorizes an exact five-file release candidate and emits an attested v2 receipt", () => {
     const fixture = createFixture();
     const outputs = authorize(fixture);
@@ -1836,6 +1914,26 @@ describe("mobile release authority", () => {
     expect(trace.at(-1)?.args[1]).toContain("/collaborators/");
     expect(trace.some(({ args }) => args.includes("POST"))).toBe(false);
     expect(fs.existsSync(path.join(fixture.stateDir, "release-ref"))).toBe(false);
+  });
+
+  it("record-only rejects a missing original intent before token or ref writing", () => {
+    const fixture = createFixture();
+    const outputs = authorize(fixture);
+    const recovery = prepareRecoveryOverrides(fixture, outputs);
+    resetState(fixture);
+    const result = runAuthority(fixture, "resolve-artifacts", {
+      ...recovery,
+      MOBILE_INTENT_ARTIFACT_DIGEST: "",
+      MOBILE_INTENT_ARTIFACT_ID: "",
+      MOBILE_INTENT_ARTIFACT_NAME: "",
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Expected exactly one unexpired mobile-release-intent-ios-123-1 artifact",
+    );
+    expect(readOutputs(fixture.outputPath)).toEqual({});
+    expect(fs.existsSync(path.join(fixture.runnerTemp, "mobile-release-intent-ios"))).toBe(false);
+    expect(readGhTrace(fixture.ghLog).some(({ args }) => args.includes("POST"))).toBe(false);
   });
 
   it("records exact iOS and Android intents and handles an identical create race idempotently", () => {
@@ -3233,7 +3331,11 @@ fi
       };
       expect(workflow.name).toBe(name);
       expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
-      expect(Object.keys(workflow.jobs)).toEqual(["authorize", "release", "recover-record"]);
+      expect(Object.keys(workflow.jobs)).toEqual(
+        platform === "ios"
+          ? ["authorize", "release", "recover-record", "inspect"]
+          : ["authorize", "release", "recover-record"],
+      );
       expect(workflow.jobs.authorize?.environment).toBeUndefined();
       expect(workflow.jobs.release?.environment).toBe(environment);
       expect(workflow.jobs["recover-record"]?.environment).toBe(environment);
@@ -3633,7 +3735,7 @@ fi
     }
   });
 
-  it("passes protected iOS release inputs only to the iOS upload step", () => {
+  it("passes protected iOS group policy only to upload and inspection, and screenshot inputs only to upload", () => {
     const source = fs.readFileSync(".github/workflows/ios-beta-release.yml", "utf8");
     const project = parse(fs.readFileSync("apps/ios/project.yml", "utf8")) as {
       name?: string;
@@ -3666,13 +3768,19 @@ fi
     );
 
     expect(source).not.toContain("secrets.TESTFLIGHT_INTERNAL_GROUP");
-    expect(source.match(/\$\{\{ vars\.TESTFLIGHT_INTERNAL_GROUP \}\}/gu)).toHaveLength(1);
+    expect(source.match(/\$\{\{ vars\.TESTFLIGHT_INTERNAL_GROUP \}\}/gu)).toHaveLength(2);
     expect(workflow.jobs.release?.environment).toBe("ios-beta-release");
     expect(placements).toEqual([
       {
         envName: "TESTFLIGHT_INTERNAL_GROUP",
         jobName: "release",
         runsUpload: true,
+        value: "${{ vars.TESTFLIGHT_INTERNAL_GROUP }}",
+      },
+      {
+        envName: "TESTFLIGHT_INTERNAL_GROUP",
+        jobName: "inspect",
+        runsUpload: false,
         value: "${{ vars.TESTFLIGHT_INTERNAL_GROUP }}",
       },
     ]);

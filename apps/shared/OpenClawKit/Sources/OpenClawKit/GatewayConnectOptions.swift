@@ -91,7 +91,7 @@ public enum GatewayAuthSource: String, Sendable {
 }
 
 /// Opaque binding for the exact credentials selected by one live Gateway socket.
-/// The credential itself never leaves `GatewayChannelActor`.
+/// The binding exposes no credential; HTTP adapters use the channel's separate route-checked access.
 public struct GatewayAuthBinding: Equatable, Sendable {
     public let source: GatewayAuthSource
     public let credentialFingerprint: String?

@@ -2,8 +2,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import * as diagnosticRuntime from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./app-server/client.js";
 import { threadStartResult } from "./app-server/codex-app-server.test-fixtures.js";
@@ -140,6 +144,36 @@ async function createCatalogHarness(agentDir: string, resources: CatalogResource
   };
 }
 
+type CatalogLogRecord = Extract<DiagnosticEventPayload, { type: "log.record" }>;
+let diagnosticClock = 1_000_000;
+
+async function withPageDiagnostics(
+  run: (records: CatalogLogRecord[], advanceClock: () => void) => Promise<void>,
+) {
+  const records: CatalogLogRecord[] = [];
+  diagnosticRuntime.resetDiagnosticEventsForTest();
+  vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
+  setLoggerOverride({ level: "warn", consoleLevel: "silent" });
+  diagnosticClock += 61_000;
+  vi.spyOn(performance, "now").mockImplementation(() => diagnosticClock);
+  const unsubscribe = diagnosticRuntime.onInternalDiagnosticEvent((event) => {
+    if (event.type === "log.record" && event.message === "slow Codex catalog page producer") {
+      records.push(event);
+    }
+  });
+  try {
+    await run(records, () => {
+      diagnosticClock += 1_500;
+    });
+  } finally {
+    await diagnosticRuntime.waitForDiagnosticEventsDrained();
+    unsubscribe();
+    resetLogger();
+    diagnosticRuntime.resetDiagnosticEventsForTest();
+    vi.unstubAllEnvs();
+  }
+}
+
 describe("catalog request lifetime across page-cache polls", () => {
   let agentDir: string;
   let h: Awaited<ReturnType<typeof createCatalogHarness>>;
@@ -164,22 +198,145 @@ describe("catalog request lifetime across page-cache polls", () => {
     expect(closed.every((result) => result.status === "fulfilled")).toBe(true);
   });
 
-  it("lets a fresh cold poll fulfill the existing request without reviving its expired caller", async () => {
-    const first = poll(h.control);
-    const frame = await h.frame(0);
-    await h.expireWaiter();
-    await expect(first).rejects.toThrow("thread/list timed out");
+  it("splits a successful control wait at the existing client request boundary", async () => {
+    await withPageDiagnostics(async (records, advanceClock) => {
+      const pending = poll(h.control, { cursor: "timed-success", limit: 1 });
+      const frame = await h.frame(0);
+      advanceClock();
+      h.reply(frame, "timed-success");
+      await expect(pending).resolves.toMatchObject({
+        sessions: [{ threadId: "timed-success" }],
+      });
+      await diagnosticRuntime.waitForDiagnosticEventsDrained();
+      expect(records).toHaveLength(1);
+      expect(records[0]?.attributes).toMatchObject({
+        outcome: "resolved",
+        controlRequestCalls: 1,
+        inclusiveControlRequestWaitMs: 1_500,
+        controlLoadMs: 0,
+        controlPrepareMs: 0,
+        controlAcquireClientMs: 0,
+        controlClientRequestMs: 1_500,
+        controlReleaseClientMs: 0,
+      });
+      expect(records[0]?.attributes).not.toHaveProperty("controlFailurePhase");
+      expect(records[0]?.attributes).not.toHaveProperty("controlFailureCategory");
+    });
+  });
 
-    const current = poll(h.control);
-    await h.waitForRefresh();
-    expect(h.frames).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS / 2);
-    h.reply(frame, "current-result");
-    await expect(current).resolves.toMatchObject({ sessions: [{ threadId: "current-result" }] });
-    await expect(first).rejects.toThrow("thread/list timed out");
-    expect(h.frames).toHaveLength(1);
-    await expect(h.companion.request("model/list", {})).resolves.toEqual({ data: [] });
-    expect(h.transports).toHaveLength(1);
+  it("attributes a rejected control request without exposing its private RPC error", async () => {
+    await withPageDiagnostics(async (records, advanceClock) => {
+      const pending = poll(h.control, { cursor: "rejected", limit: 1 });
+      const rejected = expect(pending).rejects.toMatchObject({
+        code: -32601,
+        message: "synthetic-private-control-error",
+      });
+      const frame = await h.frame(0);
+      advanceClock();
+      frame.transport.send({
+        id: frame.id,
+        error: { code: -32601, message: "synthetic-private-control-error" },
+      });
+      await rejected;
+      await diagnosticRuntime.waitForDiagnosticEventsDrained();
+      expect(h.frames).toHaveLength(1);
+      expect(records).toHaveLength(1);
+      expect(records[0]?.attributes).toMatchObject({
+        outcome: "rejected",
+        controlRequestCalls: 1,
+        controlFailurePhase: "client-request",
+        controlFailureCategory: "rpc-method-unavailable",
+      });
+      expect(JSON.stringify(records)).not.toContain("synthetic-private-control-error");
+    });
+  });
+
+  it("keeps control observations local to calls on a reusable pinned snapshot", async () => {
+    await withPageDiagnostics(async (records, advanceClock) => {
+      await h.control.withPinnedConnection(async (pinned) => {
+        expect(getCurrentSharedClientEntry(h.companion)?.activeLeases).toBe(2);
+        for (const [index, code] of [null, -32601, -32603].entries()) {
+          const pending = poll(pinned, { cursor: `pinned-${index}`, limit: 1 });
+          const settled =
+            code === null
+              ? expect(pending).resolves.toMatchObject({
+                  sessions: [{ threadId: "pinned-success" }],
+                })
+              : expect(pending).rejects.toMatchObject({ code });
+          const frame = await h.frame(index);
+          advanceClock();
+          if (code === null) {
+            h.reply(frame, "pinned-success");
+          } else {
+            frame.transport.send({
+              id: frame.id,
+              error: { code, message: "synthetic-private-error" },
+            });
+          }
+          await settled;
+          expect(getCurrentSharedClientEntry(h.companion)?.activeLeases).toBe(2);
+        }
+      });
+      await diagnosticRuntime.waitForDiagnosticEventsDrained();
+      expect(records.map((record) => record.attributes?.controlFailureCategory)).toEqual([
+        undefined,
+        "rpc-method-unavailable",
+        "rpc-error",
+      ]);
+      expect(records.map((record) => record.attributes?.controlFailurePhase)).toEqual([
+        undefined,
+        "client-request",
+        "client-request",
+      ]);
+      for (const record of records) {
+        expect(record.attributes).toMatchObject({
+          controlLoadMs: 0,
+          controlPrepareMs: 0,
+          controlClientRequestMs: 1_500,
+        });
+        expect(record.attributes).not.toHaveProperty("controlAcquireClientMs");
+        expect(record.attributes).not.toHaveProperty("controlReleaseClientMs");
+      }
+      expect(new Set(records.map((record) => record.attributes?.operationId)).size).toBe(3);
+      expect(getCurrentSharedClientEntry(h.companion)?.activeLeases).toBe(1);
+      await expect(
+        h.companion.request("thread/list", { cursor: "warm" }, { timeoutMs: REQUEST_TIMEOUT_MS }),
+      ).resolves.toEqual({ data: [] });
+      expect(JSON.stringify(records)).not.toContain("synthetic-private-error");
+    });
+  });
+
+  it("lets a fresh cold poll fulfill the existing request without reviving its expired caller", async () => {
+    await withPageDiagnostics(async (records, advanceClock) => {
+      const first = poll(h.control);
+      const frame = await h.frame(0);
+      advanceClock();
+      await h.expireWaiter();
+      await expect(first).rejects.toThrow("thread/list timed out");
+      await diagnosticRuntime.waitForDiagnosticEventsDrained();
+      expect(records).toHaveLength(1);
+      expect(records[0]?.attributes).toMatchObject({
+        outcome: "rejected",
+        controlClientRequestMs: 1_500,
+      });
+
+      const current = poll(h.control);
+      await h.waitForRefresh();
+      expect(h.frames).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS / 2);
+      advanceClock();
+      h.reply(frame, "current-result");
+      await expect(current).resolves.toMatchObject({ sessions: [{ threadId: "current-result" }] });
+      await expect(first).rejects.toThrow("thread/list timed out");
+      expect(h.frames).toHaveLength(1);
+      await expect(h.companion.request("model/list", {})).resolves.toEqual({ data: [] });
+      expect(h.transports).toHaveLength(1);
+      await diagnosticRuntime.waitForDiagnosticEventsDrained();
+      expect(records.map((record) => record.attributes?.controlClientRequestMs)).toEqual([
+        1_500, 1_500,
+      ]);
+      expect(records.map((record) => record.attributes?.outcome)).toEqual(["rejected", "resolved"]);
+    });
   });
 
   it("serves stale pages immediately while a current refresh joins the expired refresh's request", async () => {

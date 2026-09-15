@@ -135,7 +135,13 @@ describe("queued cancellation during adapter preparation", () => {
       const adapter = installHeldAdapter();
       const controller = new AbortController();
       const audit: string[] = [];
-      const unsubscribe = onTrustedMessageAuditEvent((event) => audit.push(event.outcome));
+      const retired = createDeferred();
+      const unsubscribe = onTrustedMessageAuditEvent((event) => {
+        audit.push(event.outcome);
+        if (event.outcome === "failed") {
+          retired.resolve();
+        }
+      });
       const queueIdReady = createDeferred<string>();
       const stableId = "cron-direct-delivery:v1:cancelled-preparation";
       let artifact: string | undefined;
@@ -179,6 +185,7 @@ describe("queued cancellation during adapter preparation", () => {
         const queueId = await queueIdReady.promise;
         await adapter.prepared;
         controller.abort(new Error("question ended"));
+        await retired.promise;
 
         expect(await loadPendingDeliveries(stateDir)).toEqual([]);
         expect(adapter.afterSendFailure).not.toHaveBeenCalled();

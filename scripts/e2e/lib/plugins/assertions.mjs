@@ -7,6 +7,7 @@ import {
   readBoundedResponseText,
 } from "../../../lib/bounded-response.mjs";
 import { createTimeoutError } from "../../../lib/timeout-error.mjs";
+import { assertClawHubArtifactMetadata } from "../clawhub-artifact-assertions.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
 import {
@@ -565,29 +566,6 @@ function assertClawHubExternalInstallContract(installPath) {
   }
 }
 
-function assertClawHubArtifactMetadata(record, pluginId) {
-  if (record.artifactKind === "legacy-zip") {
-    if (record.artifactFormat !== "zip") {
-      throw new Error(
-        `missing ClawHub legacy ZIP artifact metadata for ${pluginId}: ${JSON.stringify(record)}`,
-      );
-    }
-    return;
-  }
-
-  if (record.artifactKind !== "npm-pack" || record.artifactFormat !== "tgz") {
-    throw new Error(`missing ClawHub artifact metadata for ${pluginId}: ${JSON.stringify(record)}`);
-  }
-  if (!record.clawpackSha256 || typeof record.clawpackSize !== "number") {
-    throw new Error(`missing ClawHub ClawPack metadata for ${pluginId}: ${JSON.stringify(record)}`);
-  }
-  if (!record.npmIntegrity || !record.npmShasum || !record.npmTarballName) {
-    throw new Error(
-      `missing ClawHub npm artifact metadata for ${pluginId}: ${JSON.stringify(record)}`,
-    );
-  }
-}
-
 function assertPluginDirDeps() {
   const sourceDir = process.argv[3];
   assertSimplePlugin(
@@ -984,7 +962,12 @@ function assertClawHubInstalled() {
   if (typeof record.installPath !== "string" || record.installPath.length === 0) {
     throw new Error(`missing ClawHub install path for ${pluginId}`);
   }
-  assertClawHubArtifactMetadata(record, pluginId);
+  assertClawHubArtifactMetadata(record, {
+    legacyZip: `missing ClawHub legacy ZIP artifact metadata for ${pluginId}`,
+    artifact: `missing ClawHub artifact metadata for ${pluginId}`,
+    clawpack: `missing ClawHub ClawPack metadata for ${pluginId}`,
+    npm: `missing ClawHub npm artifact metadata for ${pluginId}`,
+  });
 
   const installPath = resolveHomePath(record.installPath);
   if (!fs.existsSync(installPath)) {

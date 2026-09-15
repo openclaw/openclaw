@@ -34,7 +34,10 @@ export async function compactEmbeddedAgentSessionDirectOnce(
   const cleanupContext = cleanupWork.run(() => AsyncLocalStorage.snapshot());
   let cleanup: PreparedCompactionCleanup | undefined;
   const runAttempt = async () => {
-    const preparation = await prepareDirectCompactionAttempt(params);
+    const preparation = await prepareDirectCompactionAttempt({
+      ...params,
+      abortSignal: work.signal,
+    });
     if (!preparation.ok) {
       return preparation.result;
     }

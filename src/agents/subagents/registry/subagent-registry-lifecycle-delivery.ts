@@ -95,7 +95,9 @@ export const recordAnnounceDeliveryResult = (
     deliveryState.enqueuedAt ??= delivery.enqueuedAt;
   }
   if (!delivery.delivered && delivery.disposition !== "intentional_non_delivery") {
-    if (
+    if (delivery.reason === "message_tool_delivery_missing") {
+      deliveryState.lastDropReason = "message_tool_delivery_missing";
+    } else if (
       delivery.reason === "steer_dropped" ||
       delivery.phases?.some((phase) => phase.reason === "steer_dropped")
     ) {
@@ -417,48 +419,29 @@ export const freezeRunResultAtCompletion = async (
   return true;
 };
 
-const listPendingCompletionRunsForSession = (
-  params: SubagentLifecycleOptions,
-  sessionKey: string,
-): SubagentRunRecord[] => {
-  const key = sessionKey.trim();
-  if (!key) {
-    return [];
-  }
-  const out: SubagentRunRecord[] = [];
-  for (const entry of params.runs.values()) {
-    if (entry.childSessionKey !== key) {
-      continue;
-    }
-    if (entry.expectsCompletionMessage !== true) {
-      continue;
-    }
-    if (typeof entry.execution.endedAt !== "number") {
-      continue;
-    }
-    if (typeof entry.cleanupCompletedAt === "number") {
-      continue;
-    }
-    // A paused row's result was deliberately cleared when it yielded; the text
-    // now in its session belongs to whatever turn runs next, not to the paused
-    // work. Refreezing it here would announce a stranger's output as this run's
-    // completion once the row finally settles.
-    if (entry.pauseReason === "sessions_yield") {
-      continue;
-    }
-    out.push(entry);
-  }
-  return out;
-};
-
 export const refreshFrozenResultFromSession = async (
   context: SubagentLifecycleCommonContext,
   sessionKey: string,
 ): Promise<boolean> => {
   const params = context.options;
-  const candidates = listPendingCompletionRunsForSession(params, sessionKey).filter(
-    (entry) => entry.execution.outcome?.status !== "error",
-  );
+  const key = sessionKey.trim();
+  if (!key) {
+    return false;
+  }
+  // A paused row's result was cleared on yield; later session text belongs to the next turn.
+  const candidates: SubagentRunRecord[] = [];
+  for (const entry of params.runs.values()) {
+    if (
+      entry.childSessionKey === key &&
+      entry.expectsCompletionMessage === true &&
+      typeof entry.execution.endedAt === "number" &&
+      typeof entry.cleanupCompletedAt !== "number" &&
+      entry.pauseReason !== "sessions_yield" &&
+      entry.execution.outcome?.status !== "error"
+    ) {
+      candidates.push(entry);
+    }
+  }
   const entry = candidates.toSorted(compareSubagentRunGeneration).at(-1);
   if (!entry || context.newerGenerationOwnsSession(entry)) {
     return false;

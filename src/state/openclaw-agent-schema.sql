@@ -1,6 +1,7 @@
 -- Session storage doctrine: session_nodes.entry_json is the canonical logical-session
 -- record. Promoted session_nodes columns are query indexes projected only by the
 -- session entry writer; session_windows and their children own transcript generations.
+-- Legacy ACP provenance is private import evidence carried with its logical session.
 
 CREATE TABLE IF NOT EXISTS schema_meta (
   meta_key TEXT NOT NULL PRIMARY KEY,
@@ -16,6 +17,7 @@ CREATE TABLE IF NOT EXISTS session_nodes (
   session_key TEXT NOT NULL PRIMARY KEY,
   current_session_id TEXT NOT NULL,
   entry_json TEXT NOT NULL,
+  legacy_acp_migration_json TEXT,
   entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),
   updated_at INTEGER NOT NULL,
   status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout')),

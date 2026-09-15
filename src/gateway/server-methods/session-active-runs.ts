@@ -283,6 +283,7 @@ export function resolveVisibleActiveSessionRunState(params: {
 /** Request-scoped index; candidate selection must not rescan all controllers per row. */
 export function createVisibleActiveSessionRunProjector(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
+  projectedAgentRunIndex = buildProjectedAgentRunIndex(),
 ) {
   const byKey = new Map<string, TrackedActiveSessionRun[]>();
   const byId = new Map<string, TrackedActiveSessionRun[]>();
@@ -298,7 +299,6 @@ export function createVisibleActiveSessionRunProjector(
       }
     }
   }
-  const projectedAgentRunIndex = buildProjectedAgentRunIndex();
   return (
     params: Omit<
       Parameters<typeof resolveVisibleActiveSessionRunState>[0],

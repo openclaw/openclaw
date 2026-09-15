@@ -329,7 +329,7 @@ describe("SystemAgentChatEngine operations", () => {
       }),
       deps: {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-        ensureAuthProfileStore: vi.fn(() => {
+        loadAuthProfileStoreForRuntime: vi.fn(() => {
           authReads += 1;
           // Turn start, overview, and post-agent checks see the verified grant.
           // The fourth read is the last-moment guard inside applyPersistentOperation.
@@ -379,7 +379,7 @@ describe("SystemAgentChatEngine operations", () => {
       },
       deps: {
         readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-        ensureAuthProfileStore: vi.fn(() => ({
+        loadAuthProfileStoreForRuntime: vi.fn(() => ({
           version: 1,
           profiles: { "anthropic:oauth": credential },
         })) as never,

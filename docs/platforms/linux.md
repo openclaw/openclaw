@@ -46,6 +46,17 @@ When connecting to an older Gateway whose dashboard does not support this layout
 the companion keeps the system title bar. Update the Gateway to enable the unified
 window controls.
 
+The local startup, setup, recovery, Gateway manager, and Quick Chat screens share
+light and dark styling and follow system appearance changes while open. Connection
+drafts, credential visibility, and Quick Chat replies stay intact. The connected
+dashboard retains its own web UI appearance setting.
+
+Remote setup and Connection Settings use one **Authentication** choice for token
+or password. **Show credential** reveals the entered value; switching types clears
+the draft and masks the new field. Press Enter or **Connect to Gateway** to connect.
+In Connection Settings, blank credentials reuse the saved credentials for the same
+endpoint.
+
 ### Desktop compatibility
 
 Published AMD64 AppImages are built on Ubuntu 22.04 and require glibc 2.35 or
@@ -74,9 +85,6 @@ are separate applications, not this shell's opt-in macOS and Windows Tauri test
 bundles. See their platform pages for requirements and capabilities.
 
 ### Gateway selection
-
-The Gateway manager follows your system's light or dark appearance, including
-changes made while it is open, without interrupting an unsaved connection form.
 
 Open **Gateways → Manage Gateways…** from the native app or tray menu to save a
 direct URL or SSH connection. Choose **Add Gateway** or **Edit** to open the

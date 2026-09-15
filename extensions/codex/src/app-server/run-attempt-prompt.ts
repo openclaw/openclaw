@@ -5,6 +5,7 @@ import {
   formatErrorMessage,
   resolveAgentHarnessBeforePromptBuildResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildCodexSystemPromptReport,
@@ -81,6 +82,24 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
+  const forkedSession =
+    !mutable.startupBinding?.threadId && params.sessionTarget
+      ? getSessionEntry({
+          ...params.sessionTarget,
+          sessionKey: contextSessionKey,
+          hydrateSkillPromptRefs: false,
+          readConsistency: "latest",
+        })
+      : undefined;
+  // A copied spawn transcript promises completed tool evidence to this child.
+  const preserveForkedToolResults = Boolean(
+    forkedSession?.sessionId === params.sessionId &&
+    forkedSession.createdVia === "spawn" &&
+    forkedSession.parentSessionKey &&
+    forkedSession.parentSessionKey !== contextSessionKey &&
+    forkedSession.forkSource?.sessionKey === forkedSession.parentSessionKey &&
+    forkedSession.forkSource.sessionId !== params.sessionId,
+  );
   let contextImageGroups: CodexProjectedImageGroup[] = [];
   let turnContextImageGroups: CodexProjectedImageGroup[] = [];
   // A refreshed native thread receives the original admitted user as historical context.
@@ -129,7 +148,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       originalHistoryMessages: historyState.messages,
       prompt: params.prompt,
       maxRenderedContextChars: codexContinuityProjectionMaxChars,
-      toolPayloadMode: params.pluginRuntimeRefreshMessages ? "preserve" : "elide",
+      toolPayloadMode:
+        params.pluginRuntimeRefreshMessages || preserveForkedToolResults ? "preserve" : "elide",
       prepareFileContext,
       currentUserTurnIdempotencyKey,
     });
@@ -194,7 +214,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       systemPromptAddition: assembled.systemPromptAddition,
       maxRenderedContextChars: codexContextProjectionMaxChars,
       toolPayloadMode:
-        contextEngineProjection || params.pluginRuntimeRefreshMessages ? "preserve" : "elide",
+        contextEngineProjection || params.pluginRuntimeRefreshMessages || preserveForkedToolResults
+          ? "preserve"
+          : "elide",
       ...(projectionDecision.project ? { prepareFileContext } : {}),
       currentUserTurnIdempotencyKey,
     });

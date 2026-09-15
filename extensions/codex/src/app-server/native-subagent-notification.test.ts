@@ -36,6 +36,137 @@ function trustedInterAgentNotification(params: {
 }
 
 describe("Codex native subagent notifications", () => {
+  it.each([
+    {
+      kind: "completed result",
+      tool: "wait",
+      toolStatus: "completed",
+      childStatus: "completed",
+      sender: "parent-thread",
+      expected: ["child-thread"],
+    },
+    {
+      kind: "running child",
+      tool: "wait",
+      toolStatus: "completed",
+      childStatus: "running",
+      sender: "parent-thread",
+      expected: [],
+    },
+    {
+      kind: "failed child result",
+      tool: "wait",
+      toolStatus: "completed",
+      childStatus: "errored",
+      sender: "parent-thread",
+      expected: ["child-thread"],
+    },
+    {
+      kind: "closed child result",
+      tool: "wait",
+      toolStatus: "completed",
+      childStatus: "shutdown",
+      sender: "parent-thread",
+      expected: ["child-thread"],
+    },
+    {
+      kind: "missing child result",
+      tool: "wait",
+      toolStatus: "completed",
+      childStatus: "notFound",
+      sender: "parent-thread",
+      expected: ["child-thread"],
+    },
+    {
+      kind: "interrupted child",
+      tool: "wait",
+      toolStatus: "completed",
+      childStatus: "interrupted",
+      sender: "parent-thread",
+      expected: [],
+    },
+    {
+      kind: "unfinished wait",
+      tool: "wait",
+      toolStatus: "inProgress",
+      childStatus: "completed",
+      sender: "parent-thread",
+      expected: [],
+    },
+    {
+      kind: "wait returning a failure",
+      tool: "wait",
+      toolStatus: "failed",
+      childStatus: "completed",
+      sender: "parent-thread",
+      expected: ["child-thread"],
+    },
+    {
+      kind: "spawn status",
+      tool: "spawnAgent",
+      toolStatus: "completed",
+      childStatus: "completed",
+      sender: "parent-thread",
+      expected: [],
+    },
+    {
+      kind: "other sender",
+      tool: "wait",
+      toolStatus: "completed",
+      childStatus: "completed",
+      sender: "other-parent",
+      expected: [],
+    },
+  ])(
+    "recognizes only returned native wait results: $kind",
+    ({ tool, toolStatus, childStatus, sender, expected }) => {
+      expect(
+        codexNativeSubagentNotifications.deliveredAgentPaths({
+          method: "item/completed",
+          params: {
+            threadId: "parent-thread",
+            turnId: "parent-turn",
+            item: {
+              type: "collabAgentToolCall",
+              tool,
+              status: toolStatus,
+              senderThreadId: sender,
+              receiverThreadIds: ["child-thread"],
+              agentsStates: {
+                "child-thread": { status: childStatus, message: "child result" },
+                "unselected-child": { status: "completed", message: "unrelated result" },
+              },
+            },
+          },
+        }),
+      ).toEqual(expected);
+    },
+  );
+
+  it("records every terminal result in a mixed native wait response", () => {
+    expect(
+      codexNativeSubagentNotifications.deliveredAgentPaths({
+        method: "item/completed",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-turn",
+          item: {
+            type: "collabAgentToolCall",
+            tool: "wait",
+            status: "failed",
+            senderThreadId: "parent-thread",
+            receiverThreadIds: ["succeeded-child", "failed-child", "running-child"],
+            agentsStates: {
+              "succeeded-child": { status: "completed", message: "done" },
+              "failed-child": { status: "errored", message: "error" },
+              "running-child": { status: "running", message: null },
+            },
+          },
+        },
+      }),
+    ).toEqual(["succeeded-child", "failed-child"]);
+  });
+
   it("recognizes a native completion receipt without treating its payload as a status", () => {
     expect(
       codexNativeSubagentNotifications.deliveredAgentPaths({

@@ -1,6 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
 import "../../../components/elapsed-time.ts";
-import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
@@ -143,25 +142,25 @@ export function renderBackgroundTasksStatusRow(
   };
   // Keep the live announcement separate from the tooltip: rich preview
   // content must not enter the polite region, while the popup must anchor to
-  // the link itself or its center drifts with the claw and elapsed time.
+  // the link itself or its center drifts with the indicator and elapsed time.
   const aggregate = html`
     <div class="chat-tasks-status" id=${backgroundTasks.statusRowId}>
-      <span class="chat-tasks-status__claw" aria-hidden="true">${icons.claw}</span>
-      ${
-        status.startedMs !== null
-          ? html`
-              <span class="chat-tasks-status__time" aria-hidden="true">
-                <openclaw-elapsed-time .startMs=${status.startedMs}></openclaw-elapsed-time>
-              </span>
-              <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
-            `
-          : nothing
-      }
+      <span class="chat-tasks-status__dot" aria-hidden="true"></span>
       <span class="sr-only" role="status">${label}</span>
       <openclaw-tooltip class="chat-tasks-status__preview">
         <button class="chat-tasks-status__link" type="button" @click=${openRail}>${label}</button>
         ${renderStatusPreview(remainingTasks)}
       </openclaw-tooltip>
+      ${
+        status.startedMs !== null
+          ? html`
+              <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
+              <span class="chat-tasks-status__time" aria-hidden="true">
+                <openclaw-elapsed-time .startMs=${status.startedMs}></openclaw-elapsed-time>
+              </span>
+            `
+          : nothing
+      }
     </div>
   `;
   return subagentActivity === nothing ? aggregate : html`${subagentActivity}${aggregate}`;

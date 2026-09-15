@@ -13,6 +13,7 @@ import type {
 } from "../../lib/sessions/index.ts";
 import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
 import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
+import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 import type { SessionsRouteData } from "./route.ts";
@@ -135,6 +136,7 @@ export function createManagedSessions(overrides: Partial<SessionCapability> = {}
   const archiveState = createSessionArchiveState(
     (key) => overrides.state?.result?.sessions.find((row) => row.key === key),
     () => {},
+    createSessionRowProvenance(),
   );
   const snapshots = new Map<string, SessionListSnapshot>();
   const listeners = new Map<string, Set<(snapshot: SessionListSnapshot) => void>>();

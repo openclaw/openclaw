@@ -10,6 +10,7 @@ import type { JsonTestResults } from "vitest/node";
 import type { VitestReportCapture } from "../scripts/lib/vitest-report-capture.mts";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
+import { gatewayWorkerLifetimeFixtureFiles } from "./non-isolated-runner.gateway-lifecycle-fixtures.ts";
 import { mockResolutionFixtureFiles } from "./non-isolated-runner.mock-resolution-fixtures.ts";
 import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
 
@@ -730,6 +731,130 @@ it("cleans every shared runner surface between files", (context) => {
   const run = verifyRunnerCleanup(context.signal);
   // Timeout rejects Vitest's wrapper before this promise settles. Join it again
   // at completion so cancellation and fixture writes cannot cross file cleanup.
+  context.onTestFinished(() => run);
+  return run;
+});
+
+async function verifyGatewayWorkerLifetimes(signal: AbortSignal) {
+  const fixtureRoots = path.join(repoRoot, ".artifacts", "gateway-worker-lifetimes");
+  await fs.mkdir(fixtureRoots, { recursive: true });
+  const root = await fs.mkdtemp(path.join(fixtureRoots, "run-"));
+  try {
+    const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
+    await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
+    await fs.writeFile(path.join(root, "events.log"), "");
+    const files = gatewayWorkerLifetimeFixtureFiles(repoRoot);
+    for (const [name, content] of Object.entries(files)) {
+      await fs.writeFile(path.join(root, name), content);
+    }
+    await fs.writeFile(
+      path.join(root, "vitest.config.ts"),
+      `
+import gateway from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.gateway-core.config.ts"))};
+import { defineConfig } from "vitest/config";
+import { BaseSequencer } from "vitest/node";
+class AlphabeticalSequencer extends BaseSequencer {
+  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {
+    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));
+  }
+}
+// Use the actual Gateway execution policy, with fixture-only membership and no
+// ordinary setup hooks that could close A's database before runner cleanup.
+export default defineConfig({
+  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
+  resolve: gateway.resolve,
+  test: {
+    name: "gateway-worker-lifetimes",
+    pool: gateway.test.pool,
+    isolate: gateway.test.isolate,
+    runner: gateway.test.runner,
+    maxWorkers: gateway.test.maxWorkers,
+    fileParallelism: gateway.test.fileParallelism,
+    include: ["a-producer.test.ts", "b-observer.test.ts"],
+    sequence: { sequencer: AlphabeticalSequencer },
+  },
+});
+`,
+    );
+    const reportPath = path.join(root, "report.json");
+    let child!: ChildProcess;
+    const result = await runVitestShutdownCommand({
+      bin: resolveTestNodeExecPath(),
+      args: [
+        path.join(vitestPackageDir, "vitest.mjs"),
+        "run",
+        "--root",
+        root,
+        "--config",
+        path.join(root, "vitest.config.ts"),
+        "--configLoader",
+        "runner",
+        "--reporter=verbose",
+        "--reporter=json",
+        `--reporter=${path.join(repoRoot, "scripts/lib/vitest-report-capture.mts")}`,
+        `--outputFile.json=${reportPath}`,
+      ],
+      cwd: repoRoot,
+      env: { ...childEnv(), OPENCLAW_VITEST_MAX_WORKERS: "1", GATEWAY_LIFETIME_PROBE_ROOT: root },
+      maxBytes: 16 * 1024 * 1024,
+      signal,
+      onReady(owned) {
+        child = owned;
+      },
+    });
+    expect(result.code, result.stdout + result.stderr).toBe(0);
+    expect(child.exitCode).toBe(0);
+    expect(child.signalCode).toBeNull();
+    expect(child.killed).toBe(false);
+    const canonicalRoot = (await fs.realpath(root)).replaceAll(path.sep, "/");
+    const expected = Object.keys(files)
+      .map((name) => `${canonicalRoot}/${name}`)
+      .toSorted();
+    const capture: VitestReportCapture = JSON.parse(
+      await fs.readFile(`${reportPath}.capture.json`, "utf8"),
+    );
+    expect(capture).toMatchObject({
+      pid: child.pid,
+      root: canonicalRoot,
+      processTimedOut: false,
+      ended: { reason: "passed", unhandledErrors: 0, failedModules: 0, suiteErrors: 0 },
+    });
+    expect(capture.modules.map((module) => module.file).toSorted()).toEqual(expected);
+    expect(capture.projects).toEqual([
+      {
+        name: "gateway-worker-lifetimes",
+        namePrefix: "",
+        root: canonicalRoot,
+        config: `${canonicalRoot}/vitest.config.ts`,
+        pool: "threads",
+      },
+    ]);
+    const report: JsonTestResults = JSON.parse(await fs.readFile(reportPath, "utf8"));
+    expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected);
+    expect(report).toMatchObject({
+      numTotalTests: 2,
+      numPassedTests: 2,
+      numFailedTests: 0,
+      numPendingTests: 0,
+      numTodoTests: 0,
+    });
+    for (const file of report.testResults) {
+      expect(file.status).toBe("passed");
+      expect(file.message).toBe("");
+      expect(file.assertionResults).toHaveLength(1);
+      expect(file.assertionResults[0]).toMatchObject({ status: "passed", failureMessages: [] });
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  } catch (error) {
+    if (error instanceof Error) {
+      error.message += `; retained fixture ${root}`;
+    }
+    throw error;
+  }
+}
+
+it("gives Gateway files separate workers after their resource drains", (context) => {
+  const run = verifyGatewayWorkerLifetimes(context.signal);
   context.onTestFinished(() => run);
   return run;
 });

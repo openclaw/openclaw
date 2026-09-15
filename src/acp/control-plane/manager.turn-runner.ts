@@ -8,6 +8,7 @@ import {
 } from "../../sessions/session-state-events.js";
 import { AcpRuntimeError, formatAcpErrorChain, toAcpRuntimeError } from "../runtime/errors.js";
 import { clearAcpTurnActive, markAcpTurnActive } from "./active-turns.js";
+import type { AcceptedTurnState } from "./manager.accepted-turns.js";
 import {
   isFailoverWorthyBackendError,
   resolveBackendCandidatePlan,
@@ -24,6 +25,7 @@ import {
   resolveBackgroundTaskFailureStatus,
   resolveBackgroundTaskTerminalResult,
 } from "./manager.background-task.js";
+import { cancelManagerActiveTurn } from "./manager.cancel-session.js";
 import { applyManagerRuntimeControls } from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
@@ -53,6 +55,7 @@ const ACP_COMPLETION_EVIDENCE_MAX_BYTES = 100 * 1024;
 /** Executes one ACP prompt turn against the selected backend and records terminal state. */
 export async function runManagerTurn(params: {
   input: AcpRunTurnInput;
+  acceptedTurn: AcceptedTurnState;
   sessionKey: string;
   agentId: string;
   deps: AcpSessionManagerDeps;
@@ -206,8 +209,6 @@ export async function runManagerTurn(params: {
         let handle: AcpRuntimeHandle | undefined;
         let meta: SessionAcpMeta | undefined;
         let activeTurn: ActiveTurnState | undefined;
-        let internalAbortController: AbortController | undefined;
-        let onCallerAbort: (() => void) | undefined;
         let activeTurnStarted = false;
         let promptStarted = false;
         let sawTurnOutput = false;
@@ -227,54 +228,49 @@ export async function runManagerTurn(params: {
           runtime = ensured.runtime;
           handle = ensured.handle;
           meta = ensured.meta;
-          await applyManagerRuntimeControls({
-            sessionKey,
-            runtime,
-            handle,
-            meta,
-            getCachedRuntimeState: () => params.runtimeHandles.get(params),
-            onOptionsChanged: async (runtimeOptions) => {
-              await params.writeSessionMeta({
-                cfg: input.cfg,
-                sessionKey,
-                agentId,
-                mutate: (current) => (current ? { ...current, runtimeOptions } : null),
-                failOnError: true,
-              });
-              meta = { ...ensured.meta, runtimeOptions };
-            },
-          });
-
-          await params.setSessionState({
-            cfg: input.cfg,
-            sessionKey,
-            agentId,
-            state: "running",
-            clearLastError: true,
-          });
-
-          internalAbortController = new AbortController();
-          onCallerAbort = () => {
-            internalAbortController?.abort();
-          };
-          if (input.signal?.aborted) {
-            internalAbortController.abort();
-          } else if (input.signal) {
-            input.signal.addEventListener("abort", onCallerAbort, { once: true });
-          }
-
           activeTurn = {
             requestId: input.requestId,
             instanceId: input.admittedRunContext.operationalRunInstance.instanceId,
             runtime,
             handle,
-            abortController: internalAbortController,
+            abortController: params.acceptedTurn.abortController,
           };
+          // Publish custody before controls or state persistence can yield. A setup
+          // cancellation must cancel this exact late handle before reporting done.
+          params.acceptedTurn.activeTurn = activeTurn;
           params.activeTurnBySession.set(actorKey, activeTurn);
+          if (!input.signal?.aborted) {
+            await applyManagerRuntimeControls({
+              sessionKey,
+              runtime,
+              handle,
+              meta,
+              getCachedRuntimeState: () => params.runtimeHandles.get(params),
+              onOptionsChanged: async (runtimeOptions) => {
+                await params.writeSessionMeta({
+                  cfg: input.cfg,
+                  sessionKey,
+                  agentId,
+                  mutate: (current) => (current ? { ...current, runtimeOptions } : null),
+                  failOnError: true,
+                });
+                meta = { ...ensured.meta, runtimeOptions };
+              },
+            });
+          }
+
+          if (!input.signal?.aborted) {
+            await params.setSessionState({
+              cfg: input.cfg,
+              sessionKey,
+              agentId,
+              state: "running",
+              clearLastError: true,
+            });
+          }
+
           activeTurnStarted = true;
-          const combinedSignal = input.signal
-            ? AbortSignal.any([input.signal, internalAbortController.signal])
-            : internalAbortController.signal;
+          const turnToCancel = activeTurn;
           const eventGate = { open: true };
           const turnPromise = consumeAcpTurnStream({
             runtime,
@@ -284,11 +280,17 @@ export async function runManagerTurn(params: {
               attachments: input.attachments,
               mode: input.mode,
               requestId: input.requestId,
-              signal: combinedSignal,
+              signal: input.signal,
               onElicitation: input.onElicitation,
             },
             eventGate,
             onBeforePrompt: input.onBeforePrompt,
+            onCancellation: () =>
+              cancelManagerActiveTurn({
+                activeTurn: turnToCancel,
+                reason: params.acceptedTurn.cancelReason,
+                revalidate: params.acceptedTurn.revalidateCancel,
+              }),
             onPromptStarted: async ({ authoritative }) => {
               promptStarted = authoritative;
               if (authoritative && taskRecord && !taskExecutionBound) {
@@ -455,8 +457,8 @@ export async function runManagerTurn(params: {
           }
           break;
         } finally {
-          if (input.signal && onCallerAbort) {
-            input.signal.removeEventListener("abort", onCallerAbort);
+          if (params.acceptedTurn.activeTurn === activeTurn) {
+            params.acceptedTurn.activeTurn = undefined;
           }
           if (activeTurn && params.activeTurnBySession.get(actorKey) === activeTurn) {
             params.activeTurnBySession.delete(actorKey);

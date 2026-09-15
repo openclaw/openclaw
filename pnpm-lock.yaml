@@ -380,8 +380,8 @@ importers:
         specifier: 3.1.1
         version: 3.1.1(supports-color@10.2.2)
       '@openclaw/crabline':
-        specifier: 0.1.21
-        version: 0.1.21
+        specifier: 0.1.24
+        version: 0.1.24
       '@openclaw/session-url-contract':
         specifier: workspace:*
         version: link:packages/session-url-contract
@@ -1816,8 +1816,8 @@ importers:
         specifier: 1.30.0
         version: 1.30.0(supports-color@10.2.2)(zod@4.5.4)
       '@openclaw/crabline':
-        specifier: 0.1.21
-        version: 0.1.21
+        specifier: 0.1.24
+        version: 0.1.24
       playwright-core:
         specifier: 1.63.0
         version: 1.63.0
@@ -4147,8 +4147,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/crabline@0.1.21':
-    resolution: {integrity: sha512-jUu2ZNqthh2o7N2ZzIrztzjsAsta9v7WaYo07m9L+LbpWv41K9+ewEaXS/PRtuEGz9I4cB3qa7Jh6r5NpkRkWA==}
+  '@openclaw/crabline@0.1.24':
+    resolution: {integrity: sha512-+ov1wHNlYhjnhqOcrwGPvi4i7iPD61lAYBY1hvCSnqh5134BfugMA1S5L4oEL4yX6C9VAfWq5zYnCcRrdqnd0g==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -11703,7 +11703,7 @@ snapshots:
   '@openai/codex@0.154.0-win32-x64':
     optional: true
 
-  '@openclaw/crabline@0.1.21':
+  '@openclaw/crabline@0.1.24':
     dependencies:
       '@types/node': 22.20.1
       commander: 15.0.0
@@ -11711,6 +11711,7 @@ snapshots:
       libsignal: 6.0.0
       picocolors: 1.1.1
       proper-lockfile: 4.1.2
+      protobufjs: 8.8.0
       re2js: 2.8.6
       ws: 8.21.3
       yaml: 2.9.0

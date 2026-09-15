@@ -1,5 +1,5 @@
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
+import { SESSION_OWNER_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
@@ -27,7 +27,7 @@ export function replaceSessionOwnerInTransaction(
     if (!owner?.actor.id) {
       return false;
     }
-    for (const { columnName, dataType, tableName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+    for (const { columnName, dataType, tableName } of SESSION_OWNER_COLUMN_DEFINITIONS) {
       ensureColumn(database.db, tableName, `${columnName} ${dataType}`);
     }
   }

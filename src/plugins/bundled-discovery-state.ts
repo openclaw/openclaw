@@ -12,6 +12,7 @@ import {
   getPluginCacheRetirementSignal,
   getProcessPluginCache,
   preparePluginCacheFact,
+  PluginCacheFactInvalidatedError,
 } from "./plugin-cache.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
@@ -78,6 +79,7 @@ function resolveBundledDiscoveryMemoKey(env: NodeJS.ProcessEnv): string {
 export function readBundledDiscoveryModeMemoized(
   env: NodeJS.ProcessEnv = process.env,
   behavior: { artifactPreservingReadOnly?: boolean } = {},
+  readPreparedValue?: (databasePath: string) => unknown,
 ): "compat" | "allowlist" | undefined {
   if (behavior.artifactPreservingReadOnly) {
     // Copied-state planning binds the observed bytes, not process-stable runtime metadata.
@@ -98,7 +100,9 @@ export function readBundledDiscoveryModeMemoized(
     } else {
       discoveryState.memoized = {
         key,
-        value: readBundledDiscoveryMode(env === process.env ? {} : { env }),
+        value: readPreparedValue
+          ? parseBundledDiscoveryMode(readPreparedValue(key))
+          : readBundledDiscoveryMode(env === process.env ? {} : { env }),
       };
     }
   }
@@ -129,14 +133,18 @@ export async function prepareBundledDiscoveryMode(
       value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
     }
     if (discoveryState.generation !== generation) {
-      throw new Error("Plugin discovery state changed during preparation; retry the operation.");
+      throw new PluginCacheFactInvalidatedError(
+        "Plugin discovery state changed during preparation; retry the operation.",
+      );
     }
     return { value, generation };
   });
   const activate = () => {
     prepared.assertCurrent();
     if (discoveryState.generation !== generation) {
-      throw new Error("Plugin discovery state changed during preparation; retry the operation.");
+      throw new PluginCacheFactInvalidatedError(
+        "Plugin discovery state changed during preparation; retry the operation.",
+      );
     }
     // Another root may use the single-slot memo while preparation awaits its row.
     // Reuse this operation's captured fact for the following synchronous derivation.

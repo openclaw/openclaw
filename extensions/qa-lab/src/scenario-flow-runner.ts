@@ -231,7 +231,7 @@ function resolveCallable(path: string, api: QaFlowApi, vars: QaFlowVars) {
   return parent ? value.bind(parent) : value;
 }
 
-type QaFlowActionOptions = { allowAfterAbort?: boolean };
+type QaFlowActionOptions = { allowAfterAbort?: boolean; cleanupApi?: QaFlowApi };
 
 function throwIfFlowAborted(api: QaFlowApi, options: QaFlowActionOptions = {}) {
   if (!options.allowAfterAbort) {
@@ -407,7 +407,11 @@ async function runFlowActionBody(
     } finally {
       if (tryAction.finally) {
         for (const nested of tryAction.finally) {
-          await runFlowAction(nested, api, vars, { allowAfterAbort: true });
+          // Keep this view local to finally; normal actions retain their scenario signal.
+          await runFlowAction(nested, options.cleanupApi ?? api, vars, {
+            ...options,
+            allowAfterAbort: true,
+          });
         }
       }
     }
@@ -418,6 +422,7 @@ async function runFlowActionBody(
 
 export async function runScenarioFlow(params: {
   api: QaFlowApi;
+  cleanupApi?: QaFlowApi;
   flow: QaScenarioFlow;
   scenarioTitle: string;
   vars?: QaFlowVars;
@@ -427,7 +432,7 @@ export async function runScenarioFlow(params: {
     name: step.name,
     run: async () => {
       for (const action of step.actions) {
-        await runFlowAction(action, params.api, vars);
+        await runFlowAction(action, params.api, vars, { cleanupApi: params.cleanupApi });
       }
       if (!step.detailsExpr && !step.resultExpr) {
         return undefined;

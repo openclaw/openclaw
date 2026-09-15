@@ -7,7 +7,10 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-history-events.js";
 import { jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
-import { createCurrentUserProfileMessageProjector } from "../chat-display-projection.js";
+import {
+  createCurrentUserProfileMessageProjector,
+  isAssistantTtsSupplementMessage,
+} from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import {
   projectSessionMessagePayload,
@@ -86,6 +89,10 @@ export function readChatHistoryDelta(params: {
         "channel-final"
     ) {
       // Mirror suppression needs the preceding reply, which can be before this cursor.
+      return { kind: "reset" };
+    }
+    if (isAssistantTtsSupplementMessage(entryMessage)) {
+      // Full history owns merging audio into a reply that can precede this cursor.
       return { kind: "reset" };
     }
     const messageId = asOptionalRecord(row.event)?.id;

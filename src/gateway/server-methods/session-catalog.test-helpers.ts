@@ -125,5 +125,6 @@ export {
   hoisted,
   markPluginRegistryActive,
   resolveRegisteredCatalogCreateTarget,
+  sessionCatalogHandlers,
 };
 export type { PluginRegistry, SessionCatalogProvider };

@@ -215,6 +215,106 @@ it("does not let a delayed backfill response overwrite a newer session-list reca
   state.hostDisconnected();
 });
 
+it("backfills newly visible sessions after the current batch settles", async () => {
+  const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
+  const first = row();
+  const added = row("agent:main:newly-visible");
+  let finish!: (value: unknown) => void;
+  const pending = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const request = vi
+    .spyOn(client, "request")
+    .mockResolvedValueOnce(listing([first]))
+    .mockReturnValueOnce(pending)
+    .mockResolvedValueOnce(listing([first, added]))
+    .mockResolvedValueOnce({
+      sessions: [{ ...added, activitySummary: { state: "updating", canEnsure: true } }],
+    });
+  const state = controller();
+  try {
+    state.load(client, filters, "query", true);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    state.load(client, filters, "refresh");
+    await vi.waitFor(() => expect(state.result?.sessions).toEqual([first, added]));
+    finish({
+      sessions: [{ ...first, activitySummary: { state: "updating", canEnsure: true } }],
+    });
+    await vi.waitFor(() =>
+      expect(state.result?.sessions[1]?.activitySummary?.state).toBe("updating"),
+    );
+    expect(request).toHaveBeenLastCalledWith(
+      ACTIVITY_SUMMARY_ENSURE_METHOD,
+      { sessions: [{ key: added.key, agentId: added.agentId }] },
+      expect.anything(),
+    );
+    expect(request).toHaveBeenCalledTimes(4);
+  } finally {
+    finish({ sessions: [] });
+    state.hostDisconnected();
+    await pending;
+  }
+});
+
+it.each(["sessions.list", ACTIVITY_SUMMARY_ENSURE_METHOD])(
+  "resumes recap generation after %s finishes in a hidden tab",
+  async (heldMethod) => {
+    const documentEvents = new EventTarget();
+    const pageEvents = new EventTarget();
+    let visibilityState = heldMethod === "sessions.list" ? "hidden" : "visible";
+    Object.defineProperty(documentEvents, "visibilityState", { get: () => visibilityState });
+    vi.stubGlobal("document", documentEvents);
+    vi.stubGlobal("addEventListener", pageEvents.addEventListener.bind(pageEvents));
+    vi.stubGlobal("removeEventListener", pageEvents.removeEventListener.bind(pageEvents));
+    const source = row();
+    const response = (method: string) =>
+      method === "sessions.list"
+        ? listing([source])
+        : {
+            sessions: [{ ...source, activitySummary: { state: "updating", canEnsure: true } }],
+          };
+    let finish!: (value: unknown) => void;
+    const pending = new Promise((resolve) => {
+      finish = resolve;
+    });
+    let held = false;
+    const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
+    const request = vi.spyOn(client, "request").mockImplementation(async (method) => {
+      if (method === heldMethod && !held) {
+        held = true;
+        return pending;
+      }
+      return response(method);
+    });
+    const state = controller();
+    try {
+      state.hostConnected();
+      state.load(client, filters, "query", true);
+      await vi.waitFor(() => expect(held).toBe(true));
+      if (visibilityState !== "hidden") {
+        visibilityState = "hidden";
+        documentEvents.dispatchEvent(new Event("visibilitychange"));
+      }
+      finish(response(heldMethod));
+      await vi.waitFor(() => expect(state.loading).toBe(false));
+      const requestsWhileHidden = heldMethod === "sessions.list" ? 1 : 2;
+      expect(request).toHaveBeenCalledTimes(requestsWhileHidden);
+      expect(state.result?.sessions[0]?.activitySummary?.state).toBe("stale");
+
+      visibilityState = "visible";
+      documentEvents.dispatchEvent(new Event("visibilitychange"));
+      await vi.waitFor(() =>
+        expect(state.result?.sessions[0]?.activitySummary?.state).toBe("updating"),
+      );
+    } finally {
+      finish(response(heldMethod));
+      state.hostDisconnected();
+      await pending;
+      vi.unstubAllGlobals();
+    }
+  },
+);
+
 it("retains a failed recap and retries it without turning the session list into an error", async () => {
   const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
   const source = row(undefined, {

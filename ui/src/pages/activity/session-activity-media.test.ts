@@ -99,6 +99,8 @@ it("waits for the viewport, limits concurrent discovery, and opens four thumbnai
   first.revision = 1;
   try {
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    expect(first.querySelectorAll(".chat-message-image")).toHaveLength(4);
+    expect(first.querySelector("img")?.getAttribute("alt")).toBe("first-0");
     expect(first.querySelector("openclaw-image-lightbox")).toBe(lightbox);
   } finally {
     pending[3]!.resolve(images("refreshed"));
@@ -111,6 +113,118 @@ it("waits for the viewport, limits concurrent discovery, and opens four thumbnai
   first.session = { key: "agent:main:images-0", kind: "direct", permissionMode: "workspace" };
   await vi.waitFor(() => expect(first.querySelector("openclaw-image-lightbox")).toBeNull());
 });
+
+it.each(["initial discovery", "revision refresh"])(
+  "preserves a usable gallery through %s failure and retry",
+  async (phase) => {
+    const initialDiscovery = phase === "initial discovery";
+    const failedRefresh = createDeferred<ArtifactsListResult>();
+    const retry = createDeferred<ArtifactsListResult>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...images("original", 1),
+        ...(initialDiscovery ? { nextCursor: "older" } : {}),
+      })
+      .mockReturnValueOnce(failedRefresh.promise)
+      .mockReturnValueOnce(retry.promise);
+    const harness = createGatewayHarness(createTestGatewayClient(request));
+    const context = createContext(harness.gateway, createSessions("main", []));
+    render(
+      html`<openclaw-activity-session-media
+        .context=${context}
+        sessionKey="agent:main:images"
+        agentId="main"
+      ></openclaw-activity-session-media>`,
+      container,
+    );
+    const row = container.querySelector<LitElement & { revision: number }>(
+      "openclaw-activity-session-media",
+    )!;
+    await vi.waitFor(() => expect(observers.has(row)).toBe(true));
+    observers.get(row)?.(true);
+    if (!initialDiscovery) {
+      await vi.waitFor(() =>
+        expect(row.querySelector("img")?.getAttribute("alt")).toBe("original-0"),
+      );
+      row.revision = 1;
+    }
+    try {
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+      failedRefresh.reject(new Error("Unavailable"));
+      await vi.waitFor(() => expect(row.querySelector('[role="status"]')).not.toBeNull());
+      expect(row.querySelector("img")?.getAttribute("alt")).toBe("original-0");
+      const retryButton = [...row.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "Retry",
+      );
+      expect(retryButton).toBeDefined();
+      retryButton!.click();
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+      expect(row.querySelector("img")?.getAttribute("alt")).toBe("original-0");
+      retry.resolve(images("fresh", 1));
+      await vi.waitFor(() => expect(row.querySelector("img")?.getAttribute("alt")).toBe("fresh-0"));
+      expect(row.querySelector('[role="status"]')).toBeNull();
+      request.mockResolvedValueOnce({ artifacts: [] });
+      row.revision = initialDiscovery ? 1 : 2;
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+      await vi.waitFor(() => expect(row.querySelector("img")).toBeNull());
+    } finally {
+      failedRefresh.resolve(images("released", 1));
+      retry.resolve(images("released", 1));
+    }
+  },
+);
+
+it.each(["session", "agent"] as const)(
+  "retires the previous gallery and pending refresh when its %s changes",
+  async (change) => {
+    const stale = createDeferred<ArtifactsListResult>();
+    const fresh = createDeferred<ArtifactsListResult>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(images("original", 1))
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(fresh.promise);
+    const harness = createGatewayHarness(createTestGatewayClient(request));
+    const context = createContext(harness.gateway, createSessions("main", []));
+    render(
+      html`<openclaw-activity-session-media
+        .context=${context}
+        sessionKey="agent:main:images"
+        agentId="main"
+        .session=${{ key: "agent:main:images", kind: "direct", sessionId: "original" }}
+      ></openclaw-activity-session-media>`,
+      container,
+    );
+    const row = container.querySelector<
+      LitElement & { revision: number; session?: GatewaySessionRow; agentId: string }
+    >("openclaw-activity-session-media")!;
+    await vi.waitFor(() => expect(observers.has(row)).toBe(true));
+    observers.get(row)?.(true);
+    await vi.waitFor(() =>
+      expect(row.querySelector("img")?.getAttribute("alt")).toBe("original-0"),
+    );
+    row.revision = 1;
+    try {
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+      if (change === "session") {
+        row.session = { key: "agent:main:images", kind: "direct", sessionId: "reset" };
+      } else {
+        row.agentId = "other";
+      }
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+      expect(row.querySelector("img")).toBeNull();
+      stale.resolve(images("stale", 1));
+      await row.updateComplete;
+      expect(row.querySelector("img")).toBeNull();
+      fresh.resolve(images("fresh", 1));
+      await vi.waitFor(() => expect(row.querySelector("img")?.getAttribute("alt")).toBe("fresh-0"));
+    } finally {
+      stale.resolve(images("released", 1));
+      fresh.resolve(images("released", 1));
+    }
+  },
+);
 
 it("retires old connection results and media when the same row reconnects", async () => {
   const old = createDeferred<ArtifactsListResult>();

@@ -2,6 +2,7 @@ import { html } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import {
   readSessionMethodAccess,
@@ -23,6 +24,7 @@ import type { ChatProps } from "./chat-view.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
 import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.ts";
+import { getChatModelObservedRunId, getChatRunOwnerSessionKey } from "./history-merge.ts";
 
 type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;
@@ -186,6 +188,8 @@ export function renderChatPaneComposerControls(params: {
               onRequestUpdate: () => state.requestUpdate?.(),
             }),
           activeRunId: state.chatRunId,
+          activeRunSessionKey: getChatRunOwnerSessionKey(state),
+          modelObservedRunId: getChatModelObservedRunId(state, selectedSession),
           agentDefaultModel,
           connected: state.connected,
           gatewayAvailable: Boolean(state.client),
@@ -204,7 +208,13 @@ export function renderChatPaneComposerControls(params: {
           contextWindowMutationDisabledReason: contextWindowAccess.allowed
             ? undefined
             : contextWindowAccess.reason,
-          sending: state.chatSending,
+          sending:
+            state.chatSending &&
+            state.chatSendingScopeKey ===
+              storedChatOutboxScopeKey({
+                sessionKey,
+                ...(agentScope.agentId ? { agentId: agentScope.agentId } : {}),
+              }),
           sessionKey: state.sessionKey,
           selectedSession,
           sessionsResult: state.sessionsResult,

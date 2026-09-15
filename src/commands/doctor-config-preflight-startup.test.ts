@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { resolveDeferredPluginMigrationConfigPaths } from "../config/deferred-plugin-migration-config.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { readBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { readPersistedInstalledPluginIndexRowSync } from "../plugins/installed-plugin-index-row.js";
@@ -107,5 +108,77 @@ it("refuses a session-store change between core admission and the full config re
     expect(fs.readFileSync(configPath, "utf8")).toBe(changedConfig);
     expect(fs.readFileSync(legacyStore, "utf8")).toBe("{}\n");
     expect(fs.existsSync(path.join(stateDir, "state"))).toBe(false);
+  });
+});
+
+it("admits active pending-plugin inputs without selecting an older valid backup", async () => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR ?? path.join(home, ".openclaw");
+    const configPath = process.env.OPENCLAW_CONFIG_PATH ?? path.join(stateDir, "openclaw.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    const source = {
+      gateway: { mode: "local", port: 18991 },
+      plugins: { entries: { canvas: { enabled: true } } },
+      canvasHost: { enabled: true, root: path.join(home, "legacy-canvas") },
+    };
+    const activeRaw = `${JSON.stringify(source, null, 2)}\n`;
+    const backupRaw = JSON.stringify({
+      gateway: { mode: "local", port: 18789 },
+      plugins: { enabled: false },
+    });
+    fs.writeFileSync(configPath, activeRaw);
+    fs.writeFileSync(`${configPath}.bak`, backupRaw);
+    const initial = await readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" });
+    expect(initial.valid).toBe(false);
+
+    const readiness = await import("../state/openclaw-database-preflight.js");
+    const assertReady = readiness.assertOpenClawDatabasesReady;
+    let databaseAdmitted = false;
+    const admission = vi
+      .spyOn(readiness, "assertOpenClawDatabasesReady")
+      .mockImplementation(async (params) => {
+        await assertReady(params);
+        databaseAdmitted = true;
+      });
+    try {
+      const result = await readStartupMigrationSnapshot({
+        env: process.env,
+        readSnapshot: async () => ({
+          snapshot: await readConfigFileSnapshot({ observe: false }),
+          pluginMigrationFingerprint: null,
+        }),
+        planRepair: ({ snapshot }) => planAutomaticConfigRepair(snapshot),
+        preparePluginMigrations: async (snapshot) => {
+          expect(databaseAdmitted).toBe(true);
+          expect(snapshot.raw).toBe(activeRaw);
+          expect(snapshot.hash).toBe(initial.hash);
+          expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
+          return [
+            {
+              pluginId: "canvas",
+              reason: "The configured plugin is not installed.",
+              command: "openclaw doctor --fix",
+              ...resolveDeferredPluginMigrationConfigPaths({
+                config: snapshot.sourceConfig,
+                pluginId: "canvas",
+                compatibilityMigrationPaths: ["canvasHost"],
+              }),
+            },
+          ];
+        },
+      });
+      expect(result.recovery).toBeUndefined();
+      expect(result.snapshot.valid).toBe(true);
+      expect(result.snapshot.hash).toBe(initial.hash);
+      expect(result.snapshot.raw).toBe(activeRaw);
+      expect(result.snapshot.sourceConfig).toMatchObject(source);
+      expect(result.snapshot.config.gateway?.port).toBe(18991);
+      expect(result.snapshot.config).not.toHaveProperty("canvasHost");
+      expect(fs.readFileSync(configPath, "utf8")).toBe(activeRaw);
+      expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backupRaw);
+      expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
+    } finally {
+      admission.mockRestore();
+    }
   });
 });

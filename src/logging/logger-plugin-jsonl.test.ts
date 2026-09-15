@@ -209,17 +209,39 @@ it("registered plugin service logger projects ordered native argument masks into
   expect(JSON.stringify(result.records)).not.toContain("PRIVATE_VALUE");
 });
 
-it("registered plugin service logger masks opaque credential headers with the default policy", async () => {
+it("registered plugin service logger preserves default credential and benign field handling", async () => {
   const result = await logFromPlugin("header proof", {
     "x-pomerium-jwt-assertion": "opaque-value",
+    bare: "zQ7mL2rV9aN4cT6xH8pS1dF3kJ5uW0yB7eG2nR9i",
+    ordinary: "worker finished normally",
   });
   expect(result.records).toHaveLength(1);
   expect(result.console).toHaveLength(1);
-  expect(result.records[0]["1"]["x-pomerium-jwt-assertion"]).toBe("***");
-  expect(result.console[0]["x-pomerium-jwt-assertion"]).toBe("***");
+  for (const record of [result.records[0]["1"], result.console[0]]) {
+    expect(record).toMatchObject({
+      "x-pomerium-jwt-assertion": "***",
+      bare: "zQ7mL2…nR9i",
+      ordinary: "worker finished normally",
+    });
+  }
   expect(JSON.stringify(result.records)).not.toContain("opaque-value");
   expect(JSON.stringify(result.console)).not.toContain("opaque-value");
 });
+
+it.each([":", "="])(
+  "registered plugin logger masks line-separated JWT header diagnostics (%s)",
+  async (separator) => {
+    const result = await logFromPlugin(
+      `x-pomerium-jwt-assertion${separator} opaque7\nfollowing-diagnostic-line`,
+    );
+    expect(result.records).toHaveLength(1);
+    expect(result.console).toHaveLength(1);
+    for (const record of [...result.records, ...result.console]) {
+      expect(record.message).not.toContain("opaque");
+      expect(record.message).toContain(`x-pomerium-jwt-assertion${separator} ***`);
+    }
+  },
+);
 
 it("registered plugin service logger protects a credential-header receiver before one file conversion", async () => {
   let conversions = 0;

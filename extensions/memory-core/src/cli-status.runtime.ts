@@ -37,6 +37,7 @@ import {
   type DreamingArtifactsAuditSummary,
   type RepairDreamingArtifactsResult,
 } from "./dreaming-repair.js";
+import { formatRecallRepairDetails } from "./dreaming-shared.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import {
   auditShortTermPromotionArtifacts,
@@ -101,16 +102,7 @@ function formatDreamingSummary(cfg: OpenClawConfig): string {
 function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): string {
   const actions: string[] = [];
   if (repair.rewroteStore) {
-    const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
-    const details = [
-      repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
-      (repair.removedDanglingEntries ?? 0) > 0
-        ? `-${repair.removedDanglingEntries} dangling`
-        : null,
-      removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
-    ]
-      .filter(Boolean)
-      .join(", ");
+    const details = formatRecallRepairDetails(repair);
     actions.push(`rewrote store${details ? ` (${details})` : ""}`);
   }
   if (repair.removedStaleLock) {

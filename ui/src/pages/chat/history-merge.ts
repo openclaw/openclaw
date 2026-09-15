@@ -14,6 +14,7 @@ import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type {
   ApplicationChatSubmissions,
   RetainedChatSubmission,
@@ -33,6 +34,11 @@ const chatSessionProjections = new WeakMap<
   {
     projection?: SessionProjectionState;
     runId?: string;
+    modelObservation?: {
+      runId: string;
+      model: string | undefined;
+      provider: string | undefined;
+    };
   }
 >();
 // Display ownership outlives active-state cleanup. It is not the foreground
@@ -206,8 +212,46 @@ export function getChatRunOwner(owner: object): string | undefined {
   return chatSessionProjections.get(owner)?.runId;
 }
 
+export function getChatRunOwnerSessionKey(owner: object): string | undefined {
+  const current = chatSessionProjections.get(owner);
+  return current?.runId ? current.projection?.scope.sessionKey : undefined;
+}
+
 export function setChatRunOwner(owner: object, runId: string | undefined): void {
-  chatSessionProjections.set(owner, { ...chatSessionProjections.get(owner), runId });
+  const current = chatSessionProjections.get(owner);
+  chatSessionProjections.set(owner, {
+    ...current,
+    runId,
+    modelObservation:
+      current?.modelObservation && current.modelObservation.runId === runId
+        ? current.modelObservation
+        : undefined,
+  });
+}
+
+export function observeChatRunModel(
+  owner: object,
+  runId: string | undefined,
+  row?: GatewaySessionRow,
+): void {
+  chatSessionProjections.set(owner, {
+    ...chatSessionProjections.get(owner),
+    modelObservation:
+      runId && row
+        ? { runId, model: row.activeModel, provider: row.activeModelProvider }
+        : undefined,
+  });
+}
+
+export function getChatModelObservedRunId(
+  owner: object,
+  row: GatewaySessionRow | undefined,
+): string | undefined {
+  const observation = chatSessionProjections.get(owner)?.modelObservation;
+  return observation?.model === row?.activeModel &&
+    observation?.provider === row?.activeModelProvider
+    ? observation?.runId
+    : undefined;
 }
 
 /** The only mutation boundary for the reducer and its rendered message array. */
@@ -217,13 +261,11 @@ export function publishChatSessionProjection(
 ): void {
   const current = chatSessionProjections.get(owner);
   const runId = current?.runId;
-  if (
-    current?.projection &&
-    chatProjectionScopeChanged(current.projection.scope, projection.scope)
-  ) {
+  const previousScope = current?.projection?.scope;
+  const scopeChanged = previousScope && chatProjectionScopeChanged(previousScope, projection.scope);
+  if (scopeChanged) {
     const status = owner.compactionStatus;
     const sessionKeys = ["sessionKey", "sessionId", "agentId"] as const;
-    const previousScope = current.projection.scope;
     const sessionChanged = sessionKeys.some(
       (key) =>
         Object.hasOwn(projection.scope, key) &&
@@ -243,15 +285,15 @@ export function publishChatSessionProjection(
       resetCompactionProjection(owner);
     }
   }
+  const retainedRunId =
+    runId && Object.hasOwn(projection.runs, runId) && !scopeChanged ? runId : undefined;
   chatSessionProjections.set(owner, {
     projection,
-    runId:
-      runId &&
-      Object.hasOwn(projection.runs, runId) &&
-      (!current.projection ||
-        !chatProjectionScopeChanged(current.projection.scope, projection.scope))
-        ? runId
-        : undefined,
+    modelObservation:
+      scopeChanged || (current?.modelObservation?.runId === runId && !retainedRunId)
+        ? undefined
+        : current?.modelObservation,
+    runId: retainedRunId,
   });
   // Run-only transitions share the transcript array. Preserve their ownership
   // updates above without traversing or republishing every displayed row.

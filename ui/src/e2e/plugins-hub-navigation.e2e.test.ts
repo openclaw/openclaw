@@ -271,12 +271,34 @@ suite.define(() => {
         const pluginTabBox = await page
           .getByRole("tab", { name: "Plugins", exact: true })
           .boundingBox();
-        const titleBox = await page.locator(".plugins-hub-header .page-title").boundingBox();
         expect(tabBox).not.toBeNull();
         expect(pluginTabBox).not.toBeNull();
-        expect(titleBox).not.toBeNull();
-        expect((tabBox?.y ?? 0) + (tabBox?.height ?? 0)).toBeLessThanOrEqual(titleBox?.y ?? 0);
-        expect(Math.abs((tabBox?.x ?? 0) - (titleBox?.x ?? 0))).toBeLessThanOrEqual(1);
+        if (viewport.width > 900) {
+          // Desktop shells put hub tabs centered in the page toolbar row; the
+          // shell grid may still be settling, so poll both axes.
+          await expect
+            .poll(async () => {
+              const [cell, header] = await Promise.all([
+                page.locator(".plugins-hub-header .hub-page-header__tabs").boundingBox(),
+                page.locator(".plugins-hub-header").boundingBox(),
+              ]);
+              if (!cell || !header) {
+                return Number.POSITIVE_INFINITY;
+              }
+              return Math.max(
+                Math.abs(cell.y + cell.height / 2 - (header.y + 26)),
+                Math.abs(cell.x + cell.width / 2 - (header.x + header.width / 2)),
+              );
+            })
+            .toBeLessThanOrEqual(1);
+        } else {
+          // Drawer layouts keep the stacked header: tabs above the title,
+          // sharing its left edge.
+          const titleBox = await page.locator(".plugins-hub-header .page-title").boundingBox();
+          expect(titleBox).not.toBeNull();
+          expect(tabBox!.y + tabBox!.height).toBeLessThanOrEqual(titleBox!.y);
+          expect(Math.abs(tabBox!.x - titleBox!.x)).toBeLessThanOrEqual(1);
+        }
         expect(pluginTabBox?.height ?? 0).toBeLessThanOrEqual(36);
         await expectActivePanelLabel(page, "plugins-tab-plugins");
         const pluginInstallPresentation = await installButtonPresentation(page);

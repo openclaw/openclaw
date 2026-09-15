@@ -13,6 +13,7 @@ import {
 } from "../config/sessions/transcript-tree.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareModelPricingContext } from "../model-catalog/pricing.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { resolveModelCostConfigFingerprint } from "../utils/usage-format.js";
@@ -97,10 +98,11 @@ export function resolveUsageCostAgentDir(
   return resolveAgentDir(config ?? {}, agentId);
 }
 
-export function resolveUsageCostPricingFingerprint(
+export async function resolveUsageCostPricingFingerprint(
   config?: OpenClawConfig,
   agentDir?: string,
-): string {
+): Promise<string> {
+  await prepareModelPricingContext(config);
   return resolveModelCostConfigFingerprint(config, agentDir);
 }
 
@@ -615,7 +617,7 @@ export async function refreshCostUsageCacheForAgent(params: {
   }
   try {
     const agentDir = params.agentDir ?? resolveUsageCostAgentDir(params.config, params.agentId);
-    const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
+    const pricingFingerprint = await resolveUsageCostPricingFingerprint(params.config, agentDir);
     const rows = readSessionCostUsageRollupRows(params.agentId, databasePath);
     const rawValues = new Map(rows.map((row) => [row.key, row.valueJson]));
     const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, {

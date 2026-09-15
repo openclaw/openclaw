@@ -3,6 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildStatusUpdateRows } from "../../commands/status-update-restart.js";
+import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
 import * as runtimeGuard from "../../infra/runtime-guard.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
@@ -16,7 +17,10 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { updateStatusCommand } from "./status.js";
@@ -315,6 +319,76 @@ describe("update status abandoned-run reporting", () => {
   );
 
   it.each([true, false])(
+    "reports unreadable pending migration status without losing availability (JSON: %s)",
+    async (json) => {
+      recordDeferredPluginMigrations({
+        pending: [
+          {
+            pluginId: "codex",
+            reason: "The configured plugin package is missing.",
+            command: "openclaw plugins install @openclaw/codex",
+          },
+        ],
+      });
+      openOpenClawStateDatabase()
+        .db.prepare("UPDATE migration_runs SET report_json = ? WHERE id = ?")
+        .run("not-json", "deferred-plugin-migration:codex");
+      await expect(updateStatusCommand({ json })).resolves.toBeUndefined();
+      if (json) {
+        const result = runtime.writeJson.mock.lastCall?.[0];
+        expect(result).toHaveProperty("availability");
+        expect(result.migrationWarningsError).toEqual(expect.any(String));
+        expect(result).not.toHaveProperty("migrationWarnings");
+      } else {
+        const output = runtime.log.mock.calls.flat().join("\n");
+        expect(output).toContain("OpenClaw update status");
+        expect(output).toContain("Pending plugin migration status unavailable:");
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "reports current migration warnings absent from historical update steps (JSON: %s)",
+    async (json) => {
+      const run = createUpdateRun({ trigger: "cli" });
+      const history = finishUpdateRun(run.runId, { status: "succeeded" });
+      const pending = {
+        pluginId: "codex",
+        reason: "The configured plugin package is missing.",
+        command: "openclaw plugins install @openclaw/codex",
+      };
+      recordDeferredPluginMigrations({ pending: [pending] });
+      await updateStatusCommand({ json });
+      if (json) {
+        expect(runtime.writeJson.mock.lastCall?.[0].migrationWarnings).toEqual([
+          expect.stringContaining('Plugin "codex" state migration is pending:'),
+        ]);
+        expect(runtime.writeJson.mock.lastCall?.[0].migrationWarnings[0]).toContain(
+          pending.command,
+        );
+      } else {
+        const output = runtime.log.mock.calls.flat().join("\n");
+        expect(output).toContain('Plugin "codex" state migration is pending:');
+        expect(output).toContain(pending.command);
+      }
+      expect(getUpdateRun(run.runId)).toEqual(history);
+
+      recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: [pending.pluginId] });
+      runtime.log.mockClear();
+      runtime.writeJson.mockClear();
+      await updateStatusCommand({ json });
+      if (json) {
+        expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty("migrationWarnings");
+      } else {
+        expect(runtime.log.mock.calls.flat().join("\n")).not.toContain(
+          'Plugin "codex" state migration is pending:',
+        );
+      }
+      expect(getUpdateRun(run.runId)).toEqual(history);
+    },
+  );
+
+  it.each([true, false])(
     "reports an activation timeout without abandonment (JSON: %s)",
     async (json) => {
       const created = createUpdateRun({ trigger: "cli" });
@@ -409,14 +483,30 @@ describe("update status abandoned-run reporting", () => {
     expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty("advisories");
   });
 
-  it.each(["json", "text", "status"])(
-    "reconciles expired legacy admission through %s",
-    async (surface) => {
+  it.each(
+    ["none", "succeeded-before-expiry", "succeeded-after-expiry", "active"].flatMap((laterRun) =>
+      ["json", "text", "status"].map((surface) => ({ laterRun, surface })),
+    ),
+  )(
+    "keeps expired admission history with $laterRun through $surface",
+    async ({ laterRun, surface }) => {
       const now = Date.now();
-      vi.spyOn(Date, "now").mockReturnValue(now - 25 * 60 * 60_000);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now - 25 * 60 * 60_000);
       const legacy = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
-      vi.mocked(Date.now).mockReturnValue(now);
-      finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, { status: "succeeded" });
+      clock.mockReturnValue(now);
+      if (laterRun === "succeeded-after-expiry" || laterRun === "active") {
+        await updateStatusCommand({ json: true });
+        expect(getUpdateRun(legacy.runId)?.reason).toBe("legacy-driver-expired");
+        runtime.writeJson.mockClear();
+      }
+      let currentRunId = legacy.runId;
+      if (laterRun !== "none") {
+        clock.mockReturnValue(now + 1);
+        currentRunId = createUpdateRun({ trigger: "cli" }).runId;
+        if (laterRun !== "active") {
+          finishUpdateRun(currentRunId, { status: "succeeded" });
+        }
+      }
       let output: string;
       if (surface === "status") {
         output = JSON.stringify(buildStatusUpdateRows(null));
@@ -427,19 +517,28 @@ describe("update status abandoned-run reporting", () => {
             ? JSON.stringify(runtime.writeJson.mock.lastCall?.[0])
             : runtime.log.mock.calls.flat().join("\n");
       }
-      expect(getUpdateRun(legacy.runId)).toMatchObject({
+      const expired = getUpdateRun(legacy.runId);
+      expect(expired).toMatchObject({
         phase: "finished",
         status: "failed",
         reason: "legacy-driver-expired",
       });
       expect(output).toContain("treated as abandoned after 24 h");
-      expect(output).toContain("openclaw update");
-      expect(findActiveUpdateRun()).toBeUndefined();
+      expect(output.includes("Historical update:")).toBe(laterRun !== "none");
+      expect(output.includes("run `openclaw update` to retry.")).toBe(laterRun === "none");
+      expect(findActiveUpdateRun()?.runId).toBe(laterRun === "active" ? currentRunId : undefined);
       // A later read must still surface the advisory after the terminal write.
       await updateStatusCommand({ json: true });
-      expect(JSON.stringify(runtime.writeJson.mock.lastCall?.[0])).toContain(
-        "treated as abandoned after 24 h",
-      );
+      const result = runtime.writeJson.mock.lastCall?.[0];
+      expect((result.activeRun ?? result.lastRun)?.runId).toBe(currentRunId);
+      expect(result.advisories).toEqual([
+        {
+          runId: legacy.runId,
+          reason: "legacy-driver-expired",
+          message: expect.stringContaining("treated as abandoned after 24 h"),
+        },
+      ]);
+      expect(getUpdateRun(legacy.runId)).toEqual(expired);
     },
   );
 

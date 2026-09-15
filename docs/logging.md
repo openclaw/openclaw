@@ -323,18 +323,25 @@ logging. A missing summary does not prove preparation completed without delay.
 ### Session catalog provider waits
 
 With process diagnostics enabled, the `gateway/session-catalog` logger records
-`slow session catalog provider list` for attempts that settle after at least one second. It separates
-`admissionWaitMs`, `providerElapsedMs`, and `completionDelayMs`: waiting for
-catalog provider admission, elapsed time inside the provider call, and the
-continuation after settlement and queue release. These are elapsed intervals,
-not CPU measurements. The Gateway's earlier operator-start queue is separate.
+`slow session catalog provider list` for attempts that settle after at least one second.
+`admissionWaitMs` records initial provider admission waiting. `providerElapsedMs`
+spans the first provider invocation through final logical settlement, including
+waiting between steps of a stepped fill. `completionDelayMs` begins after final
+settlement and queue release. The Gateway's earlier operator-start queue is separate.
+
+`stepCount` counts admitted callbacks. `admittedStepMs` sums their elapsed time
+through actual settlement, including authority checks, factory work, and I/O
+waits. `continuationWaitMs` measures queue waiting after an incomplete step until
+resumption or cancellation; it excludes initial admission. These fields are not
+an exact disjoint partition and do not measure CPU time.
 
 `admitted` and `providerInvoked` distinguish an attempt that never entered the
 queue's active slot from one that called the provider. Unreached intervals are
 omitted. `outcome` reports the attempt's resolution or rejection;
 `signalAborted` reports the signal independently and does not identify an error's
-cause or prove that native work stopped. Provider slots remain owned until their
-returned promises settle, including after cancellation.
+cause or prove that native work stopped. An active provider call or `next()` step
+keeps its slot until its actual promise settles, including after cancellation.
+An inert continuation queues with other callers between steps.
 
 `providerIdHash` hashes provider IDs of at most 256 UTF-16 units; longer IDs omit
 the field. It supports correlation, not anonymization or authorization. Host
@@ -383,6 +390,49 @@ emitted only after its observed operation settles and takes at least one second:
   `producerObserved=false` means the producer's diagnostic identity is
   unavailable, not that no producer exists.
 
+Page-producer summaries also accumulate elapsed time at the existing control
+phase transitions. Repeated phases, including selection retries, and multiple
+control calls contribute to the same page totals. Each total is rounded only
+when the summary emits. Unreached phases are absent; a reached phase may report
+zero milliseconds.
+
+Rejected control calls can add `controlFailurePhase` and
+`controlFailureCategory`. The failure phase uses the same logical boundaries:
+
+| Control phase    | Elapsed field            | Boundary                                                                                                                         |
+| ---------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `load-control`   | `controlLoadMs`          | Loading and entering the control module before the request owner reports its first phase.                                        |
+| `prepare`        | `controlPrepareMs`       | Options, guards, imports, or argument/budget evaluation before acquisition or client API entry.                                  |
+| `acquire-client` | `controlAcquireClientMs` | Shared-client selection, process-registration preparation, possible startup, authentication, initialization, and readiness.      |
+| `client-request` | `controlClientRequestMs` | The client API was invoked; readiness, shared native-request waiting, retries and caller continuation can still occur inside it. |
+| `release-client` | `controlReleaseClientMs` | Logical lease release or cleanup, including a later deadline decision after cleanup. This is not proof of physical process exit. |
+
+These are caller-observed intervals, frozen when that control invocation reports
+failure or closes. They exclude underlying work continuing after an outward
+timeout. A call on an already-pinned connection can omit acquisition and release
+because the surrounding pin owns those operations. Setup/settlement gaps and
+rounding mean the phase totals need not exactly equal the inclusive wait.
+
+Categories are `deadline-observed`, `scoped-rejection`,
+`rpc-method-unavailable` (typed RPC error code `-32601`), `rpc-error`, or `other`.
+They use existing owner decisions and typed errors, without copying exception
+messages, stacks, response data, or arbitrary error codes. Plain startup,
+transport, and other unclassified errors remain `other`; the category does not
+identify their cause. Public unavailable-host messages remain sanitized.
+
+Successful cleanup preserves an earlier error's phase unless the outer request
+owner observes its deadline. For `deadline-observed`, the phase is the active
+stage at that later decision, even if cleanup just completed. For example,
+`release-client/deadline-observed` can follow budget exhaustion before the client
+API was ever invoked; it does not prove cleanup caused the deadline. A cleanup
+error that replaces the request error reports `release-client`. Internally
+handled retries and successful requests do not publish failure fields, and late
+callbacks cannot overwrite a settled observation.
+
+These fields do not prove a native request was written, a native process failed,
+or a response reached the client. The containing list can resolve with an
+unavailable host after a control call rejects.
+
 `operationId` is local to `diagnosticEpoch`, PID and thread. It is not a session,
 native request or audit execution identity. One producer can serve several
 waiters, and a stale refresh can continue after a list returns. `outcome=resolved`
@@ -390,8 +440,9 @@ means that the observed operation returned; a resolved list can include
 disconnected or error-bearing hosts.
 
 All timings are elapsed time, including asynchronous waits. The inclusive
-control-request interval does not isolate physical request writes, wire latency,
-native processing or cleanup; it does not prove that a native process stopped.
+control-request interval and its logical phase totals do not isolate physical
+request writes, wire latency or native CPU, and do not prove that a native
+process stopped. Several callers can be waiting on the same underlying work.
 Provenance time is included in post-response time, and host work can overlap,
 so sums need not partition the list's elapsed time. `nodeWaitSumMs` sums existing
 paired-node promise waits; it is not a disjoint node phase or proof of native

@@ -157,7 +157,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
         requestUpdate: () => this.requestUpdate(),
         onError: (error) =>
           error === null ? this.submission.clearError() : this.submission.setError(error),
-        onClearError: (error) => this.submission.clearErrorIf(error),
+        onClearError: (error) => this.submission.clearError(error),
       },
     );
     this.submission = new DraftSubmissionFlow(
@@ -253,6 +253,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    this.submission.draftPersistence.connect();
     this.critterImport.schedule();
     document.addEventListener("keydown", this, true);
     window.addEventListener("beforeunload", this.flushDraft);

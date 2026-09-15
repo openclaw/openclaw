@@ -2,8 +2,13 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { serialize } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_MAX_RESULT_BYTES } from "../infra/sqlite-worker-contract.js";
+import {
+  appendMemoryHostEvent,
+  readMemoryHostEventRecords,
+} from "../plugin-sdk/memory-host-events.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -11,6 +16,8 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
+  pluginStateEntriesInKeyRange,
+  registerPluginStateSequencedJournalEntry,
 } from "./plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
@@ -21,6 +28,123 @@ afterEach(async () => {
 });
 
 describe("worker plugin state", () => {
+  it("appends and reads the memory journal off-thread with unchanged persisted bytes", async () => {
+    await withOpenClawTestState({ label: "memory-journal-worker" }, async (state) => {
+      const workspaceDir = state.workspaceDir;
+      const event = {
+        type: "memory.recall.recorded" as const,
+        timestamp: "2026-09-13T12:00:00.000Z",
+        query: "ordinary journal event",
+        resultCount: 0,
+        results: [],
+      };
+      const native = requireNodeSqlite();
+      const sql = [
+        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
+        vi.spyOn(native.DatabaseSync.prototype, "exec"),
+        ...(["get", "all", "run", "iterate"] as const).map((method) =>
+          vi.spyOn(native.StatementSync.prototype, method),
+        ),
+      ];
+      const timings: Record<string, number> = {};
+      try {
+        expect(await readMemoryHostEventRecords({ workspaceDir, env: state.env })).toEqual([]);
+        expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
+        let started = performance.now();
+        await appendMemoryHostEvent(workspaceDir, event, { env: state.env });
+        timings.coldAppendMs = performance.now() - started;
+        started = performance.now();
+        await appendMemoryHostEvent(workspaceDir, event, { env: state.env });
+        timings.warmAppendMs = performance.now() - started;
+        started = performance.now();
+        expect(await readMemoryHostEventRecords({ workspaceDir, env: state.env })).toEqual([
+          event,
+          event,
+        ]);
+        timings.warmReadMs = performance.now() - started;
+        for (const method of sql) {
+          expect(method).not.toHaveBeenCalled();
+        }
+        await closeOpenClawStateDatabaseAsync();
+        started = performance.now();
+        expect(await readMemoryHostEventRecords({ workspaceDir, env: state.env })).toEqual([
+          event,
+          event,
+        ]);
+        timings.coldReadMs = performance.now() - started;
+        for (const method of sql) {
+          expect(method).not.toHaveBeenCalled();
+        }
+      } finally {
+        sql.forEach((method) => method.mockRestore());
+      }
+      const { db } = openOpenClawStateDatabase({ env: state.env });
+      const rows = db
+        .prepare(
+          "SELECT entry_key, value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? ORDER BY entry_key",
+        )
+        .all("memory-core", "memory-host.events");
+      expect(rows).toHaveLength(2);
+      for (const [index, row] of rows.entries()) {
+        const sequence = index + 1;
+        const value = JSON.parse(String(row.value_json)) as { recordedAt: number };
+        expect(row.entry_key).toMatch(
+          new RegExp(`^[a-f0-9]{24}:event:1:${String(sequence).padStart(16, "0")}$`),
+        );
+        expect(row.value_json).toBe(
+          JSON.stringify({ kind: "event", event, recordedAt: value.recordedAt, sequence }),
+        );
+      }
+      expect(
+        db
+          .prepare(
+            "SELECT value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ?",
+          )
+          .get("memory-core", "memory-host.event-cursors"),
+      ).toEqual({ value_json: '{"kind":"cursor","lastSequence":2}' });
+      console.log("memory-journal-worker timings", JSON.stringify(timings));
+    });
+  });
+
+  it("captures journal data and range before asynchronous admission", async () => {
+    await withOpenClawTestState({ label: "memory-journal-capture" }, async (state) => {
+      const journalValue = { kind: "event", detail: { value: "captured" } };
+      const journalKeyRange = { keyStartInclusive: "event:", keyEndExclusive: "event;" };
+      const pending = registerPluginStateSequencedJournalEntry({
+        pluginId: "memory-core",
+        cursorOptions: {
+          namespace: "memory-host.event-cursors",
+          maxEntries: 1_000,
+          env: state.env,
+        },
+        cursorKey: "workspace:cursor",
+        journalOptions: { namespace: "memory-host.events", maxEntries: 10_000, env: state.env },
+        journalKeyPrefix: "event:1:",
+        journalKeyRange,
+        journalValue,
+      });
+      journalValue.detail.value = "changed";
+      journalKeyRange.keyStartInclusive = "changed:";
+      journalKeyRange.keyEndExclusive = "changed;";
+      await expect(pending).resolves.toBe(1);
+      await expect(
+        pluginStateEntriesInKeyRange({
+          pluginId: "memory-core",
+          namespace: "memory-host.events",
+          keyStartInclusive: "event:",
+          keyEndExclusive: "event;",
+          limit: 1,
+          env: state.env,
+        }),
+      ).resolves.toMatchObject([
+        {
+          key: "event:1:0000000000000001",
+          value: { kind: "event", detail: { value: "captured" }, sequence: 1 },
+        },
+      ]);
+    });
+  });
+
   it("shares public keyed operations with the legacy store while SQL stays on the worker", async () => {
     await withOpenClawTestState({ label: "plugin-state-worker-coexistence" }, async () => {
       const options = {
@@ -171,6 +295,89 @@ describe("worker plugin state", () => {
       }
     });
   });
+
+  it("bounds native listing bytes while preserving complete sync and worker entries", async () => {
+    await withOpenClawTestState({ label: "plugin-state-worker-listing-bytes" }, async () => {
+      const pluginId = "memory-core";
+      const namespace = "short-term-recall";
+      const expected = Array.from({ length: 64 }, (_, index) => ({
+        key: `entry-${String(index).padStart(2, "0")}`,
+        value: { index, text: "value😀" },
+        createdAt: 1000 + index,
+      }));
+      seedPluginStateEntriesForTests(expected.map((entry) => ({ pluginId, namespace, ...entry })));
+      const options = { namespace, maxEntries: expected.length };
+      const sync = createPluginStateSyncKeyedStore(pluginId, options);
+      const store = createPluginStateKeyedStore(pluginId, options);
+      const { db } = openOpenClawStateDatabase();
+      const reads = trackSqliteStatementExecutions(db, ["listing"], (sql) =>
+        sql.startsWith("select ") && sql.includes('"plugin_state_entries"') ? "listing" : null,
+      );
+      try {
+        expect(sync.entries()).toEqual(expected);
+        expect(reads.counts.listing).toBeGreaterThan(0);
+        expect(reads.counts.listing).toBeLessThanOrEqual(1);
+        expect(reads.rowCounts.listing).toBeGreaterThan(0);
+        expect(reads.rowCounts.listing).toBeLessThanOrEqual(expected.length);
+        expect(reads.textBytes.listing).toBeGreaterThan(0);
+        expect.soft(reads.textBytes.listing).toBeLessThan(4096);
+      } finally {
+        reads.restore();
+      }
+      expect(await store.entries()).toEqual(expected);
+    });
+  });
+
+  it.each(["created_at", "expires_at"] as const)(
+    "keeps later %s native errors ahead of earlier corrupt listing JSON",
+    async (column) => {
+      await withOpenClawTestState({ label: `plugin-state-worker-listing-${column}` }, async () => {
+        const pluginId = "memory-core";
+        const namespace = "listing-errors";
+        seedPluginStateEntriesForTests(
+          ["healthy", "corrupt", "unsafe"].map((key, index) => ({
+            pluginId,
+            namespace,
+            key,
+            value: { key },
+            createdAt: 1000 + index,
+          })),
+        );
+        const { db, path } = openOpenClawStateDatabase();
+        db.prepare(
+          "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+        ).run("invalid JSON", pluginId, namespace, "corrupt");
+        const options = { namespace, maxEntries: 3 };
+        const sync = createPluginStateSyncKeyedStore(pluginId, options);
+        const store = createPluginStateKeyedStore(pluginId, options);
+        const corrupt = { code: "PLUGIN_STATE_CORRUPT", operation: "entries", path };
+        expect(() => sync.entries()).toThrowError(expect.objectContaining(corrupt));
+        await expect(store.entries()).rejects.toMatchObject(corrupt);
+
+        const update = db.prepare(
+          column === "created_at"
+            ? "UPDATE plugin_state_entries SET created_at = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?"
+            : "UPDATE plugin_state_entries SET expires_at = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+        );
+        update.run(9223372036854775807n, pluginId, namespace, "unsafe");
+        const snapshot = db.prepare(
+          "SELECT * FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? ORDER BY entry_key",
+        );
+        snapshot.setReadBigInts(true);
+        const before = snapshot.all(pluginId, namespace);
+        const nativeError = {
+          code: "PLUGIN_STATE_READ_FAILED",
+          operation: "entries",
+          path,
+          cause: expect.objectContaining({ name: "RangeError", code: "ERR_OUT_OF_RANGE" }),
+        };
+        expect(() => sync.entries()).toThrowError(expect.objectContaining(nativeError));
+        expect(snapshot.all(pluginId, namespace)).toEqual(before);
+        await expect(store.entries()).rejects.toMatchObject(nativeError);
+        expect(snapshot.all(pluginId, namespace)).toEqual(before);
+      });
+    },
+  );
 
   it("returns complete entries and positional bulk values larger than a broker frame", async () => {
     await withOpenClawTestState({ label: "plugin-state-worker-large-reads" }, async () => {

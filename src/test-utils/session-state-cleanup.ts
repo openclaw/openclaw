@@ -5,11 +5,7 @@ import {
   drainSessionStoreWriterQueuesForTest,
 } from "../config/sessions/store-writer-state.js";
 import { drainFileLockStateForTest } from "../infra/file-lock.js";
-import { isPathInside } from "../infra/path-guards.js";
-import {
-  closeOpenClawAgentDatabaseByPath,
-  listOpenClawAgentDatabasesForTest,
-} from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
@@ -30,11 +26,7 @@ export async function cleanupSessionStateForTest(
   }
   // Close agent handles before shared state: releasing their leases can reopen
   // shared state. Unrelated fixtures keep their handles.
-  for (const database of listOpenClawAgentDatabasesForTest()) {
-    if (isPathInside(options.stateDir, database.path)) {
-      closeOpenClawAgentDatabaseByPath(database.path);
-    }
-  }
+  await closeOpenClawAgentDatabasesAsync(options.stateDir);
   await closeOpenClawStateDatabaseByPathAsync(
     resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: options.stateDir }),
   );

@@ -420,10 +420,6 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
   // oxlint-disable-next-line typescript/no-misused-promises -- Vitest awaits this hook; its concrete TestRunner declaration narrows the return to void.
   override async onAfterRunFiles(files: RunnerTestFile[]) {
     super.onAfterRunFiles(files);
-    if (this.config.isolate) {
-      return;
-    }
-
     const internals = this as unknown as TestRunnerInternals;
     await drainMockerResolveMocks(internals.moduleRunner?.mocker);
 
@@ -449,6 +445,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     // Lifecycle-owned singletons survive module resets; close them before the next file
     // can observe a previous file's sessions, caches, or registered resources.
     await drainGlobalSingletonLifecycleState();
+    if (this.config.isolate) {
+      return;
+    }
     // Named plugin runtimes intentionally survive duplicate module evaluation in production.
     // Clear their shared slots here so one test file cannot lend a partial runtime to the next.
     clearNamedPluginRuntimeStoresForTest();

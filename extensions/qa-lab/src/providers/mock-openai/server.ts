@@ -2829,6 +2829,7 @@ export async function startQaMockOpenAiServer(params?: {
             status: 503,
             type: "server_error",
             message: "Service Unavailable",
+            retryAfterSeconds: 120,
           }
         : undefined);
     recordRequest({
@@ -3014,6 +3015,9 @@ export async function startQaMockOpenAiServer(params?: {
       if (url.pathname === "/v1/responses") {
         const dispatched = await dispatchResponses({ body, raw });
         if (dispatched.failure) {
+          if (dispatched.failure.retryAfterSeconds !== undefined) {
+            res.setHeader("retry-after", String(dispatched.failure.retryAfterSeconds));
+          }
           writeJson(res, dispatched.failure.status, {
             error: {
               type: dispatched.failure.type,

@@ -1,8 +1,12 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { ensureProfileForEmail, linkEmail, setAvatar } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "./types.js";
 import { usersHandlers } from "./users.js";
@@ -103,6 +107,10 @@ test("users.prefs.set notifies only connections belonging to the same merged pro
     const retired = ensureProfileForEmail("retired@example.test");
     const owner = ensureProfileForEmail("owner@example.test");
     const other = ensureProfileForEmail("other@example.test");
+    const avatar = new Uint8Array(64 * 1024).fill(0x7f);
+    for (const profile of [retired, owner, other]) {
+      expect(setAvatar(profile.id, avatar, "image/png").ok).toBe(true);
+    }
     linkEmail("retired@example.test", owner.id);
 
     const connectedClients = [
@@ -122,19 +130,32 @@ test("users.prefs.set notifies only connections belonging to the same merged pro
         ),
     };
 
-    expect(
-      await invokePreferenceMethod(
-        "users.prefs.set",
-        { entries: { "ui.accent": "#A1B2C3", "ui.theme": null } },
-        retired.id,
-        context,
-      ),
-    ).toMatchObject({ ok: true, payload: { status: "ok" } });
-    expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-      "users.prefs.changed",
-      { profileId: owner.id, keys: ["ui.accent", "ui.theme"] },
-      new Set(["owner", "merged"]),
+    // Measure recipient selection on this handle; the preference worker has its own connection.
+    const reads = trackSqliteStatementExecutions(
+      openOpenClawStateDatabase().db,
+      ["profiles"],
+      (sql) =>
+        /^select\b/i.test(sql) && /\bfrom "user_profiles"(?:\s|$)/i.test(sql) ? "profiles" : null,
     );
+    try {
+      expect(
+        await invokePreferenceMethod(
+          "users.prefs.set",
+          { entries: { "ui.accent": "#A1B2C3", "ui.theme": null } },
+          retired.id,
+          context,
+        ),
+      ).toMatchObject({ ok: true, payload: { status: "ok" } });
+      expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+        "users.prefs.changed",
+        { profileId: owner.id, keys: ["ui.accent", "ui.theme"] },
+        new Set(["owner", "merged"]),
+      );
+      expect(reads.rowCounts.profiles).toBeGreaterThan(0);
+      expect.soft(reads.blobBytes.profiles).toBe(0);
+    } finally {
+      reads.restore();
+    }
   } finally {
     await state.cleanup();
   }

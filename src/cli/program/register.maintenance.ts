@@ -154,6 +154,32 @@ export function registerMaintenanceCommands(program: Command) {
           opts.json === true || !process.stdout.isTTY,
         );
       }
+      const stateSqlite = parseDoctorStateSqliteMode(opts.stateSqlite, opts.json === true);
+      const sessionSqlite = parseDoctorSessionSqliteMode(opts.sessionSqlite, opts.json === true);
+      if (opts.githubIssue === true && sessionSqlite !== "recover") {
+        return exitDoctorError(
+          "--github-issue requires --session-sqlite recover.",
+          opts.json === true,
+        );
+      }
+      // Each handler completes one operation. Reject competing requests before
+      // importing a handler so its precedence cannot silently discard another.
+      const requestedOperationCount = [
+        opts.lint === true,
+        opts.postUpgrade === true,
+        stateSqlite !== undefined,
+        sessionSqlite !== undefined,
+        opts.repair === true ||
+          opts.fix === true ||
+          opts.force === true ||
+          opts.generateGatewayToken === true,
+      ].filter(Boolean).length;
+      if (requestedOperationCount > 1) {
+        return exitDoctorError(
+          "doctor operations are mutually exclusive: choose one of --lint, --fix/--repair, --post-upgrade, --state-sqlite, or --session-sqlite.",
+          opts.json === true || (opts.lint === true && !process.stdout.isTTY),
+        );
+      }
       if (opts.lint !== true && hasLintOnlyDoctorOptions(opts)) {
         return exitDoctorError(
           "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
@@ -183,11 +209,6 @@ export function registerMaintenanceCommands(program: Command) {
         defaultRuntime,
         async () => {
           const { doctorCommand } = await import("../../commands/doctor.js");
-          const stateSqlite = parseDoctorStateSqliteMode(opts.stateSqlite, opts.json === true);
-          const sessionSqlite = parseDoctorSessionSqliteMode(
-            opts.sessionSqlite,
-            opts.json === true,
-          );
           await doctorCommand(defaultRuntime, {
             workspaceSuggestions: opts.workspaceSuggestions,
             yes: Boolean(opts.yes),

@@ -54,7 +54,7 @@ describe("plugin state fresh-store reads", () => {
         await expect(store.entries()).resolves.toEqual([]);
         await expect(store.count()).resolves.toBe(0);
         expect(
-          pluginStateEntriesInKeyRange({
+          await pluginStateEntriesInKeyRange({
             pluginId: "discord",
             namespace: "read-only-table-missing",
             keyStartInclusive: "a",

@@ -58,8 +58,22 @@ type SessionListDeliveryContext = {
   threadId?: string | number;
 };
 
+type SessionInventoryMetadata = Pick<
+  SessionRow,
+  | "createdActor"
+  | "owner"
+  | "worktree"
+  | "repositoryWorkspaceId"
+  | "repository"
+  | "execCwd"
+  | "spawnedCwd"
+  | "spawnedWorkspaceDir"
+  | "projectId"
+  | "workspaceDir"
+>;
+
 /** Full Gateway session row consumed by session orchestration internals. */
-export type GatewaySessionListRow = {
+export type GatewaySessionListRow = SessionInventoryMetadata & {
   key: string;
   agentId?: string;
   classification: NonNullable<SessionRow["classification"]>;
@@ -115,7 +129,7 @@ export type GatewaySessionListRow = {
 };
 
 /** Focused model-facing row returned by sessions_list. */
-export type SessionListRow = {
+export type SessionListRow = SessionInventoryMetadata & {
   key: string;
   sessionId?: string;
   agentId: string;

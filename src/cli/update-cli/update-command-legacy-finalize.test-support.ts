@@ -4,7 +4,11 @@ import fs from "node:fs";
 import { registerHooks } from "node:module";
 
 const scratch = process.env.OPENCLAW_STATE_DIR!;
-const source = (relative: string) => new URL(relative, import.meta.url).href;
+const source = (relative: string) =>
+  new URL(
+    import.meta.url.endsWith(".js") ? relative.replace(/\.ts$/u, ".js") : relative,
+    import.meta.url,
+  ).href;
 // Consume fixture metadata before the real worker interprets its own arguments.
 const runtimeEntry = process.argv.splice(2, 1)[0];
 if (!runtimeEntry) {

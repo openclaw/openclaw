@@ -308,6 +308,15 @@ function resolveThemeColors<T extends Record<string, ColorValue>>(
 // Theme Class
 // ============================================================================
 
+// Keep formatting independent of overridable public ANSI getters.
+function getThemeAnsi(colors: ReadonlyMap<string, string>, color: string, label: string): string {
+  const ansi = colors.get(color);
+  if (!ansi) {
+    throw new Error(`Unknown theme ${label}: ${color}`);
+  }
+  return ansi;
+}
+
 export class Theme {
   readonly name?: string;
   readonly sourcePath?: string;
@@ -337,18 +346,12 @@ export class Theme {
   }
 
   fg(color: ThemeColor, text: string): string {
-    const ansi = this.fgColors.get(color);
-    if (!ansi) {
-      throw new Error(`Unknown theme color: ${color}`);
-    }
+    const ansi = getThemeAnsi(this.fgColors, color, "color");
     return `${ansi}${text}\x1b[39m`; // Reset only foreground color
   }
 
   bg(color: ThemeBg, text: string): string {
-    const ansi = this.bgColors.get(color);
-    if (!ansi) {
-      throw new Error(`Unknown theme background color: ${color}`);
-    }
+    const ansi = getThemeAnsi(this.bgColors, color, "background color");
     return `${ansi}${text}\x1b[49m`; // Reset only background color
   }
 
@@ -373,19 +376,11 @@ export class Theme {
   }
 
   getFgAnsi(color: ThemeColor): string {
-    const ansi = this.fgColors.get(color);
-    if (!ansi) {
-      throw new Error(`Unknown theme color: ${color}`);
-    }
-    return ansi;
+    return getThemeAnsi(this.fgColors, color, "color");
   }
 
   getBgAnsi(color: ThemeBg): string {
-    const ansi = this.bgColors.get(color);
-    if (!ansi) {
-      throw new Error(`Unknown theme background color: ${color}`);
-    }
-    return ansi;
+    return getThemeAnsi(this.bgColors, color, "background color");
   }
 
   getColorMode(): ColorMode {

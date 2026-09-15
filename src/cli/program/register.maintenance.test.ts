@@ -366,6 +366,76 @@ describe("registerMaintenanceCommands doctor action", () => {
     },
   );
 
+  it.each([
+    ["lint and post-upgrade", ["--lint", "--post-upgrade"]],
+    ["session and post-upgrade", ["--session-sqlite", "inspect", "--post-upgrade"]],
+    ["session and repair", ["--session-sqlite", "import", "--fix"]],
+    ["session and repair alias", ["--session-sqlite", "inspect", "--repair"]],
+    ["session and forced repair", ["--session-sqlite", "inspect", "--force"]],
+    ["session and gateway token", ["--session-sqlite", "inspect", "--generate-gateway-token"]],
+    ["post-upgrade and repair", ["--post-upgrade", "--fix"]],
+    ["post-upgrade and gateway token", ["--post-upgrade", "--generate-gateway-token"]],
+  ])("rejects %s before either operation runs", async (_label, args) => {
+    await runMaintenanceCli(["doctor", ...args, "--json"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.writeJson).toHaveBeenCalledWith(
+      jsonFailure(
+        "doctor operations are mutually exclusive: choose one of --lint, --fix/--repair, --post-upgrade, --state-sqlite, or --session-sqlite.",
+      ),
+    );
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it.each(DOCTOR_SESSION_SQLITE_MODES.filter((mode) => mode !== "recover"))(
+    "rejects GitHub issue creation for session SQLite %s",
+    async (mode) => {
+      await runMaintenanceCli(["doctor", "--session-sqlite", mode, "--github-issue", "--json"]);
+
+      expect(doctorCommand).not.toHaveBeenCalled();
+      expect(runDoctorLintCli).not.toHaveBeenCalled();
+      expect(runtime.writeJson).toHaveBeenCalledWith(
+        jsonFailure("--github-issue requires --session-sqlite recover."),
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(2);
+    },
+  );
+
+  it("preserves standalone post-upgrade diagnostics", async () => {
+    doctorCommand.mockResolvedValue(undefined);
+
+    await runMaintenanceCli(["doctor", "--post-upgrade", "--json"]);
+
+    expect(doctorCommand).toHaveBeenCalledWith(
+      runtime,
+      expect.objectContaining({ postUpgrade: true, json: true }),
+    );
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("redacts credentials in lint failure output", async () => {
+    const token = "sk-abcdefghijklmnopqrstuv";
+    runDoctorLintCli.mockRejectedValueOnce(
+      new Error(`lint failed: Authorization: Bearer ${token}`),
+    );
+
+    await runMaintenanceCli(["doctor", "--lint", "--json"]);
+
+    expect(runtime.writeJson).toHaveBeenCalledWith({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: expect.stringContaining("lint failed: Authorization: Bearer"),
+      },
+    });
+    expect(JSON.stringify(runtime.writeJson.mock.calls)).not.toContain(token);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
   it("runs doctor lint mode without invoking repair doctor", async () => {
     runDoctorLintCli.mockResolvedValue(1);
 

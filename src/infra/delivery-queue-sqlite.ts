@@ -1,5 +1,4 @@
 // Stores durable delivery queue entries through their connection-bound owner.
-import { resolveStateDir } from "../config/state-dir.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -10,7 +9,6 @@ import {
   type UpsertDeliveryQueueEntryParams,
 } from "./delivery-queue-sqlite-bound.js";
 import {
-  countFailedDeliveryQueueEntriesInDatabase,
   countPendingDeliveryQueueEntriesInDatabase,
   deleteDeliveryQueueEntryInDatabase,
   getDeliveryQueueEntryOwnersInDatabase,
@@ -27,40 +25,22 @@ import {
   type TerminalizePendingDeliveryQueueEntryResult,
 } from "./delivery-queue-sqlite.kernel.js";
 import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
-import { isGatewayExternallySupervised } from "./gateway-supervision.js";
+import {
+  resolveDeliveryQueueStateEnv,
+  type DeliveryQueueStateContext,
+} from "./delivery-queue-state-context.js";
+import { executeDeliveryQueueOperation } from "./delivery-queue-worker-store.js";
 
 export type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.types.js";
 
-export type DeliveryQueueStateContext = {
-  stateDir: string;
-  supervisorMode?: "external";
-};
-
-export function captureDeliveryQueueStateContext(stateDir?: string): DeliveryQueueStateContext {
-  return {
-    stateDir: resolveStateDir(resolveDeliveryQueueStateEnv(stateDir)),
-    ...(isGatewayExternallySupervised(process.env) ? { supervisorMode: "external" as const } : {}),
-  };
-}
-
-export function resolveDeliveryQueueStateEnv(
-  stateDir?: string,
-  context?: DeliveryQueueStateContext,
-): NodeJS.ProcessEnv {
-  return context
-    ? {
-        ...process.env,
-        OPENCLAW_STATE_DIR: context.stateDir,
-        // Captured absence must not inherit a later ambient supervisor mode.
-        OPENCLAW_SUPERVISOR_MODE: context.supervisorMode,
-      }
-    : stateDir
-      ? { ...process.env, OPENCLAW_STATE_DIR: stateDir }
-      : process.env;
-}
+export {
+  captureDeliveryQueueStateContext,
+  resolveDeliveryQueueStateEnv,
+  type DeliveryQueueStateContext,
+} from "./delivery-queue-state-context.js";
 
 function openStateDatabase(stateDir?: string, context?: DeliveryQueueStateContext) {
   return openOpenClawStateDatabase({
@@ -175,12 +155,14 @@ export function reserveDeliveryQueueEntryAttempt(
 }
 
 /** Count dead-lettered entries per queue namespace for coarse health reporting. */
-export function countFailedDeliveryQueueEntries(stateDir?: string): Array<{
-  queueName: string;
-  count: number;
-  oldestFailedAt?: number;
-}> {
-  return countFailedDeliveryQueueEntriesInDatabase(openStateDatabase(stateDir));
+export async function countFailedDeliveryQueueEntries(
+  stateDir?: string,
+  context?: DeliveryQueueStateContext,
+): Promise<Array<{ queueName: string; count: number; oldestFailedAt?: number }>> {
+  return executeDeliveryQueueOperation(context, stateDir, {
+    type: "deliveryQueue.countFailed",
+    input: undefined,
+  });
 }
 
 /** Count pending entries across an exact set of queue namespaces. */

@@ -6,6 +6,7 @@ import {
   isLocalAssistantAttachmentSource,
 } from "./chat-message-local-media.ts";
 import {
+  clearChatMediaResourceRefresh,
   isChatMediaResourceCurrent,
   notifyChatMediaResourceSubscribers,
   observeChatMediaResource,
@@ -259,7 +260,7 @@ function resetAssistantAttachmentAvailability(
   resource.value = undefined;
   resource.retainUntil = undefined;
   resource.retryAttempted = false;
-  scheduleAssistantAttachmentRefresh(resource, { status: "checking" });
+  clearChatMediaResourceRefresh(resource);
 }
 
 function createUnavailableAssistantAttachment(

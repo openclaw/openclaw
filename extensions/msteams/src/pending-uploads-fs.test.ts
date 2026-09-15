@@ -8,6 +8,7 @@ import {
   openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareFileConsentActivityFs } from "./file-consent-helpers.js";
 import {
@@ -41,6 +42,7 @@ async function requirePendingUpload(id: string, env: NodeJS.ProcessEnv) {
 }
 
 async function cleanupTempDirs(): Promise<void> {
+  await closeOpenClawStateDatabaseAsync();
   while (createdTempDirs.length > 0) {
     const dir = createdTempDirs.pop();
     if (!dir) {
@@ -285,10 +287,6 @@ describe("prepareFileConsentActivityFs end-to-end", () => {
     setMSTeamsRuntime(msteamsRuntimeStub);
   });
 
-  afterEach(async () => {
-    await cleanupTempDirs();
-  });
-
   it("writes the pending upload to the fs store with the same id as the card", async () => {
     const stateDir = await makeTempStateDir();
     const env = makeEnv(stateDir);
@@ -320,10 +318,14 @@ describe("prepareFileConsentActivityFs end-to-end", () => {
       expect(loaded.conversationId).toBe("19:victim@thread.v2");
       expect(loaded.buffer.toString("utf8")).toBe("cli file");
     } finally {
-      if (originalEnv === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = originalEnv;
+      try {
+        await cleanupTempDirs();
+      } finally {
+        if (originalEnv === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = originalEnv;
+        }
       }
     }
   });

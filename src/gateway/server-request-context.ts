@@ -51,6 +51,7 @@ type GatewayRequestContextRuntime = Pick<
   | "loadGatewayModelCatalog"
   | "loadGatewayModelCatalogSnapshot"
   | "readPreparedGatewayModelCatalog"
+  | "readPreparedGatewayModelCatalogBatch"
   | "getRuntimeSnapshot"
   | "broadcast"
   | "broadcastToConnIds"
@@ -288,6 +289,9 @@ export function createGatewayRequestContext(
     loadGatewayModelCatalogSnapshot: runtime.loadGatewayModelCatalogSnapshot,
     ...(runtime.readPreparedGatewayModelCatalog
       ? { readPreparedGatewayModelCatalog: runtime.readPreparedGatewayModelCatalog }
+      : {}),
+    ...(runtime.readPreparedGatewayModelCatalogBatch
+      ? { readPreparedGatewayModelCatalogBatch: runtime.readPreparedGatewayModelCatalogBatch }
       : {}),
     readChatMetadata: params.chatMetadataLifecycle.read,
     ...(params.chatMetadataLifecycle.readStartup

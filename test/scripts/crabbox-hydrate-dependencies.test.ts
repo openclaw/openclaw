@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -143,7 +144,8 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
       if (environment !== null) {
         write(workspace, "pnpm-lock.yaml", `---\n${environment}\n---\n`);
       }
-      const bootstrap = resolvePnpmRunner();
+      const nodeExecPath = resolveTestNodeExecPath();
+      const bootstrap = resolvePnpmRunner({ nodeExecPath });
       const npmExecPath = execFileSync(
         bootstrap.command,
         [...bootstrap.args, "--silent", "run", "pnpm-path"],
@@ -159,9 +161,9 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
           },
         },
       ).trim();
-      const pnpm = resolvePnpmRunner({ npmExecPath });
+      const pnpm = resolvePnpmRunner({ nodeExecPath, npmExecPath });
       // The setup action prepends NODE_BIN; keep Node and the pinned pnpm runner together.
-      symlinkSync(process.execPath, path.join(bin, "node"));
+      symlinkSync(nodeExecPath, path.join(bin, "node"));
       write(
         bin,
         "pnpm",

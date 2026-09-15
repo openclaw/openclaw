@@ -9,7 +9,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { vitestWorkerBuildEntries } from "../scripts/lib/vitest-worker-build-entries.mts";
+import {
+  legacyFinalizerBuildSources,
+  vitestWorkerBuildEntries,
+} from "../scripts/lib/vitest-worker-build-entries.mts";
 import { vitestWorkerDeclarationEntries } from "../scripts/lib/vitest-worker-declarations.mts";
 import productionConfig from "./knip.config.ts";
 
@@ -106,12 +109,15 @@ const workspaces = Object.fromEntries(
         : {}),
       entry: [
         ...settings.entry,
-        // Both compiler registries emit entry modules, including declarations
+        // Compiler registries emit entry modules, including declarations
         // imported by generated child scripts. Keep workspace-relative entries.
-        ...Object.values({
-          ...vitestWorkerBuildEntries,
-          ...vitestWorkerDeclarationEntries,
-        }).flatMap((source) => {
+        ...[
+          ...Object.values({
+            ...vitestWorkerBuildEntries,
+            ...vitestWorkerDeclarationEntries,
+          }),
+          ...legacyFinalizerBuildSources,
+        ].flatMap((source) => {
           const relative = path.relative(workspace, source).replaceAll("\\", "/");
           return relative.startsWith("../") ? [] : [`${relative}!`];
         }),

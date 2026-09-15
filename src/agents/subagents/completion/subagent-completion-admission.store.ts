@@ -30,7 +30,11 @@ import {
 } from "../../../tasks/task-registry.store.kernel.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
 import { resolveTaskCleanupAfter } from "../../../tasks/task-retention.js";
-import { ensureCompletionState, ensureDeliveryState } from "../registry/subagent-delivery-state.js";
+import {
+  ensureCompletionState,
+  ensureDeliveryState,
+  isCompletedRequesterDeliveryBlocked,
+} from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { resolveFinalizedSubagentTaskState } from "../registry/subagent-registry-completion.js";
 import {
@@ -272,6 +276,7 @@ export function blockSubagentCompletionDelivery(params: {
   taskId: string;
   reason: string;
   suspendedReason?: "expiry" | "permanent_failure";
+  lastDropReason?: NonNullable<SubagentRunRecord["delivery"]>["lastDropReason"];
   disposition?: NonNullable<SubagentRunRecord["delivery"]>["disposition"];
   databaseOptions?: OpenClawStateDatabaseOptions;
 }): boolean {
@@ -341,12 +346,21 @@ export function blockSubagentCompletionDelivery(params: {
       announcedAt: undefined,
       suspendedAt: params.suspendedReason ? (delivery.suspendedAt ?? now) : delivery.suspendedAt,
       suspendedReason: params.suspendedReason ?? delivery.suspendedReason,
+      lastDropReason: params.lastDropReason ?? delivery.lastDropReason,
       nextAttemptAt: undefined,
       queueId: undefined,
     });
     Object.assign(subagent, { cleanupHandled: false, wakeOnDescendantSettle: undefined });
     if (params.suspendedReason) {
-      markRequesterSettleWakePending(subagent);
+      if (isCompletedRequesterDeliveryBlocked(subagent)) {
+        // This requester already ran. An ordinary settle wake would replay it;
+        // a separately owned yield batch still has genuine unfinished work.
+        if (subagent.requesterSettleWake?.requesterYieldBatch !== true) {
+          subagent.requesterSettleWake = undefined;
+        }
+      } else {
+        markRequesterSettleWakePending(subagent);
+      }
     } else {
       subagent.suppressCompletionDelivery = true;
     }

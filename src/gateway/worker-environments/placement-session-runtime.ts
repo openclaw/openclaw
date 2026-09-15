@@ -7,6 +7,7 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { captureRuntimeStateEnvironment } from "../../config/paths.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import { resolveSessionSelectedModelRef } from "../session-utils-model-selection.js";
@@ -49,6 +50,7 @@ export function resolveWorkerPlacementModelRuntime(
     provider: string;
     model: string;
     preparedEnvironment?: NodeJS.ProcessEnv;
+    metadataSnapshot?: PluginMetadataSnapshot;
   },
 ): string {
   const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider(params);
@@ -58,7 +60,7 @@ export function resolveWorkerPlacementModelRuntime(
   const pinnedCliRuntime =
     !locksPersistedHarness &&
     sessionRuntimeOverride &&
-    isCliProvider(sessionRuntimeOverride, params.cfg)
+    isCliProvider(sessionRuntimeOverride, params.cfg, params.metadataSnapshot)
       ? sessionRuntimeOverride
       : undefined;
   // When a non-CLI override is active the dispatch path skips CLI aliasing
@@ -87,7 +89,8 @@ export function resolveWorkerPlacementModelRuntime(
         }));
   const useCliExecution =
     pinnedCliRuntime !== undefined ||
-    (!sessionRuntimeOverride && isCliProvider(cliExecutionProvider ?? params.provider, params.cfg));
+    (!sessionRuntimeOverride &&
+      isCliProvider(cliExecutionProvider ?? params.provider, params.cfg, params.metadataSnapshot));
   return useCliExecution
     ? (cliExecutionProvider ?? params.provider)
     : resolveEffectiveAgentRuntime({

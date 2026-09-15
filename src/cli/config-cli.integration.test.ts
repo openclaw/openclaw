@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
 import { describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   createTestRuntime,
   useConfigCliIntegrationHarness,
@@ -13,6 +14,8 @@ const configRuntime = await import("../config/config.js");
 const { clearConfigCache } = configRuntime;
 const { formatConfigIssueLines } = await import("../config/issue-format.js");
 const { REDACTED_SENTINEL } = await import("../config/redact-snapshot.js");
+const { recordDeferredPluginMigrations } = await import("../infra/deferred-plugin-migrations.js");
+const { closeOpenClawStateDatabaseForTest } = await import("../state/openclaw-state-db.js");
 const runtimeSchema = await import("../config/runtime-schema.js");
 const { runConfigGet, runConfigPatch, runConfigSet, runConfigUnset } =
   await import("./config-cli.js");
@@ -33,6 +36,62 @@ function installRuntimeSchemaReadHook(hook: () => void | Promise<void>): void {
 }
 
 describe("config cli integration", () => {
+  it("rejects explicit edits to pending plugin inputs without acknowledging discarded changes", async () => {
+    const pluginPath = "plugins.entries.sample.config";
+    const raw = JSON.stringify({
+      gateway: { mode: "local", port: 18789 },
+      plugins: { entries: { sample: { config: { legacyRoot: "/srv/legacy" } } } },
+    });
+    await withConfigFileHarness(
+      "openclaw-config-cli-pending-",
+      raw,
+      async ({ configPath, tempDir }) => {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: path.join(tempDir, "state") }, async () => {
+          try {
+            recordDeferredPluginMigrations({
+              pending: [
+                {
+                  pluginId: "sample",
+                  reason: "The configured plugin is not installed.",
+                  command: "openclaw plugins install @example/sample",
+                  configPaths: [["plugins", "entries", "sample", "config"]],
+                },
+              ],
+            });
+            for (const args of [
+              ["set", `${pluginPath}.legacyRoot`, "/srv/replacement"],
+              ["set", `${pluginPath}.legacyRoot`, "/srv/replacement", "--dry-run"],
+              ["unset", `${pluginPath}.legacyRoot`],
+              ["set", pluginPath, '{"legacyRoot":"/srv/replacement"}', "--replace"],
+              ["unset", "plugins.entries.sample"],
+            ]) {
+              await expect(runRegisteredConfigCommand(["config", ...args])).rejects.toMatchObject({
+                name: "ExitError",
+                code: 1,
+              });
+              expect(registeredRuntimeErrors.at(-1)).toContain(
+                'Plugin "sample" state migration is pending',
+              );
+              expect(registeredRuntimeErrors.at(-1)).toContain(
+                "openclaw plugins install @example/sample",
+              );
+              expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+              expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
+              expect(registeredRuntimeLogs.join("\n")).not.toMatch(/Updated|Removed|Applied/);
+            }
+            await runRegisteredConfigCommand(["config", "set", "gateway.port", "18790"]);
+            expect(JSON5.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
+              gateway: { port: 18790 },
+              plugins: { entries: { sample: { config: { legacyRoot: "/srv/legacy" } } } },
+            });
+          } finally {
+            closeOpenClawStateDatabaseForTest();
+          }
+        });
+      },
+    );
+  });
+
   it.each(["restore", "external replacement", "empty external replacement", "recovery failure"])(
     "openclaw config set reports owned root removal with %s",
     async (recovery) => {

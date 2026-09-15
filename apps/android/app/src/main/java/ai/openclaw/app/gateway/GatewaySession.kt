@@ -805,6 +805,18 @@ class GatewaySession(
     return GatewayLoadedImage(bytes = loaded.bytes, mimeType = loaded.mimeType)
   }
 
+  internal suspend fun loadSourceFavicon(
+    expectedEndpointStableId: String,
+    config: GatewaySourcePreviewConfig,
+    hostname: String,
+    withEnqueue: (() -> Unit) -> Unit,
+  ): GatewayLoadedImage? {
+    if (!config.automaticallyFetchFavicons) return null
+    val conn = readyConnection(expectedEndpointStableId) ?: return null
+    val image = conn.loadSourceFavicon(config, hostname, guardRequestEnqueue(conn, withEnqueue))
+    return synchronized(lifecycleLock) { image.takeIf { currentConnection === conn && conn.isReady() } }
+  }
+
   suspend fun loadMediaArtifact(
     expectedEndpointStableId: String?,
     sessionKey: String,
@@ -1040,6 +1052,8 @@ class GatewaySession(
         }
       }
     private val client: OkHttpClient = buildClient()
+    private val sourceFaviconLoader by lazy { GatewaySourceFaviconLoader(client) }
+    private var controlUiReadCredentials: List<String> = emptyList()
     private val listener = Listener()
     private var socket: WebSocket? = null
 
@@ -1165,6 +1179,20 @@ class GatewaySession(
         retryPreparingPlayback = playbackRendition,
       )
     }
+
+    suspend fun loadSourceFavicon(
+      config: GatewaySourcePreviewConfig,
+      hostname: String,
+      withEnqueue: (() -> Unit) -> Unit,
+    ): GatewayLoadedImage? =
+      sourceFaviconLoader.load(
+        gatewayUrl = "${if (tlsConfig != null) "https" else "http"}://${formatGatewayAuthority(target.endpoint.host, target.endpoint.port)}",
+        basePath = config.basePath,
+        hostname = hostname,
+        headers = mediaTransportHeaders(),
+        credentials = controlUiReadCredentials,
+        withEnqueue = withEnqueue,
+      )
 
     fun bufferedMedia(
       bytes: ByteArray,
@@ -1643,6 +1671,11 @@ class GatewaySession(
       val authObj = obj["auth"].asObjectOrNull()
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: target.options.role
+      controlUiReadCredentials =
+        listOfNotNull(deviceToken, selectedAuth.authDeviceToken, selectedAuth.authToken, selectedAuth.authPassword)
+          .map(String::trim)
+          .filter(String::isNotEmpty)
+          .distinct()
       val authScopes =
         authObj
           ?.get("scopes")

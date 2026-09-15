@@ -101,6 +101,7 @@ describe("ModelProvidersPage usage convergence", () => {
     page.routeData = {
       gateway: harness.context.gateway,
       gatewaySnapshot: harness.context.gateway.snapshot,
+      selectionIntentRevision: harness.context.settingsAgentSelection.intentRevision,
       client: harness.context.gateway.snapshot.client,
       agentId: "main",
       data: { ...EMPTY_MODEL_PROVIDERS_DATA, updatedAt: Date.now() },
@@ -234,6 +235,7 @@ describe("ModelProvidersPage usage convergence", () => {
     page.routeData = {
       gateway: harness.context.gateway,
       gatewaySnapshot: harness.context.gateway.snapshot,
+      selectionIntentRevision: harness.context.settingsAgentSelection.intentRevision,
       data: EMPTY_MODEL_PROVIDERS_DATA,
       client: null,
       agentId: "main",

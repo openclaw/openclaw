@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
-import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
+import {
+  withArtifactPreservingStateReads,
+  withSynchronousArtifactPreservingStateSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import {
   includeContributionOwnsAgentRoster,
   includeContributionOwnsBindings,
@@ -246,14 +249,23 @@ export async function readConfigFileSnapshotInternal(
       env: deps.env,
       allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     });
-    const validated = await deps.measure("config.snapshot.read.validate", () =>
-      validateConfigObjectWithPlugins(validationConfigRaw, {
-        ...pathResolution,
-        pluginValidation: context.options.pluginValidation,
-        loadPluginMetadataSnapshot: pluginMetadata.load,
-        sourceRaw: effectiveParsed,
-        preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,
-      }),
+    const { deferredPluginMigrations, validated } = await deps.measure(
+      "config.snapshot.read.validate",
+      () =>
+        withSynchronousArtifactPreservingStateSnapshot(() => {
+          const pending = context.resolveDeferredPluginMigrations();
+          return {
+            deferredPluginMigrations: pending,
+            validated: validateConfigObjectWithPlugins(validationConfigRaw, {
+              ...pathResolution,
+              pluginValidation: context.options.pluginValidation,
+              loadPluginMetadataSnapshot: pluginMetadata.load,
+              sourceRaw: effectiveParsed,
+              preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,
+              deferredPluginMigrations: pending,
+            }),
+          };
+        }),
     );
     if (!validated.ok) {
       const availableSnapshot = pluginMetadata.getSnapshot();
@@ -291,6 +303,7 @@ export async function readConfigFileSnapshotInternal(
           runtimeConfig: coerceConfig(effectiveConfigRaw),
           hash: snapshotHash,
           issues: validated.issues,
+          deferredPluginMigrations,
           warnings: [...validated.warnings, ...envVarWarnings],
           resolutionFacts: readResolution.resolutionFacts,
           legacyIssues,
@@ -377,6 +390,7 @@ export async function readConfigFileSnapshotInternal(
             hash: snapshotHash,
             issues: [],
             warnings: [...validated.warnings, ...envVarWarnings],
+            deferredPluginMigrations,
             resolutionFacts: readResolution.resolutionFacts,
             legacyIssues: [],
           }),

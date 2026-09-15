@@ -417,6 +417,79 @@ describe("session pin mutations", () => {
     }
   });
 
+  it("preserves a pending restore-and-pin through archived observations and rolls back rejection", async () => {
+    const key = "agent:main:restore-pin";
+    const sessionId = "restore-pin-session";
+    let current: GatewaySessionRow = {
+      key,
+      agentId: "main",
+      sessionId,
+      kind: "direct",
+      updatedAt: 10,
+      archived: true,
+      archivedAt: 10,
+      pinned: false,
+    };
+    const response = createDeferred<unknown>();
+    const dispatched = createDeferred();
+    const client = createTestGatewayClient(async (method) => {
+      if (method === "sessions.list") {
+        return sessionsResult([current], current.updatedAt ?? 0);
+      }
+      if (method === "sessions.patch") {
+        dispatched.resolve();
+        return response.promise;
+      }
+      throw new Error(`Unexpected Gateway method: ${method}`);
+    });
+    const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
+    let observer: ReturnType<typeof sessions.observeRow> | undefined;
+    let operation: ReturnType<typeof sessions.patch> | undefined;
+    const observeArchived = () =>
+      sessions.reconcileChanged(
+        { ...current, sessionKey: key, reason: "patch", pinnedAt: null },
+        { archivedFilter: "all" },
+      );
+    const expectObservedPin = (pinned: boolean) => {
+      for (const row of [sessions.state.result?.sessions[0], observer?.row]) {
+        expect(row).toMatchObject({ key, sessionId, archived: true, pinned });
+        if (!pinned) {
+          expect(row?.pinnedAt).toBeUndefined();
+        }
+      }
+    };
+    try {
+      await sessions.refresh({ agentId: "main", archivedFilter: "all", force: true });
+      observer = sessions.observeRow({ key, agentId: "main" }, () => {});
+      observeArchived();
+      expect(sessions.archiveVisibility(key)).toBe("archived");
+      expectObservedPin(false);
+
+      operation = sessions.patch(
+        key,
+        { archived: false, pinned: true },
+        { agentId: "main", expectedSessionId: sessionId, deferListRefresh: true },
+      );
+      await dispatched.promise;
+      expectObservedPin(true);
+      current = { ...current, updatedAt: 20 };
+      observeArchived();
+      expectObservedPin(true);
+      await sessions.refresh({ agentId: "main", archivedFilter: "all", force: true });
+      expectObservedPin(true);
+
+      response.reject(new Error("Restore and pin rejected"));
+      await expect(operation).rejects.toThrow("Restore and pin rejected");
+      expectObservedPin(false);
+      expect(sessions.state.error).toContain("Restore and pin rejected");
+    } finally {
+      observer?.dispose();
+      sessions.dispose();
+      response.resolve({ ok: true, path: "(multiple)", key, entry: { sessionId } });
+      await Promise.allSettled(operation ? [operation] : []);
+    }
+  });
+
   it("rolls a rejected unpin back across the primary and filtered lists", async () => {
     const { gateway, key } = pinHarness({
       patchResponse: () => Promise.reject(new Error("pin rejected")),

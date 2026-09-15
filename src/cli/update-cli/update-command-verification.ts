@@ -48,18 +48,28 @@ export async function verifyPreviousGatewayForUpdate(params: {
   timeoutMs?: number;
   observedStartupMs?: number;
   assertCurrent?: () => void;
+  signal?: AbortSignal;
+  requirePluginHealth?: boolean;
+  expectedVersion?: string;
 }): Promise<boolean> {
   const { config, env } = params;
-  const readiness = captureUpdateGatewayReadinessOwner({ opts: params.opts });
+  const readiness = captureUpdateGatewayReadinessOwner({
+    opts: params.opts,
+    signal: params.signal,
+  });
   const assertCurrent = () => {
     readiness.assertCurrent();
     params.assertCurrent?.();
   };
   const port = await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env });
-  const [expectedVersion, expectedBuildId] = await Promise.all([
+  const [installedVersion, expectedBuildId] = await Promise.all([
     readPackageVersion(params.root),
     readBuiltGatewayBuildId(params.root),
   ]);
+  if (params.expectedVersion && installedVersion !== params.expectedVersion) {
+    return false;
+  }
+  const expectedVersion = params.expectedVersion ?? installedVersion;
   const { health, readyz } = await observeUpdateGatewayReadiness({
     serviceEnv: env,
     gatewayPort: port,
@@ -69,6 +79,8 @@ export async function verifyPreviousGatewayForUpdate(params: {
     observedStartupMs: params.observedStartupMs,
     requireRunningService: true,
     settle: { probes: 1 },
+    signal: params.signal,
+    requirePluginHealth: params.requirePluginHealth,
     assertCurrent,
   });
   const servesPreviousPackage = await gatewayServiceCommandUsesRoot({ root: params.root, env });
@@ -181,6 +193,7 @@ type UpdateGatewayReadinessParams = {
   expectedVersion?: string;
   expectedBuildId?: string;
   requireRunningService?: boolean;
+  requirePluginHealth?: boolean;
   health?: GatewayRestartSnapshot;
   settle?: { probes: number };
   signal?: AbortSignal;
@@ -217,7 +230,7 @@ async function observeUpdateGatewayReadiness(params: UpdateGatewayReadinessParam
     port: params.gatewayPort,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
-    requirePluginHealth: false,
+    requirePluginHealth: params.requirePluginHealth ?? false,
     env: params.serviceEnv,
     ...(params.signal ? { signal: params.signal } : {}),
   };

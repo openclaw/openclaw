@@ -41,6 +41,16 @@ start a fresh Gateway for a restart.
 An explicit server-close failure retains exit status `1`, including when final
 provider cleanup crosses the native shutdown deadline.
 
+Admission-close logs name the shutdown trigger, for example `stop (SIGTERM)` or
+`restart (SIGUSR1: config reload: gateway.bind)`. A signal alone does not identify
+its sender: Node does not expose the sender PID or command. Three occurrences of
+the same signal within five minutes in one process, or three recorded plain
+SIGTERM/SIGINT stops across process lifetimes, produce a hint to check
+`openclaw gateway status --deep` for another supervisor. Deep local status shows
+the last recorded shutdown reason and time for the selected state directory;
+on Linux, it also reports competing user and system service units when inspecting
+the native service. Failure outcomes keep their specific failure reason.
+
 Foreground/manual Gateways and other supervisors retain exit status `1` when
 cleanup cannot finish before the shutdown deadline.
 

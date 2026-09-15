@@ -238,6 +238,68 @@ describe("requester settle dispatch deadline", () => {
     expect(completeBatch).not.toHaveBeenCalled();
   });
 
+  it.each(["completed", "cancelled"] as const)(
+    "retains an in-flight private wake past the failure retry limit until %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000);
+      const child = settledChild();
+      child.completionTarget = "parent";
+      child.completionRequesterSessionId = "requester-session";
+      registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+      deliver
+        .mockResolvedValueOnce({
+          delivered: false,
+          path: "direct",
+          disposition: "retryable",
+          error: "gateway request timeout for agent",
+        })
+        .mockResolvedValue({
+          delivered: false,
+          path: "direct",
+          disposition: "retryable",
+          reason: "requester_turn_pending",
+        });
+      const completeBatch = vi.fn((batch: readonly SubagentRunRecord[]) => {
+        for (const entry of batch) {
+          entry.requesterSettleWake = undefined;
+        }
+      });
+      const wake = () =>
+        maybeWakeRequesterAfterAllChildrenSettled({
+          requesterSessionKey: REQUESTER_KEY,
+          settledEntry: child,
+          transitionBatch: (batch, state) => {
+            for (const entry of batch) {
+              entry.requesterSettleWake = state;
+            }
+          },
+          completeBatch,
+        });
+      await expect(wake()).resolves.toBe(false);
+      for (let observation = 0; observation < 5; observation += 1) {
+        await vi.advanceTimersByTimeAsync(30_000);
+        await expect(wake()).resolves.toBe(false);
+        expect(completeBatch).not.toHaveBeenCalled();
+        expect(child.requesterSettleWake).toMatchObject({ status: "dispatching", attemptCount: 2 });
+        expect(child.suppressCompletionDelivery).not.toBe(true);
+      }
+      const requestIds = deliver.mock.calls.map(([request]) => request.directIdempotencyKey);
+      expect(requestIds).toHaveLength(6);
+      expect(new Set(requestIds).size).toBe(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      if (outcome === "cancelled") {
+        child.suppressCompletionDelivery = true;
+      } else {
+        deliver.mockResolvedValueOnce({ delivered: true, path: "direct" });
+      }
+      await expect(wake()).resolves.toBe(outcome === "completed");
+      expect(completeBatch).toHaveBeenCalledOnce();
+      expect(deliver).toHaveBeenCalledTimes(outcome === "completed" ? 7 : 6);
+      expect(child.completion?.resultText).toBe("child result");
+    },
+  );
+
   it("preserves the final attempt when its Gateway closes during runtime loading", async () => {
     const retired = settledChild();
     retired.requesterSettleWake!.attemptCount = 2;

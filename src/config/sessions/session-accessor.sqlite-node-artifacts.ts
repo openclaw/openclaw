@@ -6,6 +6,7 @@ import {
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "../../state/openclaw-agent-progress-card-schema.js";
 import { ensureSessionParticipantsSchema } from "../../state/openclaw-agent-session-participants-schema.js";
+import { copyLegacyAcpMigrationSourcesForRepair } from "./session-accessor.sqlite-acp-provenance.js";
 import {
   copySessionInputCompletionsForRepair,
   copySessionPendingInputsForRepair,
@@ -49,6 +50,7 @@ export function copySessionNodeArtifactsForRepair(
     return;
   }
   copySessionPendingInputsForRepair(source, destination, keys, canonicalKey);
+  copyLegacyAcpMigrationSourcesForRepair(source, destination, keys, canonicalKey);
   const sourceDb = getSessionKysely(source.db);
   const destinationDb = getSessionKysely(destination.db);
   const sourceKeyReferences = new Set(keys.flatMap((key) => [key, key.trim()]));

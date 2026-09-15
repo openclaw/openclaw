@@ -68,77 +68,84 @@ function createSessionModelSources(
   diagnostics: string[],
   preparedAgentIds?: ReadonlySet<string>,
 ) {
-  const physicalEntries = new Map<string, Record<string, SessionEntry>>();
+  const physicalStores = new Map<
+    string,
+    {
+      entries: Record<string, SessionEntry>;
+      readers: Map<string, GatewaySessionModelSource["loadSessionEntry"]>;
+    }
+  >();
   const logicalEntries = new Map<string, SessionEntry | undefined>();
-  const readers = new Map<string, GatewaySessionModelSource["loadSessionEntry"]>();
   const logicalKey = (agentId: string, key: string) => `${normalizeAgentId(agentId)}\0${key}`;
   return {
-    add(
-      target: Omit<GatewayStoredSessionTarget, "modelSource">,
-      key: string,
-      entry: SessionEntry,
-    ): GatewaySessionModelSource {
-      const physicalKey = storeTargetKey(target.storeTarget);
-      let store = physicalEntries.get(physicalKey);
-      if (!store) {
-        store = {};
-        physicalEntries.set(physicalKey, store);
+    prepareStore(target: SessionStoreTarget) {
+      const physicalKey = storeTargetKey(target);
+      let physical = physicalStores.get(physicalKey);
+      if (!physical) {
+        physical = { entries: {}, readers: new Map() };
+        physicalStores.set(physicalKey, physical);
       }
-      store[key] = entry;
-      const identity = logicalKey(target.agentId, key);
-      // Preserve target-order selection within an owner, including hidden sentinels.
-      if (!logicalEntries.has(identity)) {
-        logicalEntries.set(identity, entry);
-      }
-      const readerKey = `${target.agentId}\0${physicalKey}`;
-      let read = readers.get(readerKey);
-      if (!read) {
-        const readQualifiedParent = createGatewaySessionEntryReader({
-          cfg,
-          agentId: target.agentId,
-          store,
-        });
-        read = (parentKey) => {
-          if (parentKey === "global" || parentKey === "unknown") {
-            return store[parentKey];
-          }
-          // Stored qualified lineage retains its owner before a main alias collapses.
-          const parsed = parseAgentSessionKey(parentKey);
-          const agentId = normalizeAgentId(parsed?.agentId ?? target.agentId);
-          const refusal = readAgentDatabaseAdmissionRefusal(agentId);
-          if (refusal) {
-            const message = `${refusal.reason}\n${refusal.repairHint}`;
-            if (!diagnostics.includes(message)) {
-              diagnostics.push(message);
-            }
-            return undefined;
-          }
-          const canonicalKey = resolveStoredSessionKeyForAgentStore({
+      const { entries: store, readers } = physical;
+      return (
+        logicalAgentId: string,
+        key: string,
+        entry: SessionEntry,
+      ): GatewaySessionModelSource => {
+        store[key] = entry;
+        const identity = logicalKey(logicalAgentId, key);
+        // Preserve target-order selection within an owner, including hidden sentinels.
+        if (!logicalEntries.has(identity)) {
+          logicalEntries.set(identity, entry);
+        }
+        let read = readers.get(logicalAgentId);
+        if (!read) {
+          const readQualifiedParent = createGatewaySessionEntryReader({
             cfg,
-            agentId,
-            sessionKey: parentKey,
+            agentId: logicalAgentId,
+            store,
           });
-          const parentIdentity = logicalKey(agentId, canonicalKey);
-          // Only unprepared qualified owners need an exact read. Cache absence too,
-          // without treating one parent read as a complete view of that owner's store.
-          if (
-            parsed &&
-            preparedAgentIds &&
-            !preparedAgentIds.has(agentId) &&
-            !logicalEntries.has(parentIdentity)
-          ) {
-            logicalEntries.set(parentIdentity, readQualifiedParent(parentKey));
-          }
-          return logicalEntries.get(parentIdentity);
-        };
-        readers.set(readerKey, read);
-      }
-      return { entry, loadSessionEntry: read };
+          read = (parentKey) => {
+            if (parentKey === "global" || parentKey === "unknown") {
+              return store[parentKey];
+            }
+            // Stored qualified lineage retains its owner before a main alias collapses.
+            const parsed = parseAgentSessionKey(parentKey);
+            const agentId = normalizeAgentId(parsed?.agentId ?? logicalAgentId);
+            const refusal = readAgentDatabaseAdmissionRefusal(agentId);
+            if (refusal) {
+              const message = `${refusal.reason}\n${refusal.repairHint}`;
+              if (!diagnostics.includes(message)) {
+                diagnostics.push(message);
+              }
+              return undefined;
+            }
+            const canonicalKey = resolveStoredSessionKeyForAgentStore({
+              cfg,
+              agentId,
+              sessionKey: parentKey,
+            });
+            const parentIdentity = logicalKey(agentId, canonicalKey);
+            // Only unprepared qualified owners need an exact read. Cache absence too,
+            // without treating one parent read as a complete view of that owner's store.
+            if (
+              parsed &&
+              preparedAgentIds &&
+              !preparedAgentIds.has(agentId) &&
+              !logicalEntries.has(parentIdentity)
+            ) {
+              logicalEntries.set(parentIdentity, readQualifiedParent(parentKey));
+            }
+            return logicalEntries.get(parentIdentity);
+          };
+          readers.set(logicalAgentId, read);
+        }
+        return { entry, loadSessionEntry: read };
+      };
     },
     remove(target: GatewayStoredSessionTarget, key: string) {
-      const store = physicalEntries.get(storeTargetKey(target.storeTarget));
+      const store = physicalStores.get(storeTargetKey(target.storeTarget));
       if (store) {
-        delete store[key];
+        delete store.entries[key];
       }
       logicalEntries.delete(logicalKey(target.agentId, key));
     },
@@ -314,11 +321,12 @@ function mergeOpenIncognitoStores(params: {
       storePath: target.storePath,
     });
     let merged = false;
+    const addModelSource = params.modelSources.prepareStore(target);
+    const modelTarget = { agentId: target.agentId, storeTarget: target };
     for (const { sessionKey, entry } of store) {
       if (!isIncognitoSessionKey(sessionKey) || entry.incognito !== true) {
         continue;
       }
-      const modelTarget = { agentId: target.agentId, storeTarget: target };
       mergeSessionEntryIntoCombined({
         cfg: params.cfg,
         combined: params.combined,
@@ -326,7 +334,7 @@ function mergeOpenIncognitoStores(params: {
         entry,
         target: {
           ...modelTarget,
-          modelSource: params.modelSources.add(modelTarget, sessionKey, entry),
+          modelSource: addModelSource(target.agentId, sessionKey, entry),
         },
         canonicalKey: sessionKey,
       });
@@ -651,6 +659,7 @@ export function loadCombinedSessionStoreForGatewayCore(
     preparedAgentIds?.add(agentId);
     preparedAgentIds?.add(storeTarget.agentId);
     preparedAgentIds?.add(rowAgentId);
+    const addModelSource = modelSources.prepareStore(storeTarget);
     for (const { sessionKey: key, entry } of store) {
       const parsed = parseAgentSessionKey(key);
       const canonicalKey = resolveStoredSessionKeyForAgentStore({
@@ -667,11 +676,7 @@ export function loadCombinedSessionStoreForGatewayCore(
       const canonicalAgentId = normalizeAgentId(parsed?.agentId ?? rowAgentId);
       preparedAgentIds?.add(canonicalAgentId);
       // A scoped row can inherit a differently owned parent from this same physical store.
-      const modelSource = modelSources.add(
-        { agentId: canonicalAgentId, storeTarget },
-        canonicalKey,
-        entry,
-      );
+      const modelSource = addModelSource(canonicalAgentId, canonicalKey, entry);
       if (requestedAgentId && canonicalAgentId !== requestedAgentId) {
         continue;
       }

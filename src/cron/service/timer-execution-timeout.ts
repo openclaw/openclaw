@@ -134,7 +134,12 @@ export type ExecuteJobCoreOptions = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
-  onHeartbeatExecutionStarted?: (opts: HeartbeatWakeRequest & { agentId: string }) => void;
+  onHeartbeatExecutionStarted?: (opts: HeartbeatWakeRequest & { agentId: string }) =>
+    | {
+        onAttemptStarted?: () => void;
+        onQueued?: () => void;
+      }
+    | undefined;
   executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
   /** Revalidates the durable run fence after awaited planning and before effects. */
   assertRunCurrent?: () => void;

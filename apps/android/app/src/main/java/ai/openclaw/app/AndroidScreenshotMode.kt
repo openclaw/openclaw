@@ -13,6 +13,7 @@ enum class AndroidScreenshotScene(
 ) {
   Home("home", HomeDestination.Connect),
   Chat("chat", HomeDestination.Chat),
+  Sources("sources", HomeDestination.Chat),
   CompletedWork("completed-work", HomeDestination.Chat),
   ActiveWork("active-work", HomeDestination.Chat),
   WorkBoundaries("work-boundaries", HomeDestination.Chat),

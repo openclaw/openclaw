@@ -15,6 +15,8 @@ For the published-upgrade regression gate, see [selection and routing](/ci/scope
 
 Docs-only `main` pushes skip CI. Every canonical `main` push admitted by the CI workflow selects the published-upgrade regression gate.
 
+Android native resource preparation uses the Mermaid renderer's filtered dependency install, including optional build tooling. Pnpm retains root dependencies but omits unrelated plugin packages; Gradle still builds the assets and runs the selected native tests and lint. Historical targets keep their compatibility path.
+
 Real-Gateway browser checks use [job budgets matched to their selected runner](/ci/runners#blacksmith-runner-capacity).
 
 | Page                                                           | Read it when                                                                                                        |

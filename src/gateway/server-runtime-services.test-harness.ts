@@ -4,7 +4,8 @@ import type { scheduleGatewayPostReadyMaintenance } from "./server-runtime-servi
 
 type StartSessionDeliveryRuntime =
   typeof import("../infra/session-delivery-queue-runtime.js").startSessionDeliveryRuntime;
-type StartHeartbeatRunner = typeof import("../infra/heartbeat-runner.js").startHeartbeatRunner;
+type StartHeartbeatRunner =
+  typeof import("../infra/heartbeat-runner-scheduler.js").startHeartbeatRunner;
 type DrainPendingDeliveries =
   typeof import("../infra/outbound/delivery-queue-recovery.js").drainPendingDeliveriesCore;
 type RecoverPendingDeliveries =
@@ -53,11 +54,11 @@ const runtimeServiceMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("../infra/heartbeat-runner.js", () => ({
-  resolveHeartbeatAgents: (cfg: { agents?: { defaults?: { heartbeat?: unknown } } }) => [
-    { agentId: "main", heartbeat: cfg.agents?.defaults?.heartbeat },
-  ],
+vi.mock("../infra/heartbeat-runner-scheduler.js", () => ({
   startHeartbeatRunner: runtimeServiceMocks.startHeartbeatRunner,
+}));
+
+vi.mock("../infra/heartbeat-runner-run.js", () => ({
   runHeartbeatOnce: runtimeServiceMocks.runHeartbeatOnce,
 }));
 

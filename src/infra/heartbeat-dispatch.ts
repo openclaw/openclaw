@@ -40,8 +40,9 @@ import { formatErrorMessage } from "./errors.js";
 import { classifyHeartbeatAgentOutcome } from "./heartbeat-delivery-normalization.js";
 import { HEARTBEAT_DELIVERY_CONTEXT_KEY_PREFIX } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
+import { heartbeatLog as log } from "./heartbeat-log.js";
 import { persistHeartbeatOutcome } from "./heartbeat-outcome-store.js";
-import { heartbeatLog as log, resolveHeartbeatChannelPlugin } from "./heartbeat-runner-config.js";
+import { resolveHeartbeatChannelPlugin } from "./heartbeat-runner-config.js";
 import type {
   HeartbeatRunOptions,
   PreparedHeartbeatRun,

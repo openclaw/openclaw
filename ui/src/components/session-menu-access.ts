@@ -44,10 +44,7 @@ export function sessionMenuReasons(params: {
         patch,
       },
     });
-    if (access.allowed) {
-      return undefined;
-    }
-    return access.cause === "method-unavailable" ? patchReason : access.reason;
+    return access.allowed ? undefined : access.reason;
   };
   const unreadReason = batchPatchReason({ unread: true });
   const categoryReason = batchPatchReason({ category: null });

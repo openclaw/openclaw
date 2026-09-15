@@ -29,6 +29,7 @@ import {
 } from "../lib/sessions/index.ts";
 import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
 import { createSessionArchiveState } from "../lib/sessions/session-archive-state.ts";
+import { createSessionRowProvenance } from "../lib/sessions/session-row-provenance.ts";
 import {
   createSidebarContextLifecycle,
   disposeSidebarContextLifecycles,
@@ -249,6 +250,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
+  const archiveProvenance = createSessionRowProvenance();
   const archiveState = createSessionArchiveState(
     (key) => state.result?.sessions.find((row) => row.key === key),
     () => {
@@ -256,6 +258,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
         listener(state);
       }
     },
+    archiveProvenance,
   );
   const groupsPut = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
@@ -277,7 +280,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   const refresh = vi.fn((_options?: Parameters<SessionCapability["refresh"]>[0]) =>
     Promise.resolve(),
   );
-  const refreshReplacement = vi.fn(() => Promise.resolve());
+  const refreshReplacement = vi.fn(() => Promise.resolve(state.result));
   const patchMany = vi.fn(
     async (
       targets: SessionsPatchManyParams["targets"],
@@ -418,6 +421,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       scopedSessions!.inheritRow(...args),
     projectRows: (rows: readonly GatewaySessionRow[]) => scopedSessions!.projectRows(rows),
     refresh,
+    invalidate: (...args: Parameters<SessionCapability["invalidate"]>) =>
+      scopedSessions!.invalidate(...args),
     refreshReplacement,
     subscribeMessages,
     unsubscribeMessages,
@@ -506,12 +511,13 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     unsubscribeMessages,
     publish,
     publishList(statePatch: Partial<SessionState>) {
+      canonicalListRevision += 1;
       for (const row of statePatch.result?.sessions ?? []) {
+        archiveProvenance.observeReadRow(row, canonicalListRevision, statePatch.agentId);
         if (row.archived === true || archiveState.visibility(row.key) === "archived") {
           archiveState.observe(row.key, row.archived === true, row);
         }
       }
-      canonicalListRevision += 1;
       publish(statePatch);
     },
   };

@@ -103,6 +103,19 @@ Long-press a session in the sidebar or Sessions screen to open its session actio
 
 A colored session has a narrow leading stripe in session lists and a small dot beside its title in Chat. Unset colors show neither marker. The Gateway stores color names, not hex values; the app adjusts their hues for light and dark appearances.
 
+## Sources in chat
+
+Completed answers show up to eight compact **Sources** cards for cited pages
+returned by web search or web fetch during that answer's run. Tap a card to read
+the recorded **Search snippet** or **Page excerpt**, then choose **Open source**
+to visit the page. A card says when no recorded excerpt is available. Opening
+the preview does not retrieve the page again.
+
+Source icons follow the Gateway's automatic favicon preference and use the
+Gateway's authenticated favicon service. A globe appears when icons are disabled
+or unavailable. Session links and GitHub issue or pull request links keep their
+existing link cards.
+
 ## Diagrams in chat
 
 Use a fenced `mermaid` block to display a diagram. A diagram renders when its

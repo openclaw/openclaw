@@ -18,12 +18,13 @@ import {
   type PluginStateStoreOperation,
 } from "./plugin-state-store.types.js";
 
+export const MAX_PLUGIN_STATE_VALUE_BYTES = 1_048_576;
 const PLUGIN_STATE_EXPIRY_BATCH_ROWS = 1_024;
 
-type PluginStateEntriesTable = OpenClawStateKyselyDatabase["plugin_state_entries"];
 type PluginStateStoreDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
 
-export type PluginStateRow = Selectable<PluginStateEntriesTable>;
+type PluginStateRow = Selectable<PluginStateStoreDatabase["plugin_state_entries"]>;
+export type PluginStateReadRow = Omit<PluginStateRow, "plugin_id" | "namespace">;
 
 export type PluginStateDatabase = {
   db: DatabaseSync;
@@ -85,7 +86,7 @@ export function parseStoredJson(
 }
 
 export function rowToEntry(
-  row: PluginStateRow,
+  row: PluginStateReadRow,
   operation: PluginStateStoreOperation,
   databasePath: string,
 ): PluginStateEntry<unknown> {
@@ -176,7 +177,7 @@ export function insertPluginStateEntryIfAbsent(db: DatabaseSync, row: PluginStat
 type PluginStateEntryLookup = { pluginId: string; namespace: string; key: string; now: number };
 const pluginStateEntryQueries = new WeakMap<
   DatabaseSync,
-  ReturnType<typeof prepareSqliteQuerySync<PluginStateEntryLookup, PluginStateRow>>
+  ReturnType<typeof prepareSqliteQuerySync<PluginStateEntryLookup, PluginStateReadRow>>
 >();
 const pluginStateEntryExistsQueries = new WeakMap<
   DatabaseSync,
@@ -210,18 +211,18 @@ export function hasPluginStateEntry(db: DatabaseSync, params: PluginStateEntryLo
 export function selectPluginStateEntry(
   db: DatabaseSync,
   params: PluginStateEntryLookup,
-): PluginStateRow | undefined {
+): PluginStateReadRow | undefined {
   let query = pluginStateEntryQueries.get(db);
   if (!query) {
     // Retain compilation with the physical connection; keys and expiry stay invocation-local.
-    query = prepareSqliteQuerySync<PluginStateEntryLookup, PluginStateRow>(db, (parameter) => {
+    query = prepareSqliteQuerySync<PluginStateEntryLookup, PluginStateReadRow>(db, (parameter) => {
       const pluginId = parameter((value) => value.pluginId);
       const namespace = parameter((value) => value.namespace);
       const key = parameter((value) => value.key);
       const now = parameter((value) => value.now);
       return getPluginStateKysely(db)
         .selectFrom("plugin_state_entries")
-        .select(["plugin_id", "namespace", "entry_key", "value_json", "created_at", "expires_at"])
+        .select(["entry_key", "value_json", "created_at", "expires_at"])
         .where("plugin_id", "=", pluginId)
         .where("namespace", "=", namespace)
         .where("entry_key", "=", key)
@@ -235,12 +236,12 @@ export function selectPluginStateEntry(
 export function iteratePluginStateEntries(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; now: number },
-): IterableIterator<PluginStateRow> {
+): IterableIterator<PluginStateReadRow> {
   return iterateSqliteQuerySync(
     db,
     getPluginStateKysely(db)
       .selectFrom("plugin_state_entries")
-      .select(["plugin_id", "namespace", "entry_key", "value_json", "created_at", "expires_at"])
+      .select(["entry_key", "value_json", "created_at", "expires_at"])
       .where("plugin_id", "=", params.pluginId)
       .where("namespace", "=", params.namespace)
       .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
@@ -260,12 +261,12 @@ export function selectPluginStateEntriesInKeyRange(
     order: "asc" | "desc";
     now: number;
   },
-): PluginStateRow[] {
+): PluginStateReadRow[] {
   return executeSqliteQuerySync(
     db,
     getPluginStateKysely(db)
       .selectFrom("plugin_state_entries")
-      .select(["plugin_id", "namespace", "entry_key", "value_json", "created_at", "expires_at"])
+      .select(["entry_key", "value_json", "created_at", "expires_at"])
       .where("plugin_id", "=", params.pluginId)
       .where("namespace", "=", params.namespace)
       .where("entry_key", ">=", params.keyStartInclusive)

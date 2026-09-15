@@ -290,6 +290,8 @@ describe("repository checkpoint GitHub publication", () => {
       code: "no_changes",
     });
     expect(f.casRequests).toHaveLength(1);
+    expect(f.runtime.head).toBe(previousHead);
+    expect(f.runtime.effects).toEqual(["push", "pull_request"]);
     await f.capture(null, "complete-revert");
     const reverted = await publish("complete-revert");
     expect(reverted).toMatchObject({ status: "published", url });
@@ -306,11 +308,16 @@ describe("repository checkpoint GitHub publication", () => {
     });
     expect(f.runtime.effects).toEqual(["push", "pull_request", "push"]);
     f.runtime.head = "f".repeat(40);
+    const commandsBefore = mocks.runCommand.mock.calls.length;
     expect(await publish("foreign-head-after-revert")).toMatchObject({
       status: "failed",
       code: "push_rejected",
+      nextAction: expect.stringContaining("published head"),
     });
     expect(f.casRequests).toHaveLength(2);
+    expect(
+      mocks.runCommand.mock.calls.slice(commandsBefore).some(([args]) => args.includes("POST")),
+    ).toBe(false);
   });
 
   it("does not recreate a deleted branch when a prior published head was recorded", async () => {

@@ -413,15 +413,54 @@ describe("Plugin SDK API baseline", () => {
 
   it("stores shared declaration detail once while retaining every affected export", async () => {
     const render = (field: string) =>
-      renderSourceFixture({
-        "fixture.ts": [
-          `type SharedOptions = { ${field}: string };`,
-          "export declare function preview(options: SharedOptions): void;",
-          "export declare function send(options: SharedOptions): void;",
-        ].join("\n"),
-      });
+      renderSourceFixture(
+        {
+          "fixture.ts": [
+            `type SharedOptions = { ${field}: string };`,
+            "export declare function preview(options: SharedOptions): void;",
+            "export declare function send(options: SharedOptions): void;",
+          ].join("\n"),
+          "pool-a.ts": [
+            "type PoolOptions = { value: string };",
+            "export declare function fixed(options: PoolOptions): void;",
+          ].join("\n"),
+          "pool-b.ts": [
+            "type PoolOptions = { value: number };",
+            "export declare function fixed(options: PoolOptions): void;",
+          ].join("\n"),
+        },
+        ["pool-b", "fixture", "pool-a"],
+      );
     const baseline = await render("text");
     const changed = await render("accountId");
+
+    for (const [surface, field] of [
+      [baseline, "text"],
+      [changed, "accountId"],
+    ] as const) {
+      expect(surface.declarationSections.map(({ name, text }) => [name, text])).toEqual([
+        ["PoolOptions", expect.stringContaining("value: number;")],
+        ["PoolOptions", expect.stringContaining("value: string;")],
+        ["SharedOptions", expect.stringContaining(`${field}: string;`)],
+        ["fixed", expect.stringContaining("function fixed(options: PoolOptions): void;")],
+        ["preview", expect.stringContaining("function preview(options: SharedOptions): void;")],
+        ["send", expect.stringContaining("function send(options: SharedOptions): void;")],
+      ]);
+      expect(
+        surface.modules.flatMap(({ entrypoint, exports }) =>
+          exports.map(({ exportName, closureSectionIds }) => [
+            entrypoint,
+            exportName,
+            closureSectionIds,
+          ]),
+        ),
+      ).toEqual([
+        ["fixture", "preview", [2, 4]],
+        ["fixture", "send", [2, 5]],
+        ["pool-a", "fixed", [1, 3]],
+        ["pool-b", "fixed", [0, 3]],
+      ]);
+    }
 
     const diff = diffPluginSdkApi(baseline, changed);
     expect(diff.exports.map(({ change, exportName }) => ({ change, exportName }))).toEqual([

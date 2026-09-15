@@ -281,6 +281,13 @@ export function bootstrapApplication(): ApplicationRuntime {
       patch: patchSettings,
     },
   );
+  const settingsAgentSelection = createAgentSelectionCapability(
+    gateway,
+    agents,
+    undefined,
+    undefined,
+    { requireConfiguredAgent: true },
+  );
   const channels = createChannelCapability(gateway);
   const stopForegroundBootstrap = subscribeForegroundChatBootstrap({
     router,
@@ -499,6 +506,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     agents,
     agentIdentity,
     agentSelection,
+    settingsAgentSelection,
     channels,
     config,
     scopeUpgrade,
@@ -680,6 +688,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       connectionBootstrap.reset();
       agents.dispose();
       agentSelection.dispose();
+      settingsAgentSelection.dispose();
       channels.dispose();
       scopeUpgrade.dispose();
       sidebarAttention.dispose();

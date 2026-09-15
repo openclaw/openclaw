@@ -457,7 +457,7 @@ describe("usage archive identity", () => {
     });
     const rows = readSessionCostUsageRollupRows("main");
     expect(rows.map((row) => row.key)).toEqual([replacement.filePath]);
-    const fingerprint = resolveUsageCostPricingFingerprint(config, state.agentDir());
+    const fingerprint = await resolveUsageCostPricingFingerprint(config, state.agentDir());
     const rollups = readUsageCostRollups("main", fingerprint);
     expect(rollups.get(replacement.filePath)?.entry.checkpoint).toMatchObject({
       kind: "jsonl",

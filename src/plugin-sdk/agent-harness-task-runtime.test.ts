@@ -230,7 +230,6 @@ describe("agent-harness-task-runtime", () => {
     expect(deliverSubagentAnnouncement).toHaveBeenCalledWith(
       expect.objectContaining({
         requesterSessionKey: "agent:main:main",
-        announceId: "harness:parent:child:succeeded",
         sourceSessionKey: "harness-thread:child",
         sourceTool: "agent_harness_task",
         expectsCompletionMessage: true,

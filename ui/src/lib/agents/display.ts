@@ -130,10 +130,6 @@ export function resolveAgentTextAvatar(
   return null;
 }
 
-export function agentBadgeText(agentId: string, defaultId: string | null) {
-  return defaultId && agentId === defaultId ? t("agents.default") : null;
-}
-
 type FormatBytesOptions = {
   fallback?: string;
   maxUnit?: "kilo" | "mega" | "giga" | "tera";

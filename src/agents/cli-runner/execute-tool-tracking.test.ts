@@ -19,7 +19,7 @@ function createTracking() {
     deactivate: vi.fn(),
   };
   const tracking = createCliToolTracking(context);
-  tracking.beginGatewayCapture("deadline-test");
+  tracking.beginGatewayCapture("deadline-test", () => {});
   return tracking;
 }
 

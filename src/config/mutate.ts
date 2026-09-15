@@ -4,6 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
+import {
+  readDeferredPluginMigrations,
+  withDeferredPluginMigrationsCurrent,
+  type DeferredPluginMigration,
+} from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
 import { assertUpdateDoctorConfigInputHash } from "../infra/update-doctor-result.js";
@@ -23,6 +28,10 @@ import {
 } from "./config-path-mutation.js";
 import { getConfigValueAtPath, setConfigValueAtPath } from "./config-paths.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./config-write-guard.js";
+import {
+  preserveDeferredPluginMigrationConfig,
+  setDeferredPluginMigrationConfigFacts,
+} from "./deferred-plugin-migration-config.js";
 import { restoreEnvVarRefs, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "./gateway-env-selection.js";
@@ -654,6 +663,8 @@ async function rollbackJsonFileWriteIfUnchanged(params: {
 }
 
 async function writeRootBoundJsonFile(params: {
+  env: NodeJS.ProcessEnv;
+  deferredPluginMigrations: readonly DeferredPluginMigration[];
   configPath: string;
   includePath: string;
   allowedRoots: readonly string[];
@@ -725,8 +736,13 @@ async function writeRootBoundJsonFile(params: {
       destinationHardlinks: "reject",
       durable: true,
     });
-    preparedFile.publish();
-    publication.phase = "published";
+    withDeferredPluginMigrationsCurrent(
+      { env: params.env, expectedPending: params.deferredPluginMigrations },
+      () => {
+        preparedFile.publish();
+        publication.phase = "published";
+      },
+    );
     await params.assertIncludeGraphForWrite(hashConfigIncludeRaw(content));
     params.assertConfigPathForWrite();
   } catch (error) {
@@ -767,6 +783,7 @@ async function writeRootBoundJsonFile(params: {
 async function tryWriteIncludeOwnedConfigMutation(params: {
   snapshot: ConfigFileSnapshot;
   nextConfig: OpenClawConfig;
+  deferredPluginMigrations: readonly DeferredPluginMigration[];
   afterWrite?: ConfigWriteOptions["afterWrite"];
   writeOptions?: ConfigWriteOptions;
   io?: ConfigMutationIO;
@@ -897,10 +914,10 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
       const runtimeConfigToWrite = resolveConfigEnvVars(runtimeCandidate, runtimeCandidateEnv, {
         onMissing: () => {},
       }) as OpenClawConfig;
-      const validated = validateConfigObjectWithPlugins(
-        runtimeConfigToWrite,
-        params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" } : undefined,
-      );
+      const validated = validateConfigObjectWithPlugins(runtimeConfigToWrite, {
+        ...(params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
+        deferredPluginMigrations: params.deferredPluginMigrations,
+      });
       if (!validated.ok) {
         throw createInvalidConfigError(
           params.snapshot.path,
@@ -944,6 +961,8 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
           includeHash,
         });
       const pathProof = await writeRootBoundJsonFile({
+        env: writeEnv,
+        deferredPluginMigrations: params.deferredPluginMigrations,
         configPath: params.snapshot.path,
         includePath,
         allowedRoots,
@@ -1149,7 +1168,6 @@ export async function replaceConfigFile(params: ConfigReplaceParams): Promise<Co
 async function replaceConfigFileUnlocked(
   params: ConfigReplaceParams,
 ): Promise<ConfigReplaceResult> {
-  const nextConfig = params.sourceConfig ?? params.nextConfig;
   const prepared = params.snapshot
     ? { snapshot: params.snapshot, writeOptions: params.writeOptions ?? {} }
     : await readConfigSnapshotForMutation({
@@ -1157,7 +1175,14 @@ async function replaceConfigFileUnlocked(
         writeOptions: params.writeOptions,
       });
   const { snapshot, writeOptions } = prepared;
+  const deferredPluginMigrations = readDeferredPluginMigrations({ env: params.io?.env });
   const mergedWriteOptions = mergeConfigMutationWriteOptions(writeOptions, params.writeOptions);
+  const nextConfig = preserveDeferredPluginMigrationConfig({
+    sourceConfig: snapshot.sourceConfig,
+    nextConfig: params.sourceConfig ?? params.nextConfig,
+    pending: deferredPluginMigrations,
+    writeOptions: mergedWriteOptions,
+  });
   mergedWriteOptions.inputBase = params.sourceConfig ? "source" : mergedWriteOptions.inputBase;
   mergedWriteOptions.assertConfigPathForWrite?.();
   assertExpectedConfigPathMatches(snapshot, mergedWriteOptions.expectedConfigPath);
@@ -1171,11 +1196,14 @@ async function replaceConfigFileUnlocked(
   let writeResult = await tryWriteIncludeOwnedConfigMutation({
     snapshot,
     nextConfig,
+    deferredPluginMigrations,
     afterWrite,
     writeOptions: mergedWriteOptions,
     io: params.io,
   });
-  if (!writeResult) {
+  if (writeResult) {
+    setDeferredPluginMigrationConfigFacts(writeResult.persistedConfig, deferredPluginMigrations);
+  } else {
     const fallbackWriteOptions: ConfigWriteOptions = copyRuntimeConfigWriteApplication(
       mergedWriteOptions,
       {

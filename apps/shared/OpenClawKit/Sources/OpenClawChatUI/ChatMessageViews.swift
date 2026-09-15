@@ -288,6 +288,10 @@ private struct ChatBubbleShape: InsettableShape {
 @MainActor
 struct ChatMessageBubble: View {
     let message: OpenClawChatMessage
+    var sourcePreviews: [ChatSourcePreview] = []
+    var sourceContextRevision = UUID()
+    var sourceFaviconsEnabled = false
+    var loadSourceFavicon: @MainActor @Sendable (String) async -> Data? = { _ in nil }
     let style: OpenClawChatView.Style
     let markdownVariant: ChatMarkdownVariant
     let userAccent: Color?
@@ -342,6 +346,10 @@ struct ChatMessageBubble: View {
     private var messageBody: some View {
         ChatMessageBody(
             message: self.message,
+            sourcePreviews: self.sourcePreviews,
+            sourceContextRevision: self.sourceContextRevision,
+            sourceFaviconsEnabled: self.sourceFaviconsEnabled,
+            loadSourceFavicon: self.loadSourceFavicon,
             isUser: self.isUser,
             style: self.style,
             markdownVariant: self.markdownVariant,
@@ -398,6 +406,10 @@ private struct ChatMessageBody: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
     let message: OpenClawChatMessage
+    var sourcePreviews: [ChatSourcePreview] = []
+    var sourceContextRevision = UUID()
+    var sourceFaviconsEnabled = false
+    var loadSourceFavicon: @MainActor @Sendable (String) async -> Data? = { _ in nil }
     let isUser: Bool
     let style: OpenClawChatView.Style
     let markdownVariant: ChatMarkdownVariant
@@ -479,7 +491,15 @@ private struct ChatMessageBody: View {
                     textColor: textColor)
             }
 
-            if self.showsLinkPreview, let previewURL = chatFirstPreviewURL(in: text) {
+            if !self.sourcePreviews.isEmpty {
+                ChatSourcePreviewsView(
+                    sources: self.sourcePreviews,
+                    contextRevision: self.sourceContextRevision,
+                    faviconsEnabled: self.sourceFaviconsEnabled,
+                    loadFavicon: self.loadSourceFavicon)
+            }
+
+            if let previewURL = self.linkPreviewURL {
                 ChatLinkPreview(url: previewURL)
             }
 
@@ -586,7 +606,7 @@ private struct ChatMessageBody: View {
         return !self.primaryText.isEmpty ||
             !self.inlineAttachments.isEmpty ||
             !self.inlineWidgets.isEmpty ||
-            (self.showsLinkPreview && chatFirstPreviewURL(in: self.primaryText) != nil)
+            self.linkPreviewURL != nil
     }
 
     private var toolActivityItems: [ChatToolActivityItem] {
@@ -609,9 +629,13 @@ private struct ChatMessageBody: View {
         return ChatToolActivity.items(calls: self.toolCalls, results: self.inlineToolResults)
     }
 
-    private var showsLinkPreview: Bool {
+    private var linkPreviewURL: URL? {
         let role = self.message.role.lowercased()
-        return role == "user" || role == "assistant"
+        guard role == "user" || role == "assistant",
+              let url = chatFirstPreviewURL(in: self.primaryText),
+              role != "assistant" || !self.sourcePreviews.contains(where: { $0.represents(url) })
+        else { return nil }
+        return url
     }
 
     private var primaryText: String {

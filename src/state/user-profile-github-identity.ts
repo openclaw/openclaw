@@ -12,7 +12,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { mutateUserPreference, selectUserPreferenceValues } from "./user-preferences.store.js";
-import { selectResolvedUserProfileById, userProfilesDb } from "./user-profiles-internal.js";
+import { selectResolvedUserProfileMetadataById, userProfilesDb } from "./user-profiles-internal.js";
 import { ensureUserProfilesSchema, UserProfileOwnerError } from "./user-profiles-schema.js";
 
 const GITHUB_PROVIDER = "github";
@@ -82,7 +82,7 @@ export function resolveCachedGitHubIdentity(
       .select("profile_id")
       .where("email", "=", email),
   );
-  const profile = alias ? selectResolvedUserProfileById(db, alias.profile_id) : undefined;
+  const profile = alias ? selectResolvedUserProfileMetadataById(db, alias.profile_id) : undefined;
   if (!profile) {
     return undefined;
   }
@@ -238,7 +238,7 @@ export function applyVerifiedGitHubIdentity(params: {
             .where("canonical_login", "is", null),
         );
   const aliasProfileId = aliasIdentity
-    ? selectResolvedUserProfileById(db, aliasIdentity.profile_id)?.id
+    ? selectResolvedUserProfileMetadataById(db, aliasIdentity.profile_id)?.id
     : undefined;
   const aliasGitHubIdentity = aliasProfileId
     ? selectStoredGitHubIdentities(db, [aliasProfileId]).get(aliasProfileId)
@@ -251,10 +251,10 @@ export function applyVerifiedGitHubIdentity(params: {
       : undefined;
   const currentProfileId =
     reusableAliasProfileId ??
-    (existing ? selectResolvedUserProfileById(db, existing.profile_id)?.id : undefined) ??
+    (existing ? selectResolvedUserProfileMetadataById(db, existing.profile_id)?.id : undefined) ??
     params.createProfile();
   const targetProfileId = existing
-    ? (selectResolvedUserProfileById(db, existing.profile_id)?.id ?? currentProfileId)
+    ? (selectResolvedUserProfileMetadataById(db, existing.profile_id)?.id ?? currentProfileId)
     : currentProfileId;
   // An email linked by older code must not turn shared owner attribution into a person.
   if (

@@ -3674,6 +3674,119 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("make the default webpage openclaw");
   });
   it.each([
+    { kind: "hidden child", node: "subagent:fork-proof", via: "spawn", fork: true, preserve: true },
+    {
+      kind: "visible child",
+      node: "dashboard:fork-proof",
+      via: "spawn",
+      fork: true,
+      preserve: true,
+    },
+    { kind: "ordinary startup", node: "main", via: "run", fork: false, preserve: false },
+    {
+      kind: "skipped fork",
+      node: "subagent:fork-proof",
+      via: "spawn",
+      fork: false,
+      preserve: false,
+    },
+    {
+      kind: "unrelated parent",
+      node: "subagent:fork-proof",
+      via: "spawn",
+      fork: true,
+      preserve: false,
+    },
+    {
+      kind: "operator fork",
+      node: "dashboard:fork-proof",
+      via: "operator",
+      fork: true,
+      preserve: false,
+    },
+  ] as const)(
+    "scopes fresh-thread tool evidence to recorded spawn forks ($kind)",
+    async ({ kind, node, via, fork, preserve }) => {
+      const sessionKey = `agent:main:${node}`;
+      const storePath = path.join(tempDir, "fork-proof.sqlite");
+      const params = createParams(sessionKey, path.join(tempDir, "fork-proof-workspace"));
+      params.sessionId = node;
+      params.sessionKey = sessionKey;
+      params.sessionTarget = { agentId: "main", sessionKey, sessionId: node, storePath };
+      const parentSessionKey = "agent:main:parent-proof";
+      await upsertSessionEntry({
+        agentId: "main",
+        sessionKey,
+        storePath,
+        entry: {
+          sessionId: node,
+          sessionFile: sessionKey,
+          createdVia: via,
+          parentSessionKey,
+          forkedFromParent: true,
+          ...(fork
+            ? {
+                forkSource: {
+                  sessionKey:
+                    kind === "unrelated parent" ? "agent:main:other-parent" : parentSessionKey,
+                  sessionId: "parent-proof",
+                },
+              }
+            : {}),
+          updatedAt: Date.now(),
+        },
+      });
+      SessionManager.open({
+        agentId: "main",
+        sessionKey,
+        sessionId: node,
+        storePath,
+      }).appendMessage(
+        userMessage("Inspect the completed tool evidence, then delegate analysis.", 1),
+      );
+      const prior = new CodexAppServerEventProjector(params, "parent-thread", "parent-turn");
+      prior.recordDynamicToolCall({
+        callId: "fork-proof-tool",
+        tool: "read",
+        arguments: { path: "private-input-fixture.txt" },
+      });
+      prior.recordDynamicToolResult({
+        callId: "fork-proof-tool",
+        tool: "read",
+        success: true,
+        terminalType: "completed",
+        contentItems: [
+          {
+            type: "inputText",
+            text: "The synthetic result code is COBALT-ORCHID-7429.\nOPENAI_API_KEY=sk-1234567890abcdef",
+          },
+        ],
+      });
+      await prior.transcriptCheckpoint.flush(true);
+      params.prompt =
+        "[Subagent Task]\nReport the synthetic result code from inherited completed tool evidence.";
+      const harness = createStartedThreadHarness();
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+
+      const turnStart = harness.requests.find((request) => request.method === "turn/start");
+      const inputText = JSON.stringify(turnStart?.params);
+      expect(inputText).toContain("Inspect the completed tool evidence, then delegate analysis.");
+      expect(inputText).toContain("[Subagent Task]");
+      expect(inputText).not.toContain("private-input-fixture.txt");
+      expect(inputText).not.toContain("sk-1234567890abcdef");
+      if (preserve) {
+        expect(inputText).toContain("COBALT-ORCHID-7429");
+        expect(inputText).not.toContain("[content omitted]");
+      } else {
+        expect(inputText).not.toContain("COBALT-ORCHID-7429");
+        expect(inputText).toContain("[content omitted]");
+      }
+    },
+  );
+  it.each([
     { boundary: "none", tail: "user-assistant" },
     { boundary: "compaction", tail: "user-assistant" },
     { boundary: "compaction", tail: "assistant" },

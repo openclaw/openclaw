@@ -491,7 +491,7 @@ describe("ManagedWorktreeService removal timing", { concurrent: false }, () => {
           const command = gitCommandArgs(args[0]);
           if (command[0] === "worktree" && command[1] === "remove") {
             clock += 500;
-          } else if (command[0] === "branch" && command[1] === "-D") {
+          } else if (command[0] === "branch" && command[1] === "-d") {
             clock += 600;
           }
           return await realRunCommand(...args);

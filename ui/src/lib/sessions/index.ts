@@ -150,7 +150,7 @@ export function createSessionCapability(
     // Preserve receipts before a pending intent makes another tracked copy.
     roster.inherit(annotated, projected);
     const decorated = deletions.apply(
-      mutations.applyConfirmedArchives(mutations.applyPendingRows(annotated, owner.scope.agentId)),
+      mutations.applyPendingRows(mutations.applyConfirmedArchives(annotated), owner.scope.agentId),
       owner,
     );
     roster.inherit(decorated, result);
@@ -197,11 +197,7 @@ export function createSessionCapability(
     decorate: decorateRows,
     reconcileList: (result, revision, agentId) => {
       const admitted = deletions.reconcileList(result, revision, agentId);
-      const sources =
-        admitted?.sessions.map((row) => ({
-          row,
-          select: roster.observeReadRow(row, revision, agentId),
-        })) ?? [];
+      const sources = roster.observeReadRows(admitted?.sessions ?? [], revision, agentId);
       const projected = permissions.reconcileList(admitted, revision, agentId);
       roster.inherit(projected, admitted);
       if (!projected) {
@@ -259,6 +255,8 @@ export function createSessionCapability(
     refreshReplacement: roster.refreshReplacement,
     refreshReplacementResult: roster.refreshReplacementResult,
     publishedRow: (key) => roster.publishedRow((row) => row.key === key),
+    archiveFields: roster,
+    readRevision: () => roster.requestRevision,
     redecorateLists: () => roster.redecorateLists(),
     notifyCreated,
     clearThink: thinkingClaims.clear,
@@ -503,6 +501,15 @@ export function createSessionCapability(
     if (event.event !== "sessions.changed" && event.event !== "session.message") {
       return;
     }
+    const payload = event.payload as {
+      agentId?: unknown;
+      reason?: unknown;
+      session?: unknown;
+    } | null;
+    // Recaps are opt-in Activity data; shared session queries never include them.
+    if (event.event === "sessions.changed" && payload?.reason === "activity-summary") {
+      return;
+    }
     const eventObservation = roster.captureEvent(event.payload);
     const swarmChanged = swarmActivity.observe(event.payload);
     const { eventInfo, reconciled, claimChanged, notifyManaged } = reconcileChangedEvent(
@@ -513,11 +520,6 @@ export function createSessionCapability(
     if (eventObservation.scope && !connection.isCurrent(eventObservation.scope)) {
       return;
     }
-    const payload = event.payload as {
-      agentId?: unknown;
-      reason?: unknown;
-      session?: unknown;
-    } | null;
     const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
     const status = reconciled.status ?? eventInfo?.status;
     const runEnded =
@@ -612,6 +614,7 @@ export function createSessionCapability(
     create: mutations.create,
     recover: operations.recover,
     patch: mutations.patch,
+    patchMany: mutations.patchMany,
     archiveVisibility: mutations.archiveVisibility,
     beginArchive: mutations.beginArchive,
     assignOwner: mutations.assignOwner,

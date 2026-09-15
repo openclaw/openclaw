@@ -7,7 +7,10 @@ import {
 } from "../../test/vitest/vitest.agents-paths.mjs";
 import { cliProcessTestFiles } from "../../test/vitest/vitest.cli-process-paths.mjs";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
-import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
+import {
+  databaseWorkerCoreTestFiles,
+  isDatabaseWorkerCoreTestFile,
+} from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import {
   gatewayDatabaseWorkerTestFiles,
   gatewayPluginTestFiles,
@@ -1634,6 +1637,9 @@ function resolveInfraShardName(file: string): string {
 function createInfraSplitShards(): NodeTestSplitShard[] {
   const groups = new Map<string, string[]>();
   for (const file of listTestFiles("src/infra")) {
+    if (isDatabaseWorkerCoreTestFile(file)) {
+      continue;
+    }
     const shardName = resolveInfraShardName(file);
     groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
   }

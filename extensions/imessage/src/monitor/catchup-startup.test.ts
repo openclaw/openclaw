@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveIMessageAccount } from "../accounts.js";
 import { imessagePlugin } from "../channel.js";
@@ -38,10 +39,11 @@ describe("registered iMessage account startup catchup", () => {
     createClient.mockReset();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
-    vi.unstubAllEnvs();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 

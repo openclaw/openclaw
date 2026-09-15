@@ -138,10 +138,10 @@ async function collectRuntimeToolSchemaFindingsWithRuntime(
       runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
     }
   ).runWithPluginMetadataSnapshot;
-  return runtime.collectRuntimeToolSchemaFindings(
-    ctx.cfg,
-    runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : undefined,
-  );
+  return runtime.collectRuntimeToolSchemaFindings(ctx.cfg, {
+    env: ctx.env,
+    ...(runWithPluginMetadataSnapshot ? { runWithPluginMetadataSnapshot } : {}),
+  });
 }
 
 async function collectProviderCatalogProjectionFindingsWithRuntime(

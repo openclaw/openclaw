@@ -1818,6 +1818,9 @@ describe("modelsAuthLoginCommand", () => {
       mode: "api_key",
     });
     expect(runtime.log).toHaveBeenCalledWith("Auth profile: openai:manual (openai/api_key)");
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway has not confirmed applying the provider settings"),
+    );
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         params: { operation: "login", agentId: "coder" },

@@ -104,7 +104,10 @@ describe("plugin Doctor migration settlement", () => {
       }),
     ).resolves.toEqual({
       changes: [],
+      completedPluginIds: undefined,
+      requiredPluginIds: ["owner"],
       warnings: [expect.stringContaining("immutable action order")],
+      warningDisposition: undefined,
     });
     expect(observed).toEqual([]);
   });
@@ -160,6 +163,8 @@ describe("plugin Doctor migration settlement", () => {
 
       const first = await runPostSessionPluginDoctorStateRepairs(params);
 
+      expect(first.requiredPluginIds).toEqual(["settlement-owner"]);
+      expect(first.completedPluginIds).toBeUndefined();
       expect(fs.readFileSync(markers[0], "utf8")).toBe("committed");
       expect(fs.existsSync(markers[1])).toBe(!["later-action", "detector"].includes(failure));
       expect(first.changes).toEqual(
@@ -184,6 +189,10 @@ describe("plugin Doctor migration settlement", () => {
       }
 
       const replay = await runPostSessionPluginDoctorStateRepairs(params);
+      expect(replay.requiredPluginIds).toEqual(["settlement-owner"]);
+      expect(replay.completedPluginIds).toEqual(
+        failure === "none" || failure === "later-warning" ? ["settlement-owner"] : undefined,
+      );
       expect(replay.changes).toEqual([]);
       expect(fs.readFileSync(markers[0], "utf8")).toBe("committed");
     },

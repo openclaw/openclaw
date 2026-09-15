@@ -24,6 +24,7 @@ import {
 } from "./subagent-registry-queries.js";
 import {
   getSubagentSessionListRunsSnapshotForRead,
+  getSubagentSessionListRunsSnapshotForSessions,
   getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead,
@@ -45,10 +46,19 @@ export {
 /** Builds the session-list index without hydrating full retained registry payloads. */
 export function buildSubagentSessionListReadIndex(
   now = Date.now(),
+  sessionKeys?: readonly string[],
 ): SubagentRunReadIndex<SubagentRunReadRecord> {
+  const runs = sessionKeys
+    ? getSubagentSessionListRunsSnapshotForSessions(subagentRuns, sessionKeys)
+    : getSubagentSessionListRunsSnapshotForRead(subagentRuns);
   return buildSubagentRunReadIndexFromRuns({
-    runs: getSubagentSessionListRunsSnapshotForRead(subagentRuns),
-    inMemoryRuns: subagentRuns.values(),
+    runs,
+    inMemoryRuns: sessionKeys
+      ? [...runs.keys()].flatMap((runId) => {
+          const current = subagentRuns.get(runId);
+          return current ? [current] : [];
+        })
+      : subagentRuns.values(),
     now,
   });
 }

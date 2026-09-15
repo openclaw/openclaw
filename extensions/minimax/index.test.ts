@@ -11,7 +11,7 @@ import {
 import { MINIMAX_OAUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildMinimaxModelDiscovery } from "./provider-catalog.js";
+import { buildMinimaxModelDiscovery, buildMinimaxProvider } from "./provider-catalog.js";
 import { registerMinimaxProviders } from "./provider-registration.js";
 import { createMiniMaxWebSearchProvider } from "./src/minimax-web-search-provider.js";
 
@@ -46,7 +46,7 @@ describe("minimax provider hooks", () => {
   });
 
   it("uses the Anthropic model-list route and X-Api-Key auth", () => {
-    const discovery = buildMinimaxModelDiscovery();
+    const discovery = buildMinimaxModelDiscovery(buildMinimaxProvider());
     const headers = new Headers(
       discovery.buildRequestHeaders?.({ apiKey: "api-key", discoveryApiKey: "discovery-key" }),
     );
@@ -57,7 +57,7 @@ describe("minimax provider hooks", () => {
   });
 
   it("preserves Bearer auth for portal OAuth model discovery", () => {
-    const discovery = buildMinimaxModelDiscovery("oauth");
+    const discovery = buildMinimaxModelDiscovery(buildMinimaxProvider(), "oauth");
     const headers = new Headers(
       discovery.buildRequestHeaders?.({ apiKey: "marker", discoveryApiKey: "oauth-token" }),
     );

@@ -145,11 +145,11 @@ export function restoreTelegramTestCredential(payloadValue, stateRoot) {
   return {
     ...payload,
     stateRoot: root,
+    credentialsPath,
     userDriverDir,
     driverEnv: {
       TELEGRAM_E2E_STATE_DIR: root,
       TELEGRAM_USER_DRIVER_STATE_DIR: userDriverDir,
-      TELEGRAM_E2E_SUT_BOT_TOKEN: payload.sutToken,
       TELEGRAM_USER_DRIVER_SUT_ID: payload.sutBotId,
       TELEGRAM_USER_DRIVER_SUT_USERNAME: payload.sutUsername,
     },

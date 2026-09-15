@@ -85,9 +85,9 @@ describe("createOpenClawCodingTools cron scope", () => {
     expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBeUndefined();
   });
 
-  it.each([false, true])(
-    "admits only the automation tool for remote management authority=%s",
-    async (controlUiAdmin) => {
+  it.each([undefined, "control-ui-admin", "channel-owner"] as const)(
+    "admits only the automation tool for management-only authority=%s",
+    async (source) => {
       const runId = "remote-management-tools";
       const { operationalRunInstance } = createTestAdmittedRunContext(runId);
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -97,7 +97,11 @@ describe("createOpenClawCodingTools cron scope", () => {
       const capability = createCronCreatorAuthorityCapability(
         runId,
         { kind: "unknown" },
-        controlUiAdmin ? true : undefined,
+        source === "channel-owner"
+          ? { source, isCurrent: () => true }
+          : source
+            ? { source }
+            : undefined,
       )!;
       const tools = await runWithCronCreatorAuthorityCapability(capability, () =>
         withGatewayToolCallerIdentity(
@@ -123,7 +127,7 @@ describe("createOpenClawCodingTools cron scope", () => {
         ),
       );
       const names = tools.map((tool) => tool.name);
-      expect(names.includes(AUTOMATIONS_TOOL_NAME)).toBe(controlUiAdmin);
+      expect(names.includes(AUTOMATIONS_TOOL_NAME)).toBe(Boolean(source));
       expect(names).not.toContain("gateway");
     },
   );

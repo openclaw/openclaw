@@ -126,21 +126,39 @@ async function notifyTerminalResult(params: {
   });
 }
 
+/** A pre-submission cancellation has a normal terminal event, not a failed prompt. */
+export async function emitCancelledAcpTurn(
+  onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void,
+): Promise<AcpTurnStreamOutcome> {
+  await onEvent?.({ type: "done", status: "cancelled", stopReason: "cancel" });
+  return { sawOutput: false, terminalStatus: "cancelled" };
+}
+
 /** Consumes runtime turn APIs and emits normalized events while tracking output/terminal state. */
 export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
   turn: AcpRuntimeTurnInput;
   eventGate: AcpTurnEventGate;
   onBeforePrompt?: () => Promise<void> | void;
+  onCancellation?: () => Promise<void>;
   onPromptStarted?: (params: { authoritative: boolean }) => Promise<void> | void;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
   onOutputEvent?: (
     event: Extract<AcpRuntimeEvent, { type: "text_delta" | "tool_call" }>,
   ) => Promise<void> | void;
 }): Promise<AcpTurnStreamOutcome> {
+  if (params.turn.signal?.aborted) {
+    await params.onCancellation?.();
+    return await emitCancelledAcpTurn(params.onEvent);
+  }
   // Gateway admission can still close while runtime preparation is awaited.
   if (params.onBeforePrompt) {
     await params.onBeforePrompt();
+  }
+  // The admission fence is asynchronous. Recheck after it, before calling the backend.
+  if (params.turn.signal?.aborted) {
+    await params.onCancellation?.();
+    return await emitCancelledAcpTurn(params.onEvent);
   }
   if (params.runtime.startTurn) {
     // Submission readiness and terminal cleanup are independent backend-owned turn boundaries.

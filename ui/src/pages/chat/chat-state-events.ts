@@ -51,6 +51,7 @@ import {
 } from "./components/chat-session-workspace.ts";
 import {
   getChatSessionProjection,
+  observeChatRunModel,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
 } from "./history-merge.ts";
@@ -395,6 +396,24 @@ function handleSessionsChangedEvent(
     state.selectedChatSessionArchived = event.archived;
   }
   const result = reconcileSessionEvent(state, payload);
+  const modelRunId = event?.clientRunId ?? event?.runId;
+  if (
+    matchesChat &&
+    source?.phase === "model" &&
+    modelRunId &&
+    result.admittedRow &&
+    (state.chatSending
+      ? state.chatQueue.some(
+          (item) =>
+            item.sendState === "sending" &&
+            (item.queueMode === "steer" && state.chatRunId
+              ? state.chatRunId === modelRunId
+              : item.sendRunId === modelRunId),
+        )
+      : !state.chatRunId || state.chatRunId === modelRunId)
+  ) {
+    observeChatRunModel(state, modelRunId, result.admittedRow);
+  }
   if (resetsSelectedSession || (matchesChat && source?.reason === "compact")) {
     void loadChatHistory(state, { deferBranches: !presented }).finally(() =>
       state.requestUpdate?.(),

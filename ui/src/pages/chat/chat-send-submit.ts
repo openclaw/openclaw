@@ -231,7 +231,9 @@ export async function handleSendChat(
       : composeBrowserAnnotationContext(userMessage, attachmentsToSend);
   // Slash commands may use ordinary files, but annotations belong to the next model prompt.
   const deliveredAttachments = rawParsedCommand
-    ? attachmentsToSend.filter((attachment) => !attachment.browserAnnotation)
+    ? attachmentsToSend.filter(
+        (attachment) => !attachment.browserAnnotation && !attachment.selectionAnnotation,
+      )
     : attachmentsToSend;
 
   if (!message && !hasAttachments) {

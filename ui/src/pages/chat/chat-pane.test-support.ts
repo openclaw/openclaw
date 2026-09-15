@@ -32,6 +32,7 @@ import { createAgentCapability } from "../../lib/agents/index.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
+import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import "./chat-pane.ts";
 import {
   createTestGatewayClient,
@@ -329,6 +330,7 @@ export function createSessionCapabilityFixture(
   const archiveState = createSessionArchiveState(
     (key) => overrides.state?.result?.sessions.find((row) => row.key === key),
     () => {},
+    createSessionRowProvenance(),
   );
   return {
     deletionState: () => undefined,

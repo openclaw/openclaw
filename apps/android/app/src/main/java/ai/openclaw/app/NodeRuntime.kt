@@ -54,6 +54,7 @@ import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.GatewaySourcePreviewConfig
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayTlsProbeRunner
@@ -70,6 +71,7 @@ import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
+import ai.openclaw.app.gateway.resolveGatewaySourcePreviewConfig
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
@@ -1407,6 +1409,8 @@ class NodeRuntime private constructor(
 
   private val _gatewayAccentArgb = MutableStateFlow<Long?>(null)
   val gatewayAccentArgb: StateFlow<Long?> = _gatewayAccentArgb.asStateFlow()
+  private val _gatewaySourcePreviewConfig = MutableStateFlow<GatewaySourcePreviewConfig?>(null)
+  val gatewaySourcePreviewConfig: StateFlow<GatewaySourcePreviewConfig?> = _gatewaySourcePreviewConfig.asStateFlow()
 
   @Volatile
   private var appearancePreferenceScopeOwner: GatewayAppearanceScopeOwner? = null
@@ -1645,6 +1649,7 @@ class NodeRuntime private constructor(
         _devicePairingCapabilities.value =
           selectGatewayDevicePairingCapabilities(hello.methods.orEmpty(), operatorScopes)
         _gatewayAccentArgb.value = null
+        _gatewaySourcePreviewConfig.value = null
         val mainSessionKey =
           prepareMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
         // Create/adopt before history refresh; this keeps the first connected read on the
@@ -1908,6 +1913,7 @@ class NodeRuntime private constructor(
     _operatorScopes.value = emptyList()
     _devicePairingCapabilities.value = GatewayDevicePairingCapabilities()
     _gatewayAccentArgb.value = null
+    _gatewaySourcePreviewConfig.value = null
     // Offline edits retain their profile or device-local policy; the expired
     // physical lease still prevents requests and response publication.
     appearancePreferenceRefreshGuard.invalidate()
@@ -3205,6 +3211,7 @@ class NodeRuntime private constructor(
         password = null,
         tlsFingerprintSha256 = null,
       )
+    _gatewaySourcePreviewConfig.value = AndroidScreenshotFixture.sourcePreviewConfig
     updateGatewayDefaultAgentId("main")
     _gatewayAgents.value = AndroidScreenshotFixture.agents
     _modelCatalog.value = AndroidScreenshotFixture.models
@@ -5567,6 +5574,26 @@ class NodeRuntime private constructor(
     }
   }
 
+  internal suspend fun loadChatSourceFavicon(
+    config: GatewaySourcePreviewConfig,
+    hostname: String,
+  ): ai.openclaw.app.gateway.GatewayLoadedImage? {
+    if (_gatewaySourcePreviewConfig.value !== config || !config.automaticallyFetchFavicons) return null
+    if (mode == NodeRuntimeMode.ScreenshotFixture) return AndroidScreenshotFixture.loadSourceFavicon(hostname)
+    val gatewayScope = captureGatewayDataScope() ?: return null
+    val image =
+      operatorSession.loadSourceFavicon(gatewayScope.stableId, config, hostname) { enqueue ->
+        if (!publishGatewayData(gatewayScope) {
+            if (_gatewaySourcePreviewConfig.value !== config) throw GatewayRequestNotEnqueued("source preview config changed")
+            enqueue()
+          }
+        ) {
+          throw GatewayRequestNotEnqueued("source preview gateway changed")
+        }
+      }
+    return image.takeIf { isGatewayDataScopeCurrent(gatewayScope) && _gatewaySourcePreviewConfig.value === config }
+  }
+
   internal suspend fun loadChatImageArtifact(artifactId: String) = chat.loadImageArtifact(artifactId)
 
   internal suspend fun loadChatMediaArtifact(
@@ -6650,6 +6677,10 @@ class NodeRuntime private constructor(
       publishAppearancePreferences(gatewayScope, lease, refreshGeneration) {
         // A profile lookup failure does not invalidate the configured Gateway fallback.
         _gatewayAccentArgb.value = resolveGatewayAccentArgb(config)
+        _gatewaySourcePreviewConfig.value =
+          connectedEndpoint?.let { endpoint ->
+            resolveGatewaySourcePreviewConfig(config, gatewayControlPageBaseUrl(endpoint), gatewayScope.generation)
+          }
       }
       val profileRead = fetchProfileAppearancePreferences(gatewayScope, lease)
       if (profileRead is GatewayAppearancePreferencesRead.Unavailable) return

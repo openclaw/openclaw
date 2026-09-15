@@ -320,9 +320,14 @@ export function collectSqliteNamedIndexContract(
   database: DatabaseSync,
   indexName: string,
 ): SqliteIndexContract | undefined {
+  // Authorize the original catalog columns even when the index is absent.
   const row = database
-    .prepare("SELECT name, sql, tbl_name FROM main.sqlite_schema WHERE type = 'index' AND name = ?")
-    .get(indexName) as SqliteSchemaRow | undefined;
+    .prepare(`
+      SELECT tbl_name FROM (
+        SELECT name, sql, tbl_name FROM main.sqlite_schema WHERE type = 'index' AND name = ?
+      )
+    `)
+    .get(indexName);
   if (!row || typeof row.tbl_name !== "string") {
     return undefined;
   }

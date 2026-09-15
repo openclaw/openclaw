@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { installProcessWarningFilter, shouldIgnoreWarning } from "./warning-filter.js";
 
 const warningFilterKey = Symbol.for("openclaw.warning-filter");
@@ -105,7 +106,7 @@ describe("warning filter", () => {
       delete childEnv.NODE_REDIRECT_WARNINGS;
       delete childEnv.NODE_NO_WARNINGS;
       const result = spawnSync(
-        process.execPath,
+        resolveTestNodeExecPath(),
         ["--import", "./scripts/tsx.mjs", "--input-type=module", "--eval", source],
         {
           cwd: process.cwd(),

@@ -8,6 +8,7 @@ import {
   type AgentSelectionContext,
 } from "../agents/agent-scope-config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
+import type { SkillStatusReport } from "../skills/discovery/status.js";
 import {
   expectObjectFields,
   mockCall,
@@ -41,7 +42,7 @@ const mocks = vi.hoisted(() => {
   const runtimeStdout: string[] = [];
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  const skillStatusReportFixture = {
+  const skillStatusReportFixture: SkillStatusReport = {
     workspaceDir: "/tmp/workspace",
     managedSkillsDir: "/tmp/workspace/skills",
     skills: [
@@ -58,7 +59,12 @@ const mocks = vi.hoisted(() => {
         always: false,
         disabled: false,
         blockedByAllowlist: false,
+        blockedByAgentFilter: false,
         eligible: true,
+        platformIncompatible: false,
+        modelVisible: true,
+        userInvocable: true,
+        commandVisible: true,
         primaryEnv: "CALENDAR_API_KEY",
         requirements: {
           bins: [],
@@ -1493,6 +1499,32 @@ describe("skills cli commands", () => {
     expect(runtimeErrors).toStrictEqual([]);
     expect(defaultRuntime.exit).toHaveBeenCalledOnce();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each([
+    ["weather", "skills.entries.weather.apiKey"],
+    ["acme.weather", `'skills.entries["acme.weather"].apiKey'`],
+    ["weather[home]", `'skills.entries["weather[home]"].apiKey'`],
+    ["123", `'skills.entries["123"].apiKey'`],
+  ])("skills info prints a copyable API-key setup path for %s", async (skillKey, path) => {
+    vi.stubEnv("OPENCLAW_PROFILE", "");
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      ...skillStatusReportFixture,
+      skills: skillStatusReportFixture.skills.map((skill) => ({
+        ...skill,
+        skillKey,
+        eligible: false,
+        modelVisible: false,
+        commandVisible: false,
+        missing: { ...skill.missing, env: ["CALENDAR_API_KEY"] },
+      })),
+    });
+
+    await runCommand(["skills", "info", "calendar"]);
+
+    expect(runtimeStdout).toHaveLength(1);
+    expect(runtimeStdout[0]).toContain(`Save via CLI: openclaw config set ${path} YOUR_KEY`);
   });
 
   it("keeps successful human skill info output at exit zero", async () => {

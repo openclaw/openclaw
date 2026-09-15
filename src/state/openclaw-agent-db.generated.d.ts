@@ -293,6 +293,7 @@ export interface SessionNodes {
   last_activity_at: number | null;
   last_interaction_at: number | null;
   last_read_at: number | null;
+  legacy_acp_migration_json: string | null;
   owner_actor_id: string | null;
   owner_actor_type: string | null;
   owner_assigned_at: number | null;

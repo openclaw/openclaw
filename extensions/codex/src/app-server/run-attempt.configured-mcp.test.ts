@@ -174,6 +174,7 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
 });
 
 import * as attemptContext from "./attempt-context.js";
+import { createCronAuthorityCapabilityFixture } from "./codex-app-server.test-fixtures.js";
 import * as dynamicTools from "./dynamic-tools.js";
 import {
   assistantMessage,
@@ -233,22 +234,6 @@ function configureFakeMcp(params: ReturnType<typeof createParams>) {
     },
   };
   return metadataSnapshot;
-}
-
-function createCronAuthorityCapabilityFixture(
-  runId: string,
-): NonNullable<ReturnType<typeof createParams>["cronCreatorAuthorityCapability"]> {
-  // Mirror the gateway-minted capability instead of casting a partial fixture;
-  // transcript tools consume callerOrigin and future contract drift must type-fail.
-  const abortController = new AbortController();
-  return {
-    active: true,
-    abort: () => abortController.abort(),
-    callerOrigin: { kind: "local" },
-    grantTokens: new Set<string>(),
-    runId,
-    signal: abortController.signal,
-  };
 }
 
 function admitLocalOperatorCronAuthority(params: ReturnType<typeof createParams>): void {
@@ -830,6 +815,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     { name: "missing", capabilityRunId: undefined },
     { name: "wrong-run", capabilityRunId: "other-run" },
     { name: "remote-management", capabilityRunId: "same-run" },
+    { name: "channel-owner-management", capabilityRunId: "same-run" },
   ])(
     "does not bind $name local-operator authority at Codex tool construction",
     async (testCase) => {
@@ -843,11 +829,18 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
       params.senderIsOwner = false;
       if (testCase.capabilityRunId) {
         const capability = createCronAuthorityCapabilityFixture(
-          testCase.name === "remote-management" ? params.runId : testCase.capabilityRunId,
+          testCase.capabilityRunId === "same-run" ? params.runId : testCase.capabilityRunId,
         );
         params.cronCreatorAuthorityCapability =
-          testCase.name === "remote-management"
-            ? { ...capability, callerOrigin: { kind: "unknown" }, controlUiAdmin: true }
+          testCase.capabilityRunId === "same-run"
+            ? {
+                ...capability,
+                callerOrigin: { kind: "unknown" },
+                managementEntitlement:
+                  testCase.name === "channel-owner-management"
+                    ? { source: "channel-owner", isCurrent: () => true }
+                    : { source: "control-ui-admin" },
+              }
             : capability;
       }
 

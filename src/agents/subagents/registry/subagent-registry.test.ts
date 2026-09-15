@@ -277,6 +277,7 @@ vi.mock("./subagent-registry-state.js", () => ({
   getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController: mocks.getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
+  getSubagentMaintenanceRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
   persistSubagentRunsToDiskOrThrow: mocks.persistSubagentRunsToDiskOrThrow,
   restoreSubagentRunsFromDisk: mocks.restoreSubagentRunsFromDisk,
@@ -1284,32 +1285,6 @@ describe("subagent registry seam flow", () => {
       "agent:main:subagent:active",
       "agent:main:subagent:killed-reconciling",
       "agent:main:subagent:pending",
-    ]);
-  });
-
-  it("uses the disk-aware run snapshot for maintenance preservation", () => {
-    const now = Date.now();
-    mocks.getSubagentRunsSnapshotForRead.mockReturnValueOnce(
-      new Map([
-        [
-          "run-restored",
-          {
-            runId: "run-restored",
-            childSessionKey: "agent:main:subagent:restored",
-            requesterSessionKey: "agent:main:main",
-            requesterDisplayKey: "main",
-            task: "restored pending task",
-            cleanup: "delete",
-            expectsCompletionMessage: true,
-            createdAt: now,
-            execution: { status: "running" as const },
-          },
-        ],
-      ]),
-    );
-
-    expect(mod.listSessionMaintenanceProtectedSubagentSessionKeys()).toEqual([
-      "agent:main:subagent:restored",
     ]);
   });
 

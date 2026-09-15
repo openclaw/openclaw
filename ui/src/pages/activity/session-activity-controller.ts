@@ -135,10 +135,13 @@ export class SessionActivityController implements ReactiveController {
       !client ||
       !this.result ||
       !this.canEnsureSummaries ||
-      !this.pageActive ||
       this.filters === "current" ||
       this.summaryPending
     ) {
+      return;
+    }
+    if (!this.pageActive) {
+      this.eventRefresh.schedule();
       return;
     }
     const visible = new Set(
@@ -231,9 +234,7 @@ export class SessionActivityController implements ReactiveController {
       if (this.summaryPending === pending) {
         this.summaryPending = undefined;
         this.host.requestUpdate();
-        if (this.summaryRetries.size > 0) {
-          void this.ensureSummaries();
-        }
+        void this.ensureSummaries();
       }
     }
   }
@@ -309,6 +310,7 @@ export class SessionActivityController implements ReactiveController {
 
   private readonly handlePageLifecycle = (event: Event): void => {
     const leaving = event.type === "pagehide";
+    const interrupted = this.pending !== undefined || this.summaryPending !== undefined;
     this.pageActive = !leaving && document.visibilityState !== "hidden";
     if (!this.pageActive) {
       this.summaryPending?.abort();
@@ -316,7 +318,7 @@ export class SessionActivityController implements ReactiveController {
       this.summaryAttempts.clear();
       this.summaryRetries.clear();
     }
-    this.eventRefresh.setActive(this.pageActive, leaving || this.pending !== undefined);
+    this.eventRefresh.setActive(this.pageActive, leaving || interrupted);
     if (!this.pageActive) {
       // The lifecycle coordinator owns catch-up after hiding, including queued in-flight work.
       this.refreshPending = false;

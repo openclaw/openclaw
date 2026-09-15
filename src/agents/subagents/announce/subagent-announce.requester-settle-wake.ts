@@ -353,14 +353,15 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     finalizeRequesterAttachment(batchRunIds, selectedState);
     return false;
   }
-  function deferBatch(state: RequesterSettleWakeBatchState): void {
-    const countTowardsLimit =
-      countActiveDescendantRuns(requesterSessionKey, requesterAgentId) === 0;
+  function deferBatch(
+    state: RequesterSettleWakeBatchState,
+    countTowardsLimit = countActiveDescendantRuns(requesterSessionKey, requesterAgentId) === 0,
+  ): void {
     const now = Date.now();
     if ((state.nextAttemptAt ?? 0) > now) {
       return;
     }
-    // Live descendants are valid overlapping work, not a stale settle loop.
+    // Live descendant or requester work is not a stale settle loop.
     // Reset their stale-deferral budget so long-running waves cannot terminalize
     // an already completed sibling before the requester can receive it.
     const deferralCount = countTowardsLimit ? (state.deferralCount ?? 0) + 1 : 0;
@@ -647,9 +648,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
                 : undefined,
             triggerMessage: wakeMessage,
             steerMessage: wakeMessage,
-            summaryLine: "all spawned subagents settled",
             requesterSessionOrigin,
-            requesterOrigin: requesterSessionOrigin,
             directOrigin,
             sourceSessionKey: currentSettledEntry.childSessionKey,
             sourceTool: "subagent_settle",
@@ -715,6 +714,12 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       return true;
     }
     if (settleRevokedBatch()) {
+      return false;
+    }
+    if (delivery.reason === "requester_turn_pending") {
+      // An existing Gateway turn still owns the input. Observe the same request
+      // without spending failure attempts or closing its completion obligation.
+      deferBatch({ ...state, lastError: undefined }, false);
       return false;
     }
     if (

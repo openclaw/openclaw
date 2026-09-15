@@ -1,5 +1,11 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
+import {
+  captureAgentRunLifecycleGeneration,
+  emitAgentEvent,
+  emitAgentEventForRunContext,
+} from "../../infra/agent-events.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createAssistantErrorTranscript,
@@ -165,6 +171,21 @@ function preserveFollowupResultForDelivery(
 export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
   params: EmbeddedAgentRunEntryParams<T>,
 ): Promise<EmbeddedAgentRunEntryResult<T>> {
+  const lifecycleGeneration = captureAgentRunLifecycleGeneration(params.identity.runId);
+  const runContext = getAgentRunContext(params.identity.runId);
+  const clearObservedModel = () => {
+    const event = {
+      ...params.identity,
+      lifecycleGeneration,
+      stream: "lifecycle",
+      data: { phase: "model", provider: null, model: null },
+    } as const;
+    if (runContext) {
+      emitAgentEventForRunContext(event, runContext);
+    } else {
+      emitAgentEvent(event);
+    }
+  };
   const contextEngineLogicalTurnLease = await createContextEngineLogicalTurnLease({
     identity: params.identity,
     config: params.selection.cfg,
@@ -379,36 +400,40 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             }
             return classified.value;
           };
-          const result = await params.runCandidate(provider, model, {
-            assistantErrorTranscript,
-            // The original OpenAI refusal proves this turn's credential already
-            // reached the provider. Keep a target-only entitlement rejection from
-            // poisoning shared auth health for ordinary OpenAI model selection.
-            ...(runOptions.forceFallbackRetry
-              ? { authProfileFailurePolicy: "local" as const }
-              : {}),
-            classifyResult,
-            allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
-            isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
-            isFallbackRetry,
-            modelRoutingProvenance: runOptions.forceFallbackRetry
-              ? {
-                  ...options.modelRoutingProvenance,
-                  stage: "fallback",
-                  fallbackReason: "unknown",
-                }
-              : options.modelRoutingProvenance,
-            contextEngineLogicalTurnLease,
-            onContextEngineTurnCandidate: (facts) => {
-              contextEngineTurnCandidate = facts;
-              unsettledContextEngineTurnAttempt = facts;
-            },
-          });
-          return {
-            result,
-            classification: classifyResult(result),
-            turnAttempt: contextEngineTurnCandidate,
-          };
+          try {
+            const result = await params.runCandidate(provider, model, {
+              assistantErrorTranscript,
+              // The original OpenAI refusal proves this turn's credential already
+              // reached the provider. Keep a target-only entitlement rejection from
+              // poisoning shared auth health for ordinary OpenAI model selection.
+              ...(runOptions.forceFallbackRetry
+                ? { authProfileFailurePolicy: "local" as const }
+                : {}),
+              classifyResult,
+              allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
+              isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
+              isFallbackRetry,
+              modelRoutingProvenance: runOptions.forceFallbackRetry
+                ? {
+                    ...options.modelRoutingProvenance,
+                    stage: "fallback",
+                    fallbackReason: "unknown",
+                  }
+                : options.modelRoutingProvenance,
+              contextEngineLogicalTurnLease,
+              onContextEngineTurnCandidate: (facts) => {
+                contextEngineTurnCandidate = facts;
+                unsettledContextEngineTurnAttempt = facts;
+              },
+            });
+            return {
+              result,
+              classification: classifyResult(result),
+              turnAttempt: contextEngineTurnCandidate,
+            };
+          } finally {
+            clearObservedModel();
+          }
         },
       });
 

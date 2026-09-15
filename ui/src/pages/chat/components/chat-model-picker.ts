@@ -86,11 +86,14 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
     isModelPickerOptionSelected(option, params.selectedModelValue, params.selectedAgentRuntime),
   );
   const triggerModelValue = params.triggerModelValue;
-  const triggerModelOption = triggerModelValue
-    ? params.modelOptions.find((option) =>
-        isModelPickerOptionSelected(option, triggerModelValue, params.selectedAgentRuntime),
-      )
-    : activeModelOption;
+  const triggerModelOption =
+    triggerModelValue === undefined
+      ? activeModelOption
+      : triggerModelValue === ""
+        ? undefined
+        : params.modelOptions.find((option) =>
+            isModelPickerOptionSelected(option, triggerModelValue, params.selectedAgentRuntime),
+          );
   const modelToolsUnavailable = triggerModelOption?.supportsTools === false;
   const selectedContextWindowOption = params.contextWindow?.options.find(
     (option) => option.id === params.contextWindow?.selected,

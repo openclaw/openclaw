@@ -2,8 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
@@ -17,6 +19,7 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import type { SessionEntry } from "./types.js";
 
 describe("terminal main session transcript freshness", () => {
@@ -96,7 +99,20 @@ describe("terminal main session transcript freshness", () => {
     });
 
     expect(entry.updatedAt).toBe(registryTimestampMs);
-    expect(check(entry, sessionKey)).toBe(true);
+    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+    if (!target.path) {
+      throw new Error("expected SQLite database path");
+    }
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
+    const reads = trackSqliteStatementExecutions(database.db, ["events"], (query) =>
+      query.includes('"transcript_events"') ? "events" : null,
+    );
+    try {
+      expect(check(entry, sessionKey)).toBe(true);
+      expect(reads.counts.events).toBe(0);
+    } finally {
+      reads.restore();
+    }
     await expect(
       hasTerminalMainSessionTranscriptNewerThanRegistry({
         agentId: "main",

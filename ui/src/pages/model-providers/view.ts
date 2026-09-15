@@ -1,15 +1,8 @@
 // Control UI view renders the Models settings page content.
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  FastMode,
-  GatewayAgentRow,
-  ModelAuthStatusResult,
-  ModelsProbeResult,
-} from "../../api/types.ts";
+import type { FastMode, ModelAuthStatusResult, ModelsProbeResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
-import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
-import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { icons } from "../../components/icons.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
@@ -78,6 +71,7 @@ type ModelProvidersViewProps = {
   canViewProfiles: boolean;
   canMutate: boolean;
   mutationBlockedReason: string | null;
+  defaultsMutationBlockedReason: string | null;
   /** Usage never converged before the retry budget ran out; cards lack usage. */
   providerUsageStalled: boolean;
   probeAvailable: boolean;
@@ -587,8 +581,8 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
         loading: props.loading,
         catalogDiscovering: props.catalogDiscovering,
         catalogDiscoveryError: props.catalogDiscoveryError,
-        canMutate: !configMutationDisabled(props),
-        mutationBlockedReason: props.mutationBlockedReason,
+        canMutate: props.defaultsMutationBlockedReason === null && !props.configBusy,
+        mutationBlockedReason: props.defaultsMutationBlockedReason,
         busy: props.busy,
         message: props.messages.defaults,
         onPrimaryChange: props.onPrimaryChange,
@@ -648,12 +642,9 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
   `);
 }
 
-/** Page shell for the Models settings page: header, agent scope control, body. */
+/** Page shell for the Models settings page. */
 export function renderModelProvidersPageShell(props: {
-  agentSelection: AgentSelectionCapability;
-  agents: readonly GatewayAgentRow[];
   onOpenModelSetup: () => void;
-  selectedAgentId: string;
   body: TemplateResult;
   onConnect: () => void;
   connectDisabled: boolean;
@@ -666,12 +657,6 @@ export function renderModelProvidersPageShell(props: {
       subtitle: html`${t("modelProviders.subtitle")}
       ${renderLearnMoreLink("https://docs.openclaw.ai/concepts/model-providers")}`,
       actions: html`
-        ${renderAgentScopeControl({
-          agents: props.agents,
-          selection: props.agentSelection,
-          allowAll: false,
-          selectedId: props.selectedAgentId,
-        })}
         <button
           class="btn"
           data-models-connect

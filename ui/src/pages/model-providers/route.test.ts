@@ -45,12 +45,15 @@ function createModelsRouter(selectedId: string | null = "main") {
   store.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
   // Match bootstrap's subscription order; the roster publishes before selection reconciles.
   const agents = createAgentCapability(store.gateway);
-  const selection = createAgentSelectionCapability(store.gateway, agents);
+  const chatSelection = createAgentSelectionCapability(store.gateway, agents);
+  const selection = createAgentSelectionCapability(store.gateway, agents, undefined, undefined, {
+    requireConfiguredAgent: true,
+  });
   selection.set(selectedId);
   const context = Object.freeze({
     gateway: store.gateway,
     agents,
-    agentSelection: selection,
+    settingsAgentSelection: selection,
   }) satisfies Parameters<NonNullable<typeof page.loader>>[0];
   const router = createRouter<
     "model-providers" | "other",
@@ -66,6 +69,7 @@ function createModelsRouter(selectedId: string | null = "main") {
   cleanups.push(() => {
     router.stop();
     selection.dispose();
+    chatSelection.dispose();
     agents.dispose();
     store.gateway.stop();
   });
@@ -73,6 +77,7 @@ function createModelsRouter(selectedId: string | null = "main") {
     ...store,
     context,
     selection,
+    chatSelection,
     router,
     request,
     modelCalls: () =>
@@ -174,7 +179,7 @@ describe("Models route admission", () => {
   );
 
   it.each(["import", "roster"] as const)(
-    "accepts metadata and scope-only changes during %s",
+    "accepts metadata and independent chat scope changes during %s",
     async (boundary) => {
       const harness = createModelsRouter(boundary === "roster" ? null : "main");
       const admitted = harness.gateway.snapshot;
@@ -192,7 +197,7 @@ describe("Models route admission", () => {
         await started.promise;
       }
       harness.current().opts.onRecoveryScopeChange?.();
-      harness.selection.setScope(boundary === "import" ? null : "research");
+      harness.chatSelection.setScope(boundary === "import" ? null : "research");
       expect(harness.gateway.snapshot).not.toBe(admitted);
       expect(harness.gateway.snapshot.hello).toBe(admitted.hello);
       response.resolve(roster);
@@ -209,7 +214,7 @@ describe("Models route admission", () => {
           .map(([method]) => method)
           .toSorted(),
       ).toEqual(modelMethods.toSorted());
-      expect(harness.context.agentSelection.state.selectedId).toBe("main");
+      expect(harness.context.settingsAgentSelection.state.selectedId).toBe("main");
     },
   );
 

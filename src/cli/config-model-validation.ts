@@ -24,6 +24,7 @@ import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import { formatCliCommand } from "./command-format.js";
 
 type TouchedModelRef = {
@@ -378,12 +379,6 @@ function expandInheritedDefaultRefs(
   return expanded;
 }
 
-function modelRefEnvSourcePath(path: string): string {
-  return path
-    .replace(/\.list\.(\d+)/u, ".list[$1]")
-    .replace(/\.fallbacks\.(\d+)$/u, ".fallbacks[$1]");
-}
-
 function validateModelRefSyntax(
   config: OpenClawConfig,
   ref: TouchedModelRef,
@@ -392,7 +387,8 @@ function validateModelRefSyntax(
   if (!ref.value) {
     return "Model reference is empty";
   }
-  if (unresolvedPaths.has(modelRefEnvSourcePath(ref.path))) {
+  const configPath = formatConcreteConfigPath(ref.path.split("."), config);
+  if (unresolvedPaths.has(configPath)) {
     return "Model reference contains an unresolved environment variable";
   }
   const resolved = ref.fallback

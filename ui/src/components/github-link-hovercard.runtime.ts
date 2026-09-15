@@ -229,9 +229,6 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
 
   private invalidatePreviewContext(): void {
     this.seeds = null;
-    if (this.client && this.previewContext) {
-      previewContexts.get(this.client)?.delete(this.agentId ?? "");
-    }
     this.previewContext = null;
   }
 
@@ -621,7 +618,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     this.cache.set(key, entry);
     this.syncInlineStates();
     while (this.cache.size > CACHE_LIMIT) {
-      const oldestKey = this.cache.keys().next().value as string | undefined;
+      const oldestKey = this.cache.keys().next().value;
       if (!oldestKey) {
         break;
       }

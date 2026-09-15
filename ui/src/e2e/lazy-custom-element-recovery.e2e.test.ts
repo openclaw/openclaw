@@ -178,6 +178,28 @@ const focusedCases = [
   },
 ];
 
+const systemBusyness = {
+  name: "System busyness",
+  label: "System busyness",
+  tag: "openclaw-debug-overlay-content",
+  chunk: /\/assets\/debug-overlay-content-[^/?]+\.js(?:\?.*)?$/u,
+  proofName: "system-busyness",
+  dock: undefined,
+  frame: (page: Page) => page.locator(".debug-overlay"),
+  close: (page: Page) =>
+    page.locator(".debug-overlay__header").getByRole("button", { name: "Close", exact: true }),
+  open: async (page: Page) => {
+    await page.locator(".sidebar-identity-card").click();
+    await page
+      .locator('wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:debug-overlay"]')
+      .click();
+  },
+  ready: (page: Page) =>
+    page
+      .locator('openclaw-debug-overlay-content .debug-overlay__section[aria-busy="false"]')
+      .first(),
+};
+
 const dockedCases = [
   ...(["right", "bottom"] as const).map((dock) => ({
     name: `Home ${dock}`,
@@ -195,28 +217,13 @@ const dockedCases = [
     ready: (page: Page) =>
       page.locator("openclaw-assistant-panel .agent-chat__composer-combobox textarea"),
   })),
+  systemBusyness,
   {
-    name: "System busyness",
-    label: "System busyness",
-    tag: "openclaw-debug-overlay-content",
-    chunk: /\/assets\/debug-overlay-content-[^/?]+\.js(?:\?.*)?$/u,
-    proofName: "system-busyness",
-    dock: undefined,
-    frame: (page: Page) => page.locator(".debug-overlay"),
-    close: (page: Page) =>
-      page.locator(".debug-overlay__header").getByRole("button", { name: "Close", exact: true }),
-    open: async (page: Page) => {
-      await page.locator(".sidebar-identity-card").click();
-      await page
-        .locator(
-          'wa-dropdown.sidebar-identity-menu wa-dropdown-item[value="command:debug-overlay"]',
-        )
-        .click();
-    },
-    ready: (page: Page) =>
-      page
-        .locator('openclaw-debug-overlay-content .debug-overlay__section[aria-busy="false"]')
-        .first(),
+    ...systemBusyness,
+    name: "System busyness frame",
+    tag: "openclaw-debug-overlay",
+    chunk: /\/assets\/debug-overlay-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
+    proofName: "system-busyness-frame",
   },
 ];
 
@@ -247,6 +254,21 @@ async function installDockedScenario(
     })),
     featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
     historyMessages: [{ role: "assistant", content: "The workspace is ready." }],
+    methodResponses: {
+      "diagnostics.lanes": {
+        lanes: [
+          {
+            lane: "main",
+            queuedCount: 0,
+            activeCount: 0,
+            maxConcurrent: 16,
+            draining: false,
+            generation: 1,
+          },
+        ],
+        dynamic: null,
+      },
+    },
   });
   await page.goto(
     route === "new"
@@ -489,6 +511,83 @@ suite.define(() => {
       }
     }
   });
+
+  it.each(["new", "chat"] as const)(
+    "keeps the outer System busyness frame nonmodal and transfers its current mode on %s",
+    async (route) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport },
+        async ({ page }) => {
+          const held = await holdModuleResponse(
+            page,
+            /\/assets\/debug-overlay-[A-Za-z0-9_-]{8}\.js(?:\?.*)?$/u,
+          );
+          try {
+            const composer = await installDockedScenario(page, undefined, route);
+            expect(
+              await page.evaluate(() => customElements.get("openclaw-debug-overlay") === undefined),
+            ).toBe(true);
+            expect(held.requests()).toBe(0);
+            await systemBusyness.open(page);
+            await held.request;
+            const frame = page.locator(".debug-overlay");
+            await frame.waitFor();
+            expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+            const expanded = await frame.boundingBox();
+            expect(expanded).not.toBeNull();
+            await composer.fill("Still editable during the outer load");
+            await frame
+              .getByRole("button", { name: "Minimize system busyness", exact: true })
+              .click();
+            await expect
+              .poll(() => frame.getAttribute("class"))
+              .toContain("debug-overlay--minimized");
+            const minimized = await frame.boundingBox();
+            expect(minimized).not.toBeNull();
+            expect(minimized!.height).toBeLessThan(expanded!.height);
+            await composer.press("Escape");
+            expect(await frame.isVisible()).toBe(true);
+            await frame
+              .getByRole("button", { name: "Expand system busyness", exact: true })
+              .click();
+            await expect.poll(() => frame.boundingBox()).toEqual(expanded);
+            await frame
+              .getByRole("button", { name: "Minimize system busyness", exact: true })
+              .click();
+            if (captureUiProof) {
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(artifactDir, `system-busyness-${route}-outer-loading.png`),
+              });
+            }
+            held.release();
+            await page.locator("openclaw-debug-overlay .debug-overlay--minimized").waitFor();
+            await expect.poll(() => frame.boundingBox()).toEqual(minimized);
+            expect(await composer.inputValue()).toBe("Still editable during the outer load");
+            await frame
+              .getByRole("button", { name: "Expand system busyness", exact: true })
+              .click();
+            await systemBusyness.ready(page).waitFor();
+            await expect.poll(() => frame.boundingBox()).toEqual(expanded);
+            if (captureUiProof) {
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(artifactDir, `system-busyness-${route}-outer-ready.png`),
+              });
+            }
+            await frame
+              .getByRole("button", { name: "Minimize system busyness", exact: true })
+              .click();
+            await frame.getByRole("button", { name: "Close", exact: true }).press("Escape");
+            await frame.waitFor({ state: "hidden" });
+            expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+          } finally {
+            held.release();
+          }
+        },
+      );
+    },
+  );
 
   it("keeps Home header controls aligned on a cold New session while its body loads", async () => {
     await suite.withPage(

@@ -20,10 +20,12 @@ import type {
   CodexThreadTurnsListParams,
   CodexThreadTurnsListResponse,
 } from "./app-server/protocol.js";
+import type { CodexControlRequestObservation } from "./app-server/request-observation.js";
 import { withTimeout } from "./app-server/timeout.js";
 import {
   currentCodexCatalogListDiagnostics,
   startCodexCatalogPageDiagnostics,
+  startCodexCatalogControlRequestDiagnostics,
   waitForCodexCatalogPage,
 } from "./session-catalog-diagnostics.js";
 import { createCodexCatalogHomeResolver, type CodexCatalogHome } from "./session-catalog-homes.js";
@@ -97,7 +99,11 @@ function codexCatalogPageCacheKey(
 
 type CodexSessionCatalogRequestSnapshot = {
   requestTimeoutMs: number;
-  listThreads(params: CodexThreadListParams, timeoutMs: number): Promise<CodexThreadListResponse>;
+  listThreads(
+    params: CodexThreadListParams,
+    timeoutMs: number,
+    observation?: CodexControlRequestObservation,
+  ): Promise<CodexThreadListResponse>;
   listThreadTurns(params: CodexThreadTurnsListParams): Promise<CodexThreadTurnsListResponse>;
   listThreadItems(params: CodexThreadItemsListParams): Promise<CodexThreadItemsListResponse>;
   forkThread(
@@ -121,6 +127,7 @@ type CodexCatalogRequest = <M extends CodexCatalogRequestMethod>(
   requestParams: CodexAppServerRequestParams<M>,
   timeoutMs?: number,
   assertCurrent?: () => void,
+  observation?: CodexControlRequestObservation,
 ) => Promise<CodexAppServerRequestResult<M>>;
 
 function createCodexCatalogRequestSnapshot(
@@ -129,8 +136,8 @@ function createCodexCatalogRequestSnapshot(
 ): CodexSessionCatalogRequestSnapshot {
   return {
     requestTimeoutMs,
-    listThreads: (params, timeoutMs) =>
-      request(CODEX_CONTROL_METHODS.listThreads, params, timeoutMs),
+    listThreads: (params, timeoutMs, observation) =>
+      request(CODEX_CONTROL_METHODS.listThreads, params, timeoutMs, undefined, observation),
     listThreadTurns: (params) => request(CODEX_CONTROL_METHODS.listThreadTurns, params),
     listThreadItems: (params) => request(CODEX_CONTROL_METHODS.listThreadItems, params),
     forkThread: (params, assertCurrent) =>
@@ -294,6 +301,7 @@ function createCodexSessionCatalogControlFromRequests(params: {
             diagnostics.fields.controlRequestCalls++;
           }
           let response: CodexThreadListResponse;
+          const observation = startCodexCatalogControlRequestDiagnostics(diagnostics);
           try {
             response = await requests.listThreads(
               {
@@ -308,8 +316,13 @@ function createCodexSessionCatalogControlFromRequests(params: {
                 ...(cursor ? { cursor } : {}),
               },
               remainingTimeoutMs,
+              observation,
             );
+          } catch (error) {
+            observation?.rejected();
+            throw error;
           } finally {
+            observation?.close();
             if (diagnostics) {
               const elapsed = performance.now() - requestStarted;
               diagnostics.fields.inclusiveControlRequestWaitMs =
@@ -479,12 +492,13 @@ export function createCodexSessionCatalogControl(params: {
         : undefined;
     return createCodexCatalogRequestSnapshot(
       runtime.requestTimeoutMs,
-      async (method, requestParams, timeoutMs, assertCurrent) => {
+      async (method, requestParams, timeoutMs, assertCurrent, observation) => {
         const { codexControlRequest } = await import("./command-rpc.js");
         return await codexControlRequest(pluginConfig, method, requestParams, {
           ...requestOptions,
           authProfileId: null,
           assertCurrent,
+          ...(observation ? { controlObservation: observation } : {}),
           ...(catalogListKey && method === CODEX_CONTROL_METHODS.listThreads
             ? { catalogListKey }
             : {}),
@@ -532,6 +546,7 @@ export function createCodexSessionCatalogControl(params: {
             requestParams: CodexAppServerRequestParams<M>,
             timeoutMs?: number,
             assertCurrent?: () => void,
+            observation?: CodexControlRequestObservation,
           ): Promise<CodexAppServerRequestResult<M>> =>
             await requestCodexAppServerClientJson<CodexAppServerRequestResult<M>>({
               client,
@@ -540,6 +555,7 @@ export function createCodexSessionCatalogControl(params: {
               config: runtimeConfig,
               timeoutMs: timeoutMs ?? runtime.requestTimeoutMs,
               assertCurrent,
+              ...(observation ? { controlObservation: observation } : {}),
             }),
         );
         const pinnedControl: CodexSessionCatalogControl =

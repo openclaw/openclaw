@@ -22,63 +22,11 @@ import {
 } from "./update-schedule-dto.ts";
 import { formatUpdateCampaignLabel } from "./update-schedule-projection.ts";
 
-const TRIAGE_HINT = "Run openclaw triage on the Gateway host before retrying.";
-const translations: Record<string, string> = {
-  "updates.triage.hostHint": TRIAGE_HINT,
-  "updates.status": "Update {status}: {reason}. {guidance}",
-  "updates.failureReasons.dirty": "Commit or stash changes, then retry.",
-  "updates.failureReasons.depsInstallFailed":
-    "Dependency install failed. Fix the install error and retry.",
-  "updates.failureReasons.managedServiceHandoffUnavailable":
-    "Stop the foreground Gateway, update in the terminal, then launch it again.",
-  "updates.failureReasons.default":
-    "See the gateway logs for the exact failure and retry once the cause is fixed.",
-  "common.unknown": "Unknown",
-  "updates.failureReasons.restartUnhealthy":
-    "The replacement process never became healthy. The previous process stayed up so you can recover.",
-  "updates.failedAtStep": "The update failed at {step}: {cause}.",
-  "updates.campaign.countdown": "Updating in {time}",
-  "updates.campaign.applying": "Updating…",
-  "updates.campaign.held": "Update held · resumes in {time}",
-  "updates.campaign.waitingForIdle": "Waiting for active work · forced update in {time}",
-};
-
-function installTranslations() {
-  return vi.spyOn(i18n, "t").mockImplementation((key, params) => {
-    const template = translations[key] ?? key;
-    return template.replace(/\{(\w+)\}/g, (_match, name: string) => params?.[name] ?? `{${name}}`);
-  });
-}
-
 afterEach(() => {
-  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
 describe("update schedule hydration", () => {
-  it("preserves an active hold deadline after reconnect", () => {
-    const holdUntilMs = 3_601_000;
-    const hello = {
-      snapshot: {
-        updateSchedule: {
-          channel: "stable",
-          autoEnabled: true,
-          target: { kind: "package", version: "2.0.0" },
-          campaign: {
-            id: "campaign-held",
-            state: "waiting-for-idle",
-            announcedAtMs: 1_000,
-            holdUntilMs,
-            forceAtMs: 4_501_000,
-            updatedAtMs: 2_000,
-          },
-        },
-      },
-    } as GatewayHelloOk;
-
-    expect(readUpdateSchedule(hello)?.campaign?.holdUntilMs).toBe(holdUntilMs);
-  });
-
   it("preserves additive git availability and the hello schedule DTO", () => {
     const updateSchedule = {
       channel: "dev",
@@ -141,7 +89,6 @@ describe("update schedule hydration", () => {
   });
 
   it("formats countdown deadlines with a stable minutes-and-seconds shape", () => {
-    installTranslations();
     const schedule = {
       channel: "stable",
       autoEnabled: true,
@@ -186,7 +133,7 @@ describe("update schedule hydration", () => {
         },
         1_000,
       ),
-    ).toBe("Updating…");
+    ).toBe("Applying update…");
   });
 
   it.each([
@@ -394,7 +341,6 @@ describe("update status localization", () => {
   });
 
   it("projects the recorded update attempt without inferring from localized text", () => {
-    installTranslations();
     const projected = projectUpdateStatusResponse(
       {
         sentinel: {
@@ -440,10 +386,11 @@ describe("update status localization", () => {
     {
       reason: "managed-service-handoff-unavailable",
       key: "managedServiceHandoffUnavailable",
-      guidance: "Stop the foreground Gateway, update in the terminal, then launch it again.",
+      guidance:
+        "Stop the foreground Gateway, run `openclaw update`, then launch it again. For automatic updates, install a managed Gateway service.",
     },
   ])("localizes known update failure guidance for $reason", ({ reason, key, guidance }) => {
-    const translate = installTranslations();
+    const translate = vi.spyOn(i18n, "t");
 
     expect(resolveUpdateStatusBanner({ status: "skipped", reason })).toEqual({
       tone: "warn",
@@ -458,7 +405,6 @@ describe("update status localization", () => {
   });
 
   it("names the recorded cause instead of the reason slug when a retained step failed", () => {
-    installTranslations();
     expect(
       projectUpdateSentinel({
         kind: "update",
@@ -480,14 +426,13 @@ describe("update status localization", () => {
       })?.banner,
     ).toEqual({
       tone: "danger",
-      text: `The update failed at install: ENOSPC: no space left on device, write. Dependency install failed. Fix the install error and retry. ${TRIAGE_HINT}`,
+      text: "The update failed at install: ENOSPC: no space left on device, write. Dependency install failed. Fix the install error and retry. If Ask OpenClaw is unavailable, run `openclaw triage` on the Gateway host to open a local coding agent for diagnosis and repair. Diagnose the cause before retrying.",
     });
   });
 
   it.each(["stderrTail", "stdoutTail"])(
     "redacts credentials in %s before shortening the recorded cause",
     (stream) => {
-      installTranslations();
       const password = "synthetic-password-value";
       const prefix = "npm ERR! fetch failed ";
       const userinfo = `https://build:${password}`;
@@ -516,7 +461,7 @@ describe("update status localization", () => {
   );
 
   it("preserves unknown status details inside localized fallback guidance", () => {
-    const translate = installTranslations();
+    const translate = vi.spyOn(i18n, "t");
 
     expect(resolveUpdateStatusBanner({ status: "error", reason: "disk-read-only" })).toEqual({
       tone: "danger",

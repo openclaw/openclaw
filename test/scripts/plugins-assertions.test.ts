@@ -9,6 +9,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
@@ -1876,14 +1877,114 @@ fs.renameSync = (source, destination) => {
     }
   });
 
-  it("rejects ClawHub install paths that resolve outside the managed extensions root", () => {
+  it.each([
+    {
+      name: "rejects ClawHub install paths that resolve outside the managed extensions root",
+      escaped: true,
+      recordOverrides: {},
+      errorPrefix: null,
+      pathError: false,
+    },
+    {
+      name: "accepts legacy ZIP without later ClawPack or npm fields",
+      recordOverrides: {},
+      errorPrefix: null,
+      pathError: false,
+    },
+    {
+      name: "rejects a legacy artifact with the wrong format before later metadata",
+      recordOverrides: { artifactFormat: "tgz" },
+      errorPrefix: "missing ClawHub legacy ZIP artifact metadata",
+      pathError: false,
+    },
+    {
+      name: "rejects a non-legacy artifact kind before ClawPack metadata",
+      recordOverrides: { artifactKind: "other" },
+      errorPrefix: "missing ClawHub artifact metadata",
+      pathError: false,
+    },
+    {
+      name: "rejects missing ClawPack metadata before npm metadata",
+      recordOverrides: { artifactKind: "npm-pack", artifactFormat: "tgz" },
+      errorPrefix: "missing ClawHub ClawPack metadata",
+      pathError: false,
+    },
+    {
+      name: "rejects a string ClawPack size",
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: "digest",
+        clawpackSize: "0",
+      },
+      errorPrefix: "missing ClawHub ClawPack metadata",
+      pathError: false,
+    },
+    {
+      name: "accepts zero size before rejecting missing npm metadata",
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: "digest",
+        clawpackSize: 0,
+      },
+      errorPrefix: "missing ClawHub npm artifact metadata",
+      pathError: false,
+    },
+    {
+      name: "accepts zero size and truthy non-string metadata with a real npm peer",
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: { digest: 1 },
+        clawpackSize: 0,
+        npmIntegrity: 1,
+        npmShasum: true,
+        npmTarballName: ["package.tgz"],
+      },
+      errorPrefix: null,
+      pathError: false,
+    },
+    {
+      name: "rejects an empty install path before invalid metadata",
+      recordOverrides: { artifactFormat: "tgz", installPath: "" },
+      errorPrefix: null,
+      pathError: true,
+    },
+    {
+      name: "rejects a non-string install path before invalid metadata",
+      recordOverrides: { artifactFormat: "tgz", installPath: 42 },
+      errorPrefix: null,
+      pathError: true,
+    },
+  ])("$name", ({ escaped, recordOverrides, errorPrefix, pathError }) => {
     const root = autoCleanupTempDirs.make("openclaw-plugins-clawhub-path-");
     const home = path.join(root, "home");
     const scratchRoot = path.join(root, "scratch");
     const extensionsRoot = path.join(home, ".openclaw", "extensions");
-    const escapedInstallPath = `${extensionsRoot}${path.sep}..${path.sep}escaped-clawhub`;
+    const installPath = escaped
+      ? `${extensionsRoot}${path.sep}..${path.sep}escaped-clawhub`
+      : path.join(extensionsRoot, "openclaw-kitchen-sink-fixture");
     mkdirSync(extensionsRoot, { recursive: true });
-    mkdirSync(escapedInstallPath, { recursive: true });
+    mkdirSync(installPath, { recursive: true });
+    const record = {
+      artifactFormat: "zip",
+      artifactKind: "legacy-zip",
+      clawhubFamily: "code-plugin",
+      clawhubPackage: "@openclaw/kitchen-sink",
+      installPath,
+      source: "clawhub",
+      spec: "clawhub:@openclaw/kitchen-sink",
+      ...recordOverrides,
+    };
+    if (record.artifactKind === "npm-pack") {
+      mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
+      symlinkSync(
+        process.cwd(),
+        path.join(installPath, "node_modules", "openclaw"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
 
     writeJson(path.join(scratchRoot, "plugins-clawhub-installed.json"), {
       plugins: [{ id: "openclaw-kitchen-sink-fixture", status: "loaded" }],
@@ -1893,15 +1994,7 @@ fs.renameSync = (source, destination) => {
     });
     writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
       installRecords: {
-        "openclaw-kitchen-sink-fixture": {
-          artifactFormat: "zip",
-          artifactKind: "legacy-zip",
-          clawhubFamily: "code-plugin",
-          clawhubPackage: "@openclaw/kitchen-sink",
-          installPath: escapedInstallPath,
-          source: "clawhub",
-          spec: "clawhub:@openclaw/kitchen-sink",
-        },
+        "openclaw-kitchen-sink-fixture": record,
       },
     });
 
@@ -1912,12 +2005,28 @@ fs.renameSync = (source, destination) => {
         CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
         CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
         HOME: home,
+        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
         OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
       },
     });
 
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("ClawHub install path resolved outside");
+    if (escaped) {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("ClawHub install path resolved outside");
+    } else if (pathError) {
+      expect(result.status).toBe(1);
+      expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
+        "missing ClawHub install path for openclaw-kitchen-sink-fixture",
+      );
+    } else if (errorPrefix) {
+      expect(result.status).toBe(1);
+      expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
+        `${errorPrefix} for openclaw-kitchen-sink-fixture: ${JSON.stringify(record)}`,
+      );
+    } else {
+      expect(result.status, result.stderr).toBe(0);
+    }
   });
 
   it("times out stalled ClawHub package metadata requests", async () => {

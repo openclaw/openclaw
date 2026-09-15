@@ -1158,7 +1158,7 @@ describe("tui command handlers", () => {
     });
   });
 
-  it("keeps gateway diagnostics on /gateway-status", async () => {
+  it.each(["/gateway-status", "/gwstatus"])("keeps gateway diagnostics on %s", async (command) => {
     const { handleCommand, getGatewayStatus, addSystem, addUser, sendChat } = createHarness({
       getGatewayStatus: vi.fn().mockResolvedValue({
         runtimeVersion: "1.2.3",
@@ -1167,7 +1167,7 @@ describe("tui command handlers", () => {
       }),
     });
 
-    await handleCommand("/gateway-status");
+    await handleCommand(command);
 
     expect(getGatewayStatus).toHaveBeenCalledTimes(1);
     expect(addUser).not.toHaveBeenCalled();
@@ -1175,6 +1175,8 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("Gateway status");
     expect(addSystem).toHaveBeenCalledWith("Version: 1.2.3");
     expect(addSystem).toHaveBeenCalledWith("  Telegram: not configured");
+    expect(addSystem).toHaveBeenCalledWith("Stored sessions: 2");
+    expect(addSystem).not.toHaveBeenCalledWith("Active sessions: 2");
   });
 
   it("returns to OpenClaw with an optional request", async () => {

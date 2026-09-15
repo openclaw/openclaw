@@ -15,6 +15,7 @@ export {
 export {
   dropPreSessionStartAnnouncePairs,
   createPreSessionStartAnnouncePairFilter,
+  isAssistantTtsSupplementMessage,
   isHeartbeatHistoryTurnBoundaryMessage,
 } from "./chat-display-projection.history.js";
 export { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";

@@ -40,7 +40,11 @@ import {
 } from "./shared.js";
 import { inspectUpdateDatabaseContexts } from "./update-command-database-context.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
-import { createBeforeGitMutation, updateGitInstall } from "./update-command-git.js";
+import {
+  createBeforeGitMutation,
+  recordInspectedGitTarget,
+} from "./update-command-git-admission.js";
+import { updateGitInstall } from "./update-command-git.js";
 import {
   formatUpdateAncestryBlockMessage,
   handoffUpdateFromGateway,
@@ -592,6 +596,7 @@ export async function executeMutableUpdate(
         installTarget: params.packageInstallTarget,
         validateCandidate,
         beforeActivate,
+        assertCurrent: assertExecutionCurrent,
         managedServiceEnv: preManagedServiceStop?.serviceEnv,
         onTransaction: (transaction) => {
           packageTransaction = transaction;
@@ -614,13 +619,9 @@ export async function executeMutableUpdate(
         channel: params.channel,
         tag: params.tag,
         devTarget: params.devTarget,
+        assertCurrent: assertExecutionCurrent,
         inspectGitTarget: async (target) => {
-          if (target.metadataUnreadable) {
-            throw new UpdatePreMutationError(
-              "target-metadata-preflight",
-              `Update refused: could not inspect the target's schema support (${target.metadataUnreadable}).`,
-            );
-          }
+          recordInspectedGitTarget(opts.run, target, assertExecutionCurrent);
           await recheckSchemas(target.schemaVersions);
           if (!gitContextPrepared) {
             await stopManagedServiceBeforeMutableUpdate(gitMutationRoots ?? undefined, "inspect");

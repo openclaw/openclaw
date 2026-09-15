@@ -11,7 +11,7 @@ import type { GatewayClient } from "./shared-types.js";
 export type GatewayCronCreatorAuthorityAdmission = Readonly<{
   runId: string;
   callerOrigin: { kind: "local" } | { kind: "unknown" };
-  controlUiAdmin?: true;
+  managementEntitlement?: CronCreatorAuthorityCapability["managementEntitlement"];
   isCurrent?: () => boolean;
   bindRunScope?: (scope: CronCreatorAuthorityCapability) => void;
 }>;
@@ -63,7 +63,9 @@ function resolveDirectOperatorAuthority(
           internal?.isLocalClient === true
             ? { kind: "local" as const }
             : { kind: "unknown" as const },
-        ...(internal?.controlUiAdmin === true ? { controlUiAdmin: true as const } : {}),
+        ...(internal?.controlUiAdmin === true
+          ? { managementEntitlement: { source: "control-ui-admin" as const } }
+          : {}),
       })
     : undefined;
 }

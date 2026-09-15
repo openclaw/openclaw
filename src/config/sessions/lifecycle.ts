@@ -2,7 +2,7 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
-import { loadTranscriptHeaderSync, readTranscriptStatsSync } from "./session-accessor.js";
+import { loadTranscriptHeaderSync, readTranscriptMutationStateSync } from "./session-accessor.js";
 import {
   isTerminalSessionStatus,
   type InternalSessionEntry,
@@ -286,17 +286,17 @@ export function hasTerminalMainSessionTranscriptNewerThanRegistrySync(
   try {
     // Runtime transcripts are SQLite-only. Legacy-looking sessionFile values still
     // resolve through agent/session/store scope, so a file stat would read stale state.
-    const stats = readTranscriptStatsSync({
+    const mutation = readTranscriptMutationStateSync({
       agentId: params.agentId,
       sessionId: check.sessionId,
       storePath: params.storePath,
     });
-    if (stats.lastMutationAtMs === undefined) {
+    if (mutation.updatedAt === null) {
       return false;
     }
     return isTranscriptMutationNewerThanRegistry({
-      transcriptMutationAtMs: stats.lastMutationAtMs,
-      registryTimestampMs: stats.lastObservedMutationAtMs ?? check.registryTimestampMs,
+      transcriptMutationAtMs: mutation.updatedAt,
+      registryTimestampMs: mutation.observedAt ?? check.registryTimestampMs,
     });
   } catch {
     return false;

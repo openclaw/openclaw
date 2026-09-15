@@ -149,7 +149,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     {
       requestUpdate: vi.fn(),
       onError: (error) => flow?.setError(error),
-      onClearError: (error) => flow?.clearErrorIf(error),
+      onClearError: (error) => flow?.clearError(error),
     },
   );
   const requestUpdate = vi.fn();

@@ -67,12 +67,6 @@ function browserServiceErrorFromPayload(
   );
 }
 
-type LoopbackBrowserAuthDeps = {
-  getRuntimeConfig: typeof getRuntimeConfig;
-  resolveBrowserControlAuth: typeof resolveBrowserControlAuth;
-  getBridgeAuthForPort: typeof getBridgeAuthForPort;
-};
-
 function isAbsoluteHttp(url: string): boolean {
   return /^https?:\/\//i.test(url.trim());
 }
@@ -85,10 +79,9 @@ function isLoopbackHttpUrl(url: string): boolean {
   }
 }
 
-function withLoopbackBrowserAuthImpl(
+function withLoopbackBrowserAuth(
   url: string,
   init: (RequestInit & { timeoutMs?: number }) | undefined,
-  deps: LoopbackBrowserAuthDeps,
 ): RequestInit & { timeoutMs?: number } {
   const headers = new Headers(init?.headers ?? {});
   if (headers.has("authorization") || headers.has("x-openclaw-password")) {
@@ -99,8 +92,8 @@ function withLoopbackBrowserAuthImpl(
   }
 
   try {
-    const cfg = deps.getRuntimeConfig();
-    const auth = deps.resolveBrowserControlAuth(cfg);
+    const cfg = getRuntimeConfig();
+    const auth = resolveBrowserControlAuth(cfg);
     if (auth.token) {
       headers.set("Authorization", `Bearer ${auth.token}`);
       return { ...init, headers };
@@ -117,7 +110,7 @@ function withLoopbackBrowserAuthImpl(
   // Fall back to the in-memory registry if config auth is not available.
   try {
     const { port } = parseBrowserHttpUrl(url, "browser control URL");
-    const bridgeAuth = deps.getBridgeAuthForPort(port);
+    const bridgeAuth = getBridgeAuthForPort(port);
     if (bridgeAuth?.token) {
       headers.set("Authorization", `Bearer ${bridgeAuth.token}`);
     } else if (bridgeAuth?.password) {
@@ -128,17 +121,6 @@ function withLoopbackBrowserAuthImpl(
   }
 
   return { ...init, headers };
-}
-
-function withLoopbackBrowserAuth(
-  url: string,
-  init: (RequestInit & { timeoutMs?: number }) | undefined,
-): RequestInit & { timeoutMs?: number } {
-  return withLoopbackBrowserAuthImpl(url, init, {
-    getRuntimeConfig,
-    resolveBrowserControlAuth,
-    getBridgeAuthForPort,
-  });
 }
 
 const BROWSER_TOOL_PERSISTENT_MODEL_HINT =

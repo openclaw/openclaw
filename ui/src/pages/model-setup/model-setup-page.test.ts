@@ -3,146 +3,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
-import {
-  createApplicationContextProvider,
-  type ApplicationContextProvider,
-} from "../../test-helpers/application-context.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import type { ModelSetupRouteData } from "./model-setup-page.ts";
 import "./model-setup-page.ts";
-import type { ModelSetupPageState } from "./state.ts";
-
-type TestModelSetupPage = HTMLElement & {
-  routeData?: ModelSetupRouteData;
-  updateComplete: Promise<boolean>;
-};
-
-const recommendedIconUrl = "https://cdn.simpleicons.org/ollama";
-const customIconUrl = "https://cdn.example.com/acme.png";
-
-const detection: SystemAgentSetupDetectResult = {
-  candidates: [],
-  unavailableCandidates: [],
-  manualProviders: [],
-  authOptions: [],
-  prepareOptions: [
-    {
-      id: "ollama",
-      brandId: "ollama",
-      label: "Ollama",
-      hint: "Connect to an Ollama server and select a cloud or local model",
-    },
-    {
-      id: "llama-cpp",
-      brandId: "llama-cpp",
-      label: "llama.cpp",
-      hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
-    },
-    {
-      id: "lmstudio",
-      brandId: "lmstudio",
-      label: "LM Studio",
-      hint: "Connect to a running LM Studio server and use an already loaded model",
-    },
-  ],
-  recommendedInstalls: [
-    {
-      id: "ollama",
-      brandId: "ollama",
-      label: "Ollama",
-      hint: "Run open models locally",
-      website: "https://ollama.com/download",
-      icon: recommendedIconUrl,
-    },
-  ],
-  workspace: "/tmp/workspace",
-  setupComplete: false,
-};
-
-function createContext() {
-  const request = vi.fn<GatewayBrowserClient["request"]>();
-  const client = {
-    request: (...args: Parameters<GatewayBrowserClient["request"]>) => request(...args),
-  } as unknown as GatewayBrowserClient;
-  const snapshot = {
-    client,
-    phase: "connected",
-    hello: {
-      type: "hello-ok" as const,
-      protocol: 1,
-      auth: { role: "operator", scopes: ["operator.read", "operator.admin"] },
-      features: {
-        methods: [
-          "config.set",
-          "openclaw.setup.detect",
-          "openclaw.setup.verify",
-          "openclaw.setup.activate.start",
-          "openclaw.setup.prepare.start",
-        ],
-      },
-    },
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const gateway = {
-    snapshot,
-    connection: {
-      gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
-      token: "test-token",
-      password: "",
-      bootstrapToken: "",
-    },
-    eventLog: [],
-    connect: () => undefined,
-    setSessionKey: () => undefined,
-    start: () => undefined,
-    stop: () => undefined,
-    subscribe: () => () => undefined,
-    subscribeEventLog: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-  } as unknown as ApplicationGateway;
-  const runtimeConfig = createRuntimeConfigCapability(gateway);
-  return {
-    client,
-    request,
-    runtimeConfig,
-    snapshot,
-    context: {
-      gateway,
-      agentSelection: {
-        state: { selectedId: "main", scopeId: "main" },
-        subscribe: () => () => undefined,
-      },
-      basePath: "/openclaw",
-      resourceBasePath: "/openclaw",
-      navigate: vi.fn(),
-      runtimeConfig,
-    } as unknown as ApplicationContext,
-  };
-}
-
-async function mountPage(
-  context: ApplicationContext,
-  fixture: ModelSetupRouteData & {
-    state: Extract<ModelSetupPageState, { phase: "ready" }>;
-    client: GatewayBrowserClient;
-  },
-): Promise<{ page: TestModelSetupPage; provider: ApplicationContextProvider }> {
-  const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-model-setup-page") as TestModelSetupPage;
-  vi.spyOn(fixture.client, "request").mockResolvedValueOnce(fixture.state.result);
-  page.routeData = { firstRun: fixture.firstRun };
-  provider.append(page);
-  document.body.append(provider);
-  await page.updateComplete;
-  await waitForFast(() => expect(page.querySelector(".model-setup__loading")).toBeNull());
-  return { page, provider };
-}
+import {
+  createContext,
+  mountPage,
+  detection,
+  recommendedIconUrl,
+  customIconUrl,
+  type TestModelSetupPage,
+} from "./test-helpers/page.test-support.ts";
 
 describe("ModelSetupPage catalog icons", () => {
   beforeEach(async () => {
@@ -154,6 +27,22 @@ describe("ModelSetupPage catalog icons", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it.each([true, false])("selects the correct agent for firstRun=%s", async (firstRun) => {
+    const { context, client } = createContext();
+    const request = vi.spyOn(client, "request");
+    context.settingsAgentSelection.state.selectedId = "research";
+    await mountPage(context, {
+      state: { phase: "ready", result: detection },
+      client,
+      firstRun,
+    });
+    expect(request).toHaveBeenCalledWith(
+      "openclaw.setup.detect",
+      { agentId: firstRun ? "main" : "research" },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("uses bundled brand icons without enqueueing their remote artwork", async () => {
@@ -188,7 +77,9 @@ describe("ModelSetupPage catalog icons", () => {
       expect(page.textContent).toContain("OPENAI_API_KEY=sk-123...cdef");
       expect(page.textContent).not.toContain("sk-1234567890abcdef");
     });
-    page.querySelector<HTMLButtonElement>(".model-setup .btn")?.click();
+    [...page.querySelectorAll<HTMLButtonElement>(".model-setup .btn")]
+      .find((button) => button.textContent?.trim() === "Retry")
+      ?.click();
     await waitForFast(() => {
       expect(page.querySelector('[data-prepare-choice="llama-cpp"]')).not.toBeNull();
       expect(page.querySelector('[role="alert"]')).toBeNull();

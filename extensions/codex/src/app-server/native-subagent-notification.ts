@@ -83,11 +83,31 @@ export const codexNativeSubagentNotifications = {
 
 /** Reads native delivery receipts, leaving status and result ownership with the child lifecycle. */
 function readDeliveredNativeCompletionPaths(notification: CodexServerNotification): string[] {
+  const params = isJsonObject(notification.params) ? notification.params : undefined;
+  const item = isJsonObject(params?.item) ? params.item : undefined;
+  // V1 wait returns these exact terminal states to the foreground parent.
+  // The wait tool finishing alone says nothing about a still-running child.
+  if (
+    notification.method === "item/completed" &&
+    item?.type === "collabAgentToolCall" &&
+    item.tool === "wait" &&
+    (item.status === "completed" || item.status === "failed") &&
+    item.senderThreadId === params?.threadId &&
+    Array.isArray(item.receiverThreadIds) &&
+    isJsonObject(item.agentsStates)
+  ) {
+    const receivers = new Set(item.receiverThreadIds);
+    return Object.entries(item.agentsStates).flatMap(([threadId, state]) =>
+      receivers.has(threadId) &&
+      isJsonObject(state) &&
+      ["completed", "errored", "shutdown", "notFound"].includes(readString(state, "status") ?? "")
+        ? [threadId]
+        : [],
+    );
+  }
   if (notification.method !== "rawResponseItem/completed") {
     return [];
   }
-  const params = isJsonObject(notification.params) ? notification.params : undefined;
-  const item = isJsonObject(params?.item) ? params.item : undefined;
   if (!item || readString(item, "type") !== "agent_message") {
     return extractCodexNativeSubagentCompletions(notification).map(
       (completion) => completion.agentPath,

@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { Insertable } from "kysely";
 import { getRuntimeConfig } from "../../config/config.js";
 import { patchSessionEntryWithKey } from "../../config/sessions/session-accessor.js";
+import { readLegacyAcpMigrationContext } from "../../config/sessions/session-accessor.sqlite-acp-provenance.js";
 import {
   mergeSessionEntry,
   type AcpSessionRuntimeOptions,
@@ -14,6 +15,10 @@ import {
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  legacyAcpMigrationBindingMatches,
+  recordLegacyAcpMigrationCompletion,
+} from "../../infra/legacy-acp-migration-source.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import {
   type OpenClawStateDatabaseOptions,
@@ -244,6 +249,7 @@ export function writeAcpSessionMetaForMigration(params: {
   lifecycleRevision?: string;
   meta: SessionAcpMeta;
   env?: NodeJS.ProcessEnv;
+  database?: OpenClawStateDatabaseOptions["database"];
   databasePath?: string;
   now?: () => number;
 }): void {
@@ -262,7 +268,7 @@ export function writeAcpSessionMetaForMigration(params: {
     (database) => {
       upsertAcpSessionMetaRow(database.db, row);
     },
-    { env: params.env, path: params.databasePath },
+    { database: params.database, env: params.env, path: params.databasePath },
   );
 }
 
@@ -480,6 +486,35 @@ function sessionStoreUpdateOptions(params: {
   };
 }
 
+function consumeLegacyAcpMigrationSources(params: {
+  database: DatabaseSync;
+  agentId?: string;
+  storePath: string;
+  sessionKey: string;
+  entry: SessionEntry | undefined;
+  env?: NodeJS.ProcessEnv;
+  now: number;
+}): void {
+  if (!params.entry) {
+    return;
+  }
+  const current = readLegacyAcpMigrationContext(params);
+  if (current.sources.length === 0) {
+    return;
+  }
+  if (
+    current.entry?.sessionId !== params.entry.sessionId ||
+    current.entry.lifecycleRevision !== params.entry.lifecycleRevision
+  ) {
+    throw new Error("Canonical ACP session changed before legacy source consumption.");
+  }
+  for (const source of current.sources) {
+    if (legacyAcpMigrationBindingMatches(source, current.entry)) {
+      recordLegacyAcpMigrationCompletion(params.database, source, params.now);
+    }
+  }
+}
+
 export async function upsertAcpSessionMeta(params: {
   assertCommitAllowed?: () => void;
   sessionKey: string;
@@ -509,7 +544,7 @@ export async function upsertAcpSessionMeta(params: {
   if (!storeEntry.storePath) {
     return null;
   }
-  const { entry } = storeEntry;
+  const { entry, storePath } = storeEntry;
   const storageSessionKey = storeEntry.storeSessionKey;
   const databaseSessionKey = buildAcpDatabaseSessionKey(storageSessionKey, storeEntry.agentId);
   let current: SessionAcpMeta | undefined;
@@ -563,6 +598,15 @@ export async function upsertAcpSessionMeta(params: {
     runOpenClawStateWriteTransaction(
       (database) => {
         params.assertCommitAllowed?.();
+        consumeLegacyAcpMigrationSources({
+          database: database.db,
+          agentId: storeEntry.agentId,
+          storePath,
+          sessionKey: patched?.sessionKey ?? storageSessionKey,
+          entry: patched?.entry ?? entry,
+          env: params.env,
+          now: updatedAt,
+        });
         const sessionKeysToDelete = new Set([databaseSessionKey]);
         if (currentRowKey) {
           sessionKeysToDelete.add(currentRowKey);
@@ -622,6 +666,15 @@ export async function upsertAcpSessionMeta(params: {
     (database) => {
       // The entry patch and legacy cleanup await before this authoritative publication.
       params.assertCommitAllowed?.();
+      consumeLegacyAcpMigrationSources({
+        database: database.db,
+        agentId: storeEntry.agentId,
+        storePath,
+        sessionKey: persisted.sessionKey,
+        entry: persisted.entry,
+        env: params.env,
+        now: updatedAt,
+      });
       const persistedDatabaseSessionKey = buildAcpDatabaseSessionKey(
         persisted.sessionKey,
         storeEntry.agentId,

@@ -18,6 +18,10 @@ import {
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 // Codex tests cover commands plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -439,6 +443,8 @@ describe("codex command", () => {
     }
     codexDiagnosticsFeedbackState.clear();
     resetSharedCodexAppServerClientForTests();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     clearRuntimeAuthProfileStoreSnapshots();
     clearSessionStoreCacheForTest();
     vi.unstubAllEnvs();

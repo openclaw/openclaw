@@ -86,7 +86,10 @@ class DebugOverlayContent extends OpenClawLightDomElement {
     const controller = new AbortController();
     this.requestController?.abort();
     this.requestController = controller;
-    const requests = DEBUG_OVERLAY_SECTIONS.map(async (section): Promise<void> => {
+    const sections = this.minimized
+      ? DEBUG_OVERLAY_SECTIONS.filter((section) => section.id === "status")
+      : DEBUG_OVERLAY_SECTIONS;
+    const requests = sections.map(async (section): Promise<void> => {
       try {
         const value = await section.load({ client, gateway }, controller.signal);
         this.updateSection(generation, section.id, { status: "ready", value });

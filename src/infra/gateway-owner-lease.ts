@@ -3,7 +3,10 @@ import { hostname } from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  withExistingOpenClawStateDatabaseCurrentReadOnly,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -65,9 +68,17 @@ function parseSupervisor(value: unknown): GatewayOwnerSupervisor | null {
 }
 
 export function readGatewayOwnerLease(
-  params: { env?: NodeJS.ProcessEnv; port?: number } = {},
+  params: {
+    env?: NodeJS.ProcessEnv;
+    port?: number;
+    /** Mutation admission must not inherit a discovery snapshot. */
+    current?: boolean;
+  } = {},
 ): GatewayOwnerLeaseIdentity | undefined {
-  return withExistingOpenClawStateDatabaseReadOnly(
+  const read = params.current
+    ? withExistingOpenClawStateDatabaseCurrentReadOnly
+    : withExistingOpenClawStateDatabaseReadOnly;
+  return read(
     ({ db }) => {
       if (!tableExists(db, "state_leases")) {
         return undefined;

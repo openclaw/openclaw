@@ -350,6 +350,7 @@ export type PackageInstallUpdateParams = {
   installTarget?: ResolvedGlobalInstallTarget;
   validateCandidate: (root: string) => Promise<UpdateStepResult[]>;
   beforeActivate: () => Promise<void>;
+  assertCurrent?: () => void;
   onTransaction: (transaction: PackageUpdateTransaction) => void;
   onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
   getDoctorContext?: PackageDoctorOptions["getDoctorContext"];
@@ -472,6 +473,7 @@ export async function runPackageInstallUpdate(
     },
     validateCandidate: params.validateCandidate,
     beforeActivate: params.beforeActivate,
+    assertCurrent: params.assertCurrent,
     onTransaction: params.onTransaction,
     installTarget,
     installSpec,

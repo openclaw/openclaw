@@ -25,7 +25,7 @@ Private/shared-channel and non-current chat member lookups require additional ro
 and are rejected by the default permission baseline.
 
 For `member-info` and `search` in the message tool, use `channelId` to select the
-conversation. A Teams channel uses the Graph `<team-id>/<channel-id>` form:
+conversation. The Graph `<team-id>/<channel-id>` form identifies a Teams channel:
 
 ```json5
 {
@@ -38,8 +38,10 @@ conversation. A Teams channel uses the Graph `<team-id>/<channel-id>` form:
 
 `search` uses the same `channelId` filter with a `query` instead of `userId`.
 Omitting the filter uses the current conversation when its Graph route is
-available. The selected conversation must still satisfy the configured access
-policy and the action's membership requirements.
+available. For the current channel, its bare `19:...@thread.tacv2` ID and
+`conversation:19:...@thread.tacv2` form reuse that same Graph route. Use the full
+Graph form to select another channel. The selected conversation must still
+satisfy the configured access policy and the action's membership requirements.
 
 ## Native approval cards
 

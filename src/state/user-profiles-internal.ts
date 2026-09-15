@@ -7,6 +7,7 @@ import {
 } from "./openclaw-state-db.js";
 import {
   ensureUserProfilesSchema,
+  hasEnsuredUserProfileRoleSchema,
   type UserProfilesDatabase,
   UserProfileNotFoundError,
 } from "./user-profiles-schema.js";
@@ -16,6 +17,7 @@ import {
 } from "./user-profiles-tailscale-avatar.js";
 
 export type UserProfileRow = UserProfilesDatabase["user_profiles"];
+export type UserProfileMetadataRow = Omit<UserProfileRow, "avatar">;
 
 // Selection metadata is immutable and carries no database handle or profile state.
 export const userProfileAvatarPresence = expressionBuilder<UserProfilesDatabase, "user_profiles">()(
@@ -54,7 +56,7 @@ export function selectResolvedUserProfile<T extends Pick<UserProfileRow, "merged
   );
 }
 
-export function selectResolvedUserProfileById(
+function selectResolvedUserProfileById(
   db: DatabaseSync,
   profileId: string,
 ): UserProfileRow | undefined {
@@ -63,6 +65,51 @@ export function selectResolvedUserProfileById(
     profileId,
     userProfilesDb(db).selectFrom("user_profiles").selectAll(),
   );
+}
+
+/** Keep native row validation while omitting avatar payloads from metadata reads. */
+export function selectResolvedUserProfileMetadataById(
+  db: DatabaseSync,
+  profileId: string,
+): UserProfileMetadataRow | undefined {
+  if (!hasEnsuredUserProfileRoleSchema(db)) {
+    return selectResolvedUserProfileById(db, profileId);
+  }
+  return selectResolvedUserProfile(
+    db,
+    profileId,
+    userProfilesDb(db)
+      .selectFrom("user_profiles")
+      .select((eb) => [
+        "id",
+        "display_name",
+        // Preserve native conversion errors for non-BLOB values in damaged profile rows.
+        eb
+          .case()
+          .when(eb.fn<string>("typeof", ["avatar"]), "=", "blob")
+          .then(null)
+          .else(eb.ref("avatar"))
+          .end()
+          .as("avatar"),
+        "avatar_mime",
+        "avatar_sha256",
+        "merged_into",
+        "role",
+        "created_at",
+        "updated_at",
+      ]),
+  );
+}
+
+export function requireResolvedUserProfileMetadataById(
+  db: DatabaseSync,
+  profileId: string,
+): UserProfileMetadataRow {
+  const profile = selectResolvedUserProfileMetadataById(db, profileId);
+  if (!profile) {
+    throw new UserProfileNotFoundError(profileId);
+  }
+  return profile;
 }
 
 export function requireResolvedUserProfileById(

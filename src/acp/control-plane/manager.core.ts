@@ -10,7 +10,13 @@ import { logVerbose } from "../../globals.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
-import { cancelManagerActiveTurn, runManagerCancelSession } from "./manager.cancel-session.js";
+import {
+  runAcceptedManagerTurn,
+  type AcceptedTurns,
+  type AcceptedTurnState,
+} from "./manager.accepted-turns.js";
+import { recordQueuedBackgroundTaskCancellation } from "./manager.background-task.js";
+import { cancelManagerAcceptedTurn, runManagerCancelSession } from "./manager.cancel-session.js";
 import { runManagerCloseSession } from "./manager.close-session.js";
 import { reconcileManagerRuntimeSessionIdentifiers } from "./manager.identity-reconcile.js";
 import { runManagerInitializeSession } from "./manager.initialize-session.js";
@@ -27,6 +33,7 @@ import {
 import { runManagerStartupIdentityReconcile } from "./manager.startup-identity-reconcile.js";
 import { runManagerGetSessionStatus } from "./manager.status.js";
 import { runManagerTurn } from "./manager.turn-runner.js";
+import { emitCancelledAcpTurn } from "./manager.turn-stream.js";
 import {
   type AcpCloseSessionInput,
   type AcpCloseSessionResult,
@@ -64,6 +71,8 @@ export class AcpSessionManager {
   private readonly actorQueue = new SessionActorQueue();
   private readonly runtimeHandles = new ManagerRuntimeHandleCache();
   private readonly activeTurnBySession = new Map<string, ActiveTurnState>();
+  private readonly acceptedTurns: AcceptedTurns = new Map();
+  private stopping = false;
   private readonly turnLatencyStats: TurnLatencyStats = {
     completed: 0,
     failed: 0,
@@ -76,13 +85,20 @@ export class AcpSessionManager {
   constructor(deps: AcpSessionManagerDeps = DEFAULT_DEPS) {
     this.deps = deps;
     registerAcpSessionManagerDisposer(this, async (reason) => {
+      this.stopping = true;
+      const acceptedTurns: AcceptedTurnState[] = [];
+      for (const turns of this.acceptedTurns.values()) {
+        for (const turn of turns) {
+          acceptedTurns.push(turn);
+        }
+      }
       await Promise.all(
-        [...this.activeTurnBySession.values()].map(async (activeTurn) => {
+        acceptedTurns.map(async (acceptedTurn) => {
           try {
-            await cancelManagerActiveTurn({ activeTurn, reason });
+            await cancelManagerAcceptedTurn({ acceptedTurn, reason });
           } catch (error) {
             logVerbose(
-              `acp-manager: active runtime cancel failed for ${activeTurn.handle.sessionKey}: ${String(error)}`,
+              `acp-manager: active runtime cancel failed for ${acceptedTurn.requestId}: ${String(error)}`,
             );
           }
         }),
@@ -295,11 +311,22 @@ export class AcpSessionManager {
 
   async runTurn(input: AcpRunTurnInput): Promise<void> {
     const target = resolveAcpSessionTarget(input);
-    await this.withSessionActor(
-      target,
-      async () =>
+    const startedAt = Date.now();
+    await runAcceptedManagerTurn({
+      input,
+      ...target,
+      stopping: this.stopping,
+      turns: this.acceptedTurns,
+      withSessionActor: this.withSessionActor.bind(this),
+      onQueuedCancellation: async () => {
+        recordQueuedBackgroundTaskCancellation({ input, ...target, deps: this.deps, startedAt });
+        await emitCancelledAcpTurn(input.onEvent);
+        this.recordTurnCompletion({ startedAt });
+      },
+      run: async (acceptedInput, acceptedTurn) =>
         await runManagerTurn({
-          input,
+          input: acceptedInput,
+          acceptedTurn,
           ...target,
           deps: this.deps,
           runtimeHandles: this.runtimeHandles,
@@ -311,8 +338,7 @@ export class AcpSessionManager {
           reconcileRuntimeSessionIdentifiers: this.reconcileRuntimeSessionIdentifiers.bind(this),
           writeSessionMeta: this.writeSessionMeta.bind(this),
         }),
-      input.signal,
-    );
+    });
   }
 
   async cancelSession(params: {
@@ -332,6 +358,7 @@ export class AcpSessionManager {
       expectedRunId: params.expectedRunId,
       expectedInstanceId: params.expectedInstanceId,
       expectedOwnerKey: params.expectedOwnerKey,
+      acceptedTurns: this.acceptedTurns,
       activeTurnBySession: this.activeTurnBySession,
       withSessionActor: this.withSessionActor.bind(this),
       resolveSession: this.resolveSession.bind(this),

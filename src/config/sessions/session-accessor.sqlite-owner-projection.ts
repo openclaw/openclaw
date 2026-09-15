@@ -5,7 +5,7 @@ import {
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
+import { SESSION_OWNER_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type { SessionActor } from "./session-entry-provenance.js";
 import type { SessionEntry } from "./types.js";
@@ -88,7 +88,7 @@ export function hasSqliteSessionOwnerColumns(database: DatabaseSync): boolean {
   const columns = new Set(
     tableInfoRows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])),
   );
-  const available = FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS.every(({ columnName }) =>
+  const available = SESSION_OWNER_COLUMN_DEFINITIONS.every(({ columnName }) =>
     columns.has(columnName),
   );
   reads.availability = { available, schemaVersion };

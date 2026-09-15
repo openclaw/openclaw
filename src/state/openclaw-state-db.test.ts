@@ -54,6 +54,8 @@ import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.gene
 import {
   assertOpenClawStateDatabaseForMaintenance,
   clearOpenClawStateDatabaseOpenFailure,
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   detectOpenClawStateDatabaseSchemaMigrations,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -1036,7 +1038,10 @@ function runHotRollbackJournalRecoveryProbe(params: { moduleUrl: string; rootDir
         "UPDATE hot_journal_probe SET value = 'uncommitted';",
       );
       fs.writeFileSync(process.env.OPENCLAW_HOT_JOURNAL_READY_PATH, "ready");
-      setInterval(() => {}, 1_000);
+      // Keep the transaction-owning connection live until the parent kills this process.
+      setInterval(() => {
+        void database.isOpen;
+      }, 1_000);
     \`;
     const writer = spawn(
       process.execPath,
@@ -1567,11 +1572,13 @@ beforeAll(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await closeOpenClawStateDatabaseAsync();
   cleanupTempDirs(stateDbTempDirs);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   stateDbLogInfo.mockClear();
   vi.restoreAllMocks();
@@ -3197,6 +3204,9 @@ describe("openclaw state database", () => {
           },
         ] satisfies CronStoredJob[];
         await saveCronStore(storePath, { version: 1, jobs });
+        await closeOpenClawStateDatabaseByPathAsync(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+        );
         closeOpenClawStateDatabaseForTest();
 
         const { DatabaseSync } = requireNodeSqlite();
@@ -3376,6 +3386,9 @@ describe("openclaw state database", () => {
             },
           ],
         });
+        await closeOpenClawStateDatabaseByPathAsync(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+        );
         closeOpenClawStateDatabaseForTest();
         const { DatabaseSync } = requireNodeSqlite();
         const db = new DatabaseSync(
@@ -7784,7 +7797,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     ).toEqual([{ source_id: "legacy-job", ended_at: 12345 }]);
   });
 
-  it("opens databases with early queue tables before creating newer indexes", () => {
+  it("opens databases with early queue tables before creating newer indexes", async () => {
     const stateDir = createTempStateDir();
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -8244,7 +8257,7 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       "failed",
     );
     expect(
-      countFailedDeliveryQueueEntries(stateDir).some(
+      (await countFailedDeliveryQueueEntries(stateDir)).some(
         ({ queueName, count }) => queueName === "outbound" && count > 0,
       ),
     ).toBe(true);

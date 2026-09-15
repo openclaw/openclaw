@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { enableNodeSqliteKyselyStatementCache } from "./kysely-sync.js";
 import {
   assertSqliteSchemaContains,
+  collectSqliteNamedIndexContract,
   collectSqliteSchemaIssues,
   createSqliteTableContractReader,
 } from "./sqlite-schema-contract.js";
@@ -88,6 +89,34 @@ describe.each([false, true])("assertSqliteSchemaContains (statement cache: %s)",
         /missing or drifted index idx_children_parent; run openclaw doctor --fix to repair it\./,
       );
     } finally {
+      database.close();
+    }
+  });
+
+  it("preserves SQL-column authorization errors for an absent named index", () => {
+    const database = createDatabase(CANONICAL_SCHEMA);
+    try {
+      database.exec("DROP INDEX idx_children_parent;");
+      expect(collectSqliteNamedIndexContract(database, "idx_children_parent")).toBeUndefined();
+
+      database.setAuthorizer((action, table, column, schema) => {
+        if (
+          action === constants.SQLITE_READ &&
+          (table === "sqlite_master" || table === "sqlite_schema") &&
+          column === "sql" &&
+          schema === "main"
+        ) {
+          return constants.SQLITE_DENY;
+        }
+        return constants.SQLITE_OK;
+      });
+      expect(() => collectSqliteNamedIndexContract(database, "idx_children_parent")).toThrow(
+        /access to sqlite_(?:master|schema)\.sql is prohibited/iu,
+      );
+      database.setAuthorizer(null);
+      expect(collectSqliteNamedIndexContract(database, "idx_children_parent")).toBeUndefined();
+    } finally {
+      database.setAuthorizer(null);
       database.close();
     }
   });

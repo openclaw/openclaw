@@ -7,7 +7,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import "../../components/agent-select-registration.ts";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
@@ -23,7 +22,6 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSkillLibraryEnglish } from "../../i18n/locales/en-skill-library.ts";
-import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
@@ -239,7 +237,6 @@ function renderSkillsToolbar(
       })),
       onChange: (value) => props.onStatusFilterChange(value),
     })}
-    ${renderSkillsAgentSelector(props)}
     <label class="plugins-field skills-toolbar__search">
       <span>${t("common.search")}</span>
       <input
@@ -263,45 +260,6 @@ function renderSkillsToolbar(
       ${props.loading ? t("common.loading") : t("common.refresh")}
     </button>
   </div>`;
-}
-
-function renderSkillsAgentSelector(props: SkillsProps) {
-  const agents = listSelectableAgents(props.agentsList?.agents ?? []);
-  const selectedAgentId = agents.some((agent) => agent.id === props.selectedAgentId)
-    ? (props.selectedAgentId ?? "")
-    : agents.some((agent) => agent.id === props.agentsList?.defaultId)
-      ? (props.agentsList?.defaultId ?? "")
-      : (agents[0]?.id ?? "");
-  return html`
-    ${
-      agents.length > 1
-        ? html`
-            <div class="plugins-field skills-toolbar__agent">
-              <span>${t("usage.filters.agent")}</span>
-              <openclaw-agent-select
-                class="agent-select--settings"
-                name="skills-agent"
-                .options=${agents.map((agent) => {
-                  const label = normalizeAgentLabel(agent);
-                  return {
-                    value: agent.id,
-                    label:
-                      agent.id === props.agentsList?.defaultId
-                        ? t("skillsPage.defaultAgent", { name: label })
-                        : label,
-                    agent,
-                  };
-                })}
-                .value=${selectedAgentId}
-                .accessibleLabel=${t("usage.filters.agent")}
-                .disabled=${skillControlsLocked(props) || !props.connected}
-                .onSelect=${props.onAgentChange}
-              ></openclaw-agent-select>
-            </div>
-          `
-        : nothing
-    }
-  `;
 }
 
 function renderClawHubDetailDialog(props: SkillsProps) {
@@ -749,4 +707,3 @@ function renderInstalledSkillCard(skill: SkillStatusEntry, props: SkillsProps) {
     </article>
   `;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

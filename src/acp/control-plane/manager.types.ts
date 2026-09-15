@@ -230,6 +230,7 @@ export type SetManagerSessionState = (params: {
 export type WithManagerSessionActor = <T>(
   target: AcpSessionTarget,
   op: () => Promise<T>,
+  signal?: AbortSignal,
 ) => Promise<T>;
 
 export const DEFAULT_DEPS: AcpSessionManagerDeps = {

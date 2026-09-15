@@ -868,7 +868,7 @@ export async function modelsAuthPasteApiKeyCommand(
     },
   });
 
-  const profileId = await saveModelProviderApiKey({
+  const { profileId, warning } = await saveModelProviderApiKey({
     config,
     provider,
     apiKey: key,
@@ -877,6 +877,9 @@ export async function modelsAuthPasteApiKeyCommand(
   });
 
   await refreshRunningGatewayAuthState(agentId, "login", runtime);
+  if (warning) {
+    runtime.error(warning);
+  }
 
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);

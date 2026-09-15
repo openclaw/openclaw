@@ -72,9 +72,12 @@ refresh the guard. Validate from PR-head mode. Do not fabricate passing evidence
 or erase a failing review condition.
 
 The agent Testbox flag verifies hosted evidence instead of running full gates
-locally. The wrapper may accept a patch-identical recently green pre-rebase run;
-it owns that decision. For explicitly owner-approved reviewed fork code without
-hosted Testbox, use the documented `OPENCLAW_PR_GATES_REMOTE=testbox` path.
+locally. The wrapper may accept a patch-identical recently green pre-rebase run
+when the main context incorporated into the candidate is unchanged or disjoint.
+Incorporated overlapping or critical input changes require current-head CI.
+The merge workflow still owns later main-drift policy. For explicitly
+owner-approved reviewed fork code without hosted Testbox, use the documented
+`OPENCLAW_PR_GATES_REMOTE=testbox` path.
 
 Watch one exact head with `node scripts/watch-pr-ci.mjs <pr> <head-sha>`; use narrow
 JSON check/run reads and fetch failed logs once. Address substantive human/bot

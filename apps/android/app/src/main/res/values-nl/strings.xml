@@ -550,6 +550,7 @@
     <string name="native_4ba5121d4d1be174" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Apparaten"</string>
     <string name="native_4bc652d0bc018e69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw voor Android."</string>
     <string name="native_4bcf240ace02f19c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Goedkeuring van functionaliteit in afwachting"</string>
+    <string name="native_4c086c788ad0fdab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zoekfragment"</string>
     <string name="native_4c09c146861e92a9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sla je wijzigingen op of maak ze ongedaan voordat je deze automatisering uitvoert, inschakelt, uitschakelt, verwijdert of vernieuwt."</string>
     <string name="native_4c27eb153d751834" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nog geen automatiseringen."</string>
     <string name="native_4c2dd6654a535240" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Voor deze skill moeten nog %1$s onderdelen worden ingesteld. Android toont wat er is geïnstalleerd; instellingen en configuraties kunnen alleen op de desktop of via de CLI worden gewijzigd."</string>
@@ -660,7 +661,7 @@
     <string name="native_5bb88b338f9e14ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Geen uitvoer — tool mislukt."</string>
     <string name="native_5bcf311b19d80c56" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Verbinding testen"</string>
     <string name="native_5c0c8c9aa658f4a0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OPENCLAW"</string>
-    <string name="native_5c1acea9c9b0e704" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Web Fetch"</string>
+    <string name="native_5c1acea9c9b0e704" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Webinhoud ophalen"</string>
     <string name="native_5c39123805ffb4e2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Prompt"</string>
     <string name="native_5c944156b5353428" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Apparaat goedkeuren?"</string>
     <string name="native_5cc60967e044ee0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Waarschuwing over bijlage sluiten"</string>
@@ -738,6 +739,7 @@
     <string name="native_674b38cae72bb0c8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Niet gegroepeerd"</string>
     <string name="native_674eb55d9c353900" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Planningsdetails"</string>
     <string name="native_67528858c36397f7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefoonfuncties"</string>
+    <string name="native_67a0d2e0dab41fca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bron openen"</string>
     <string name="native_67a926f7008e2b0e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Niet beschikbaar"</string>
     <string name="native_67b696468610b879" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dashboard"</string>
     <string name="native_67fa416afa64d304" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Token plakken"</string>
@@ -844,6 +846,7 @@
     <string name="native_75081b593d15cf6e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Uitgeschakeld"</string>
     <string name="native_752ae6f8d8349c75" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Wacht nog op goedkeuring"</string>
     <string name="native_75419062daafab8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kon achtergrondtaken niet laden"</string>
+    <string name="native_75573d44b7620f81" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Paginafragment"</string>
     <string name="native_757bfc36ce2e0428" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Controleer of OpenClaw duidelijk kan spreken op deze telefoon."</string>
     <string name="native_75c4bbf668b72cbf" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bezig · %1$s actieve uitvoeringen"</string>
     <string name="native_75db671fb2e8cca9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Werkmap voor opdracht"</string>
@@ -971,7 +974,6 @@
     <string name="native_88e0c9e9615456f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Geen gemarkeerde items"</string>
     <string name="native_88e6e8384a7fc7ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Sessiedoel"</string>
     <string name="native_893a3e37d71c4563" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway heeft een weigering geregistreerd."</string>
-    <string name="native_89713b9c9c1b8f65" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Accepteren"</string>
     <string name="native_8998824610d49175" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Vraag OpenClaw wat je wilt"</string>
     <string name="native_89bbfe23c3917a3f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Maak opnieuw verbinding om door te gaan"</string>
     <string name="native_8a20f46d5276b474" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s gekoppeld"</string>
@@ -1298,6 +1300,7 @@
     <string name="native_b906e4f5d8dd6128" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nog geen agents geladen."</string>
     <string name="native_b93a70717669740b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ClawHub doorzoeken"</string>
     <string name="native_b96a4e034aae9cd8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Koppeling vereist"</string>
+    <string name="native_b99fa6c061504f00" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Voorbeeld niet beschikbaar"</string>
     <string name="native_b9cf97697898d132" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Actieve uitvoeringen"</string>
     <string name="native_b9d5d026db17b9e4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mislukt — %1$s"</string>
     <string name="native_ba19e9c3d5f49882" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Rood"</string>
@@ -1417,6 +1420,7 @@
     <string name="native_ca7981b46ecf2c17" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Uit"</string>
     <string name="native_cae7d57bc067a514" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Stop"</string>
     <string name="native_cae98462b30650eb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Nog geen overeenkomende gesprekken."</string>
+    <string name="native_caf85b0888d78f1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Bronnen"</string>
     <string name="native_cba62d81f910c7f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"De koppeling met Gateway is gelukt.\nKeur de knooppuntfuncties van deze telefoon goed via een beheerdersinterface."</string>
     <string name="native_cc4b66e7e22230c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Deze skill is geïnstalleerd maar voldoet momenteel niet aan de voorwaarden om te worden uitgevoerd. Gebruik de desktop of de CLI voor configuratiewijzigingen."</string>
     <string name="native_cc5f45fb30a26e07" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Spraakherkenning bezet"</string>
@@ -1449,7 +1453,7 @@
     <string name="native_d01da77df594cd2c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kon niet meer sessies laden."</string>
     <string name="native_d03262ba19b05a7d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Regelnummers tonen"</string>
     <string name="native_d0329dd25d4401f9" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s extra werkprocessen"</string>
-    <string name="native_d04fc7d7e19702f8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Web Search"</string>
+    <string name="native_d04fc7d7e19702f8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Zoeken op het web"</string>
     <string name="native_d053ba98d8bbcec1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Probeer Chat, Spraak, Gespreksthreads, Providers of Instellingen."</string>
     <string name="native_d056177742e27cf5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw Actief"</string>
     <string name="native_d0cda6559bb347db" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"navigate"</string>

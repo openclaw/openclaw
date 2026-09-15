@@ -30,6 +30,7 @@ import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-stat
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
 import {
   parseTimeoutMsOrExit,
+  readPackageVersion,
   resolveUpdateRoot,
   tryResolveInvocationCwd,
   tryWriteCompletionCache,
@@ -100,7 +101,7 @@ export async function updateFinalizeCommand(
           const resolvedInstallKind = await resolveUpdateInstallKind(resolvedRoot, {
             timeoutMs: lifecycle.budget("preflight"),
           });
-          lifecycle.recordInstallKind(resolvedInstallKind);
+          lifecycle.recordInstallKind(resolvedInstallKind, await readPackageVersion(resolvedRoot));
           return { root: resolvedRoot, installKind: resolvedInstallKind, runId: admittedRunId };
         }),
       );

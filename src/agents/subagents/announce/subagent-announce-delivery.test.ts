@@ -529,7 +529,6 @@ async function deliverSlackThreadAnnouncement(params: {
     targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
     triggerMessage: "child done",
     steerMessage: "child done",
-    requesterOrigin: slackThreadOrigin,
     requesterSessionOrigin: slackThreadOrigin,
     completionDirectOrigin: slackThreadOrigin,
     directOrigin: slackThreadOrigin,
@@ -591,7 +590,6 @@ async function deliverDiscordDirectMessageCompletion(params: {
     targetRequesterSessionKey: requesterSessionKey,
     triggerMessage: "child done",
     steerMessage: "child done",
-    requesterOrigin: origin,
     requesterSessionOrigin: origin,
     completionDirectOrigin: origin,
     directOrigin: origin,
@@ -663,7 +661,6 @@ async function deliverTelegramDirectMessageCompletion(params: {
     targetRequesterSessionKey: requesterSessionKey,
     triggerMessage: "child done",
     steerMessage: "child done",
-    requesterOrigin: origin,
     requesterSessionOrigin: origin,
     completionDirectOrigin: origin,
     directOrigin: origin,
@@ -737,7 +734,6 @@ async function deliverSlackChannelAnnouncement(params: {
     targetRequesterSessionKey: params.requesterSessionKey ?? "agent:main:slack:channel:C123",
     triggerMessage: "child done",
     steerMessage: "child done",
-    requesterOrigin: params.requesterOrigin ?? origin,
     requesterSessionOrigin: params.requesterOrigin ?? origin,
     completionDirectOrigin: params.completionDirectOrigin ?? params.requesterOrigin ?? origin,
     directOrigin: params.requesterOrigin ?? origin,
@@ -827,7 +823,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
       triggerMessage: "child done",
       steerMessage: "child done",
-      requesterOrigin: params.requesterOrigin,
+      requesterSessionOrigin: params.requesterOrigin,
       requesterIsSubagent: false,
       expectsCompletionMessage: false,
       directIdempotencyKey: "announce-no-external-route",
@@ -1172,11 +1168,6 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
       triggerMessage: "child done",
       steerMessage: "child done",
-      requesterOrigin: {
-        channel: "slack",
-        to: "channel:C123",
-        accountId: "acct-1",
-      },
       requesterIsSubagent: false,
       expectsCompletionMessage: false,
       directIdempotencyKey: "announce-no-external-route",
@@ -1387,7 +1378,6 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
         targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
         triggerMessage: "child done",
         steerMessage: "child done",
-        ...(fallsBack ? { requesterOrigin: slackThreadOrigin } : {}),
         requesterIsSubagent: false,
         expectsCompletionMessage: false,
         directIdempotencyKey,
@@ -2316,7 +2306,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         requesterRunTimeoutSeconds,
         triggerMessage: "child done",
         steerMessage: "child done",
-        requesterOrigin: slackThreadOrigin,
         requesterSessionOrigin: slackThreadOrigin,
         completionDirectOrigin: slackThreadOrigin,
         directOrigin: slackThreadOrigin,
@@ -2432,7 +2421,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       targetRequesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
       triggerMessage: "child done",
       steerMessage: "child done",
-      requesterOrigin: slackThreadOrigin,
       requesterSessionOrigin: slackThreadOrigin,
       completionDirectOrigin: slackThreadOrigin,
       directOrigin: slackThreadOrigin,
@@ -4209,8 +4197,42 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
       reason: "message_tool_delivery_missing",
       error: "completion agent did not use the message tool for message-tool-only delivery",
+      disposition: "permanent_failure",
     });
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(result.phases?.map((phase) => phase.phase)).toEqual(["direct-primary"]);
   });
+
+  it.each(["accepted", "in_flight", "yielded"] as const)(
+    "does not replay a still-owned %s completion handoff",
+    async (state) => {
+      const callGateway = createGatewayMock(
+        state === "yielded"
+          ? { status: "ok", result: { payloads: [], meta: { yielded: true } } }
+          : { status: state },
+      );
+      const result = await deliverSlackChannelAnnouncement({
+        callGateway,
+        directIdempotencyKey: `announce-pending-message-tool-${state}`,
+        sourceTool: "subagent_announce",
+        runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+        internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+      });
+      expectRecordFields(
+        result,
+        state === "yielded"
+          ? {
+              delivered: false,
+              reason: "completion_handoff_pending",
+              disposition: "session_queued",
+            }
+          : { delivered: true, path: "direct" },
+      );
+      expect(result.phases?.map((phase) => phase.phase)).toEqual(["direct-primary"]);
+      expect(callGateway).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     {
@@ -4996,7 +5018,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const result = await deliverSubagentAnnouncement({
       requesterSessionKey: "agent:main:announce-missing-destination",
       targetRequesterSessionKey: "agent:main:announce-missing-destination",
-      requesterOrigin: origin,
       requesterSessionOrigin: origin,
       directOrigin: origin,
       requesterIsSubagent: false,
@@ -5536,7 +5557,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       targetRequesterSessionKey: route.sessionKey,
       triggerMessage: "all spawned subagents settled",
       steerMessage: "all spawned subagents settled",
-      requesterOrigin: origin,
       requesterSessionOrigin: origin,
       directOrigin: origin,
       requesterIsSubagent: "requesterIsSubagent" in route && route.requesterIsSubagent === true,

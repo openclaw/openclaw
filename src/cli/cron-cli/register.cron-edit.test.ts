@@ -191,6 +191,13 @@ describe("cron edit command", () => {
     );
   });
 
+  it.each(["", "   "])("rejects blank payload --script %j before Gateway access", async (value) => {
+    await expectCronEditRejection(
+      ["--script", value, "--display-name", "Replacement", "--pacing-min", "30m"],
+      "--script must not be blank",
+    );
+  });
+
   it("validates trigger script files before Gateway access", async () => {
     const fixtureDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "cron-edit-invalid-"));
     const emptyPath = path.join(fixtureDir, "empty.js");

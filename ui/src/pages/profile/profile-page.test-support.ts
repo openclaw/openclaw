@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -23,7 +24,7 @@ export function createConnectedContext(
   };
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const subscribe = () => () => undefined;
-  const context = {
+  const baseContext = {
     runtimeConfig: { subscribe, state: {}, ensureLoaded: async () => undefined },
     gateway: {
       get snapshot() {
@@ -73,7 +74,17 @@ export function createConnectedContext(
     },
     basePath: "",
     navigate: vi.fn(),
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as Omit<ApplicationContext<RouteId>, "settingsAgentSelection">;
+  const context: ApplicationContext<RouteId> = {
+    ...baseContext,
+    settingsAgentSelection: createAgentSelectionCapability(
+      baseContext.gateway,
+      baseContext.agents,
+      undefined,
+      undefined,
+      { requireConfiguredAgent: true },
+    ),
+  };
   return {
     context,
     emitConnected(connected: boolean) {

@@ -2359,7 +2359,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
             ? {
                 runId: "control-ui-admin-run",
                 callerOrigin: { kind: "unknown" },
-                controlUiAdmin: true,
+                managementEntitlement: { source: "control-ui-admin" },
               }
             : undefined,
         );

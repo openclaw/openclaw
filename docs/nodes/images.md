@@ -100,6 +100,12 @@ image destinations retain their URL punctuation.
 - Video default: 50MB (override with `tools.media.video.maxBytes`, or per entry).
 - Oversize media skips understanding, but the reply still goes through with the original body.
 
+Image description checks the source byte cap before resizing. Recognized images
+are then prepared for the selected model's declared image limits; each fallback
+starts from the same normalized original. Models without declared image limits
+keep those normalized bytes. `agents.defaults.imageQuality` remains an image-tool
+setting and does not change media-understanding preparation.
+
 ## Notes for Tests
 
 - Cover send and reply flows for image/audio/document cases.

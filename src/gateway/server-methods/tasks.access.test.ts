@@ -4,9 +4,9 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import { setCanonicalSqliteSessionMainKey } from "../../config/sessions/session-canonical-key.js";
 import {
   closeOpenClawAgentDatabasesForTest,
-  listOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { deleteTaskRecordById } from "../../tasks/runtime-internal.js";
 import { reloadTaskRegistryFromStore } from "../../tasks/task-registry.js";

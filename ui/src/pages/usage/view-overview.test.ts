@@ -499,6 +499,7 @@ describe("renderCostWindowComparison", () => {
         ],
         "2026-06-01",
         "2026-07-01",
+        "local",
       ),
       container,
     );
@@ -522,6 +523,7 @@ describe("renderCostWindowComparison", () => {
         [dailyEntry("2026-07-01", 300, 0.003)],
         "2026-06-02",
         "2026-07-01",
+        "local",
       ),
       container,
     );

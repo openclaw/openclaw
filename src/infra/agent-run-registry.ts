@@ -9,10 +9,16 @@ import {
   type AgentRunApprovalClosureReason,
 } from "./agent-run-approval-leases.js";
 import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
-import { buildAgentRunProjectionIndex, projectedRunIdentity } from "./agent-run-projection.js";
+import {
+  areAgentRunModelsEqual,
+  buildAgentRunProjectionIndex,
+  projectedAgentRunInputKey,
+  projectedRunIdentity,
+} from "./agent-run-projection.js";
 import type {
   AgentRunContext,
   AgentRunContextOwnership,
+  AgentRunModel,
   AgentRunRegistryState,
   ProjectedAgentRunIndex,
   ProjectedAgentRunState,
@@ -136,14 +142,12 @@ export function registerAgentRunContext(
   ) {
     return;
   }
-  let runIndexChanged = false;
+  const runIndexInputBefore = projectedAgentRunInputKey(existing);
   if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
     existing.sessionKey = context.sessionKey;
-    runIndexChanged = true;
   }
   if (context.sessionId && existing.sessionId !== context.sessionId) {
     existing.sessionId = context.sessionId;
-    runIndexChanged = true;
   }
   if (context.agentId && existing.agentId !== context.agentId) {
     existing.agentId = context.agentId;
@@ -160,7 +164,6 @@ export function registerAgentRunContext(
     existing.projectSessionActive !== context.projectSessionActive
   ) {
     existing.projectSessionActive = context.projectSessionActive;
-    runIndexChanged = true;
   }
   if (context.projectSessionLifecycle !== undefined) {
     existing.projectSessionLifecycle = context.projectSessionLifecycle;
@@ -186,7 +189,7 @@ export function registerAgentRunContext(
   if (context.lastActiveAt !== undefined) {
     existing.lastActiveAt = context.lastActiveAt;
   }
-  if (runIndexChanged) {
+  if (runIndexInputBefore !== projectedAgentRunInputKey(existing)) {
     bumpAgentRunIndexVersion();
   }
   recordAgentEventRouting(runId, existing);
@@ -558,12 +561,37 @@ export function listAgentRunsForSession(params: {
   return runs.toSorted((a, b) => a.runId.localeCompare(b.runId));
 }
 
+export function recordAgentRunModel(runId: string, model: AgentRunModel | undefined): void {
+  const context = getAgentRunContext(runId);
+  if (!context || context.lifecycleGeneration !== getAgentRunLifecycleGeneration()) {
+    return;
+  }
+  if (areAgentRunModelsEqual(context.activeModel, model)) {
+    return;
+  }
+  if (model) {
+    context.activeModel = model;
+  } else {
+    delete context.activeModel;
+  }
+  bumpAgentRunIndexVersion();
+}
+
+export function resolveProjectedAgentRunModel(params: {
+  agentId: string;
+  sessionId?: string;
+  index?: ProjectedAgentRunIndex;
+}): AgentRunModel | null | undefined {
+  return params.sessionId === undefined
+    ? undefined
+    : (params.index ?? buildProjectedAgentRunIndex()).modelsBySessionId.get(
+        projectedRunIdentity(params.agentId, params.sessionId),
+      );
+}
+
 export function buildProjectedAgentRunIndex(): ProjectedAgentRunIndex {
-  const state = getAgentRunRegistryState();
-  return buildAgentRunProjectionIndex({
-    contexts: state.contexts.values(),
-    lifecycleGeneration: state.lifecycleGeneration,
-  });
+  const { contexts, lifecycleGeneration } = getAgentRunRegistryState();
+  return buildAgentRunProjectionIndex({ contexts: contexts.values(), lifecycleGeneration });
 }
 
 export function resolveProjectedAgentRunProgressState(params: {

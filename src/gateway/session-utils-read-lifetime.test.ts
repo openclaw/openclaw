@@ -26,6 +26,9 @@ it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
           { agentId: "main", storePath, sessionKey },
           { sessionId: "identical-session", updatedAt: 1 },
         );
+        // Settle seed workers, then restore the warm handle before testing read lifetime.
+        await closeOpenClawAgentDatabaseByPathAsync(storePath);
+        openOpenClawAgentDatabase({ agentId: "main", path: storePath });
       }
       fs.symlinkSync(originalDirectory, aliasDirectory, "junction");
       const config = {

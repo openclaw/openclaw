@@ -1146,23 +1146,6 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
     return visit(cardId);
   }
 
-  protected async recordDispatch(card: WorkboardCard, now: number): Promise<WorkboardCard> {
-    const result = await this.updateLatestCard(card.id, (current) => ({
-      metadata: {
-        ...current.metadata,
-        automation: normalizeAutomation(
-          {
-            ...current.metadata?.automation,
-            dispatchCount: (current.metadata?.automation?.dispatchCount ?? 0) + 1,
-            lastDispatchAt: now,
-          },
-          current.metadata?.automation,
-        ),
-      },
-    }));
-    return result.card;
-  }
-
   protected async recordOrchestrationCandidate(
     card: WorkboardCard,
     now: number,

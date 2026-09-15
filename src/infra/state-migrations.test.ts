@@ -134,9 +134,10 @@ function closeMigrationDatabases() {
 async function rerunAutomaticMigrationAfterRestart(params: AutoMigrateLegacyStateParams) {
   closeMigrationDatabases();
   vi.resetModules();
-  const [agentDb, stateDb] = await Promise.all([
+  const [agentDb, stateDb, agentDbTest] = await Promise.all([
     import("../state/openclaw-agent-db.js"),
     import("../state/openclaw-state-db.js"),
+    import("../state/openclaw-agent-db.test-support.js"),
   ]);
   migrationDatabaseClosers.add(agentDb.closeOpenClawAgentDatabasesForTest);
   migrationDatabaseClosers.add(stateDb.closeOpenClawStateDatabaseForTest);
@@ -148,7 +149,7 @@ async function rerunAutomaticMigrationAfterRestart(params: AutoMigrateLegacyStat
     });
   } finally {
     closeMigrationDatabases();
-    expect(agentDb.listOpenClawAgentDatabasesForTest()).toEqual([]);
+    expect(agentDbTest.listOpenClawAgentDatabasesForTest()).toEqual([]);
     expect(stateDb.isOpenClawStateDatabaseOpen()).toBe(false);
   }
 }

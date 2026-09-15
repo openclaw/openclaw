@@ -279,7 +279,10 @@ public struct OpenClawChatView: View {
             self.content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onAppear { self.viewModel.load() }
+        .onAppear {
+            self.viewModel.refreshSourceContext()
+            self.viewModel.load()
+        }
         .onChange(of: self.turnRecapObservation, initial: true) { _, observation in
             self.updateTurnRecap(observation)
         }
@@ -626,6 +629,12 @@ public struct OpenClawChatView: View {
     {
         let bubble = ChatMessageBubble(
             message: msg,
+            sourcePreviews: self.viewModel.sourcePreviews(for: msg),
+            sourceContextRevision: self.viewModel.sourcePreviewState.revision,
+            sourceFaviconsEnabled: self.viewModel.sourcePreviewState.context?.automaticallyFetchFavicons == true,
+            loadSourceFavicon: { [weak viewModel] host in
+                await viewModel?.transport.loadSourceFavicon(host: host)
+            },
             style: self.style,
             markdownVariant: self.markdownVariant,
             userAccent: self.userAccent,

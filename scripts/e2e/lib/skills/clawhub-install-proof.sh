@@ -94,8 +94,7 @@ if (requestedSlug) {
   const preferred = safeResults.find((entry) => entry.slug === preferredSlug);
   const homeassistant = safeResults.find((entry) => String(entry.slug ?? "").includes("homeassistant"));
   candidates = [preferred, homeassistant, ...safeResults]
-    .filter((entry, index, ordered) => entry && ordered.indexOf(entry) === index)
-    .slice(0, 3);
+    .filter((entry, index, ordered) => entry && ordered.indexOf(entry) === index);
 }
 if (!candidates[0]?.slug) {
   throw new Error(`No non-suspicious skill slug found. Search returned: ${slugs.join(", ") || "(none)"}`);

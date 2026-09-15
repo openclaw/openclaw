@@ -333,8 +333,6 @@ export type CronServiceState = {
    * until the runtime can quarantine and sanitize the active store.
    */
   warnedInvalidPersistedJobKeys: Set<string>;
-  /** Availability is rechecked every tick; this set only bounds skip diagnostics. */
-  reportedUnavailableReaperAgentIds: Set<string>;
   pendingQuarantineConfigJobs: QuarantinedCronConfigJob[];
   lastQuarantineFailureWarnKey: string | null;
   storeLoadedAtMs: number | null;
@@ -364,7 +362,6 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),
-    reportedUnavailableReaperAgentIds: new Set<string>(),
     pendingQuarantineConfigJobs: [],
     lastQuarantineFailureWarnKey: null,
     storeLoadedAtMs: null,

@@ -12,7 +12,7 @@ import {
   writeUserPreferences,
 } from "./user-preferences.store.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
-import { selectResolvedUserProfileById } from "./user-profiles-internal.js";
+import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 
 export function executeUserPreferenceCommand(
@@ -23,7 +23,7 @@ export function executeUserPreferenceCommand(
   if (command.type === "userPreferences.write") {
     const { update } = command.input;
     if (update.serialized.length === 0 && update.deletionKeys.length === 0) {
-      const profile = selectResolvedUserProfileById(
+      const profile = selectResolvedUserProfileMetadataById(
         openOpenClawStateDatabase(options).db,
         command.input.profileId,
       );
@@ -32,7 +32,7 @@ export function executeUserPreferenceCommand(
     ensureUserPreferencesSchema(options);
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
-        const profile = selectResolvedUserProfileById(db, command.input.profileId);
+        const profile = selectResolvedUserProfileMetadataById(db, command.input.profileId);
         if (!profile) {
           return undefined;
         }
@@ -48,7 +48,7 @@ export function executeUserPreferenceCommand(
   }
   const { db } = openOpenClawStateDatabase(options);
   return runSqliteDeferredTransactionSync(db, () => {
-    const profile = selectResolvedUserProfileById(db, command.input.profileId);
+    const profile = selectResolvedUserProfileMetadataById(db, command.input.profileId);
     return profile
       ? { profileId: profile.id, entries: readUserPreferences(db, profile.id, command.input.keys) }
       : undefined;

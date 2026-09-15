@@ -41,6 +41,7 @@ import {
   type PendingLiveEvent,
   type WorkerLiveCredentialRotation,
 } from "./live-event-window.js";
+import { captureWorkerTurnFinishing } from "./placement-turn-claim-events.js";
 import { captureWorkerTurnDiagnosticRecorder } from "./worker-turn-run-owner.js";
 
 const DEFAULT_WINDOW_SIZE = 128;
@@ -500,7 +501,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     window: LiveEventWindow,
     request: WorkerLiveEventParams,
     allowBufferedTerminalCapacity: boolean,
-    recordDiagnostic: PendingLiveEvent["recordDiagnostic"],
+    recordApplied: PendingLiveEvent["recordApplied"],
   ): WorkerLiveEventFailure | undefined => {
     const owned = claimRun(window, request.runId, allowBufferedTerminalCapacity);
     if ("ok" in owned) {
@@ -532,7 +533,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       window.trajectoryWrites.add(write);
       void write.then(() => window.trajectoryWrites.delete(write));
     }
-    recordDiagnostic?.(request.event);
+    recordApplied?.(request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
   };
@@ -540,15 +541,15 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
   const drain = (
     window: LiveEventWindow,
     first: WorkerLiveEventParams,
-    firstDiagnostic: PendingLiveEvent["recordDiagnostic"],
+    firstApplied: PendingLiveEvent["recordApplied"],
     firstPending?: PendingLiveEvent,
   ): WorkerLiveEventApplicationResult => {
     let request: WorkerLiveEventParams | undefined = first;
     let buffered = firstPending;
-    let recordDiagnostic = firstPending ? firstPending.recordDiagnostic : firstDiagnostic;
+    let recordApplied = firstPending ? firstPending.recordApplied : firstApplied;
     let publishedPrefix = false;
     while (request) {
-      const failed = publish(window, request, buffered !== undefined, recordDiagnostic);
+      const failed = publish(window, request, buffered !== undefined, recordApplied);
       if (failed) {
         if (failed.details.reason === "capacity-exceeded" && buffered) {
           // Keep the ordered tail retryable while the active prefix claim drains.
@@ -588,7 +589,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       }
       request = next.request;
       buffered = next;
-      recordDiagnostic = next.recordDiagnostic;
+      recordApplied = next.recordApplied;
     }
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };
@@ -604,6 +605,11 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       return resyncWindow(window);
     }
     const recordDiagnostic = captureWorkerTurnDiagnosticRecorder(params.identity);
+    const recordFinishing = captureWorkerTurnFinishing(params.identity, params.request);
+    const recordApplied: PendingLiveEvent["recordApplied"] = (event) => {
+      recordDiagnostic?.(event);
+      recordFinishing?.();
+    };
     const { seq } = params.request;
     const expectedSeq = window.ackedSeq + 1;
     if (seq > window.ackedSeq + windowSize) {
@@ -611,7 +617,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     if (seq === expectedSeq) {
       const pending = window.pending.get(seq);
-      return drain(window, pending?.request ?? params.request, recordDiagnostic, pending);
+      return drain(window, pending?.request ?? params.request, recordApplied, pending);
     }
     if (window.pending.has(seq)) {
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
@@ -620,7 +626,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if (window.pendingBytes + sizeBytes > maxPendingBytes) {
       return resyncWindow(window);
     }
-    window.pending.set(seq, { request: params.request, sizeBytes, recordDiagnostic });
+    window.pending.set(seq, { request: params.request, sizeBytes, recordApplied });
     window.pendingBytes += sizeBytes;
     return { ok: true, result: { ackedSeq: window.ackedSeq } };
   };

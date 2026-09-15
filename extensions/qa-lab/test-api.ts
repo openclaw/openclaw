@@ -1,7 +1,13 @@
 // QA Lab test API exposes evidence helpers without loading runtime entrypoints.
 export {
+  captureQaEvidenceRuntimeIdentity,
+  captureQaEvidenceSourceIdentity,
+} from "./src/evidence-environment.js";
+export { createQaEvidenceInvocation } from "./src/evidence-invocation.js";
+export {
   buildScriptEvidenceSummary,
   QA_EVIDENCE_FILENAME,
+  type QaEvidenceIdentity,
   type QaEvidencePackageSource,
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,

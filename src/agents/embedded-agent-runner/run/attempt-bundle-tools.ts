@@ -7,6 +7,7 @@ import {
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
+import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
@@ -157,6 +158,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       ? await createBundleLspToolRuntime({
           workspaceDir: params.setup.effectiveWorkspace,
           cfg: params.attempt.config,
+          abortSignal: params.attempt.abortSignal,
           manifestRegistry: bundleManifestRegistry,
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
@@ -200,8 +202,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       // The view outlives this attempt; capture policy against the complete MCP catalog now.
       bundleMcpRuntime.restrictAppTools(allowedAppTools);
     }
-    const normalizedBundledTools =
-      filteredBundledTools.length > 0 ? normalizeTools(filteredBundledTools) : filteredBundledTools;
+    const normalizedBundledTools = (
+      filteredBundledTools.length > 0 ? normalizeTools(filteredBundledTools) : filteredBundledTools
+    ).map((tool) => wrapToolWithBeforeToolCallHook(tool, params.preparedToolBase.toolHookContext));
     const projectTools = (coreTools: typeof toolsRaw) => {
       const projectedTools = filterLocalModelLeanTools({
         tools: [...coreTools, ...normalizedBundledTools].map((tool) =>

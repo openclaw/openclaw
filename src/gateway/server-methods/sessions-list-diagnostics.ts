@@ -132,7 +132,6 @@ function startSessionListDiagnostics(
           runWithDiagnosticTraceContext(trace, () =>
             sessionLog.warn("slow session list", {
               ...fields,
-              operation: "sessions.list",
               ...(workTrace
                 ? { workTraceId: workTrace.traceId, workSpanId: workTrace.spanId }
                 : {}),

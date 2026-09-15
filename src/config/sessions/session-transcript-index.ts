@@ -594,13 +594,23 @@ function selectSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync) {
         eb.or([
           eb(eb.fn.coalesce("st.needs_rebuild", eb.val(1)), "!=", 0),
           eb("latest.seq", ">", eb.fn.coalesce("st.indexed_seq", eb.val(-1))),
-          eb.exists(
-            eb
-              .selectFrom("session_transcript_active_events as pending")
-              .select("pending.session_id")
-              .whereRef("pending.session_id", "=", "session_windows.session_id")
-              .where("pending.context_eligible", "is", null),
-          ),
+          eb.and([
+            // A clean store has no pending rows; check once before per-session probes.
+            eb.exists(
+              eb
+                .selectFrom("session_transcript_active_events as any_pending")
+                .select("any_pending.session_id")
+                .where("any_pending.context_eligible", "is", null)
+                .limit(1),
+            ),
+            eb.exists(
+              eb
+                .selectFrom("session_transcript_active_events as pending")
+                .select("pending.session_id")
+                .whereRef("pending.session_id", "=", "session_windows.session_id")
+                .where("pending.context_eligible", "is", null),
+            ),
+          ]),
         ]),
       )
       // Ordering keeps the session-window scan and one latest-row index seek per session.

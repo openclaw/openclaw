@@ -371,11 +371,11 @@ jobs:
           git_fetch_with_checkout_auth --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
           git_fetch_with_checkout_auth --tags origin '+refs/tags/*:refs/tags/*'
 
-          if git tag --points-at "${SELECTED_SHA}" | grep -Eq '^v'; then
+          if git tag --points-at "${SELECTED_SHA}" | grep -E '^v' >/dev/null; then
             exit 0
           fi
 
-          if git for-each-ref --format='%(refname:short)' --contains "${SELECTED_SHA}" refs/remotes/origin | grep -Eq '^origin/'; then
+          if git for-each-ref --format='%(refname:short)' --contains "${SELECTED_SHA}" refs/remotes/origin | grep -E '^origin/' >/dev/null; then
             exit 0
           fi
 

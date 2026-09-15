@@ -100,6 +100,15 @@ export function buildDiagnosticSessionActivitySnapshot(
 // steer gates): lowering it reopens #88870, removing it reopens #96168.
 export const BLOCKED_TOOL_CALL_ABORT_FLOOR_MS = 15 * 60_000;
 
+/** Process expiry starts cancellation; give its result the ordinary stalled-tool window. */
+export function resolveToolExecutionRecoveryDeadlineAtMs(
+  executionDeadlineAtMs: number | undefined,
+): number | undefined {
+  return executionDeadlineAtMs === undefined
+    ? undefined
+    : executionDeadlineAtMs + BLOCKED_TOOL_CALL_ABORT_FLOOR_MS;
+}
+
 // Default quiet-run reclaim window for steer/takeover. Evidence clocks stay local.
 export const RUN_STALE_TAKEOVER_MS = 10 * 60_000;
 

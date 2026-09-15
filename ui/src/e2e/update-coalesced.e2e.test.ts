@@ -321,7 +321,7 @@ suite.define(() => {
           reason: "version-mismatch",
           updatedAtMs: run.updatedAtMs + 1,
           finishedAtMs: Date.now(),
-          after: { version: "1.0.0" },
+          after: { version: "2.0.0" },
           verification: {
             booted: true,
             serviceRunning: true,

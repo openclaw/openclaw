@@ -27,6 +27,7 @@ import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
   readGatewaySecretInputValue,
 } from "../../gateway/secret-input-paths.js";
+import { readGatewayLastShutdown } from "../../infra/gateway-boot-lifecycle.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import { inspectPortConnections } from "../../infra/ports-inspect.js";
@@ -344,6 +345,17 @@ async function gatherDaemonStatusImpl(
   const hasUrlOverride = Boolean(probeUrlOverride);
   const serviceTargetsProbe = useNativeServiceTargetContext && !hasUrlOverride;
   const shouldInspectLocalGateway = !hasUrlOverride;
+  const lastShutdown =
+    opts.deep && shouldInspectLocalGateway ? readGatewayLastShutdown(mergedDaemonEnv) : undefined;
+  let duelingScopesWarning: string | null = null;
+  if (opts.deep && serviceTargetsProbe && process.platform === "linux") {
+    const { findSystemdGatewayInstallation, formatDuelingScopesWarning } =
+      await import("../../daemon/systemd-scope.js");
+    const installation = await findSystemdGatewayInstallation(serviceEnv).catch(() => null);
+    duelingScopesWarning = installation
+      ? formatDuelingScopesWarning(installation, daemonPort)
+      : null;
+  }
   const windowsFirewall =
     opts.deep === true && shouldInspectLocalGateway
       ? await inspectWindowsGatewayFirewall({
@@ -604,6 +616,8 @@ async function gatherDaemonStatusImpl(
     },
     gateway: {
       ...gateway,
+      ...(lastShutdown ? { lastShutdown } : {}),
+      ...(duelingScopesWarning ? { duelingScopesWarning } : {}),
       ...(windowsFirewall?.applies ? { windowsFirewall } : {}),
       ...(opts.probe
         ? {

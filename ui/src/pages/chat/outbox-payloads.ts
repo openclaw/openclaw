@@ -115,6 +115,9 @@ async function preparePayload(
       const attachments = await Promise.all(
         result.value.map(async (attachment, index) => ({
           ...metadata[index]!,
+          ...(attachment.selectionAnnotation
+            ? { selectionAnnotation: attachment.selectionAnnotation }
+            : {}),
           dataUrl: await readBlobAsDataUrl(attachment.blob),
         })),
       );

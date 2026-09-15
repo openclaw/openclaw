@@ -189,7 +189,7 @@ describe("OpenClaw configured-model planner", () => {
       throw new Error("missing test route");
     }
     const authDeps = {
-      ensureAuthProfileStore: vi.fn(() => ({
+      loadAuthProfileStoreForRuntime: vi.fn(() => ({
         version: 1,
         profiles: {
           "openai:p2": { type: "api_key", provider: "openai", key: "test-key" },

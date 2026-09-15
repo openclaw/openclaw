@@ -188,6 +188,25 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });
 
+  it("keeps launched Chrome when readiness responses take 750ms", async () => {
+    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
+      setupEnsureBrowserAvailableHarness();
+    isChromeCdpReady.mockImplementation(
+      async (_url, timeoutMs = 0) =>
+        await new Promise<boolean>((resolve) => {
+          setTimeout(() => resolve(timeoutMs >= 750), Math.min(750, timeoutMs));
+        }),
+    );
+    const launched = mockLaunchedChrome(launchOpenClawChrome, 124);
+
+    const ready = expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(8100);
+    await ready;
+
+    expect(state.profiles.get("openclaw")?.running).toBe(launched);
+    expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+
   it("stops launched chrome when CDP readiness never arrives", async () => {
     const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile } =
       setupEnsureBrowserAvailableHarness();

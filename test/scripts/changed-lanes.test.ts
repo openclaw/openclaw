@@ -1162,6 +1162,7 @@ describe("scripts/changed-lanes", () => {
     "extensions/discord/package.json",
     "extensions/slack/security-contract-api.ts",
     "src/config/zod-schema.core.ts",
+    "src/channels/bundled-channel-ids.generated.ts",
     "src/channels/plugins/config-schema.ts",
     "scripts/load-channel-config-surface.ts",
   ])("routes %s through the bundled channel config metadata lane", (changedPath) => {

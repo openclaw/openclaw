@@ -16,7 +16,9 @@ const listBundledPackageChannelMetadataMock = vi.hoisted(() =>
 const listRawChannelPluginCatalogEntriesMock = vi.hoisted(() =>
   vi.fn<() => ChannelPluginCatalogEntry[]>(() => []),
 );
-const channelsAddCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+const channelsAddCommandMock = vi.hoisted(() =>
+  vi.fn<typeof import("../commands/channels.js").channelsAddCommand>(async () => undefined),
+);
 const channelsLogsCommandMock = vi.hoisted(() =>
   vi.fn(async (_options: { channel?: string }, _runtime: unknown) => undefined),
 );
@@ -163,7 +165,9 @@ describe("registerChannelsCli", () => {
     await registerChannelsCli(program, ["node", "openclaw", ...args]);
     await program.parseAsync(args, { from: "user" });
 
-    const [options] = channelsLogsCommandMock.mock.calls[0] ?? [];
+    const optionsCall = channelsLogsCommandMock.mock.calls[0];
+    expect(optionsCall).toBeDefined();
+    const options = optionsCall![0];
     expect(options?.channel).toBe(expectedChannel);
   });
 
@@ -594,6 +598,103 @@ describe("registerChannelsCli", () => {
     );
     expect(getChannelAddOptionFlags(program)).not.toContain("--secret-file <path>");
     expect(getChannelAddOptionFlags(program)).not.toContain("--workspace <workspace>");
+  });
+
+  it("omits empty legacy integer defaults while still rejecting explicit blanks", async () => {
+    const legacyIntChannel = [
+      {
+        id: "legacy-chat",
+        cliAddOptions: [
+          {
+            flags: "--limit <n>",
+            description: "Legacy integer limit",
+            defaultValue: "",
+            valueType: "int" as const,
+          },
+        ],
+      },
+    ];
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce(legacyIntChannel);
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce(legacyIntChannel);
+
+    await runChannelsAddCli([
+      "channels",
+      "add",
+      "--channel",
+      "legacy-chat",
+      "--token",
+      "test-token",
+    ]);
+
+    expect(channelsAddCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "legacy-chat",
+        token: "test-token",
+      }),
+      runtimeMock,
+      { hasFlags: true },
+    );
+    const omittedLimitCall = channelsAddCommandMock.mock.calls[0];
+    expect(omittedLimitCall).toBeDefined();
+    const omittedLimitOpts = omittedLimitCall![0];
+    expect(omittedLimitOpts).not.toHaveProperty("limit");
+
+    channelsAddCommandMock.mockClear();
+    await runChannelsAddCli([
+      "channels",
+      "add",
+      "--channel",
+      "legacy-chat",
+      "--token",
+      "test-token",
+      "--limit",
+      "",
+    ]);
+
+    expect(channelsAddCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "legacy-chat",
+        token: "test-token",
+        limit: "",
+      }),
+      runtimeMock,
+      { hasFlags: true },
+    );
+  });
+
+  it("preserves empty legacy text defaults when the flag is omitted", async () => {
+    const legacyTextChannel = [
+      {
+        id: "legacy-chat",
+        cliAddOptions: [
+          {
+            flags: "--note <text>",
+            description: "Legacy optional note",
+            defaultValue: "",
+          },
+        ],
+      },
+    ];
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce(legacyTextChannel);
+
+    await runChannelsAddCli([
+      "channels",
+      "add",
+      "--channel",
+      "legacy-chat",
+      "--token",
+      "test-token",
+    ]);
+
+    expect(channelsAddCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "legacy-chat",
+        token: "test-token",
+        note: "",
+      }),
+      runtimeMock,
+      { hasFlags: true },
+    );
   });
 
   it("uses caller argv instead of raw process argv for channel-specific add options", async () => {

@@ -371,7 +371,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       [
         this.gateway.gateway,
         this.systemInfo ? this.systemInfoRequestClient() : null,
-        this.context?.agentSelection.state.selectedId ?? null,
+        this.context?.settingsAgentSelection.state.selectedId ?? null,
       ] as const,
     task: async ([gateway, client, agentId], { signal }) => {
       if (!gateway || !client || !agentId) {
@@ -430,7 +430,7 @@ export class ConfigPage extends OpenClawLightDomElement {
           : null;
       return [
         client,
-        this.context?.agentSelection.state.selectedId ?? null,
+        this.context?.settingsAgentSelection.state.selectedId ?? null,
         hiddenCatalogIds.join("\0"),
       ] as const;
     },
@@ -475,7 +475,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       (config, notify) => config.subscribe(notify),
     )
     .watch(
-      () => this.context?.agentSelection,
+      () => this.context?.settingsAgentSelection,
       (selection, notify) => selection.subscribe(notify),
     )
     .watch(

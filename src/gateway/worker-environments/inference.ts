@@ -698,17 +698,15 @@ export function createWorkerInferenceManager(options: {
     ).catch(() => undefined);
   };
 
-  const manager = {
+  return {
     start,
     cancel,
     cancelEnvironment,
     cancelClaim,
     cancelSession,
+    beginSessionDrain,
     hasSession,
     resolveSessionIdForRunId,
     stop,
   };
-  // Archive-only control stays non-enumerable so the manager's inferred contract remains stable.
-  Object.defineProperty(manager, "beginSessionDrain", { value: beginSessionDrain });
-  return manager;
 }

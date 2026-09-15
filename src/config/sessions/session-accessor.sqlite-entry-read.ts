@@ -107,7 +107,8 @@ function getExactSessionEntryQueries(database: DatabaseSync) {
 export type ResolvedSessionEntryRow = {
   entry: SessionEntry;
   row: Pick<SessionEntryRow, "current_session_id" | "entry_json" | "session_key" | "updated_at"> &
-    SqliteSessionOwnerRow;
+    SqliteSessionOwnerRow &
+    Partial<Pick<SessionEntryRow, "legacy_acp_migration_json">>;
 };
 
 function parseReadableSessionEntryData(

@@ -34,6 +34,7 @@ const UpdateRunStepSchema = z.object({
   status: z.enum(UPDATE_RUN_STEP_STATUSES),
   startedAtMs: timestamp.optional(),
   endedAtMs: timestamp.optional(),
+  exitCode: z.number().int().nullable().optional(),
   detail: text.optional(),
   failureFacts: z.array(UpdateFailureFactSchema).max(5).optional(),
   configChange: z

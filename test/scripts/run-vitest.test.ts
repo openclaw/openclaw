@@ -753,6 +753,10 @@ registerHooks({resolve(specifier, context, nextResolve) {
       ["run", "test/scripts/run-vitest.test.ts", "-t", "src"],
       ["test/scripts/run-vitest.test.ts", "--", "-t", "src"],
     ],
+    [
+      ["run", "test/scripts/run-vitest.test.ts", "--repeats", "19"],
+      ["test/scripts/run-vitest.test.ts", "--", "--repeats", "19"],
+    ],
   ])("keeps option value %j out of project target classification", (argv, expected) => {
     expect(resolveTestProjectsDelegationArgs(argv)).toEqual(expected);
   });

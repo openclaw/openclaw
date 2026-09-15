@@ -242,7 +242,17 @@ suite.define(() => {
           }
           await signIn.click();
           const dialog = page.locator("openclaw-modal-dialog");
-          await dialog.getByText("The model could not finish setup", { exact: true }).waitFor();
+          const alert = dialog.getByRole("alert");
+          await alert.waitFor();
+          expect((await alert.textContent())?.trim()).toBe(
+            "Could not finish. Open Details to see what to do next.",
+          );
+          const details = dialog.locator("details");
+          expect(await details.getAttribute("open")).toBeNull();
+          const diagnostic = details.getByText("The model could not finish setup", { exact: true });
+          expect(await diagnostic.isVisible()).toBe(false);
+          await details.getByText("Details", { exact: true }).click();
+          await diagnostic.waitFor();
           await dialog.getByRole("button", { name: "Close", exact: true }).click();
           await expect.poll(() => dialog.count()).toBe(0);
           await expect.poll(() => signIn.isDisabled()).toBe(outcome === "uncertain");
@@ -262,7 +272,14 @@ suite.define(() => {
             );
           } else {
             await signIn.click();
-            await dialog.getByText("The model could not finish setup", { exact: true }).waitFor();
+            await alert.waitFor();
+            expect((await alert.textContent())?.trim()).toBe(
+              "Could not finish. Open Details to see what to do next.",
+            );
+            expect(await details.getAttribute("open")).toBeNull();
+            expect(await diagnostic.isVisible()).toBe(false);
+            await details.getByText("Details", { exact: true }).click();
+            await diagnostic.waitFor();
             expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(2);
           }
           if (artifactDir) {

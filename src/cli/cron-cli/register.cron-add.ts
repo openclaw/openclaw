@@ -146,6 +146,9 @@ export function registerCronAddCommand(cron: Command) {
               const commandArgv = parseCronCommandArgv(opts.commandArgv);
               // File arguments identify exact local paths; trimming can select another file.
               const scriptPath = readNonBlankString(opts.script);
+              if (typeof opts.script === "string" && !scriptPath) {
+                throw new CronCliError("--script must not be blank");
+              }
               const toolsAllow = parseCronToolsAllow(opts.tools);
               if (optionMessage && positionalMessage && optionMessage !== positionalMessage) {
                 throw new CronCliError(

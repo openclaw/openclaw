@@ -22,6 +22,10 @@ import {
   createUpdateFailureFact,
   type UpdateFailureFact,
 } from "../../infra/update-failure-facts.js";
+import {
+  createFreeBsdPkgOwnershipInspection,
+  type FreeBsdPkgOwnershipInspection,
+} from "../../infra/update-freebsd-pkg-ownership.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { CLI_NAME } from "../cli-name.js";
 import { resolveNodeRunner } from "./shared.js";
@@ -267,7 +271,11 @@ export function resolveManagedServiceNodeRunner(
 
 export async function resolveManagedServicePackageUpdatePlan(params: {
   root: string;
+  pkgOwnership?: FreeBsdPkgOwnershipInspection;
 }): Promise<{ rootRedirect: ManagedServiceRootRedirect | null; nodeRunner?: string }> {
+  const pkgOwnership =
+    params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS);
+  await pkgOwnership.assertUnowned(params.root);
   if (!isGatewayServiceManagementAllowedForUpdate(process.env)) {
     return { rootRedirect: null };
   }
@@ -278,6 +286,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
     .catch(() => null);
   const layout = await summarizeGatewayServiceLayout(command);
   const serviceRoot = layout?.packageRoot;
+  await pkgOwnership.assertUnowned(serviceRoot);
   const serviceNode = resolveManagedServiceNodeRunner(command);
   if (
     serviceRoot &&

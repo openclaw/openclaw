@@ -1,6 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateCompareIntent,
+  PluginStateKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   getFileLockProcessStartTime,
   isPidDefinitelyDead,
@@ -107,13 +110,31 @@ export async function deleteShortTermLockEntryIfCurrent(
   lockKey: string,
   expected: ShortTermLockEntry,
 ): Promise<boolean> {
-  if (!lockStore.deleteIf) {
-    throw new Error("memory-core short-term lock store requires conditional deletion");
+  if (!lockStore.observe || !lockStore.compareAndApply) {
+    throw new Error("memory-core short-term lock store requires atomic comparisons");
   }
-  return await lockStore.deleteIf(
-    lockKey,
-    (current) => current.owner === expected.owner && current.acquiredAt === expected.acquiredAt,
-  );
+  const { owner, acquiredAt } = expected;
+  const decideDeletion = (
+    current: ShortTermLockEntry | undefined,
+  ): PluginStateCompareIntent<ShortTermLockEntry> => ({
+    operation: "delete",
+    action:
+      current !== undefined && current.owner === owner && current.acquiredAt === acquiredAt
+        ? "delete"
+        : "keep",
+  });
+  let observation = await lockStore.observe(lockKey);
+  while (true) {
+    const result = await lockStore.compareAndApply(
+      lockKey,
+      observation.comparison,
+      decideDeletion(observation.value),
+    );
+    if (result.status !== "conflict") {
+      return result.status === "applied";
+    }
+    observation = result.current;
+  }
 }
 
 /** Captured input preparation shares local ordering without claiming a durable write lease. */

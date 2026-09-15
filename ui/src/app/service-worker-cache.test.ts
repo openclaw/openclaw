@@ -285,6 +285,7 @@ describe("Control UI service worker cache versioning", () => {
           listener: (event: { data: unknown; ports: unknown[] }) => void,
         ) => listeners.set(type, listener),
         location: { href: "https://control.example/sw.js?v=old-build" },
+        registration: { scope: "https://control.example/" },
       },
     });
     listeners.get("message")?.({

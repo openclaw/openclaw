@@ -4,6 +4,7 @@ import {
 } from "../../infra/worker-task-capacity.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.js";
 import {
   resolveSqliteTranscriptReadScope,
@@ -19,7 +20,10 @@ import type {
 import { isSessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { runSessionHistoryWorkerRequest } from "./session-transcript-worker-runtime.js";
+import {
+  withSessionHistoryWorkerDatabase,
+  type SessionHistoryWorkerDatabase,
+} from "./session-transcript-worker-runtime.js";
 import type { SessionTranscriptHistoryWorkerInput } from "./session-transcript.worker.js";
 
 type QueuedHistoryRead = {
@@ -43,6 +47,7 @@ function receivePage(
 function readQueuedPage(
   input: SessionTranscriptHistoryWorkerInput,
   key: string,
+  owner: SessionHistoryWorkerDatabase,
   signal?: AbortSignal,
 ): Promise<SessionHistoryWorkerResult> {
   signal?.throwIfAborted();
@@ -54,11 +59,12 @@ function readQueuedPage(
   const pending = createDeferredCore<SessionHistoryWorkerResult>();
   const queued = { promise: pending.promise, shared: false };
   queuedHistoryReads.set(key, queued);
-  void runSessionHistoryWorkerRequest(() => {
-    // A later caller must not join a SQLite snapshot that has already started.
-    queuedHistoryReads.delete(key);
-    return input;
-  }, key.length * 2)
+  void owner
+    .run(() => {
+      // A later caller must not join a SQLite snapshot that has already started.
+      queuedHistoryReads.delete(key);
+      return input;
+    }, key.length * 2)
     .then(pending.resolve, pending.reject)
     .finally(() => {
       if (queuedHistoryReads.get(key) === queued) {
@@ -92,8 +98,13 @@ export async function readSessionHistoryPageInWorker(
       : request.params.target;
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const admission = resolveSessionTranscriptReadFence(resolved);
+  const databaseOptions = toDatabaseOptions(resolved);
   const input: SessionTranscriptHistoryWorkerInput = {
     kind: "history-page",
+    database: {
+      agentId: databaseOptions.agentId,
+      path: resolveOpenClawAgentSqlitePath(databaseOptions),
+    },
     request,
     ...(admission ? { admission: { ...admission } } : {}),
   };
@@ -109,8 +120,10 @@ export async function readSessionHistoryPageInWorker(
   pendingHistoryReaders++;
   pendingHistoryBytes += inputBytes;
   try {
-    const result = await readRestoredSessionTranscript(scope, () =>
-      readQueuedPage(input, key, signal),
+    const result = await withSessionHistoryWorkerDatabase(input.database, (owner) =>
+      readRestoredSessionTranscript(scope, () =>
+        readQueuedPage(input, `${owner.generation}:${key}`, owner, signal),
+      ),
     );
     if (result.kind !== request.kind) {
       throw new Error("Session history worker returned the wrong page type");

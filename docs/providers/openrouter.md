@@ -31,9 +31,10 @@ With Tailscale Serve, your browser must have access to the same tailnet. If no
 managed HTTPS address is available, enable Serve and retry, or use the CLI flow
 below. The callback does not sign you in to the Control UI.
 
-The Control UI uses hosted completion when opened at the managed HTTPS address.
-When opened through localhost or another address, it keeps manual redirect
-completion so browsers outside the tailnet can still finish setup.
+The Control UI receives the return automatically at the managed HTTPS address
+or when opened directly on the local Gateway's loopback address and port.
+Other addresses use manual redirect completion. If pasted input is incomplete
+or invalid, correct it in the same sign-in attempt and submit again.
 
 <Tabs>
   <Tab title="OAuth">

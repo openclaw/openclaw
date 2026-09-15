@@ -77,6 +77,7 @@ public actor GatewayChannelActor {
     private var tickIntervalMs: Double = 30000
     private var lastAuthSource: GatewayAuthSource = .none
     private var lastAuthBinding: (generation: UInt64, binding: GatewayAuthBinding)?
+    private var acceptedHTTPBearer: (generation: UInt64, token: String?)?
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     // Remote gateways (tailscale/wan) can take longer to deliver connect.challenge.
@@ -150,9 +151,19 @@ public actor GatewayChannelActor {
         return self.lastAuthBinding?.binding
     }
 
+    /// Native HTTP adapters reuse the credential accepted by this exact socket,
+    /// including stored device tokens that the hello response does not reissue.
+    public func httpResourceBearer(ifCurrentConnectionGeneration expectedGeneration: UInt64) -> String? {
+        guard self.authBinding(ifCurrentConnectionGeneration: expectedGeneration) != nil,
+              self.acceptedHTTPBearer?.generation == expectedGeneration
+        else { return nil }
+        return self.acceptedHTTPBearer?.token
+    }
+
     public func shutdown() async {
         self.shouldReconnect = false
         self.connected = false
+        self.acceptedHTTPBearer = nil
         self.activeConnectAttemptID = nil
         self.automaticReconnectRequested = false
         self.connectAttemptTask?.cancel()
@@ -996,6 +1007,7 @@ extension GatewayChannelActor {
                 }
             }
         }
+        self.acceptedHTTPBearer = (connectionGeneration, selectedAuth.httpResourceBearer(hello: ok, role: role))
         self.lastTick = Date()
         // Keep arbitrary push/lifecycle callbacks off the connect critical path.
         // Clients needing immediate hello state get a dedicated short admission.
@@ -1077,6 +1089,7 @@ extension GatewayChannelActor {
         // receive failure. Only the owner notifies lifecycle cleanup or reconnects.
         self.disconnectedConnectionGeneration = connectionGeneration
         self.connected = false
+        self.acceptedHTTPBearer = nil
         self.activeConnectAttemptID = nil
         if shouldReconnect {
             self.automaticReconnectRequested = true

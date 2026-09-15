@@ -162,7 +162,7 @@ export function makeMissingToolResult(params: {
   } as ToolResultMessage;
 }
 
-function isSyntheticMissingToolResult(message: ToolResultMessage): boolean {
+export function isSyntheticMissingToolResult(message: ToolResultMessage): boolean {
   if (!(message as { isError?: unknown }).isError) {
     return false;
   }

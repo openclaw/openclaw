@@ -4,7 +4,7 @@ import type {
   SessionsCatalogListResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
@@ -228,53 +228,11 @@ describe("AppSidebar multi-select", () => {
     await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
   });
 
-  it("archives serially when an older Gateway does not advertise patchMany", async () => {
-    const { sidebar, harness, request } = await mountMultiSelect(["sessions.patch"]);
-
-    click(rowLink(sidebar, "agent:main:a"), { altKey: true });
-    click(rowLink(sidebar, "agent:main:b"), { altKey: true });
-    await sidebar.updateComplete;
-    openContextMenu(sidebar, "agent:main:a");
-    await sidebar.updateComplete;
-
-    const menu = await sessionMenu(sidebar);
-    const archive = menu.querySelector<HTMLButtonElement>('[data-shortcut="a"]');
-    expect(archive?.disabled).toBe(false);
-    archive?.click();
-
-    await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
-    expect(harness.patch).toHaveBeenNthCalledWith(
-      1,
-      "agent:main:a",
-      { archived: true },
-      {
-        agentId: "main",
-        expectedSessionId: "session:agent:main:a",
-        deferListRefresh: true,
-      },
-    );
-    expect(harness.patch).toHaveBeenNthCalledWith(
-      2,
-      "agent:main:b",
-      { archived: true },
-      {
-        agentId: "main",
-        expectedSessionId: "session:agent:main:b",
-        deferListRefresh: true,
-      },
-    );
-    expect(harness.patchMany).not.toHaveBeenCalled();
-    expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toEqual([]);
-    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
-    expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
-  });
-
-  it("disables batch archive when method metadata is missing", async () => {
-    const rejection = new GatewayRequestError({
-      code: "INVALID_REQUEST",
-      message: "unknown method: sessions.patchMany",
-    });
-    const { sidebar, harness, request } = await mountMultiSelect(null, rejection);
+  it.each([
+    { name: "patchMany is not advertised", methods: ["sessions.patch"] },
+    { name: "method metadata is missing", methods: null },
+  ])("disables batch archive when $name", async ({ methods }) => {
+    const { sidebar, harness, request } = await mountMultiSelect(methods);
 
     click(rowLink(sidebar, "agent:main:a"), { altKey: true });
     click(rowLink(sidebar, "agent:main:b"), { altKey: true });

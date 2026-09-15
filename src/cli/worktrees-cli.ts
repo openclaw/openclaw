@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { managedWorktrees, resolveWorktreeCleanupLimits } from "../agents/worktrees/service.js";
@@ -85,8 +85,29 @@ export function registerWorktreesCli(program: Command): void {
     .description("Snapshot and remove a managed worktree")
     .argument("<id>", "Managed worktree id")
     .option("--force", "Remove even if snapshot creation fails", false)
+    .addOption(
+      new Option("--if-lossless", "Remove without force only when clean and published").conflicts(
+        "force",
+      ),
+    )
     .option("--json", "Output JSON", false)
-    .action(async (id: string, opts: JsonOption & { force?: boolean }) => {
+    .action(async (id: string, opts: JsonOption & { force?: boolean; ifLossless?: boolean }) => {
+      if (opts.ifLossless) {
+        const removed = await managedWorktrees.removeIfLossless(id);
+        const cleanup = managedWorktrees
+          .listRegistryRecords()
+          .find((record) => record.id === id)?.runEndCleanup;
+        if (opts.json) {
+          printJson({ removed, cleanup });
+        } else {
+          defaultRuntime.log(
+            removed
+              ? `Removed ${id} without force.`
+              : `Retained ${id}: ${cleanup?.outcome ?? "cleanup not admitted"}.`,
+          );
+        }
+        return;
+      }
       const result = await managedWorktrees.remove({
         id,
         reason: "manual-delete",

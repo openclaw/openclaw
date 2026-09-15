@@ -20,7 +20,12 @@ import {
   withRequesterCronAuthority,
 } from "../../agents/subagents/requester-cron-authority.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
+  setRuntimeConfigSnapshot,
+} from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
@@ -125,7 +130,7 @@ async function inRun<T>(
       createCronCreatorAuthorityCapability(
         runId,
         admitted.callerOrigin,
-        admitted.controlUiAdmin,
+        admitted.managementEntitlement,
         admitted.isCurrent,
       ),
       "admitted cron capability",
@@ -139,7 +144,7 @@ async function inRun<T>(
 }
 
 async function withSuccessor<T>(
-  admin: boolean,
+  admin: boolean | "channel-owner",
   run: (identity: AgentRuntimeIdentity) => Promise<T>,
 ) {
   const originalRunId = "original-requester";
@@ -159,8 +164,26 @@ async function withSuccessor<T>(
   });
   // The authenticated connection boundary supplies these facts; no model or
   // child result may promote the ordinary continuation below.
-  requester.internal = admin ? { controlUiAdmin: true } : {};
-  await inRun(originalRunId, admission(originalRunId, requester), async () => {
+  requester.internal = admin === true ? { controlUiAdmin: true } : {};
+  const admitted =
+    admin === "channel-owner"
+      ? {
+          runId: originalRunId,
+          callerOrigin: { kind: "unknown" as const },
+          managementEntitlement: {
+            source: "channel-owner" as const,
+            isCurrent: () =>
+              isConfiguredCommandOwner(getRuntimeConfig(), {
+                channel: "discord",
+                senderId: "owner-1",
+              }),
+          },
+        }
+      : admission(originalRunId, requester);
+  if (admin === "channel-owner") {
+    setRuntimeConfigSnapshot({ ...cfg, commands: { ownerAllowFrom: ["discord:owner-1"] } });
+  }
+  await inRun(originalRunId, admitted, async () => {
     expect(
       markRequesterTurnYieldedInRuns({
         requesterSessionKey: SESSION,
@@ -237,10 +260,21 @@ async function createStoredJob(listConfiguredChannels: () => Promise<string[]> =
       wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "Check service health" },
       delivery: { mode: "none" },
+      owner: { agentId: "main", sessionKey: "agent:main:telegram:dm:42", accountId: "telegram" },
     },
-    { scheduledToolPolicy: { version: 1, mode: "trusted" } },
+    {
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+      captureRuntimeAuthority: () => ({
+        version: 1,
+        runtimeId: "codex",
+        namespace: "codex.apps",
+        payload: { apps: [{ id: "calendar" }] },
+      }),
+    },
   );
   const before = (await loadCronStore(storePath)).jobs;
+  const runtimeAuthority = before[0]!.runtimeAuthority;
+  expect(runtimeAuthority).toBeDefined();
   const context = createDirectChatContext({
     cron,
     cronStorePath: storePath,
@@ -250,6 +284,8 @@ async function createStoredJob(listConfiguredChannels: () => Promise<string[]> =
   return {
     before,
     read: async () => (await loadCronStore(storePath)).jobs,
+    runtimeAuthority,
+    readRuntimeAuthority: async () => (await loadCronStore(storePath)).jobs[0]!.runtimeAuthority,
     update: async (identity: AgentRuntimeIdentity) => {
       const management = bindCronManagementGrant(identity.operationalRunInstance.runId);
       const client = createSyntheticPluginRuntimeClient();
@@ -260,7 +296,13 @@ async function createStoredJob(listConfiguredChannels: () => Promise<string[]> =
       const respond = vi.fn<RespondFn>();
       const params = {
         id: job.id,
-        patch: { name: "Reviewed maintenance", enabled: true, delivery: { mode: "none" } },
+        patch: {
+          name: "Reviewed maintenance",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 3_600_000 },
+          payload: { kind: "agentTurn", message: "Reviewed health check" },
+          delivery: { mode: "none" },
+        },
       };
       await expectDefined(
         cronHandlers["cron.update"],
@@ -279,12 +321,12 @@ async function createStoredJob(listConfiguredChannels: () => Promise<string[]> =
 }
 
 describe("requester continuation persisted automation management", () => {
-  it.each([true, false])(
-    "permits the stored mutation only for an administrator: %s",
+  it.each([true, false, "channel-owner"] as const)(
+    "permits the stored mutation only for an admitted manager: %s",
     async (admin) => {
       const fixture = await createStoredJob();
       const [ok, result, error] = await withSuccessor(admin, fixture.update);
-      expect(ok).toBe(admin);
+      expect(ok).toBe(Boolean(admin));
       if (admin) {
         expect(result).toMatchObject({ name: "Reviewed maintenance", enabled: true });
         expect(await fixture.read()).toMatchObject([
@@ -292,8 +334,12 @@ describe("requester continuation persisted automation management", () => {
             name: "Reviewed maintenance",
             enabled: true,
             scheduledToolPolicy: { version: 1, mode: "trusted" },
+            owner: fixture.before[0]!.owner,
+            schedule: { kind: "every", everyMs: 3_600_000 },
+            payload: { kind: "agentTurn", message: "Reviewed health check" },
           },
         ]);
+        expect(await fixture.readRuntimeAuthority()).toEqual(fixture.runtimeAuthority);
       } else {
         expect(error).toMatchObject({
           code: "INVALID_REQUEST",
@@ -304,7 +350,7 @@ describe("requester continuation persisted automation management", () => {
     },
   );
 
-  it.each(["fresh user turn", "session reset"])(
+  it.each(["fresh user turn", "session reset", "global owner removal"])(
     "rejects %s revocation while the real update awaits validation",
     async (reason) => {
       const entered = createDeferred();
@@ -318,7 +364,10 @@ describe("requester continuation persisted automation management", () => {
         return [];
       });
       hold = true;
-      const update = withSuccessor(true, fixture.update);
+      const update = withSuccessor(
+        reason === "global owner removal" ? "channel-owner" : true,
+        fixture.update,
+      );
       try {
         await Promise.race([
           entered.promise,
@@ -327,7 +376,9 @@ describe("requester continuation persisted automation management", () => {
           }),
         ]);
         expect(await fixture.read()).toEqual(fixture.before);
-        if (reason === "fresh user turn") {
+        if (reason === "global owner removal") {
+          setRuntimeConfigSnapshot(cfg);
+        } else if (reason === "fresh user turn") {
           const requester = createSyntheticPluginRuntimeClient({ scopes: ["operator.write"] });
           requester.internal = {};
           admission("new-user-turn", requester);

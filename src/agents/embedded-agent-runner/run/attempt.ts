@@ -282,7 +282,6 @@ export async function runEmbeddedAttempt(
           setup,
           preparedToolBase,
           bundleTools: { clientTools, uncompactedEffectiveTools },
-          runTrace,
           abortSignal: runAbortController.signal,
           executeCodeModeTool: (toolParams) => {
             if (!toolSearchCatalogExecutor) {
@@ -461,7 +460,14 @@ export async function runEmbeddedAttempt(
         }),
       );
     }
-  } catch (error) {
+  } catch (cause) {
+    let error = cause;
+    // An abort-aware preparation can reject before the next cancellation checkpoint.
+    try {
+      externalAbortController.throwIfFired();
+    } catch (abortError) {
+      error = abortError;
+    }
     const terminalOutcome = buildAgentRunTerminalOutcomeFromAttempt({
       terminal: executionState.terminal,
       abortSignal: params.abortSignal,

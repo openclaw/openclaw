@@ -71,7 +71,7 @@ export function renderProviderStatus(card: ModelProviderCard) {
   if (card.catalogStatus === "unavailable") {
     return renderSettingsStatus({
       kind: "warn",
-      label: t("common.failed"),
+      label: t("modelProviders.status.modelsUnavailable"),
     });
   }
   if (!hasProviderCredentials(card)) {

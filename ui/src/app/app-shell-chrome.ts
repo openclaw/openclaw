@@ -30,10 +30,17 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import {
+  readDebugOverlayMode,
+  shouldCloseDebugOverlay,
+  type DebugOverlayElement,
+  type DebugOverlayMode,
+} from "../pages/debug/debug-overlay-frame.ts";
 import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
 import {
   isOptionalElementDefined,
+  DEBUG_OVERLAY_ELEMENT,
   KEYBOARD_SHORTCUTS_ELEMENT,
   type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
@@ -62,10 +69,6 @@ import {
 import { isHomePanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
-
-type DebugOverlayElement = HTMLElement & {
-  toggle: () => void;
-};
 
 type KeyboardShortcutsDialogElement = HTMLElement & {
   isOpen: boolean;
@@ -385,6 +388,18 @@ export class ShellChromeOwner {
 
   readonly handleDocumentKeydown = (event: KeyboardEvent): void => {
     const host = this.host;
+    if (
+      host.lazyCustomElements.visibleState?.element === DEBUG_OVERLAY_ELEMENT &&
+      shouldCloseDebugOverlay(
+        event,
+        this.pendingDebugOverlayMode,
+        host.querySelector(".debug-overlay"),
+      )
+    ) {
+      event.preventDefault();
+      host.lazyCustomElements.close();
+      return;
+    }
     if (document.openClawModalLayers?.size) {
       return;
     }
@@ -465,21 +480,65 @@ export class ShellChromeOwner {
     }
   };
 
+  get pendingDebugOverlayMode(): DebugOverlayMode {
+    return readDebugOverlayMode(this.pendingLazyAction);
+  }
+
+  togglePendingDebugOverlayMode(): void {
+    const event = this.pendingLazyAction;
+    if (
+      event?.eventType !== DEBUG_OVERLAY_REQUEST_EVENT ||
+      this.host.lazyCustomElements.visibleState?.element !== DEBUG_OVERLAY_ELEMENT
+    ) {
+      return;
+    }
+    event.detail = {
+      mode: this.pendingDebugOverlayMode === "minimized" ? "expanded" : "minimized",
+    };
+    persistLazyShellAction(event);
+    this.host.requestUpdate();
+  }
+
   private readonly handleDebugOverlayRequest = (event: Event): void => {
     const host = this.host;
     if (host.navDrawerOpen && isMobileNavLayout()) {
       host.closeNavDrawer({ restoreFocus: false });
     }
-    const descriptor = lazyShellEvent(DEBUG_OVERLAY_REQUEST_EVENT, event);
-    const overlay = host.querySelector<DebugOverlayElement>("openclaw-debug-overlay");
-    if (overlay) {
-      this.clearPendingLazyAction(descriptor);
-      overlay.toggle();
+    if (host.lazyCustomElements.visibleState?.element === DEBUG_OVERLAY_ELEMENT) {
+      if (this.pendingDebugOverlayMode === "minimized") {
+        this.togglePendingDebugOverlayMode();
+      } else {
+        host.lazyCustomElements.close();
+      }
       return;
     }
-    this.pendingLazyAction = descriptor;
-    persistLazyShellAction(descriptor);
-    host.requestUpdate();
+    const descriptor = lazyShellEvent(DEBUG_OVERLAY_REQUEST_EVENT, event);
+    const overlay = isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT)
+      ? host.querySelector<DebugOverlayElement>(DEBUG_OVERLAY_ELEMENT.tagName)
+      : null;
+    if (overlay) {
+      this.clearPendingLazyAction(descriptor);
+      if (descriptor.detail && "mode" in descriptor.detail) {
+        overlay.open(readDebugOverlayMode(descriptor));
+      } else {
+        overlay.toggle();
+      }
+      return;
+    }
+    this.requestLazyElement(DEBUG_OVERLAY_ELEMENT, descriptor, () => {
+      if (this.pendingLazyAction !== descriptor) {
+        return;
+      }
+      const mounted = host.querySelector<DebugOverlayElement>(DEBUG_OVERLAY_ELEMENT.tagName);
+      if (!mounted) {
+        return;
+      }
+      const mode = this.pendingDebugOverlayMode;
+      // Opening starts inner-content recovery. Retire only the outer intent first,
+      // or the shell would erase the new reload action recorded by the overlay.
+      this.clearPendingLazyAction(descriptor);
+      mounted.open(mode);
+    });
   };
 
   private readonly handleAssistantToggleBeforeMount = (event: Event): void => {
@@ -588,7 +647,7 @@ export class ShellChromeOwner {
     const host = this.host;
     const elements: Record<LazyShellEvent["eventType"], string> = {
       [COMMAND_PALETTE_OPEN_EVENT]: host.commandPaletteElement.tagName,
-      [DEBUG_OVERLAY_REQUEST_EVENT]: "openclaw-debug-overlay",
+      [DEBUG_OVERLAY_REQUEST_EVENT]: DEBUG_OVERLAY_ELEMENT.tagName,
       [KEYBOARD_SHORTCUTS_REQUEST_EVENT]: KEYBOARD_SHORTCUTS_ELEMENT.tagName,
       [TERMINAL_PANEL_TOGGLE_EVENT]: host.terminalPanelElement.tagName,
       [BROWSER_PANEL_TOGGLE_EVENT]: host.browserPanelElement.tagName,
