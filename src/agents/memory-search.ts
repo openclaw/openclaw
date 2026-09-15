@@ -21,10 +21,12 @@ import { resolveMemorySearchSourcePolicy } from "./memory-search-source-policy.j
 
 type ProducedMemorySearchConfig = NonNullable<ReturnType<typeof produceMemorySearchConfig>>;
 
+/** Retains released authoring shapes even when the producer narrows its output. */
 export type ResolvedMemorySearchConfig = Omit<
   ProducedMemorySearchConfig,
   | "cache"
   | "documentInputType"
+  | "enabled"
   | "inputType"
   | "local"
   | "outputDimensionality"
@@ -33,6 +35,7 @@ export type ResolvedMemorySearchConfig = Omit<
   | "store"
   | "sync"
 > & {
+  enabled: boolean;
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
