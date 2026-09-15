@@ -111,6 +111,7 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         const begin = async () => {
           await page.locator("[data-models-connect]").click();
+          await page.locator(`[data-models-login-provider="${loginProvider}"]`).click();
           await page
             .locator("openclaw-modal-dialog")
             .getByRole("button", { name: "Fixture browser sign-in", exact: true })

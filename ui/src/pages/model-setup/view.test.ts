@@ -52,7 +52,7 @@ describe("renderModelSetup", () => {
     expect(text(container)).toContain("Found on this Gateway");
     expect(text(container)).toContain("Codex CLI");
     expect(text(container)).toContain("openai/gpt-5 · Signed in locally");
-    expect(text(container)).toContain("Found, but needs attention");
+    expect(text(container)).toContain("Other detected software");
     expect(text(container)).toContain("This local runtime must be configured outside OpenClaw");
     expect(text(container)).toContain("Set up and verify a model");
     expect(text(container)).toContain("Run a model locally");
@@ -358,17 +358,13 @@ describe("renderModelSetup", () => {
     expect(onSuccessClose).toHaveBeenCalledOnce();
   });
 
-  it("only rechecks unavailable runtimes without a supported setup route", () => {
-    const onDetect = vi.fn();
-    const container = mount(props({ onDetect }));
-    const buttons = container.querySelectorAll<HTMLButtonElement>(
-      '[data-unavailable-candidate="pi-cli"] button',
-    );
-
-    expect([...buttons].map((button) => button.textContent?.trim())).toEqual(["Check again"]);
-    buttons[0]?.click();
-
-    expect(onDetect).toHaveBeenCalledOnce();
+  it("explains software without a setup route instead of offering an ineffective retry", () => {
+    const container = mount(props());
+    const unavailable = container.querySelector('[data-unavailable-candidate="pi-cli"]')!;
+    expect(unavailable.closest("details")).not.toBeNull();
+    expect(unavailable.closest("details")?.open).toBe(false);
+    expect(unavailable.querySelector("button")).toBeNull();
+    expect(text(unavailable)).toContain("configured outside OpenClaw");
   });
 
   it("derives prepare rows from accepted choice ids and hides usable local candidates", () => {

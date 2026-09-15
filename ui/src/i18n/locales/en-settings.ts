@@ -3,6 +3,18 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  modelSetup: {
+    discovery: {
+      title: "On this Gateway",
+      description:
+        "Find existing connections or prepare a local model for {agent}. Using a model here changes this agent, not the global defaults.",
+      useForAgent: "Test & use for this agent",
+      connectForAgent: "Connect & use for this agent",
+      connectProvider: "Connect provider",
+      returnToModels: "Return to Models",
+      otherSoftware: "Other detected software",
+    },
+  },
   connection: {
     ping: {
       title: "Gateway ping",
@@ -321,13 +333,23 @@ const enSettings = {
       action: "Connect provider",
       title: "Connect a provider",
       noOptions: "No account connection methods are available.",
+      method: "Connection method",
+      searchProviders: "Search providers…",
+      noMatches: "No providers match your search.",
+      noProviders: "No providers are available to connect.",
+      discover: "On this Gateway",
       description: "Save credentials for this agent. Choose the active model separately.",
       done: "Provider credentials saved.",
       finishing: "Credentials are being saved. Wait for the result.",
       sessionExpired:
         "This sign-in session ended. Close this dialog and refresh Models to check the result.",
     },
-    subtitle: "Providers and credentials for the selected agent.",
+    subtitle: "Global model defaults and provider access for your agents.",
+    accessTitle: "Provider access",
+    accessDescription:
+      "Manage connections for the selected agent. Global defaults above apply to all agents.",
+    search: "Search providers…",
+    noMatches: "No providers match your search.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",
     disconnected: "Connect to the gateway to see configured model providers.",
@@ -445,7 +467,7 @@ const enSettings = {
       saved: "Provider {provider} added.",
     },
     defaults: {
-      title: "Global defaults",
+      title: "Defaults for all agents",
       subtitle:
         "Model and behavior defaults for all agents. Agent-specific settings override these defaults. View each agent's model in Agents → Overview.",
       primary: "Model",
@@ -1323,6 +1345,7 @@ export const registerSettingsEnglish = Object.assign(
   () => {
     en.memoryPage = enSettings.memoryPage;
     en.modelProviders = enSettings.modelProviders;
+    Object.assign(en.modelSetup, enSettings.modelSetup);
     // Extend the shared objects: eager save/update copy and existing readers survive.
     en.cloudWorkersPage = enSettings.cloudWorkersPage;
     Object.assign(en.connection, enSettings.connection);

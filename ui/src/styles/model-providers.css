@@ -552,3 +552,55 @@ openclaw-model-account-usage,
     margin-left: var(--space-4);
   }
 }
+
+/* Agent-scoped provider connection picker; the secure wizard keeps its own layout. */
+.model-provider-login .model-setup-wizard__footer {
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.model-provider-login__providers {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  max-height: min(360px, 45dvh);
+  margin: 0;
+  padding: var(--space-1);
+  overflow-y: auto;
+  list-style: none;
+}
+
+.model-provider-login__option.btn {
+  justify-content: flex-start;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 52px;
+  padding: var(--space-3);
+  text-align: start;
+  white-space: normal;
+}
+
+.model-provider-login__copy {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-provider-login__copy > span {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 400;
+}
+
+.model-provider-login__provider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-provider-login__secondary {
+  margin-inline-end: auto;
+}

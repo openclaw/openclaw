@@ -79,7 +79,6 @@ const settingsRowRoutes = [
   "agents",
   "ai-agents",
   "labs",
-  "model-setup",
   "model-providers",
   "mcp",
   "memory",
@@ -108,7 +107,7 @@ const mobileStandaloneSettingsPageRoutes = [
 
 const mobileGeometryCases = [
   { route: "appearance", contentSelector: ".settings-page" },
-  { route: "model-setup", contentSelector: ".model-setup" },
+  { route: "model-providers", contentSelector: ".settings-page" },
   { route: "memory", contentSelector: ".memory-page__panel .settings-page" },
   { route: "plugin-settings", contentSelector: ".settings-page" },
 ] as const satisfies ReadonlyArray<{ route: RouteId; contentSelector: string }>;
@@ -235,7 +234,10 @@ suite.define(() => {
         const failedScripts: string[] = [];
         const startupScripts: string[] = [];
         const settingsScripts: string[] = [];
-        const providerCopy = "Providers and credentials for the selected agent.";
+        const settingsOnlyCopy = [
+          "Global model defaults and provider access for your agents.",
+          "Find existing connections or prepare a local model for {agent}.",
+        ];
         // Keep each cold-boot document alive through the final assertions: replacing
         // an observed document cancels its idle imports and creates test-owned failures.
         for (const pathname of ["new", "chat", "settings/model-providers"]) {
@@ -270,16 +272,20 @@ suite.define(() => {
 
           await page.goto(`${suite.server.baseUrl}${pathname}`);
           const ready = isSettings
-            ? page.getByRole("heading", { name: /^Configured providers\b/ })
+            ? page.getByRole("heading", { name: /^Provider access\b/ })
             : page.locator(".agent-chat__composer-combobox textarea");
           await ready.waitFor();
           if (isSettings) {
-            expect(settingsScripts.join("\n")).toContain(providerCopy);
+            for (const copy of settingsOnlyCopy) {
+              expect(settingsScripts.join("\n")).toContain(copy);
+            }
             expect(await page.locator(".model-providers__defaults").textContent()).toContain(
               "Utility Model",
             );
           } else {
-            expect(startupScripts.join("\n")).not.toContain(providerCopy);
+            for (const copy of settingsOnlyCopy) {
+              expect(startupScripts.join("\n")).not.toContain(copy);
+            }
           }
           if (recordVisuals) {
             await page.screenshot({
@@ -288,7 +294,9 @@ suite.define(() => {
             });
           }
         }
-        expect(startupScripts.join("\n")).not.toContain(providerCopy);
+        for (const copy of settingsOnlyCopy) {
+          expect(startupScripts.join("\n")).not.toContain(copy);
+        }
         expect(errors).toEqual([]);
         expect(failedScripts).toEqual([]);
       },
@@ -816,7 +824,9 @@ suite.define(() => {
           routeId: route,
         });
         if (route === "model-providers") {
-          await page.getByRole("heading", { name: "Global defaults", exact: true }).waitFor();
+          await page
+            .getByRole("heading", { name: "Defaults for all agents", exact: true })
+            .waitFor();
         }
 
         const titleDescriptionPairs = page.locator(

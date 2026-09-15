@@ -60,7 +60,8 @@ suite.define(() => {
       await expect.poll(() => setupAction.count()).toBe(1);
       await captureProof(page, "chat-home-desktop.png");
       await setupAction.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+      expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
       await page.goBack();
       const sendButton = page.getByRole("button", { name: "Send message", exact: true });
       await textarea.fill("/help");
@@ -72,7 +73,8 @@ suite.define(() => {
       await expect.poll(() => setupAction.count()).toBe(1);
       await captureProof(page, "chat-help-desktop.png");
       await setupAction.click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+      expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
       await page.goBack();
       await textarea.fill("Start a conversation.");
       await expect.poll(() => sendButton.isDisabled()).toBe(true);
@@ -101,7 +103,8 @@ suite.define(() => {
       await expect.poll(() => page.locator("textarea").count()).toBe(0);
       await captureProof(page, "new-session-desktop.png");
       await page.getByRole("button", { name: "Connect an AI provider" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+      expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
     } finally {
       await context.close();
     }
@@ -148,7 +151,8 @@ suite.define(() => {
 
       await page.setViewportSize({ height: 900, width: 1660 });
       await page.getByRole("button", { name: "Connect an AI provider" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+      expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
       const modelsLink = page.locator('.settings-sidebar__item[href="/settings/model-providers"]');
       await expect.poll(() => modelsLink.getAttribute("aria-current")).toBe("page");
       await captureProof(page, "custodian-model-setup-selected.png");

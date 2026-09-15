@@ -49,6 +49,7 @@ export const en: TranslationMap & {
     Record<"title" | "openWindow" | "unavailable" | "toggle" | "reconnect" | "connecting", string>;
   updates: TranslationMap;
   login: TranslationMap;
+  modelSetup: TranslationMap;
   newSession: TranslationMap;
   skillWorkshop: TranslationMap;
   systems: TranslationMap;
@@ -2459,6 +2460,7 @@ export const en: TranslationMap & {
     retry: "Retry",
   },
   modelSetup: {
+    discovery: {},
     missingAuth: "No provider credential is configured for this model. Set it up in Model Setup.",
     commandHint: "Try /models or /help.",
     heading: "Connect a verified AI model",
