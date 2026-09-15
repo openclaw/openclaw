@@ -55,6 +55,9 @@ openclaw plugins marketplace list <source> [--json]
 openclaw plugins marketplace refresh [--feed-profile <name>] [--expected-sha256 <sha256>] [--json]
 ```
 
+Search and marketplace list add `v` only to numeric version labels, preserving
+existing prefixes and build names. JSON output keeps the original version values.
+
 For slow install, inspect, uninstall, or registry-refresh investigation, run the
 command with `OPENCLAW_PLUGIN_LIFECYCLE_TRACE=1`. The trace writes phase timings
 to stderr and keeps JSON output parseable. See [Debugging](/help/debugging#plugin-lifecycle-trace).

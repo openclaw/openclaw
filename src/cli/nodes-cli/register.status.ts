@@ -1,7 +1,6 @@
 // Node status/list/describe commands and paired-node display formatting.
 import { formatByteSize } from "@openclaw/normalization-core";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
@@ -15,6 +14,7 @@ import { isNodeHostStats } from "../../shared/node-host-stats.js";
 import { shortenHomeInString } from "../../utils.js";
 import { formatPairingApproveCommand } from "../pairing-command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
+import { formatVersionLabel } from "../version-format.js";
 import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
@@ -60,17 +60,6 @@ function formatNodeHostStats(stats: unknown, connected: boolean, now: number): s
   return connected
     ? summary
     : `${summary} (last known ${formatTimeAgo(Math.max(0, now - stats.updatedAtMs))})`;
-}
-
-function formatVersionLabel(raw: string) {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return raw;
-  }
-  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("v")) {
-    return trimmed;
-  }
-  return /^\d/.test(trimmed) ? `v${trimmed}` : trimmed;
 }
 
 function resolveNodeVersions(node: {

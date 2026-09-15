@@ -326,7 +326,17 @@ describe("plugins marketplace list", () => {
   const manifest = {
     name: "QA Marketplace",
     version: "1.0.0",
-    plugins: [{ name: "demo", source: { kind: "path", path: "./plugins/demo" } }],
+    plugins: [
+      { name: "demo", version: "1.2.3" },
+      { name: "prefixed", version: "v1.2.3" },
+      { name: "uppercase", version: "V1.2.3" },
+      { name: "opaque", version: "canary" },
+      { name: "missing" },
+    ].map((plugin) => ({
+      name: plugin.name,
+      version: plugin.version,
+      source: { kind: "path", path: "./plugins/demo" },
+    })),
   };
 
   beforeEach(() => {
@@ -373,7 +383,15 @@ describe("plugins marketplace list", () => {
 
     const output = mocks.defaultRuntime.log.mock.calls.map(([line]) => String(line));
     expect(output[0]).toBe(`Cloning marketplace source ${source}...`);
-    expect(output.join("\n")).toContain("demo");
+    for (const expected of [
+      "demo v1.2.3",
+      "prefixed v1.2.3",
+      "uppercase V1.2.3",
+      "opaque canary",
+      "missing",
+    ]) {
+      expect(output).toContain(expected);
+    }
     expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
     expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
   });
