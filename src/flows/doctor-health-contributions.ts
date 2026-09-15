@@ -260,7 +260,16 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
       },
     },
   };
-  note("Gateway token configured.", "Gateway auth");
+  const { formatCliCommand } = await loadCommandFormatModule();
+  note(
+    [
+      "Gateway token configured.",
+      `Reveal it with ${formatCliCommand("openclaw gateway auth-token --show")} in an interactive terminal on the Gateway host.`,
+      "The token hot-applies to the running Gateway when config hot reload is enabled (default; old shared-auth clients reconnect) — a restart is only needed when the effective auth mode changed.",
+      'With gateway.reload.mode: "off", hot reload is disabled: restart the Gateway to adopt the new token.',
+    ].join("\n"),
+    "Gateway auth",
+  );
 }
 
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
