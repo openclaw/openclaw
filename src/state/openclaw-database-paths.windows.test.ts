@@ -21,12 +21,12 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { repairOpenClawStateDatabaseSchema } from "./openclaw-state-db-doctor.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openExistingOpenClawStateDatabaseReadOnly,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 

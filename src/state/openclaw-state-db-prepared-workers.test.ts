@@ -4,12 +4,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { repairOpenClawStateDatabaseSchema } from "./openclaw-state-db-doctor.js";
 import { ensureNodeWorkerPreparedWorkspaceSchema } from "./openclaw-state-db-schema-additive.js";
 import {
   closeOpenClawStateDatabaseForTest,
   detectOpenClawStateDatabaseSchemaMigrations,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";

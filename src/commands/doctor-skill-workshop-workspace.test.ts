@@ -28,10 +28,10 @@ import {
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { hashSkillProposalContent, importLegacySkillProposal } from "../skills/workshop/store.js";
 import type { SkillProposalRecord } from "../skills/workshop/types.js";
+import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../state/openclaw-state-db-doctor.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
 } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,

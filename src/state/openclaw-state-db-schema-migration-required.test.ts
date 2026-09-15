@@ -8,10 +8,10 @@ import {
   preflightOpenClawStateDatabasePath,
 } from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { repairOpenClawStateDatabaseSchema } from "./openclaw-state-db-doctor.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 

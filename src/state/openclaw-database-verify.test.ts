@@ -32,11 +32,11 @@ import {
   readOpenClawDatabaseQuarantine,
   recordOpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-store.js";
+import { repairOpenClawStateDatabaseSchema } from "./openclaw-state-db-doctor.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
-  repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 import { createUnsafeIndexDrift } from "./sqlite-index-drift.test-support.js";
 

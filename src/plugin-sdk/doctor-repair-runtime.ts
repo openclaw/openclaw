@@ -14,8 +14,6 @@ export {
   formatPluginInstallPathIssue,
 } from "../infra/plugin-install-path-warnings.js";
 export { removePluginFromConfig } from "../plugins/uninstall-config.js";
-export {
-  detectOpenClawStateDatabaseSchemaMigrations,
-  repairOpenClawStateDatabaseSchema,
-} from "../state/openclaw-state-db.js";
+export { repairOpenClawStateDatabaseSchema } from "../state/openclaw-state-db-doctor.js";
+export { detectOpenClawStateDatabaseSchemaMigrations } from "../state/openclaw-state-db.js";
 export type { OpenClawStateDatabaseSchemaMigration } from "../state/openclaw-state-db.js";

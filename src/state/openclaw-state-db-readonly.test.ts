@@ -3,7 +3,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, constants } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
@@ -34,6 +34,7 @@ import {
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 
 function createOptions(stateDir: string) {
@@ -43,10 +44,68 @@ function createOptions(stateDir: string) {
   };
 }
 
+function installDanglingWorkshopReviewIndex(database: DatabaseSync) {
+  database.exec(
+    "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
+  );
+  database.enableDefensive?.(false);
+  database.exec("PRAGMA writable_schema = ON;");
+  database
+    .prepare(
+      `UPDATE sqlite_schema
+        SET sql = 'CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
+                     ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)'
+      WHERE type = 'index'
+        AND name = 'idx_skill_workshop_collection_reviews_workspace_time'`,
+    )
+    .run();
+  const schema = database.prepare("PRAGMA schema_version").get() as {
+    schema_version: number;
+  };
+  database.exec(
+    `PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schema.schema_version + 1};`,
+  );
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
 });
+
+it
+  .skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")
+  .each(["read", "write"] as const)(
+  "keeps prepared statements reusable across cached state %s operations",
+  async (mode) => {
+    await withTempDir("openclaw-state-readonly-statements-", async (root) => {
+      const options = createOptions(root);
+      const { db } = openOpenClawStateDatabase(options);
+      db.exec("CREATE TABLE held(value TEXT); INSERT INTO held VALUES ('original')");
+      let compilations = 0;
+      db.setAuthorizer((action, table, column) => {
+        if (action === constants.SQLITE_READ && table === "held" && column === "value") {
+          compilations++;
+        }
+        return constants.SQLITE_OK;
+      });
+      try {
+        const statement = db.prepare("SELECT value FROM held");
+        expect(statement.get()).toEqual({ value: "original" });
+        expect(compilations).toBe(1);
+        for (let index = 0; index < 3; index++) {
+          const value =
+            mode === "read"
+              ? withExistingOpenClawStateDatabaseReadOnly(() => statement.get(), options)
+              : runOpenClawStateWriteTransaction(() => statement.get(), options);
+          expect(value).toEqual({ value: "original" });
+        }
+        expect(compilations).toBe(1);
+      } finally {
+        db.setAuthorizer(null);
+      }
+    });
+  },
+);
 
 it("keeps fresh synchronous read callbacks from returning asynchronous work", async () => {
   await withTempDir("openclaw-state-sync-read-", async (root) => {
@@ -307,41 +366,23 @@ describe.each(["admission", "explicit", "async"] as const)("%s read-only state r
       expect(fs.readFileSync(options.path)).toEqual(before);
     });
   });
-  it("reads through the exact dangling Workshop index without changing its source", async () => {
+  it("requires Doctor before reading a dangling Workshop index without changing its source", async () => {
     await withTempDir("openclaw-state-readonly-dangling-workshop-", async (stateDir) => {
       const options = createOptions(stateDir);
       const opened = openOpenClawStateDatabase(options);
       closeOpenClawStateDatabaseForTest();
       const database = new DatabaseSync(opened.path);
       try {
-        database.exec(
-          "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
-        );
-        database.enableDefensive?.(false);
-        database.exec("PRAGMA writable_schema = ON;");
-        database
-          .prepare(
-            `UPDATE sqlite_schema
-              SET sql = 'CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
-                           ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC)'
-            WHERE type = 'index'
-              AND name = 'idx_skill_workshop_collection_reviews_workspace_time'`,
-          )
-          .run();
-        const schema = database.prepare("PRAGMA schema_version").get() as {
-          schema_version: number;
-        };
-        database.exec(
-          `PRAGMA writable_schema = OFF; PRAGMA schema_version = ${schema.schema_version + 1};`,
-        );
+        installDanglingWorkshopReviewIndex(database);
       } finally {
         database.close();
       }
       const before = fs.readFileSync(options.path);
 
-      expect(
-        await readState(({ db }) => db.prepare("SELECT role FROM schema_meta").get(), options),
-      ).toEqual({ role: "global" });
+      await expect(
+        async () =>
+          await readState(({ db }) => db.prepare("SELECT role FROM schema_meta").get(), options),
+      ).rejects.toThrow(/malformed database schema/u);
       expect(fs.readFileSync(options.path)).toEqual(before);
     });
   });

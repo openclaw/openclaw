@@ -19,9 +19,9 @@ import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../../state/openclaw-state-db-doctor.js";
 import {
   closeOpenClawStateDatabaseForTest,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";

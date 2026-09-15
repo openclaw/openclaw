@@ -42,9 +42,9 @@ const fs = await import("node:fs");
 const {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } = await import("./openclaw-state-db.js");
+const { repairOpenClawStateDatabaseSchema } = await import("./openclaw-state-db-doctor.js");
 
 function chmodError(code: string): Error {
   const err = new Error(`${code}: chmod failed`) as NodeJS.ErrnoException;

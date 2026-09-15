@@ -110,6 +110,16 @@ the same way. The repair preserves attributable review rows and unrelated
 indexes; unrecognized column sets or dependencies on retired columns still
 refuse and roll back the transaction.
 
+If the retired review index still references the removed `workspace_dir` column,
+run `openclaw doctor --fix` before starting the Gateway. Doctor recognizes and
+removes that exact malformed index in its repair transaction while preserving
+review rows. Its pre-repair reads still check ownership, active writers, and
+supported schema versions. Ordinary database reads and opens assume the catalog
+has been repaired; they do not probe for this legacy index or relax SQLite schema
+parsing. The update flow runs the candidate Doctor before Gateway activation,
+but an updater that cannot write its ledger against a malformed database needs
+a standalone run of compatible Doctor first.
+
 Skill-only workspace relocation uses the existing `migration_runs` and
 `migration_sources` tables to save pre-move directory identity, file hashes,
 and the workspace attestation timestamp. After relocation, only matching

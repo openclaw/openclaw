@@ -142,7 +142,6 @@ function isMaintenanceKind(kind: unknown): kind is MaintenanceKind {
     kind === "agent-media" ||
     kind === "agent-databases-composite-primary-key" ||
     kind === "audit-events-v2" ||
-    kind === "legacy-workshop-review-index" ||
     kind === "legacy-workspace" ||
     kind === "legacy-session-store"
   );
@@ -167,8 +166,7 @@ function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined
       return isMaintenanceKind(node.kind) ? { type: node.type, kind: node.kind } : undefined;
     case "state-migration":
       return (node.kind === "agent-databases-composite-primary-key" ||
-        node.kind === "audit-events-v2" ||
-        node.kind === "legacy-workshop-review-index") &&
+        node.kind === "audit-events-v2") &&
         typeof node.pathname === "string"
         ? { type: node.type, kind: node.kind, pathname: node.pathname }
         : undefined;

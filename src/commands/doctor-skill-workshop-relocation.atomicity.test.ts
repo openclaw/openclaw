@@ -23,7 +23,7 @@ import {
   type SkillProposalRecord,
   type SkillProposalRollback,
 } from "../skills/workshop/types.js";
-import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../state/openclaw-state-db.js";
+import { repairOpenClawStateDatabaseSchemaIfNeeded } from "../state/openclaw-state-db-doctor.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,

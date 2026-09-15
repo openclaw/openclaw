@@ -33,6 +33,8 @@ const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.
 
 async function assertDoctorDatabaseSchemasCompatible(scope?: "state") {
   const databasePreflight = await import("../state/openclaw-database-preflight.js");
+  const { openStateDatabaseDoctorReadAdmission } =
+    await import("../state/openclaw-state-db-maintenance.js");
   const [{ createConfigIO }, targets] = await Promise.all([
     import("../config/io.js"),
     import("../config/sessions/targets.js"),
@@ -46,6 +48,7 @@ async function assertDoctorDatabaseSchemasCompatible(scope?: "state") {
   const databaseSchemas = await databasePreflight.preflightOpenClawDatabaseSchemas({
     env: process.env,
     scope,
+    schemaReadAdmission: openStateDatabaseDoctorReadAdmission,
     configuredAgentDatabaseTargets: (registeredDatabases) =>
       targets.resolveConfiguredAgentDatabaseTargets(cfg, { env: process.env, registeredDatabases }),
     configuredAgentDatabaseCandidatePaths: targets.resolveConfiguredAgentDatabaseCandidatePaths(
@@ -159,6 +162,24 @@ async function runDoctorHealthFlowWithResult(
         runtime: effectiveRuntime,
         json: options.json,
       });
+
+      if (maintenance) {
+        // Config and plugin preparation read state before the general migration graph runs.
+        const { repairOpenClawStateDatabaseSchema } =
+          await import("../state/openclaw-state-db-doctor.js");
+        const catalog = repairOpenClawStateDatabaseSchema({ env: process.env }, "catalog");
+        for (const change of catalog.changes) {
+          effectiveRuntime.log(change);
+        }
+        if (catalog.warnings.length > 0) {
+          const { resolveOpenClawStateSqlitePath } =
+            await import("../state/openclaw-state-db.paths.js");
+          throw new DoctorUnreadableStateDatabaseError(
+            resolveOpenClawStateSqlitePath(),
+            catalog.warnings.join("\n"),
+          );
+        }
+      }
 
       // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
       const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");

@@ -99,6 +99,9 @@ export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 export const OPENCLAW_DATABASE_SCHEMA_DOCS_URL =
   "https://docs.openclaw.ai/reference/database-schemas";
 
+/** Explicit maintenance callers may admit malformed catalogs on their private reads. */
+export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
+
 /** Open shared SQLite database handle plus WAL maintenance lifecycle. */
 export type OpenClawStateDatabase = {
   db: DatabaseSync;

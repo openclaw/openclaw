@@ -15,6 +15,7 @@ import {
 } from "../state/openclaw-agent-db-lease.js";
 import { recordOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { openStateDatabaseDoctorReadAdmission } from "../state/openclaw-state-db-maintenance.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
@@ -231,7 +232,12 @@ describe("Doctor agent lease admission", () => {
       }
       const before = fs.readFileSync(pathname);
 
-      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
+      expect(() =>
+        assertNoOpenClawAgentDatabaseLeasesReadOnly({
+          env: state.env,
+          schemaReadAdmission: openStateDatabaseDoctorReadAdmission,
+        }),
+      ).not.toThrow();
       expect(fs.readFileSync(pathname)).toEqual(before);
     });
   });

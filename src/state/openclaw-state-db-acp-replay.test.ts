@@ -3,11 +3,11 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { expectAcpReplayUtf8Accounting } from "../acp/event-ledger.test-support.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { repairOpenClawStateDatabaseSchema } from "./openclaw-state-db-doctor.js";
 import { isOpenClawStateSchemaFastPathEligible } from "./openclaw-state-db-fast-path.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
 
 function seedLegacyReplay(db: DatabaseSync) {

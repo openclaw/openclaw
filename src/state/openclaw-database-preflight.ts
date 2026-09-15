@@ -6,7 +6,11 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/ses
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  clearNodeSqliteKyselyCacheForDatabase,
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { hasNodeErrorCode } from "../infra/path-guards.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
@@ -58,11 +62,8 @@ import type { OpenClawSchemaVersions } from "./openclaw-schema-versions.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
+  type OpenClawStateSchemaReadAdmission,
 } from "./openclaw-state-db-contract.js";
-import {
-  closeWorkshopIndexReadDatabase,
-  openDanglingWorkshopIndexReadAdmission,
-} from "./openclaw-state-db-dangling-workshop-index.js";
 import {
   assertOpenClawStateDatabaseOwner,
   assertOpenClawStateDatabaseForMaintenance,
@@ -342,6 +343,7 @@ export async function preflightOpenClawStateDatabasePath(
 export async function preflightOpenClawDatabaseSchemas(options: {
   env: NodeJS.ProcessEnv;
   scope?: "state";
+  schemaReadAdmission?: OpenClawStateSchemaReadAdmission;
   signal?: AbortSignal;
   /** Omit for current-runtime checks; updates pass their complete target pair. */
   supportedVersions?: OpenClawSchemaVersions;
@@ -397,7 +399,7 @@ export async function preflightOpenClawDatabaseSchemas(options: {
       stateDatabase = openNodeSqliteDatabase(stateSnapshot.location, {
         readOnly: true,
       });
-      closeStateSchemaReadAdmission = openDanglingWorkshopIndexReadAdmission(stateDatabase);
+      closeStateSchemaReadAdmission = options.schemaReadAdmission?.(stateDatabase);
       stateDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
       const stateVersion = readSqliteUserVersion(stateDatabase);
       const contentVersion =
@@ -502,7 +504,12 @@ export async function preflightOpenClawDatabaseSchemas(options: {
   } finally {
     try {
       if (stateDatabase) {
-        closeWorkshopIndexReadDatabase(stateDatabase, closeStateSchemaReadAdmission);
+        try {
+          closeStateSchemaReadAdmission?.();
+        } finally {
+          clearNodeSqliteKyselyCacheForDatabase(stateDatabase);
+          stateDatabase.close();
+        }
       }
     } finally {
       await stateSnapshot?.cleanupAsync();

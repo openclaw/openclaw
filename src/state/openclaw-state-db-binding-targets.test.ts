@@ -7,11 +7,13 @@ import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { VERSION } from "../version.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
+  repairOpenClawStateDatabaseSchema,
+  repairOpenClawStateDatabaseSchemaIfNeeded,
+} from "./openclaw-state-db-doctor.js";
+import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   reconcileOpenClawStateSchemaPublication,
-  repairOpenClawStateDatabaseSchema,
-  repairOpenClawStateDatabaseSchemaIfNeeded,
 } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
