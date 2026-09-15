@@ -1377,6 +1377,39 @@ openclaw-session-discussion {
   min-height: 0;
 }
 
+.sidebar-pdf-preview {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sidebar-pdf-preview__surface {
+  display: flex;
+  min-width: 0;
+  height: clamp(360px, 70dvh, 760px);
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.sidebar-pdf-preview__surface > .sidebar-attachment-preview__loading {
+  flex: 1;
+}
+
+.sidebar-pdf-preview__frame {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  background: var(--bg);
+}
+
 .sidebar-attachment-preview__markdown {
   min-width: 0;
   margin-top: 16px;

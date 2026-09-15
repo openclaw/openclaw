@@ -44,6 +44,7 @@ import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
+import { isPdfAttachment } from "./chat-pdf-preview.ts";
 import type { AttachmentSidebarRuntime, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderSidebarFile, type FileViewControls } from "./chat-sidebar-file-view.ts";
 import { isTextAttachment } from "./chat-text-attachment.ts";
@@ -82,6 +83,26 @@ function renderSidebarAttachment(
           isSvgImageMediaPath(content.title, undefined)))) &&
     isCrossOriginHttpSource(src ?? "");
   const imagePreview = (src || pending) && !blockedExternalSvg && kind === "image";
+  if (
+    (src || pending) &&
+    kind === "document" &&
+    isPdfAttachment(mimeType, content.title) &&
+    !isCrossOriginHttpSource(src ?? "")
+  ) {
+    return html`<openclaw-chat-pdf-preview
+      .src=${src ?? ""}
+      .sourceIdentity=${[
+        runtime.connectionEpoch ?? "",
+        runtime.agentId ?? "",
+        runtime.sessionKey ?? "",
+        content.sourceIdentity ?? src ?? "",
+      ].join("\u0000")}
+      .label=${content.title}
+      .mimeType=${content.mimeType ?? ""}
+      .sizeBytes=${source?.sizeBytes ?? content.sizeBytes}
+      .downloadHref=${src ?? ""}
+    ></openclaw-chat-pdf-preview>`;
+  }
   if (
     (src || pending) &&
     isTextAttachment(mimeType, content.title) &&
