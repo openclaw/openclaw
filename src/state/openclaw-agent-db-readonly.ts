@@ -46,10 +46,18 @@ type OpenClawAgentDatabaseReadOnlyBehavior = {
 
 const readOnlyScope = new AsyncLocalStorage<OpenClawAgentDatabaseReadOnlyScope>();
 
-/** One retained connection; the worker's parent owns idle retirement and native drainage. */
+/** One retained connection; its caller owns explicit close or worker retirement. */
 export class OpenClawAgentDatabaseReadOnlyScope {
   private database?: OpenClawAgentReadOnlyDatabaseHandle;
   private target?: { agentId: string; path: string };
+
+  close(): void {
+    const database = this.database;
+    // Descendant async contexts retain this object after run returns. Revoke reuse first.
+    this.target = undefined;
+    this.database = undefined;
+    database?.close();
+  }
 
   run<T>(target: { agentId: string; path: string }, operation: () => T): T {
     if (this.target?.agentId !== target.agentId || this.target.path !== target.path) {

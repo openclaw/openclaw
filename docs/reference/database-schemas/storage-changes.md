@@ -200,8 +200,13 @@ retains prepared statements and connection-local canonical-key validation, never
 an authorization result or an open read transaction. Canonical validation checks
 the committed main-key policy before reuse. The companion retires with its writer's
 native close, disposal, or replacement, including eviction and update cleanup.
-Cold readers outside the history worker and extension-capable readers remain
-one-shot; incognito reads retain their existing process-local owner.
+Cold session search retains one read-only connection while synchronously listing
+entries and checking each entry's current visibility. The entry accessor closes
+that connection before transcript search, including on errors; inherited async
+callbacks fall back to ordinary fresh reads. This scope preserves the same
+per-read admission and committed-row checks without caching visibility decisions.
+Other cold readers outside the history worker and extension-capable readers
+remain one-shot; incognito reads retain their existing process-local owner.
 
 The history worker retains one read-only connection across requests, rechecking
 schema, agent owner, and physical file identity before reuse. Every request keeps
