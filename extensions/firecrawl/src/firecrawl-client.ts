@@ -57,6 +57,13 @@ const FIRECRAWL_SELF_HOSTED_PRIVATE_ERROR =
 const FIRECRAWL_HTTP_PRIVATE_ERROR =
   "Firecrawl HTTP baseUrl must target a private or internal self-hosted endpoint. Use https:// for public hosts.";
 
+function firecrawlUnresolvableHostError(hostname: string, cause: unknown): Error {
+  return new Error(
+    `Unable to resolve Firecrawl baseUrl host: ${hostname}. Verify the hostname or DNS configuration.`,
+    { cause },
+  );
+}
+
 type FirecrawlEndpointMode = "selfHosted" | "strict";
 type FirecrawlResolvedEndpoint = {
   url: string;
@@ -139,8 +146,17 @@ async function firecrawlEndpointTargetsPrivateNetwork(
       policy: { allowPrivateNetwork: true },
     });
     return pinned.addresses.every((address) => isPrivateIpAddress(address));
-  } catch {
-    return false;
+  } catch (error) {
+    // Distinguish a host that cannot be resolved (empty DNS answer or lookup
+    // rejection such as ENOTFOUND) from one that resolves to a blocked or
+    // non-private address. Swallowing resolution failures previously reported
+    // unresolvable hosts as privateness policy violations (#135333).
+    // SsrFBlockedError is an SSRF result and still falls through to the
+    // caller's policy error for non-private targets.
+    if (error instanceof SsrFBlockedError) {
+      return false;
+    }
+    throw firecrawlUnresolvableHostError(url.hostname, error);
   }
 }
 
