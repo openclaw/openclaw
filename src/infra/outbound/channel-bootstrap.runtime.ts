@@ -4,12 +4,17 @@ import {
   resolveAgentWorkspaceDir,
   tryResolveAmbientOwnerAgentId,
 } from "../../agents/agent-scope.js";
+import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
+import { resolveStateDir } from "../../config/state-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { resolveDiscoverableScopedChannelPluginIds } from "../../plugins/channel-plugin-ids.js";
+import { preparePersistedInstalledPluginIndexCacheEntry } from "../../plugins/installed-plugin-index-record-state.js";
 import { loadPluginRegistryHandle } from "../../plugins/loader.js";
+import { getPluginCache, retainPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../../plugins/runtime.js";
@@ -83,15 +88,28 @@ function resolveSendCapableRegistry(
     : undefined;
 }
 
-/** Loads runtime plugins on demand when a selected outbound channel has only a setup shell. */
-export function bootstrapOutboundChannelPlugin(params: {
+type OutboundChannelBootstrapParams = {
   channel: string;
   cfg?: OpenClawConfig;
   agentId?: string;
-}): PluginRegistry | undefined {
+};
+
+type OutboundChannelBootstrapPlan =
+  | { kind: "resolved"; registry: PluginRegistry | undefined }
+  | {
+      kind: "cold";
+      cfg: OpenClawConfig;
+      agentId: string | undefined;
+      outcomeKey: string;
+      registries: Map<string, PluginRegistry | null> | undefined;
+    };
+
+function resolveBootstrapPlan(
+  params: OutboundChannelBootstrapParams,
+): OutboundChannelBootstrapPlan {
   const cfg = params.cfg;
   if (!cfg) {
-    return undefined;
+    return { kind: "resolved", registry: undefined };
   }
 
   const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
@@ -99,7 +117,7 @@ export function bootstrapOutboundChannelPlugin(params: {
   const activeRegistry = scopedEntry ? scopedRegistry : getActivePluginRegistry();
   const activeSendRegistry = resolveSendCapableRegistry(activeRegistry, params.channel);
   if (activeSendRegistry) {
-    return activeSendRegistry;
+    return { kind: "resolved", registry: activeSendRegistry };
   }
 
   // Outbound callers already know the admitted run owner. Preserve it here so
@@ -118,18 +136,35 @@ export function bootstrapOutboundChannelPlugin(params: {
     const cachedRegistry = registries.get(outcomeKey);
     if (cachedRegistry !== undefined) {
       cacheBootstrapOutcome(registries, outcomeKey, cachedRegistry);
-      return resolveSendCapableRegistry(cachedRegistry, params.channel);
+      return {
+        kind: "resolved",
+        registry: resolveSendCapableRegistry(cachedRegistry, params.channel),
+      };
     }
   }
 
-  const autoEnabled = applyPluginAutoEnable({ config: cfg });
-  const workspaceDir = agentId === undefined ? undefined : resolveAgentWorkspaceDir(cfg, agentId);
+  return { kind: "cold", cfg, agentId, outcomeKey, registries };
+}
+
+function loadBootstrapPlan(
+  params: OutboundChannelBootstrapParams,
+  plan: Extract<OutboundChannelBootstrapPlan, { kind: "cold" }>,
+  discovery?: { env: NodeJS.ProcessEnv; workspaceDir: string | undefined },
+): PluginRegistry | undefined {
+  const { cfg, agentId, outcomeKey, registries } = plan;
+  const env = discovery?.env;
+  const autoEnabled = applyPluginAutoEnable({ config: cfg, ...(env ? { env } : {}) });
+  const workspaceDir = discovery
+    ? discovery.workspaceDir
+    : agentId === undefined
+      ? undefined
+      : resolveAgentWorkspaceDir(cfg, agentId);
   const pluginIds = resolveDiscoverableScopedChannelPluginIds({
     config: autoEnabled.config,
     activationSourceConfig: cfg,
     channelIds: [params.channel],
     workspaceDir,
-    env: process.env,
+    env: env ?? process.env,
   });
   const activatedConfig =
     withActivatedPluginIds({ config: autoEnabled.config, pluginIds }) ?? autoEnabled.config;
@@ -142,6 +177,7 @@ export function bootstrapOutboundChannelPlugin(params: {
       autoEnabledReasons: autoEnabled.autoEnabledReasons,
       onlyPluginIds: pluginIds,
       workspaceDir,
+      ...(env ? { env } : {}),
       runtimeOptions: {
         allowGatewaySubagentBinding: true,
       },
@@ -154,4 +190,58 @@ export function bootstrapOutboundChannelPlugin(params: {
     cacheBootstrapOutcome(registries, outcomeKey, sendRegistry ?? null);
   }
   return sendRegistry;
+}
+
+/** Loads runtime plugins on demand when a selected outbound channel has only a setup shell. */
+export function bootstrapOutboundChannelPlugin(
+  params: OutboundChannelBootstrapParams,
+): PluginRegistry | undefined {
+  const plan = resolveBootstrapPlan(params);
+  return plan.kind === "resolved" ? plan.registry : loadBootstrapPlan(params, plan);
+}
+
+/** Prepares cold SQLite metadata before the shared bootstrap decision and loader. */
+export async function bootstrapOutboundChannelPluginAsync(
+  params: OutboundChannelBootstrapParams & { assertCurrent?: () => void },
+): Promise<PluginRegistry | undefined> {
+  params.assertCurrent?.();
+  const initial = resolveBootstrapPlan(params);
+  if (initial.kind === "resolved") {
+    return initial.registry;
+  }
+  const cache = getPluginCache();
+  const env = cloneEnvWithPlatformSemantics(process.env);
+  // Preparation and synchronous derivation must keep the same physical state root across awaits.
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const discovery = {
+    env,
+    workspaceDir:
+      initial.agentId === undefined
+        ? undefined
+        : resolveAgentWorkspaceDir(initial.cfg, initial.agentId, env),
+  };
+  const release = retainPluginCache(cache);
+  try {
+    return await withPluginCache(cache, async () => {
+      const activateDiscovery = await prepareBundledDiscoveryMode(env);
+      params.assertCurrent?.();
+      const installed = await preparePersistedInstalledPluginIndexCacheEntry({ env });
+      params.assertCurrent?.();
+      installed.assertCurrent();
+      activateDiscovery();
+      // A newer registry or scoped registration may have resolved this channel while we awaited.
+      const plan = resolveBootstrapPlan(params);
+      if (plan.kind === "resolved") {
+        return plan.registry;
+      }
+      if (plan.agentId !== initial.agentId) {
+        throw new Error(
+          "Outbound plugin owner changed during metadata preparation; retry the operation.",
+        );
+      }
+      return loadBootstrapPlan(params, plan, discovery);
+    });
+  } finally {
+    release();
+  }
 }

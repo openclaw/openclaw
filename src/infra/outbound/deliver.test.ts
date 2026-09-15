@@ -35,6 +35,7 @@ import {
 } from "../diagnostic-events.js";
 import { retryAsync } from "../retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
+import * as channelResolution from "./channel-resolution.js";
 import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
 import { countPhysicalOutboundSends, PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForOutbound } from "./payloads.js";
@@ -5618,35 +5619,56 @@ describe("deliverOutboundPayloads", () => {
     },
   );
 
-  it("emits a terminal failure without queueing when preparation is aborted", async () => {
-    hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sent");
-    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
-    const abortController = new AbortController();
-    abortController.abort();
-    const cfg: OpenClawConfig = {};
+  it.each(["aborted", "metadata rejected"] as const)(
+    "emits one terminal failure without queueing when preparation is %s",
+    async (failure) => {
+      hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sent");
+      const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+      const abortController = new AbortController();
+      const errorMessage = failure === "aborted" ? "Operation aborted" : "metadata unavailable";
+      const resolutionSpy =
+        failure === "metadata rejected"
+          ? vi
+              .spyOn(channelResolution, "resolveOutboundChannelMessageAdapter")
+              .mockRejectedValueOnce(new Error(errorMessage))
+          : undefined;
+      if (failure === "aborted") {
+        abortController.abort();
+      }
+      const cfg: OpenClawConfig = {};
+      const events: TrustedMessageAuditEvent[] = [];
+      const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
 
-    await expect(
-      deliverMatrix({
-        cfg,
-        payloads: [{ text: "a" }],
-        deps: { matrix: sendMatrix },
-        abortSignal: abortController.signal,
-      }),
-    ).rejects.toThrow("Operation aborted");
+      try {
+        await expect(
+          deliverMatrix({
+            cfg,
+            payloads: [{ text: "a" }],
+            deps: { matrix: sendMatrix },
+            abortSignal: abortController.signal,
+          }),
+        ).rejects.toThrow(errorMessage);
 
-    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
-    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
-    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-    expect(sendMatrix).not.toHaveBeenCalled();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: "a",
-        error: expect.stringContaining("Operation aborted"),
-        success: false,
-      }),
-      expect.objectContaining({ channelId: "matrix" }),
-    );
-  });
+        expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+        expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+        expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+        expect(sendMatrix).not.toHaveBeenCalled();
+        expect(events.map((event) => event.outcome)).toEqual(["failed"]);
+        expect(hookMocks.runner.runMessageSent).toHaveBeenCalledOnce();
+        expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            content: "a",
+            error: expect.stringContaining(errorMessage),
+            success: false,
+          }),
+          expect.objectContaining({ channelId: "matrix" }),
+        );
+      } finally {
+        unsubscribe();
+        resolutionSpy?.mockRestore();
+      }
+    },
+  );
 
   it("passes normalized payload to onError", async () => {
     const sendMatrix = vi.fn().mockRejectedValue(new Error("boom"));

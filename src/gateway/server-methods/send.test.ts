@@ -203,6 +203,7 @@ vi.mock("../../plugins/loader.js", () => ({
 
 vi.mock("../../infra/outbound/channel-bootstrap.runtime.js", () => ({
   bootstrapOutboundChannelPlugin: vi.fn(),
+  bootstrapOutboundChannelPluginAsync: vi.fn(),
   resetOutboundChannelBootstrapStateForTests: vi.fn(),
 }));
 

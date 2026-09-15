@@ -30,8 +30,19 @@ vi.mock("../../plugins/loader.js", () => ({
   loadPluginRegistryHandle: loaderMocks.loadPluginRegistryHandle,
 }));
 
-const { bootstrapOutboundChannelPlugin, resetOutboundChannelBootstrapStateForTests } =
-  await import("./channel-bootstrap.runtime.js");
+vi.mock("../../plugins/plugin-metadata-state-worker.js", () => ({
+  readPluginMetadataStateRow: vi.fn(async () => undefined),
+}));
+
+const {
+  bootstrapOutboundChannelPlugin,
+  bootstrapOutboundChannelPluginAsync,
+  resetOutboundChannelBootstrapStateForTests,
+} = await import("./channel-bootstrap.runtime.js");
+const bootstrapModes = [
+  { mode: "sync", bootstrap: bootstrapOutboundChannelPlugin },
+  { mode: "async", bootstrap: bootstrapOutboundChannelPluginAsync },
+];
 const {
   createChannelHandler,
   resolveChannelOutboundDirectiveOptions,
@@ -362,31 +373,34 @@ describe("bootstrapOutboundChannelPlugin", () => {
     },
   );
 
-  it("returns a scoped handle without replacing the process root", () => {
-    installDiscordSetupShell();
-    const root = getActivePluginRegistry();
-    const handle = createEmptyPluginRegistry();
-    handle.channels = [
-      {
-        pluginId: "discord",
-        plugin: {
-          id: "discord",
-          meta: {},
-          outbound: { sendText: async () => ({ messageId: "1" }) },
+  it.each(bootstrapModes)(
+    "returns a scoped handle without replacing the process root ($mode)",
+    async ({ bootstrap }) => {
+      installDiscordSetupShell();
+      const root = getActivePluginRegistry();
+      const handle = createEmptyPluginRegistry();
+      handle.channels = [
+        {
+          pluginId: "discord",
+          plugin: {
+            id: "discord",
+            meta: {},
+            outbound: { sendText: async () => ({ messageId: "1" }) },
+          },
+          source: "runtime",
         },
-        source: "runtime",
-      },
-    ] as never;
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
+      ] as never;
+      loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
-    expect(bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig })).toBe(handle);
-    expect(bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig })).toBe(handle);
-    expect(getActivePluginRegistry()).toBe(root);
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledWith(
-      expect.objectContaining({ onlyPluginIds: ["discord"] }),
-    );
-  });
+      expect(await bootstrap({ channel: "discord", cfg: discordConfig })).toBe(handle);
+      expect(await bootstrap({ channel: "discord", cfg: discordConfig })).toBe(handle);
+      expect(getActivePluginRegistry()).toBe(root);
+      expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
+      expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledWith(
+        expect.objectContaining({ onlyPluginIds: ["discord"] }),
+      );
+    },
+  );
 
   it("resolves durable message capabilities inside the scoped handle", async () => {
     installDiscordSetupShell();
@@ -484,19 +498,18 @@ describe("bootstrapOutboundChannelPlugin", () => {
     },
   );
 
-  it("does not retry an unusable handle in the same generation", () => {
-    installDiscordSetupShell();
-    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
+  it.each(bootstrapModes)(
+    "does not retry an unusable handle in the same generation ($mode)",
+    async ({ bootstrap }) => {
+      installDiscordSetupShell();
+      loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
 
-    expect(
-      bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig }),
-    ).toBeUndefined();
-    expect(
-      bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig }),
-    ).toBeUndefined();
+      expect(await bootstrap({ channel: "discord", cfg: discordConfig })).toBeUndefined();
+      expect(await bootstrap({ channel: "discord", cfg: discordConfig })).toBeUndefined();
 
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
-  });
+      expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("does not retry a thrown bootstrap in the same generation", () => {
     installDiscordSetupShell();

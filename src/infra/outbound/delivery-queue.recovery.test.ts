@@ -1173,6 +1173,7 @@ describe("delivery-queue recovery", () => {
       channel: "demo-channel-a",
       cfg: baseCfg,
       allowBootstrap: true,
+      assertCurrent: expect.any(Function),
     });
     const deliverInput = mockCallRecord(deliver);
     expect(deliverInput.channel).toBe("demo-channel-a");

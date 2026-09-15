@@ -25,7 +25,7 @@ import {
 } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
-import { resolveDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
+import { prepareDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { OUTBOUND_DELIVERY_LOG_SCOPE } from "./deliver-log.js";
 import { buildPayloadSummary } from "./deliver-payload.js";
@@ -413,12 +413,15 @@ async function settleQueuedFailure(
             })),
       );
       if (settlement.unknownSendCleanup) {
-        const cleanup = resolveOutboundChannelMessageAdapter({
-          channel: entry.channel,
-          cfg: params.cfg,
-          agentId: entry.session?.agentId,
-          allowBootstrap: true,
-        })?.durableFinal?.afterUnknownSendTerminal;
+        const cleanup = (
+          await resolveOutboundChannelMessageAdapter({
+            channel: entry.channel,
+            cfg: params.cfg,
+            agentId: entry.session?.agentId,
+            allowBootstrap: true,
+            assertCurrent: () => stateContext.workerContext.admission.assertCurrent(),
+          })
+        )?.durableFinal?.afterUnknownSendTerminal;
         try {
           await cleanup?.(
             buildUnknownSendContext({
@@ -526,16 +529,19 @@ async function runReconciledSentCommitHooks(params: {
   cfg: OpenClawConfig;
   reconciliation: Extract<ChannelMessageUnknownSendReconciliationResult, { status: "sent" }>;
   log: RecoveryLogger;
+  assertCurrent: () => void;
 }): Promise<void> {
   if (params.entry.legacyPreparedContentUnavailable) {
     return;
   }
-  const adapter = resolveOutboundChannelMessageAdapter({
+  const adapter = await resolveOutboundChannelMessageAdapter({
     channel: params.entry.channel,
     cfg: params.cfg,
     agentId: params.entry.session?.agentId,
     allowBootstrap: true,
+    assertCurrent: params.assertCurrent,
   });
+  params.assertCurrent();
   const afterCommit = adapter?.send?.lifecycle?.afterCommit;
   if (!afterCommit) {
     return;
@@ -741,6 +747,7 @@ async function drainQueuedEntry(
         payloads: queuedDeliveryPayloads(entry),
         cfg: opts.cfg,
         warn: (message) => opts.log.warn(message),
+        assertCurrent: () => stateContext.workerContext.admission.assertCurrent(),
       }));
     if (reconciliation?.status === "sent") {
       try {
@@ -760,6 +767,7 @@ async function drainQueuedEntry(
           cfg: opts.cfg,
           reconciliation,
           log: opts.log,
+          assertCurrent: () => stateContext.workerContext.admission.assertCurrent(),
         });
         emitQueuedAuditTerminals(entry, () =>
           completedOutboundAuditTerminals({
@@ -1240,7 +1248,7 @@ async function processQueuedRecovery(
     }
     return "continue";
   }
-  const admission = resolveDeferredDeliveryAdmission(
+  const resolveAdmission = await prepareDeferredDeliveryAdmission(
     {
       cfg: opts.cfg,
       channel: entry.channel,
@@ -1248,8 +1256,15 @@ async function processQueuedRecovery(
       accountId: entry.accountId,
       phase: "recovery",
     },
-    { agentId: entry.session?.agentId },
+    {
+      agentId: entry.session?.agentId,
+      assertCurrent: () => stateContext.workerContext.admission.assertCurrent(),
+    },
   );
+  if (context.shouldContinue?.() === false) {
+    return "stop";
+  }
+  const admission = resolveAdmission();
   if (admission.status !== "allowed") {
     const settled = await settleQueuedFailure({ ...opts, error: admission.reason }, stateContext);
     const logLabel = context.kind === "startup" ? "Recovery" : context.logLabel;
