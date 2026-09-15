@@ -102,15 +102,19 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   );
   let contextImageGroups: CodexProjectedImageGroup[] = [];
   let turnContextImageGroups: CodexProjectedImageGroup[] = [];
-  // A refreshed native thread receives the original admitted user as historical context.
-  const currentUserTurnIdempotencyKey = params.pluginRuntimeRefreshMessages
-    ? undefined
-    : params.userTurnTranscriptRecorder?.message?.idempotencyKey;
   const assertProjectionCurrent = () => {
     params.hostCapabilities.assertActive();
     connection.assertCurrent();
     connection.runAbortController.signal.throwIfAborted();
   };
+  const admittedMessage =
+    params.userTurnTranscriptRecorder?.message ??
+    (await params.userTurnTranscriptRecorder?.resolveMessage());
+  assertProjectionCurrent();
+  // A refreshed native thread receives the original admitted user as historical context.
+  const currentUserTurnIdempotencyKey = params.pluginRuntimeRefreshMessages
+    ? undefined
+    : admittedMessage?.idempotencyKey;
   const prepareFileContext: NonNullable<
     Parameters<typeof projectContextEngineAssemblyForCodex>[0]["prepareFileContext"]
   > = async (message, maxChars) => {
@@ -271,8 +275,21 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     }
   }
   const codexModelInputHistoryMessages: typeof historyState.messages = [];
+  // Refresh changes the transport prompt, but retains the admitted request's recorder.
+  const admittedContent = admittedMessage?.content;
+  const currentUserMessage = admittedMessage
+    ? typeof admittedContent === "string"
+      ? admittedContent
+      : (admittedContent ?? [])
+          .flatMap((part) => (part.type === "text" ? [part.text] : []))
+          .join("\n")
+    : params.pluginRuntimeRefreshMessages
+      ? ""
+      : params.prompt;
   const buildPromptFromCurrentInputs = async () => {
     const result = await resolveAgentHarnessBeforePromptBuildResult({
+      currentUserMessage,
+      currentUserMessageId: admittedMessage?.idempotencyKey,
       prompt: prependCurrentInboundContext(promptState.promptText, params.currentInboundContext),
       developerInstructions: {
         build: ({ toolsAllow }) => {

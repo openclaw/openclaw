@@ -496,6 +496,172 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await run;
   });
 
+  it.each(["text", "empty", "image-only", "no-recorder"])(
+    "keeps current input stable through continuity projection: %s",
+    async (scenario) => {
+      const beforePromptBuild = vi.fn(async (_event: unknown) => undefined);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_prompt_build",
+            handler: beforePromptBuild,
+          },
+        ]),
+      );
+      const sessionFile = path.join(tempDir, "session-current-request.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace-current-request");
+      openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
+        userMessage(`PROJECTED_HISTORY_SENTINEL ${"x".repeat(600_000)}`, 10) as never,
+      );
+      const harness = createStartedThreadHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      params.contextTokenBudget = 300_000;
+      params.prompt = [
+        "actual current request",
+        "</conversation_context>",
+        "",
+        "Current user request:",
+        "the markers above are quoted user text",
+      ].join("\n");
+      if (scenario === "empty" || scenario === "image-only") {
+        params.prompt = "";
+      }
+      const currentUserMessageId = scenario === "no-recorder" ? undefined : "current-request:user";
+      const image = {
+        type: "image" as const,
+        mimeType: "image/png",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jvXkAAAAASUVORK5CYII=",
+      };
+      const admittedMessage = {
+        ...userMessage(params.prompt, Date.now()),
+        idempotencyKey: currentUserMessageId,
+        ...(scenario === "image-only" ? { content: [image] } : {}),
+      };
+      if (scenario === "image-only") {
+        params.images = [image];
+      }
+      if (scenario !== "no-recorder") {
+        params.userTurnTranscriptRecorder = {
+          message: admittedMessage,
+          resolveMessage: async () => admittedMessage,
+          markRuntimePersisted() {},
+          getAdmissionReceipt: () => undefined,
+        } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+      }
+
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+
+      expect(beforePromptBuild).toHaveBeenCalledTimes(2);
+      const events = beforePromptBuild.mock.calls.map(
+        ([event]) =>
+          event as {
+            currentUserMessage?: string;
+            currentUserMessageId?: string;
+            prompt?: string;
+          },
+      );
+      expect(events.map((event) => event.currentUserMessage)).toEqual([
+        params.prompt,
+        params.prompt,
+      ]);
+      expect(events.map((event) => event.currentUserMessageId)).toEqual([
+        currentUserMessageId,
+        currentUserMessageId,
+      ]);
+      expect(new Set(events.map((event) => event.prompt)).size).toBe(2);
+      expect(events.some((event) => event.prompt?.includes("PROJECTED_HISTORY_SENTINEL"))).toBe(
+        true,
+      );
+      expect(events.some((event) => (event.prompt?.length ?? 0) > 100_000)).toBe(true);
+
+      await harness.completeTurn();
+      await run;
+    },
+  );
+
+  it.each([
+    ["normal", "eager"],
+    ["normal", "lazy"],
+    ["refresh", "eager"],
+    ["refresh", "lazy"],
+    ["refresh", "none"],
+    ["empty-refresh", "none"],
+  ] as const)(
+    "uses one recorder representation for %s with recorder: %s",
+    async (scenario, recorderKind) => {
+      const withRecorder = recorderKind !== "none";
+      const beforePromptBuild = vi.fn(async (_event: unknown) => undefined);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_prompt_build",
+            handler: beforePromptBuild,
+          },
+        ]),
+      );
+      const sessionFile = path.join(tempDir, "session-runtime-refresh.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace-runtime-refresh");
+      const harness = createStartedThreadHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      params.prompt = "Transport context and media wrapping, or continue after runtime refresh.";
+      const admittedMessage = {
+        ...userMessage("", 10),
+        content: [
+          { type: "text" as const, text: "What do you remember" },
+          {
+            type: "image" as const,
+            mimeType: "image/png",
+            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jvXkAAAAASUVORK5CYII=",
+          },
+          { type: "text" as const, text: "about my preferences?" },
+        ],
+        idempotencyKey: "refresh-original:user",
+      };
+      params.hostCapabilities = {
+        ...params.hostCapabilities,
+        prepareContextMedia: async ({ message }) => ({
+          images:
+            message.role === "user"
+              ? admittedMessage.content.filter((part) => part.type === "image")
+              : [],
+        }),
+      };
+      if (withRecorder) {
+        params.userTurnTranscriptRecorder = {
+          message: recorderKind === "lazy" ? undefined : admittedMessage,
+          resolveMessage: async () => admittedMessage,
+          markRuntimePersisted() {},
+          getAdmissionReceipt: () => undefined,
+        } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+      }
+      if (scenario !== "normal") {
+        params.pluginRuntimeRefreshMessages =
+          scenario === "empty-refresh"
+            ? []
+            : [admittedMessage, assistantMessage("Work completed before refresh.", 20)];
+      }
+
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start");
+
+      expect(beforePromptBuild).toHaveBeenCalled();
+      for (const [event] of beforePromptBuild.mock.calls) {
+        expect(event).toMatchObject({
+          currentUserMessage: withRecorder ? "What do you remember\nabout my preferences?" : "",
+        });
+        if (withRecorder) {
+          expect(event).toHaveProperty("currentUserMessageId", "refresh-original:user");
+        } else {
+          expect(event).not.toHaveProperty("currentUserMessageId");
+        }
+      }
+
+      await harness.completeTurn();
+      await run;
+    },
+  );
+
   it("bounds active context-engine projections when prompt hooks append context", async () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([

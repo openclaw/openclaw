@@ -131,6 +131,8 @@ type TriggerLookupParams = {
   activeProjectKeys?: string[];
   signal?: AbortSignal;
   runId?: string;
+  /** Undefined uses legacy query identity; null disables request-local reuse. */
+  requestKey?: string | null;
   authorityFingerprint?: string;
 };
 
@@ -187,17 +189,17 @@ async function loadTriggerRecallCandidates(params: TriggerLookupParams) {
 
 function resolveTriggerRecallCandidates(params: TriggerLookupParams) {
   const runId = params.runId?.trim();
-  if (!runId) {
+  if (!runId || params.requestKey === null) {
     return loadTriggerRecallCandidates(params);
   }
-  const runKey = `${runId}:${params.authorityFingerprint ?? "none"}`;
+  const runKey = `${runId}:${JSON.stringify([params.authorityFingerprint, params.requestKey])}`;
   const existing = triggerRecallRuns.get(runKey);
   const activeProjectKeys = params.activeProjectKeys ?? [];
   if (
     existing &&
     existing.cfg === params.cfg &&
     existing.agentId === params.agentId &&
-    existing.query === params.query &&
+    (params.requestKey !== undefined || existing.query === params.query) &&
     existing.activeProjectKeys.length === activeProjectKeys.length &&
     existing.activeProjectKeys.every((key, index) => key === activeProjectKeys[index])
   ) {

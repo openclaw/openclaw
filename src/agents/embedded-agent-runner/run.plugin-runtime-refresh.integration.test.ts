@@ -88,6 +88,7 @@ describe("plugin runtime refresh admission", () => {
       });
       expect(result.meta.error).toBeUndefined();
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+      expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.pluginRuntimeRefreshMessages).toEqual([]);
       const final = await buildReplyPayloads({
         payloads: result.payloads ?? [],
         messagingToolSentTexts: result.messagingToolSentTexts,
