@@ -1,5 +1,6 @@
 // Control UI view renders nodes exec approvals screen content.
 import { html, nothing } from "lit";
+import { live } from "lit/directives/live.js";
 import "../../components/agent-select-registration.ts";
 import { icons } from "../../components/icons.ts";
 import {
@@ -319,6 +320,7 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
           class="settings-select"
           aria-label=${t("devices.execApprovals.host")}
           ?disabled=${state.disabled}
+          .value=${live(state.target)}
           @change=${(event: Event) => {
             const target = event.target as HTMLSelectElement;
             const value = target.value;
@@ -349,6 +351,7 @@ function renderExecApprovalsTarget(state: ExecApprovalsState) {
                 class="settings-select"
                 aria-label=${t("devices.execApprovals.node")}
                 ?disabled=${state.disabled || !hasNodes}
+                .value=${live(nodeValue)}
                 @change=${(event: Event) => {
                   const target = event.target as HTMLSelectElement;
                   const value = target.value.trim();

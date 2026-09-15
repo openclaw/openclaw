@@ -899,6 +899,10 @@ export const en: TranslationMap & {
       on: "on",
       target: "Target",
       targetHint: "Gateway edits local approvals; node edits the selected node.",
+      discardPromptTitle: "Discard unsaved approval changes?",
+      discardPromptBody:
+        "Switching targets clears the exec approvals draft for the current target. Unsaved changes cannot be recovered.",
+      discardConfirm: "Discard changes",
       host: "Host",
       gateway: "Gateway",
       node: "Node",
