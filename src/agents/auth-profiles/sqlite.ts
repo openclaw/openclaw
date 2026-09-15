@@ -230,7 +230,7 @@ function parseJsonCell(raw: string | null | undefined): unknown {
   return safeParseJson(raw) ?? null;
 }
 
-type PersistedAuthProfileStoreInspection =
+export type PersistedAuthProfileStoreInspection =
   | { status: "missing"; reason: "database" | "table" | "row" }
   | { status: "readable"; raw: unknown }
   | { status: "unreadable" };
@@ -441,7 +441,7 @@ export function assertAuthProfileStoreAgentOwner(agentDir: string, agentId: stri
 }
 
 export function inspectAuthProfileJsonCellReadOnly(
-  databaseTarget: Pick<AuthProfileDatabaseTarget, "kind" | "path">,
+  databaseTarget: Pick<AuthProfileDatabaseTarget, "kind" | "path"> & { env?: NodeJS.ProcessEnv },
   target: "store" | "state",
 ): PersistedAuthProfileStoreInspection {
   if (databaseTarget.kind === "shared-state") {
@@ -449,7 +449,7 @@ export function inspectAuthProfileJsonCellReadOnly(
       return (
         withExistingOpenClawStateDatabaseReadOnly(
           ({ db }) => inspectAuthProfileJsonCell(db, target, "shared-state"),
-          { path: databaseTarget.path },
+          { path: databaseTarget.path, ...(databaseTarget.env ? { env: databaseTarget.env } : {}) },
         ) ?? { status: "missing", reason: "database" }
       );
     } catch {

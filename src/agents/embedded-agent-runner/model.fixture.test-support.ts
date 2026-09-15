@@ -5,10 +5,10 @@ import * as authProfileStore from "../auth-profiles/store-runtime.js";
 
 export function guardModelFixtureAuth(root: string) {
   const violations: Array<string | undefined> = [];
-  const loadAuthProfileStoreForRuntime = authProfileStore.loadAuthProfileStoreForRuntime;
+  const loadAuthProfileStoreForRuntimeAsync = authProfileStore.loadAuthProfileStoreForRuntimeAsync;
   const spy = vi
-    .spyOn(authProfileStore, "loadAuthProfileStoreForRuntime")
-    .mockImplementation((dir, options, env) => {
+    .spyOn(authProfileStore, "loadAuthProfileStoreForRuntimeAsync")
+    .mockImplementation(async (dir, options) => {
       // Any necessary native auth reads must remain inside the fixture's owned state.
       // Record even swallowed violations before the owner can inspect the path.
       if (!dir || !isPathInside(root, dir)) {
@@ -19,7 +19,7 @@ export function guardModelFixtureAuth(root: string) {
         violations.push(dir);
         throw new Error("Model fixture auth request must be read-only");
       }
-      return loadAuthProfileStoreForRuntime(dir, options, env);
+      return loadAuthProfileStoreForRuntimeAsync(dir, options);
     });
   return { spy, verify: () => expect(violations).toEqual([]) };
 }

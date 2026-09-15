@@ -1,3 +1,5 @@
+import { SHARED_AUTH_STORE_STATE_KEY } from "../agents/auth-profiles/path-resolve.js";
+import { inspectAuthProfileJsonCellReadOnly } from "../agents/auth-profiles/sqlite.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
 import {
   patchConfigHealthEntryInDatabase,
@@ -53,6 +55,7 @@ import {
 } from "../tasks/task-registry.store.kernel.js";
 import { readTaskRegistryStatusSnapshot } from "../tasks/task-registry.store.status.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
+import { readConfigMachineState } from "./config-machine-state.js";
 import {
   openClawStateDatabaseCache,
   retainOpenClawStateDatabase,
@@ -73,6 +76,7 @@ import type {
   OpenClawStateWorkerOperations,
   OpenClawStateWorkerInspectionOperations,
 } from "./openclaw-state-worker-contract.js";
+import { readUserModelAuthProfile } from "./user-model-accounts.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
 
 const log = createSubsystemLogger("state/worker");
@@ -135,6 +139,30 @@ function createSharedStateWorkerBackend(
     execute(command) {
       if (closed) {
         throw new Error("Shared-state worker is closed");
+      }
+      if (
+        command.type === "authProfiles.read" ||
+        command.type === "authProfiles.sharedOwnership" ||
+        command.type === "authProfiles.personal"
+      ) {
+        const read = () => {
+          const options = {
+            path: context.databasePath,
+            env: getSqliteWorkerStateContext().environment,
+          };
+          if (command.type === "authProfiles.sharedOwnership") {
+            return readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, options);
+          }
+          if (command.type === "authProfiles.personal") {
+            return readUserModelAuthProfile(command.input.profileId, options);
+          }
+          const target = { kind: "shared-state" as const, ...options };
+          return {
+            store: inspectAuthProfileJsonCellReadOnly(target, "store"),
+            state: inspectAuthProfileJsonCellReadOnly(target, "state"),
+          };
+        };
+        return command.input.artifactPreserving ? withArtifactPreservingStateReads(read) : read();
       }
       if (command.type === "tasks.statusSummary") {
         const read = () =>

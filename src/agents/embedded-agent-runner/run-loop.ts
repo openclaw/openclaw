@@ -89,6 +89,7 @@ export async function runPreparedEmbeddedLoop(
     "runtime",
     () =>
       prepareEmbeddedRunRuntime({
+        assertCurrent: input.laneController.throwIfAborted,
         runParams: params,
         sessionAdmission: input.sessionAdmission,
         provider,
@@ -307,14 +308,13 @@ export async function runPreparedEmbeddedLoop(
             `provider=${provider}/${modelId} attempts=${runRetryBudget.attemptsDispatched} ` +
             `countedAttempts=${runRetryBudget.attemptsCounted} maxAttempts=${runRetryBudget.maxAttempts}`,
         );
-        const retryLimitDecision = resolveRunFailoverDecision({
-          stage: "retry_limit",
-          fallbackConfigured,
-          failoverReason: lastRetryFailoverReason,
-        });
         return handleRetryLimitExhaustion({
           message,
-          decision: retryLimitDecision,
+          decision: resolveRunFailoverDecision({
+            stage: "retry_limit",
+            fallbackConfigured,
+            failoverReason: lastRetryFailoverReason,
+          }),
           provider,
           model: modelId,
           profileId: lastProfileId,

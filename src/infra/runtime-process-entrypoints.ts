@@ -34,6 +34,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "../state/openclaw-state.worker",
     distWorkerPath: "state/openclaw-state.worker.js",
   },
+  authProfileRead: {
+    currentModuleUrl,
+    sourceWorkerName: "../agents/auth-profiles/sqlite-read.worker",
+    distWorkerPath: "agents/auth-profiles/sqlite-read.worker.js",
+  },
   sqliteStore: {
     currentModuleUrl,
     sourceWorkerName: "sqlite-store.worker",

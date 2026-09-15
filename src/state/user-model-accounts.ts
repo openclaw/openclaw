@@ -13,7 +13,10 @@ import {
 } from "../infra/kysely-sync.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { SECRET_STORE_VALUE_MAX_BYTES } from "../secrets/store/secret-store-validation-error.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import {
+  isArtifactPreservingStateRead,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "./openclaw-state-db-readonly.js";
 import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
@@ -21,6 +24,8 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
+import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-model-account-id.js";
 import { selectResolvedUserProfile, userProfilesDb } from "./user-profiles-internal.js";
 
@@ -182,6 +187,11 @@ function readProfile(
     return undefined;
   }
   const { credential, usageStats } = parseRecord(raw, profileSchema);
+  registerProfileSecrets(credential);
+  return { credential, usageStats };
+}
+
+function registerProfileSecrets(credential: AuthProfileCredential): void {
   if (credential.type === "oauth") {
     registerSecretValueForRedaction(credential.access);
     registerSecretValueForRedaction(credential.refresh);
@@ -189,11 +199,12 @@ function readProfile(
       registerSecretValueForRedaction(credential.idToken);
     }
   } else if (credential.type === "token") {
-    registerSecretValueForRedaction(credential.token);
-  } else {
+    if (credential.token !== undefined) {
+      registerSecretValueForRedaction(credential.token);
+    }
+  } else if (credential.key !== undefined) {
     registerSecretValueForRedaction(credential.key);
   }
-  return { credential, usageStats };
 }
 
 function writeProfile(
@@ -335,6 +346,27 @@ export function readUserModelAuthProfile(
     const owner = credentialOwner(db, authProfileId);
     return owner ? readProfile(db, owner, authProfileId) : undefined;
   }, options);
+}
+
+/** Read one selected account on the canonical actor; redaction remains caller-owned. */
+export async function readUserModelAuthProfileAsync(
+  authProfileId: string,
+  context: OpenClawStateWorkerContext,
+): Promise<UserModelAuthProfile | undefined> {
+  const profile = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({
+        type: "authProfiles.personal",
+        input: { profileId: authProfileId, artifactPreserving: isArtifactPreservingStateRead() },
+      }),
+    { existingOnly: true },
+  );
+  context.admission.assertCurrent();
+  if (profile) {
+    registerProfileSecrets(profile.credential);
+  }
+  return profile;
 }
 
 /** The canonical OAuth/usage owners mutate one exact private credential under the DB lock. */

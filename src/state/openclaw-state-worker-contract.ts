@@ -1,3 +1,4 @@
+import type { AuthProfileRowRead } from "../agents/auth-profiles/sqlite-read.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
 import type { ConfigHealthPatch } from "../config/io.health-state.kernel.js";
 import type {
@@ -29,6 +30,7 @@ import type {
 } from "../tasks/task-registry.store.types.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
 import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
+import type { UserModelAuthProfile } from "./user-model-accounts.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
 
 type TaskLookupRecords = {
@@ -55,6 +57,12 @@ export type OpenClawStateWorkerOperations = PluginStateWorkerOperations &
   CronStoreSaveWorkerOperations &
   SessionDeliveryWorkerOperations &
   DeliveryQueueWorkerOperations & {
+    "authProfiles.read": { input: { artifactPreserving: boolean }; output: AuthProfileRowRead };
+    "authProfiles.sharedOwnership": { input: { artifactPreserving: boolean }; output: unknown };
+    "authProfiles.personal": {
+      input: { profileId: string; artifactPreserving: boolean };
+      output: UserModelAuthProfile | undefined;
+    };
     "backup.recordOutcome": { input: PreparedBackupRunRecord; output: void };
     "projects.findRoot": { input: { repoRoot: string }; output: string | undefined };
     "modelCatalog.remote.read": {

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
@@ -654,6 +655,156 @@ describe("resolveModel", () => {
     expect(prepareProviderDynamicModel).toHaveBeenCalledOnce();
     expect(normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledOnce();
     expect(runProviderDynamicModel).not.toHaveBeenCalled();
+  });
+
+  it.each(["auth", "suppressed auth", "prepared miss", "prepared model"] as const)(
+    "rejects retired run authority after %s before invoking another provider hook",
+    async (stage) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const expired = new Error("The model resolution owner retired.");
+      let current = true;
+      const pause = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      auth.spy.mockImplementation(async () => {
+        if (stage === "auth" || stage === "suppressed auth") {
+          await pause();
+        }
+        return { version: 1, profiles: {} };
+      });
+      const prepareProviderDynamicModel = vi.fn(async () => {
+        if (stage === "prepared miss" || stage === "prepared model") {
+          await pause();
+        }
+        return stage === "prepared model"
+          ? {
+              ...makeModel("candidate"),
+              provider: "acme",
+              api: "openai-completions" as const,
+              baseUrl: "https://discovered.example/v1",
+              input: ["text" as const],
+              contextWindow: 65_536,
+              maxTokens: 8_192,
+            }
+          : undefined;
+      });
+      const runProviderDynamicModel = vi.fn(() => makeModel("candidate"));
+      const normalizeProviderResolvedModelWithPlugin = vi.fn(() => undefined);
+      const resolution = resolveModelAsync(
+        stage === "suppressed auth" ? "openai" : "acme",
+        stage === "suppressed auth" ? "gpt-5.3-codex-spark" : "candidate",
+        state.agentDir(),
+        undefined,
+        {
+          skipAgentDiscovery: true,
+          assertCurrent() {
+            if (!current) {
+              throw expired;
+            }
+          },
+          runtimeHooks: {
+            ...createRuntimeHooks(),
+            prepareProviderDynamicModel,
+            runProviderDynamicModel,
+            normalizeProviderResolvedModelWithPlugin,
+            shouldPreferProviderRuntimeResolvedModel: () => true,
+          },
+        },
+      );
+      try {
+        await Promise.race([
+          entered.promise,
+          resolution.then(() => {
+            throw new Error("Model resolution settled before the preparation barrier.");
+          }),
+        ]);
+        current = false;
+        release.resolve();
+        await expect(resolution.then(() => "resolved")).rejects.toBe(expired);
+        expect(prepareProviderDynamicModel).toHaveBeenCalledTimes(
+          stage.startsWith("prepared") ? 1 : 0,
+        );
+        expect(runProviderDynamicModel).not.toHaveBeenCalled();
+        expect(normalizeProviderResolvedModelWithPlugin).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await resolution.catch(() => {});
+      }
+    },
+  );
+
+  it("reuses an empty auth result when async model preparation falls back to the sync hook", async () => {
+    auth.spy.mockResolvedValueOnce({ version: 1, profiles: {} });
+    const prepareProviderDynamicModel = vi.fn(async () => {
+      auth.spy.mockImplementation(() => {
+        throw new Error("Auth storage became unavailable after model preparation");
+      });
+      return undefined;
+    });
+    const runProviderDynamicModel = vi.fn(() => ({
+      ...makeModel("fallback-model"),
+      provider: "acme",
+      api: "openai-completions" as const,
+      baseUrl: "https://discovered.example/v1",
+    }));
+
+    const result = await resolveModelAsync("acme", "fallback-model", state.agentDir(), undefined, {
+      runtimeHooks: {
+        ...createRuntimeHooks(),
+        prepareProviderDynamicModel,
+        runProviderDynamicModel,
+      },
+      skipAgentDiscovery: true,
+    });
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "acme",
+      id: "fallback-model",
+      api: "openai-completions",
+      baseUrl: "https://discovered.example/v1",
+    });
+    expect(auth.spy).toHaveBeenCalledOnce();
+    expect(prepareProviderDynamicModel).toHaveBeenCalledOnce();
+    expect(runProviderDynamicModel).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a retained generation usable while its model resolution owner is active", async () => {
+    const cfg: OpenClawConfig = {};
+    const assertCurrent = vi.fn();
+    const preparedModelRuntime: PreparedModelRuntimeSnapshot = {
+      catalogOwner: undefined,
+      agentDir: state.agentDir(),
+      activeProjectKeys: [],
+      allowGatewaySubagentBinding: false,
+      config: cfg,
+      observationConfig: cfg,
+      isCurrent: () => false,
+      authModes: {},
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      modelCatalog: { entries: [], routeVariants: [] },
+      configuredRuntimeModels: [],
+      inlineProviderModels: [],
+      createStores: createEmptyAgentDiscoveryStores,
+    };
+    auth.spy.mockImplementation(() => {
+      throw new Error("Prepared auth must not read credentials again");
+    });
+    const runProviderDynamicModel = vi.fn(() => ({
+      ...makeModel("retained-model"),
+      provider: "acme",
+    }));
+    const result = await resolveModelAsync("acme", "retained-model", state.agentDir(), cfg, {
+      preparedModelRuntime,
+      authProfileMode: "api_key",
+      assertCurrent,
+      runtimeHooks: { ...createRuntimeHooks(), runProviderDynamicModel },
+    });
+    expect(expectResolvedModel(result).id).toBe("retained-model");
+    expect(assertCurrent).toHaveBeenCalled();
+    expect(auth.spy).not.toHaveBeenCalled();
+    expect(runProviderDynamicModel).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -2443,7 +2594,7 @@ describe("resolveModel", () => {
 
   it.each([false, true])(
     "keeps exact configured routes ahead of legacy rows (reversed=%s)",
-    (reverse) => {
+    async (reverse) => {
       const exact = { ...makeModel("Model"), baseUrl: "https://exact.example.test/v1" };
       const legacy = {
         ...makeModel("custom/Model"),
@@ -2462,7 +2613,7 @@ describe("resolveModel", () => {
         },
       };
       for (const row of [exact, legacy]) {
-        const resolved = resolveModelWithRegistry({
+        const resolved = await resolveModelWithRegistry({
           provider: "custom",
           modelId: row.id,
           cfg,
@@ -2479,7 +2630,7 @@ describe("resolveModel", () => {
 
   it.each([false, true])(
     "merges exact rows before provider defaults (empty headers=%s)",
-    (emptyHeaders) => {
+    async (emptyHeaders) => {
       const cfg: OpenClawConfig = {
         models: {
           providers: {
@@ -2499,7 +2650,7 @@ describe("resolveModel", () => {
           },
         },
       };
-      const resolved = resolveModelWithRegistry({
+      const resolved = await resolveModelWithRegistry({
         provider: "custom",
         modelId: "Model",
         cfg,
@@ -4686,7 +4837,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("passes configured workspaceDir through direct registry dynamic hooks", () => {
+  it("passes configured workspaceDir through direct registry dynamic hooks", async () => {
     const runProviderDynamicModel = vi.fn(
       (params: {
         workspaceDir?: string;
@@ -4714,7 +4865,7 @@ describe("resolveModel", () => {
       },
     } as OpenClawConfig;
 
-    const result = resolveModelWithRegistry({
+    const result = await resolveModelWithRegistry({
       provider: "openai",
       modelId: "gpt-5.4",
       agentDir: state.agentDir("state"),

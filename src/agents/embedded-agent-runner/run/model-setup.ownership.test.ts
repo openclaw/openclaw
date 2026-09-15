@@ -119,6 +119,7 @@ async function createFixture(
   await replaceSessionEntry(target, entry);
   const resolve = () =>
     resolveEmbeddedRunModelSetup({
+      assertCurrent: () => {},
       runParams,
       sessionAdmission: assertAgentHarnessRunAdmission(runParams),
       provider: generation.provider,
@@ -151,6 +152,7 @@ async function createFixture(
     let runtime: Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>> | undefined;
     try {
       runtime = await prepareEmbeddedRunRuntime({
+        assertCurrent: () => {},
         runParams: { ...actualParams, preparedRunAdmission: admission },
         sessionAdmission: assertAgentHarnessRunAdmission(actualParams),
         provider: actualParams.provider ?? generation.provider,

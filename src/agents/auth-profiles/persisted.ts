@@ -25,6 +25,7 @@ import {
   removePersonalAuthProfileReferences,
   setRuntimeExternalCliProfileIds,
 } from "./runtime-external-profile-references.js";
+import type { AuthProfileRowRead } from "./sqlite-read.js";
 import {
   inspectAuthProfileJsonCellReadOnly,
   readPersistedAuthProfileStateRaw,
@@ -848,6 +849,21 @@ function mergePersistedAuthProfileState(
     ...store,
     ...mergeAuthProfileState(coerceAuthProfileState(raw), coerceAuthProfileState(readState())),
   });
+}
+
+/** Decode worker-read facts with the same store/state coercion as synchronous reads. */
+export function loadPersistedAuthProfileStoreFromRows(
+  rows: AuthProfileRowRead,
+  databasePath: string,
+): AuthProfileStore | null {
+  const store = mergePersistedAuthProfileState(
+    rows.store.status === "readable" ? rows.store.raw : null,
+    () => (rows.state.status === "readable" ? rows.state.raw : null),
+  );
+  if (!store && rows.store.status !== "missing") {
+    throw new AuthProfileStoreUnreadableError(databasePath);
+  }
+  return store;
 }
 
 /** Loads the persisted auth profile store and merges runtime state. */

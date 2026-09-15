@@ -45,6 +45,7 @@ import { staticModelIdMatches } from "./model.static-id.js";
 export { resolveModelWithRegistry } from "./model.registry-resolution.js";
 
 type CommonModelResolutionOptions = {
+  assertCurrent?: () => void;
   authStorage?: AuthStorage;
   modelRegistry?: ModelRegistry;
   agentId?: string;
@@ -115,6 +116,7 @@ export async function resolveModelAsync(
   cfg?: OpenClawConfig,
   options?: AsyncModelResolutionOptions,
 ): Promise<ModelResolution> {
+  options?.assertCurrent?.();
   const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
   const derivedWorkspaceDir = resolveModelWorkspaceDir(
     cfg,
@@ -149,6 +151,7 @@ export async function resolveModelAsync(
   // Route-projected cfg owns transport/auth; the snapshot contributes generation facts only.
   const preparedModelRuntime = explicitPreparedRuntime ?? preparedSnapshot;
   const resolve = async () => {
+    options?.assertCurrent?.();
     const workspaceDir =
       options?.workspaceDir ?? preparedModelRuntime?.workspaceDir ?? derivedWorkspaceDir;
     const normalizedRef = normalizeProviderModelRef({
@@ -232,7 +235,8 @@ export async function resolveModelAsync(
       getStaticCatalogModel: getManifestStaticCatalogModel,
     });
     if (explicitModel?.kind === "suppressed") {
-      const suppressedRuntimeModel = resolveRuntimePreferredSuppressedModel({
+      const suppressedRuntimeModel = await resolveRuntimePreferredSuppressedModel({
+        assertCurrent: options?.assertCurrent,
         provider: normalizedRef.provider,
         modelId: normalizedRef.model,
         modelRegistry,
@@ -247,6 +251,7 @@ export async function resolveModelAsync(
         runtimeHooks,
         getStaticCatalogModel: getManifestStaticCatalogModel,
       });
+      options?.assertCurrent?.();
       if (suppressedRuntimeModel) {
         return { model: suppressedRuntimeModel, logicalRef, authStorage, modelRegistry };
       }
@@ -285,6 +290,7 @@ export async function resolveModelAsync(
     };
     const resolveStaticCatalogFallbackModel = async () => {
       const catalogModel = await resolveStaticCatalogModel();
+      options?.assertCurrent?.();
       if (!catalogModel) {
         return undefined;
       }
@@ -311,7 +317,7 @@ export async function resolveModelAsync(
       });
     };
     const resolveDynamicAttempt = async () => {
-      const authProfile = resolveDynamicModelAuthProfile({
+      const authProfile = await resolveDynamicModelAuthProfile({
         provider: normalizedRef.provider,
         modelId: normalizedRef.model,
         cfg,
@@ -320,6 +326,7 @@ export async function resolveModelAsync(
         authProfileMode: options?.authProfileMode,
         preferredProfile: options?.preferredProfile,
       });
+      options?.assertCurrent?.();
       const preparedDynamicModel = await runtimeHooks.prepareProviderDynamicModel({
         provider: normalizedRef.provider,
         config: cfg,
@@ -336,7 +343,9 @@ export async function resolveModelAsync(
           ...authProfile,
         },
       });
+      options?.assertCurrent?.();
       return resolveModelWithPreparedRegistry({
+        assertCurrent: options?.assertCurrent,
         provider: normalizedRef.provider,
         modelId: normalizedRef.model,
         modelRegistry,
@@ -349,6 +358,7 @@ export async function resolveModelAsync(
         authProfileMode: options?.authProfileMode,
         preferredProfile: options?.preferredProfile,
         runtimeHooks,
+        preparedAuthProfile: authProfile,
         ...(preparedDynamicModel ? { preparedDynamicModel } : {}),
         getStaticCatalogModel: getManifestStaticCatalogModel,
         ...(options?.allowBundledStaticCatalogFallback ? { skipConfiguredFallback: true } : {}),
@@ -367,8 +377,10 @@ export async function resolveModelAsync(
         ? explicitModel.model
         : undefined;
     model ??= await resolveDynamicAttempt();
+    options?.assertCurrent?.();
     if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
       model = await resolveStaticCatalogFallbackModel();
+      options?.assertCurrent?.();
     }
     if (!model && !explicitModel && options?.allowBundledStaticCatalogFallback) {
       model = buildConfiguredFallbackModel({
@@ -384,6 +396,7 @@ export async function resolveModelAsync(
     }
     if (model && options?.allowBundledStaticCatalogFallback) {
       const staticMediaInput = (await resolveStaticCatalogModel())?.mediaInput;
+      options?.assertCurrent?.();
       const resolvedMediaInput = (model as ProviderRuntimeModel).mediaInput;
       const mediaInput = mergeModelMediaInput(staticMediaInput, resolvedMediaInput);
       if (mediaInput) {

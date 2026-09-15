@@ -1,6 +1,7 @@
 import {
   readUserModelAuthProfile,
   updateUserModelAuthProfile,
+  type UserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import type { AuthProfileStore } from "./types.js";
@@ -10,7 +11,19 @@ export function materializePersonalAuthProfile(
   store: AuthProfileStore,
   profileId: string,
 ): AuthProfileStore {
-  const profile = readUserModelAuthProfile(profileId);
+  return materializePreparedPersonalAuthProfile(
+    store,
+    profileId,
+    readUserModelAuthProfile(profileId),
+  );
+}
+
+/** Merge an explicitly selected account already read through its canonical owner. */
+export function materializePreparedPersonalAuthProfile(
+  store: AuthProfileStore,
+  profileId: string,
+  profile: UserModelAuthProfile | undefined,
+): AuthProfileStore {
   if (!profile) {
     return store;
   }
