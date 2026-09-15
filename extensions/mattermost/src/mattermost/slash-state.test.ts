@@ -1,5 +1,8 @@
 // Mattermost tests cover slash state plugin behavior.
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { EventEmitter } from "node:events";
+import { IncomingMessage, type ServerResponse } from "node:http";
+import { Socket } from "node:net";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { createMockIncomingRequest, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
@@ -10,6 +13,11 @@ import {
   deactivateSlashCommands,
   registerSlashCommandRoute,
 } from "./slash-state.js";
+
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return { ...actual, safeEqualSecret: vi.fn(actual.safeEqualSecret) };
+});
 
 function createResolvedMattermostAccount(accountId: string): ResolvedMattermostAccount {
   return {
@@ -75,22 +83,32 @@ function replaceAccountHandler(accountId: string): void {
   };
 }
 
-function createRequest(body: string): IncomingMessage {
+function createRequest(body: string, authorization?: string): IncomingMessage {
   const req = createMockIncomingRequest([body]);
   req.method = "POST";
-  req.headers = { "content-type": "application/x-www-form-urlencoded" };
+  req.headers = { "content-type": "application/x-www-form-urlencoded", authorization };
+  return req;
+}
+
+function createStalledRequest(remoteAddress: string, authorization?: string): IncomingMessage {
+  const req = new IncomingMessage(new Socket());
+  req.method = "POST";
+  req.headers = { "content-type": "application/x-www-form-urlencoded", authorization };
+  Object.defineProperty(req.socket, "remoteAddress", { value: remoteAddress });
   return req;
 }
 
 function createResponse(): { res: ServerResponse; getBody: () => string } {
   let body = "";
-  const res = {
+  const res = Object.assign(new EventEmitter(), {
     statusCode: 200,
     setHeader() {},
-    end(chunk?: string | Buffer) {
+    removeHeader() {},
+    end(chunk?: string | Buffer, callback?: () => void) {
       body = chunk ? String(chunk) : "";
+      callback?.();
     },
-  } as unknown as ServerResponse;
+  }) as unknown as ServerResponse;
   return { res, getBody: () => body };
 }
 
@@ -114,11 +132,12 @@ function createSlashRoute(register = registerSlashCommandRoute) {
 
 async function routeSlashRequest(params: {
   body: string;
+  authorization?: string;
   register?: typeof registerSlashCommandRoute;
 }): Promise<{ statusCode: number; body: string; warn: ReturnType<typeof vi.fn> }> {
   const { handler, warn } = createSlashRoute(params.register);
   const response = createResponse();
-  await handler(createRequest(params.body), response.res);
+  await handler(createRequest(params.body, params.authorization), response.res);
   return { statusCode: response.res.statusCode, body: response.getBody(), warn };
 }
 
@@ -165,6 +184,92 @@ describe("slash-state global singleton", () => {
 describe("slash-state request routing", () => {
   afterEach(() => {
     deactivateSlashCommands();
+    vi.mocked(safeEqualSecret).mockClear();
+  });
+
+  it("accepts the Token scheme case-insensitively and compares every known token", async () => {
+    activate({ accountId: "a1", tokens: ["tok-a", "tok-a-alt"] });
+    activate({ accountId: "a2", tokens: ["tok-b"] });
+
+    const matched = await routeSlashRequest({
+      body: "token=tok-a",
+      authorization: "tOkEn tok-a",
+    });
+
+    expect(matched.statusCode).toBe(200);
+    expect(vi.mocked(safeEqualSecret).mock.calls).toEqual([
+      ["tok-a", "tok-a"],
+      ["tok-a", "tok-a-alt"],
+      ["tok-a", "tok-b"],
+    ]);
+
+    for (const authorization of [
+      "Bearer tok-a",
+      "Token tok-a extra",
+      "Token tok-a,Token tok-b",
+      "garbage",
+    ]) {
+      vi.mocked(safeEqualSecret).mockClear();
+      const ignored = await routeSlashRequest({ body: "token=tok-a", authorization });
+      expect(ignored.statusCode).toBe(200);
+      expect(safeEqualSecret).not.toHaveBeenCalled();
+    }
+  });
+
+  it("isolates distinct credentials across accounts", async () => {
+    activate({ accountId: "a1", tokens: ["tok-a"] });
+    activate({ accountId: "a2", tokens: ["tok-b"] });
+    const route = createSlashRoute();
+    const requests = Array.from({ length: 8 }, (_, index) =>
+      createStalledRequest(`203.0.113.${index + 1}`, "Token tok-a"),
+    );
+    const responses = requests.map(() => createResponse());
+    const runs = requests.map((req, index) => route.handler(req, responses[index]!.res));
+
+    const overflow = createResponse();
+    await route.handler(createRequest("", "Token tok-a"), overflow.res);
+    const accountB = createStalledRequest("203.0.113.20", "Token tok-b");
+    const accountBResponse = createResponse();
+    const accountBRun = route.handler(accountB, accountBResponse.res);
+
+    try {
+      expect(overflow.res.statusCode).toBe(429);
+      expect(accountBResponse.res.statusCode).toBe(200);
+    } finally {
+      for (const req of [...requests, accountB]) {
+        req.complete = true;
+        req.push(null);
+      }
+      await Promise.all([...runs, accountBRun]);
+    }
+  });
+
+  it("collapses duplicate credentials without merging distinct duplicate groups", async () => {
+    activate({ accountId: "a1", tokens: ["tok-a", "tok-shared", "tok-shared-other"] });
+    activate({ accountId: "a2", tokens: ["tok-shared", "tok-shared-other"] });
+    const route = createSlashRoute();
+    const requests = Array.from({ length: 8 }, (_, index) =>
+      createStalledRequest(`203.0.113.${index + 1}`, "Token tok-shared"),
+    );
+    const responses = requests.map(() => createResponse());
+    const runs = requests.map((req, index) => route.handler(req, responses[index]!.res));
+
+    const overflow = createResponse();
+    await route.handler(createRequest("", "Token tok-shared"), overflow.res);
+    const unique = createStalledRequest("203.0.113.20", "Token tok-shared-other");
+    const uniqueResponse = createResponse();
+    const uniqueRun = route.handler(unique, uniqueResponse.res);
+
+    try {
+      expect(overflow.res.statusCode).toBe(429);
+      expect(uniqueResponse.res.statusCode).toBe(200);
+    } finally {
+      for (const req of [...requests, unique]) {
+        req.complete = true;
+        req.push(null);
+      }
+      await Promise.all([...runs, uniqueRun]);
+    }
   });
 
   it.each([
@@ -213,6 +318,40 @@ describe("slash-state request routing", () => {
         });
       },
     );
+  });
+
+  it("bounds concurrent pre-authentication body reads across the slash route", async () => {
+    activateSlashCommands({
+      account: createResolvedMattermostAccount("a1"),
+      commandTokens: ["token-1"],
+      registeredCommands: [createRegisteredCommand()],
+      api: slashApi,
+    });
+    const route = createSlashRoute();
+    const requests = Array.from({ length: 12 }, (_, index) =>
+      createStalledRequest(`203.0.113.${index + 1}`),
+    );
+    const responses = requests.map(() => createResponse());
+    const runs = requests.map((req, index) => route.handler(req, responses[index]!.res));
+
+    try {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+
+      expect(responses.filter(({ res }) => res.statusCode === 200)).toHaveLength(8);
+      expect(responses.filter(({ res }) => res.statusCode === 429)).toHaveLength(4);
+    } finally {
+      for (const req of requests) {
+        req.complete = true;
+        req.push(null);
+      }
+      await Promise.all(runs);
+    }
+
+    const followUp = createResponse();
+    await route.handler(createRequest(""), followUp.res);
+    expect(followUp.res.statusCode).toBe(400);
   });
 
   it("routes a token owned by one account", async () => {
