@@ -7,7 +7,9 @@ const DEFAULT_WORKSPACE = "/tmp/openclaw";
 const DEFAULT_MENTION_PATTERN = "\\bbot\\b";
 
 vi.mock("./media-understanding.runtime.js", () => ({
-  transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
+  resolveTelegramPreflightAudioTranscript: (...args: unknown[]) =>
+    transcribeFirstAudioMock(...args),
+  sendTelegramPreflightAudioTranscriptEcho: vi.fn(async () => undefined),
 }));
 
 const { buildTelegramMessageContextForTest } =

@@ -5,10 +5,12 @@ import { normalizeAllowFrom } from "./bot-access.js";
 const {
   resolveStickerVisionSupportRuntimeMock,
   transcribeFirstAudioMock,
+  sendTelegramPreflightAudioTranscriptEchoMock,
   triggerInternalHookMock,
 } = vi.hoisted(() => ({
   resolveStickerVisionSupportRuntimeMock: vi.fn(async (_params: unknown) => false),
   transcribeFirstAudioMock: vi.fn(),
+  sendTelegramPreflightAudioTranscriptEchoMock: vi.fn(async (_params: unknown) => undefined),
   triggerInternalHookMock: vi.fn<(event: unknown) => Promise<void>>(async () => undefined),
 }));
 
@@ -17,7 +19,10 @@ vi.mock("./sticker-vision.runtime.js", () => ({
     resolveStickerVisionSupportRuntimeMock(params),
 }));
 vi.mock("./media-understanding.runtime.js", () => ({
-  transcribeFirstAudio: (...args: unknown[]) => transcribeFirstAudioMock(...args),
+  resolveTelegramPreflightAudioTranscript: (...args: unknown[]) =>
+    transcribeFirstAudioMock(...args),
+  sendTelegramPreflightAudioTranscriptEcho: (params: unknown) =>
+    sendTelegramPreflightAudioTranscriptEchoMock(params),
 }));
 vi.mock("openclaw/plugin-sdk/hook-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/hook-runtime")>(
@@ -641,6 +646,7 @@ describe("resolveTelegramInboundBody", () => {
 
   it("transcribes when the group sender is authorized", async () => {
     transcribeFirstAudioMock.mockReset();
+    sendTelegramPreflightAudioTranscriptEchoMock.mockClear();
     transcribeFirstAudioMock.mockResolvedValueOnce("hey bot please help");
     const logger = createLogger();
     const result = await resolveGroup({
@@ -648,7 +654,11 @@ describe("resolveTelegramInboundBody", () => {
       patterns: BOT_PATTERN,
       allowFrom: ["46"],
       message: voiceMessage("voice-2", 2),
-      overrides: audioOverrides("/tmp/voice-2.ogg", { patterns: BOT_PATTERN }),
+      overrides: audioOverrides("/tmp/voice-2.ogg", {
+        patterns: BOT_PATTERN,
+        echo: true,
+        accountId: "primary",
+      }),
     });
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
@@ -656,6 +666,35 @@ describe("resolveTelegramInboundBody", () => {
       '[Audio transcript (machine-generated, untrusted)]: "hey bot please help"',
     );
     expect(result?.effectiveWasMentioned).toBe(true);
+    expect(sendTelegramPreflightAudioTranscriptEchoMock).toHaveBeenCalledWith({
+      transcript: "hey bot please help",
+      cfg: expect.any(Object),
+      accountId: "primary",
+      originatingTo: "telegram:-1001234567890",
+      messageThreadId: undefined,
+    });
+  });
+
+  it("does not echo a preflight transcript for an unmentioned group message", async () => {
+    transcribeFirstAudioMock.mockReset();
+    sendTelegramPreflightAudioTranscriptEchoMock.mockClear();
+    transcribeFirstAudioMock.mockResolvedValueOnce("ambient voice note");
+
+    const result = await resolveGroup({
+      logger: createLogger(),
+      patterns: BOT_PATTERN,
+      allowFrom: ["46"],
+      message: voiceMessage("voice-unmentioned", 3),
+      overrides: audioOverrides("/tmp/voice-unmentioned.ogg", {
+        patterns: BOT_PATTERN,
+        echo: true,
+        accountId: "primary",
+      }),
+    });
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
+    expect(result).toBeNull();
+    expect(sendTelegramPreflightAudioTranscriptEchoMock).not.toHaveBeenCalled();
   });
 
   it("admits a transcript participant mention despite a whitespace-only audio caption", async () => {
@@ -688,6 +727,7 @@ describe("resolveTelegramInboundBody", () => {
 
   it("transcribes DM voice notes via preflight (not only groups)", async () => {
     transcribeFirstAudioMock.mockReset();
+    sendTelegramPreflightAudioTranscriptEchoMock.mockClear();
     transcribeFirstAudioMock.mockResolvedValueOnce("hello from a voice note");
     const result = await resolvePrivate(
       voiceMessage("voice-dm-1", 10),
@@ -705,6 +745,13 @@ describe("resolveTelegramInboundBody", () => {
       '[Audio transcript (machine-generated, untrusted)]: "hello from a voice note"',
     );
     expect(result?.bodyText).not.toContain("<media:audio>");
+    expect(sendTelegramPreflightAudioTranscriptEchoMock).toHaveBeenCalledWith({
+      transcript: "hello from a voice note",
+      cfg: expect.any(Object),
+      accountId: "primary",
+      originatingTo: "telegram:42",
+      messageThreadId: undefined,
+    });
   });
 
   it("passes DM topic thread IDs through audio preflight context", async () => {
