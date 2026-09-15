@@ -176,6 +176,59 @@ describe("runtime postbuild static assets", () => {
     ]);
   });
 
+  it("copies each package asset once with multiple Git index stages", async () => {
+    const rootDir = createTempDir("openclaw-static-assets-index-");
+    const git = (args: string[], input?: string) =>
+      childProcess.execFileSync("git", args, { cwd: rootDir, encoding: "utf8", input });
+    const pluginIds = ["conflicted", "package-only", "with-manifest"];
+    for (const id of pluginIds) {
+      const pluginDir = path.join(rootDir, "extensions", id);
+      await fs.mkdir(pluginDir, { recursive: true });
+      await fs.writeFile(path.join(pluginDir, "asset.txt"), `${id} bytes\n`);
+      await fs.writeFile(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          openclaw: { build: { staticAssets: [{ source: "asset.txt", output: "asset.txt" }] } },
+        }),
+      );
+    }
+    for (const id of ["with-manifest", "manifest-only"]) {
+      const pluginDir = path.join(rootDir, "extensions", id);
+      await fs.mkdir(pluginDir, { recursive: true });
+      await fs.writeFile(path.join(pluginDir, "openclaw.plugin.json"), "not valid JSON");
+    }
+    git(["init", "-q"]);
+    git(["add", "extensions"]);
+    const packagePath = "extensions/conflicted/package.json";
+    const blob = git(["hash-object", "-w", "--stdin"], "{}").trim();
+    // Keep resolved working-tree metadata while the index still holds all merge stages.
+    git(
+      ["update-index", "--index-info"],
+      [
+        `0 ${"0".repeat(blob.length)}\t${packagePath}`,
+        ...[1, 2, 3].map((stage) => `100644 ${blob} ${stage}\t${packagePath}`),
+        "",
+      ].join("\n"),
+    );
+    expect(git(["ls-files", "--", packagePath]).trim().split("\n")).toHaveLength(3);
+
+    const copy = vi.spyOn(fsSync, "copyFileSync");
+    try {
+      copyStaticExtensionAssets({ rootDir });
+      expect(copy).toHaveBeenCalledTimes(3);
+      expect(discoverStaticExtensionAssets({ rootDir }).map(({ pluginDir }) => pluginDir)).toEqual(
+        pluginIds,
+      );
+      for (const id of pluginIds) {
+        await expect(
+          fs.readFile(path.join(rootDir, "dist", "extensions", id, "asset.txt"), "utf8"),
+        ).resolves.toBe(`${id} bytes\n`);
+      }
+    } finally {
+      copy.mockRestore();
+    }
+  });
+
   it.each([
     { name: "top-level array", packageJson: [] },
     { name: "array openclaw section", packageJson: { openclaw: [] } },
