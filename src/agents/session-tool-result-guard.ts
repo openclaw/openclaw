@@ -17,6 +17,7 @@ import {
   type BoundedJsonUtf8Bytes,
 } from "../infra/json-utf8-bytes.js";
 import {
+  isResourceTokenFieldKey,
   isSensitiveFieldKey,
   redactSensitiveFieldValueWithConfig,
   redactToolPayloadTextWithConfig,
@@ -208,8 +209,14 @@ function redactPersistedDetailString(
 
 function selectPersistedDetailRedactionKey(
   key: string,
+  value: unknown,
   inheritedKey: string | undefined,
 ): string | undefined {
+  // A resource reference does not introduce a credential boundary, but must not
+  // clear a sensitive parent such as access_token: { doc_token: ... }.
+  if (typeof value === "string" && isResourceTokenFieldKey(key)) {
+    return inheritedKey;
+  }
   return isSensitiveFieldKey(key) ? key : inheritedKey;
 }
 
@@ -263,7 +270,7 @@ function redactPersistedDetailValue(
     const redacted = redactPersistedDetailValue(
       field,
       depth + 1,
-      selectPersistedDetailRedactionKey(key, redactionKey),
+      selectPersistedDetailRedactionKey(key, field, redactionKey),
       redactionConfig,
     );
     changed ||= redactedKey !== key || redacted !== field;
@@ -284,7 +291,7 @@ function redactPersistedSummaryField(
   return redactPersistedDetailValue(
     value,
     0,
-    selectPersistedDetailRedactionKey(key, undefined),
+    selectPersistedDetailRedactionKey(key, value, undefined),
     redactionConfig,
   );
 }

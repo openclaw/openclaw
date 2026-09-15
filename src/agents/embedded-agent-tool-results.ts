@@ -329,10 +329,12 @@ function carriesBinaryData(record: Record<string, unknown>): boolean {
 
 function sanitizeStructuredToolResultValue(
   value: unknown,
-  key = "",
+  path: readonly string[] = [],
   parentCarriesBinaryData = false,
   seen = new WeakSet<object>(),
+  directFieldValue = true,
 ): unknown {
+  const key = path.at(-1) ?? "";
   if (typeof value === "string") {
     if (SENSITIVE_STRUCTURED_HEADER_FIELDS.has(key.toLowerCase())) {
       return "***";
@@ -345,7 +347,15 @@ function sanitizeStructuredToolResultValue(
       return `[opaque data omitted: ${value.length} chars]`;
     }
     return truncateToolText(
-      redactInlineDataUriValue(redactModelVisibleSensitiveFieldValueWithConfig(key, value)),
+      redactInlineDataUriValue(
+        redactModelVisibleSensitiveFieldValueWithConfig(
+          key,
+          value,
+          undefined,
+          path,
+          directFieldValue,
+        ),
+      ),
     );
   }
   if (typeof value === "bigint") {
@@ -361,7 +371,7 @@ function sanitizeStructuredToolResultValue(
   if (Array.isArray(value)) {
     // Keep the owning key so arrays of credentials inherit the same redaction policy.
     return value.map((item) =>
-      sanitizeStructuredToolResultValue(item, key, parentCarriesBinaryData, seen),
+      sanitizeStructuredToolResultValue(item, path, parentCarriesBinaryData, seen, false),
     );
   }
   const record = value as Record<string, unknown>;
@@ -369,7 +379,7 @@ function sanitizeStructuredToolResultValue(
   return Object.fromEntries(
     Object.entries(record).map(([childKey, child]) => [
       childKey,
-      sanitizeStructuredToolResultValue(child, childKey, hasBinaryData, seen),
+      sanitizeStructuredToolResultValue(child, [...path, childKey], hasBinaryData, seen),
     ]),
   );
 }
