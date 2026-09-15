@@ -61,6 +61,12 @@ type BrowserSsrFPolicyCompat = NonNullable<BrowserConfig["ssrfPolicy"]> & {
    * still accepting old user files until doctor rewrites them.
    */
   allowPrivateNetwork?: boolean;
+  /**
+   * Retired authored key. Doctor folds it into `allowedHostnames` and the strict
+   * schema rejects a file that still carries it, so it is read only through this
+   * compat alias and never written back (#142358).
+   */
+  hostnameAllowlist?: unknown;
 };
 
 /** Browser config after defaults, derived ports, and profile defaults are applied. */
@@ -247,9 +253,18 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
+  // Retired authored key (doctor migrates it to allowedHostnames and the schema
+  // rejects it): fold it into the canonical allowlist so the resolved policy
+  // never carries it back to disk. Matches
+  // "Merged browser.ssrfPolicy.hostnameAllowlist → allowedHostnames."
+  const { hostnameAllowlist: legacyHostnameAllowlistRaw, ...restPolicy } = { ...rawPolicy };
+  const legacyHostnameAllowlist = normalizeStringList(legacyHostnameAllowlistRaw);
   const resolved = mergeSsrFPolicies({
-    ...rawPolicy,
-    allowedHostnames: normalizeStringList(rawPolicy?.allowedHostnames),
+    ...restPolicy,
+    allowedHostnames: normalizeStringList([
+      ...(rawPolicy?.allowedHostnames ?? []),
+      ...(legacyHostnameAllowlist ?? []),
+    ]),
   });
   if (resolved && hasExplicitPrivateSetting) {
     delete resolved.allowPrivateNetwork;
