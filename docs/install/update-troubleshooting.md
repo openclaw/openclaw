@@ -25,6 +25,17 @@ Status checks, switching between those scopes, and reloading the same tab do not
 automatically send those investigations again. If the browser cannot read or
 save that history, the failure details remain visible without an automatic
 diagnostic request. Ask OpenClaw manually or run `openclaw triage` on the host.
+To prevent further automatic questions about that attempt across reloads and new tabs,
+select **Don't ask again for this run in this browser** on its failure card.
+This explicit choice retains up to 32 attempt identities in this browser's
+storage, scoped to the Gateway and profile. It does not hide update history,
+block manual questions, or apply to another failed attempt or browser.
+Closing the card or update dialog and selecting **Review update** do not make
+this choice. If saving fails, this tab will not automatically ask about the
+current attempt again, and the card keeps an error and the save action. This
+choice does not cancel an investigation that has already started.
+Unreadable browser history pauses automatic questions without hiding the
+failure details or disabling manual Ask OpenClaw.
 If the Gateway or agent is
 unavailable, use `openclaw triage` on the Gateway host. Automatic diagnosis keeps
 your unsent composer draft, including when its conversation session must restart.

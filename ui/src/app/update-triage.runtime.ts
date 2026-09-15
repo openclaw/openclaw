@@ -18,7 +18,8 @@ export function presentUpdateFailureTriage(
   failure: UpdateFailureTriage,
   admission: UpdateTriageAdmission,
 ): void {
-  if (!admission.isCurrent()) {
+  // Loading this presenter can yield while another tab saves a newer choice.
+  if (!admission.canPresent()) {
     return;
   }
   if (!canCallGatewayMethod(context.gateway.snapshot, "openclaw.chat", "operator.admin")) {
@@ -64,6 +65,18 @@ export function presentUpdateFailureTriage(
       action: {
         label: t("updates.reviewUpdate"),
         target: { kind: "navigate", routeId: "updates" },
+      },
+      optOut: {
+        label: t("updates.triage.optOut"),
+        apply: admission.optOut.apply,
+        notice: () => {
+          const notice = admission.optOut.notice();
+          return notice === "save-failed"
+            ? t("updates.triage.optOutSaveFailed")
+            : notice === "history-unavailable"
+              ? t("updates.triage.browserHistoryUnavailable")
+              : null;
+        },
       },
     },
     admission,

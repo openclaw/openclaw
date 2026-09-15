@@ -37,8 +37,10 @@ export function renderCustodianAlertCard(params: {
   alert: CustodianAlert;
   context: ApplicationContext;
   onDismiss: () => void;
+  onOptOut: () => void;
 }) {
-  const { action } = params.alert;
+  const { action, optOut } = params.alert;
+  const notice = optOut?.notice();
   const canUpdate = canCallGatewayMethod(
     params.context.gateway.snapshot,
     "update.run",
@@ -73,5 +75,13 @@ export function renderCustodianAlertCard(params: {
           </button>`
         : nothing
     }
+    ${
+      optOut
+        ? html`<button class="btn btn--sm" type="button" @click=${params.onOptOut}>
+            ${optOut.label}
+          </button>`
+        : nothing
+    }
+    ${notice ? html`<p class="custodian__error" role="alert">${notice}</p>` : nothing}
   </article>`;
 }

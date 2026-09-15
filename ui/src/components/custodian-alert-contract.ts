@@ -18,4 +18,10 @@ export type CustodianAlert = {
   /** Prompt sent to the system agent. */
   question: string;
   action?: { label: string; target: CustodianAlertAction };
+  /** An automatic presentation's owner decides whether its explicit opt-out was saved. */
+  optOut?: {
+    label: string;
+    apply: () => boolean;
+    notice: () => string | null;
+  };
 };

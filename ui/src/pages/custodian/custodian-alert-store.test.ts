@@ -24,6 +24,25 @@ afterEach(() => {
 });
 
 describe("CustodianAlertStore", () => {
+  it.each([false, true])("does not clear a replacement alert after opt-out returns %s", (saved) => {
+    const replacement = alert("replacement");
+    const apply = vi.fn(() => {
+      custodianAlertStore.present(replacement);
+      return saved;
+    });
+    const previous = {
+      ...alert("previous"),
+      optOut: { label: "Stop automatic investigation", apply, notice: () => null },
+    };
+    custodianAlertStore.present(previous);
+    custodianAlertStore.optOut(previous);
+    expect(apply).toHaveBeenCalledOnce();
+    expect(custodianAlertStore.alert).toBe(replacement);
+    custodianAlertStore.optOut(previous);
+    expect(apply).toHaveBeenCalledOnce();
+    expect(custodianAlertStore.alert).toBe(replacement);
+  });
+
   it("asks once per presentation so both surfaces cannot double-send", () => {
     const send = vi.fn();
     const incident = alert("ask-once");

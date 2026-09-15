@@ -27,6 +27,11 @@ const enUpdateActions = {
         "The update request went unanswered. Run `openclaw triage` on the Gateway host and inspect the result before retrying.",
     },
     triage: {
+      optOut: "Don't ask again for this run in this browser",
+      optOutSaveFailed:
+        "Could not save this choice in this browser. This tab won't automatically ask about this run again. Try again to keep this choice after reload.",
+      browserHistoryUnavailable:
+        "Browser investigation history is unavailable. Automatic questions are paused; you can still ask OpenClaw manually.",
       failedTitle: "Diagnose failed update",
       unknownTitle: "Diagnose unknown update outcome",
       expectedTarget: "Expected update",

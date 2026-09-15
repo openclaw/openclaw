@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { buildSystemAgentSessionInvalidatedErrorDetails } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../api/gateway.ts";
@@ -14,7 +15,9 @@ import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { projectUpdateRunFailure } from "./update-overlay-helpers.ts";
 import type { UpdateFailureTriage, UpdateTriageAdmission } from "./update-overlay-helpers.ts";
+import { createUpdateRunReceipts } from "./update-run-receipts.ts";
 import { presentUpdateFailureTriage } from "./update-triage.runtime.ts";
+import { openUpdateFailureTriage } from "./update-triage.ts";
 
 const FAILURE: UpdateFailureTriage = {
   id: "recorded-attempt",
@@ -31,6 +34,11 @@ const FAILURE: UpdateFailureTriage = {
     afterSha: "2222222222222222222222222222222222222222",
     failure: { step: "build", detail: "Disk is full" },
   },
+};
+
+const UNSAVED_OPT_OUT: UpdateTriageAdmission["optOut"] = {
+  apply: () => false,
+  notice: () => null,
 };
 
 function typeComposerDraft(surface: HTMLElement, draft: string): HTMLTextAreaElement {
@@ -51,6 +59,245 @@ afterEach(() => {
 });
 
 describe("update triage presentation", () => {
+  it("rechecks browser opt-out before presenting a delayed overlay handoff", async () => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const run = createUpdateRunFixture({
+      status: "failed",
+      phase: "finished",
+      reason: "build-failed",
+      finishedAtMs: 3_000,
+    });
+    const request = vi.fn(async (method: string) =>
+      method === "update.status" ? { lastRun: run } : {},
+    );
+    const { context } = createContext(request);
+    const onUpdateFailure =
+      vi.fn<(failure: UpdateFailureTriage, admission: UpdateTriageAdmission) => void>();
+    const overlays = createApplicationOverlays(context.gateway, { onUpdateFailure });
+    const openPanel = vi.fn();
+    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, openPanel);
+    try {
+      await vi.waitFor(() => expect(onUpdateFailure).toHaveBeenCalledOnce());
+      const handoff = onUpdateFailure.mock.calls[0];
+      if (!handoff) {
+        throw new Error("Expected the real overlay's failure handoff");
+      }
+      const [failure, admission] = handoff;
+      const admit = vi.spyOn(admission, "admit");
+      expect(admission.isCurrent()).toBe(true);
+      expect(
+        createUpdateRunReceipts().recordTriageOptOut(
+          gatewayCredentialScope(context.gateway.connection.gatewayUrl),
+          context.gateway.snapshot.selfUser?.id ?? null,
+          failure.id,
+        ),
+      ).toBe(true);
+
+      presentUpdateFailureTriage(context, failure, admission);
+
+      expect(custodianAlertStore.alert).toBeNull();
+      expect(openPanel).not.toHaveBeenCalled();
+      expect(admission.isCurrent()).toBe(true);
+      expect(admit).not.toHaveBeenCalled();
+      expect(sessionStorage.getItem("openclaw:control-ui:update:v1")).toBeNull();
+
+      vi.spyOn(
+        await import("./update-triage.runtime.ts"),
+        "presentUpdateFailureTriage",
+      ).mockImplementation(() => {
+        throw new Error("Presentation unavailable");
+      });
+      await openUpdateFailureTriage(context, failure, admission);
+      expect(context.navigate).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, openPanel);
+      overlays.dispose();
+    }
+  });
+
+  it.each(["initial history", "final send fence"])(
+    "shows unreadable browser history at %s without sending an automatic question",
+    async (boundary) => {
+      const local = createStorageMock();
+      const historyKey = "openclaw:control-ui:update-triage-opt-out:v1";
+      vi.stubGlobal("localStorage", local);
+      vi.stubGlobal("sessionStorage", createStorageMock());
+      const run = createUpdateRunFixture({
+        status: "failed",
+        phase: "finished",
+        reason: "build-failed",
+        finishedAtMs: 3_000,
+        steps: [{ step: "build", status: "failed", detail: "Disk is full" }],
+      });
+      const request = vi.fn(
+        async (method: string, params?: { sessionId?: string; message?: string }) =>
+          method === "update.status"
+            ? { lastRun: run }
+            : { sessionId: params?.sessionId, reply: "Ready." },
+      );
+      const { context } = createContext(request);
+      const provider = createApplicationContextProvider(context);
+      const surface = document.createElement("openclaw-custodian-surface");
+      surface.store = new CustodianSessionStore();
+      provider.append(surface);
+      document.body.append(provider);
+      await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
+      if (boundary === "initial history") {
+        local.setItem(historyKey, "unreadable");
+      }
+      let changed = false;
+      const unsubscribe = surface.store.subscribe(() => {
+        if (boundary === "final send fence" && surface.store.sending && !changed) {
+          changed = true;
+          local.setItem(historyKey, "unreadable");
+        }
+      });
+      const overlays = createApplicationOverlays(context.gateway, {
+        onUpdateFailure: (failure, admission) =>
+          presentUpdateFailureTriage(context, failure, admission),
+      });
+      const messages = () =>
+        request.mock.calls.flatMap(([method, params]) =>
+          method === "openclaw.chat" && params?.message ? [params.message] : [],
+        );
+      try {
+        await vi.waitFor(() =>
+          expect(surface.textContent).toContain("Browser investigation history is unavailable"),
+        );
+        expect(changed).toBe(boundary === "final send fence");
+        expect(messages()).toEqual([]);
+        expect(surface.textContent).toContain("Disk is full");
+        expect(sessionStorage.getItem("openclaw:control-ui:update:v1")).toBeNull();
+        const composer = typeComposerDraft(surface, "Please investigate manually");
+        composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        await vi.waitFor(() => expect(messages()).toEqual(["Please investigate manually"]));
+        expect(local.getItem(historyKey)).toBe("unreadable");
+      } finally {
+        unsubscribe();
+        overlays.dispose();
+      }
+    },
+  );
+
+  it.each(["readiness", "final send fence", "scope return"])(
+    "honors a browser opt-out with failed storage at %s without blocking manual Ask",
+    async (boundary) => {
+      const waitsForAccess = boundary !== "final send fence";
+      const local = createStorageMock();
+      vi.stubGlobal("localStorage", local);
+      vi.stubGlobal("sessionStorage", createStorageMock());
+      const run = createUpdateRunFixture({
+        status: "failed",
+        phase: "finished",
+        reason: "build-failed",
+        finishedAtMs: 3_000,
+        steps: [{ step: "build", status: "failed", detail: "Disk is full" }],
+      });
+      const request = vi.fn(
+        async (method: string, params?: { sessionId?: string; message?: string }) => {
+          if (method === "update.status") {
+            return { lastRun: run };
+          }
+          return method === "openclaw.chat"
+            ? {
+                sessionId: params?.sessionId,
+                reply: "Ready to inspect the update.",
+                ...(!params?.message && waitsForAccess
+                  ? {
+                      question: {
+                        id: "access",
+                        header: "Access",
+                        question: "How should OpenClaw work?",
+                        options: [{ label: "Full access" }, { label: "Ask first" }],
+                      },
+                    }
+                  : {}),
+              }
+            : {};
+        },
+      );
+      const { context, setGatewaySnapshot } = createContext(request);
+      const provider = createApplicationContextProvider(context);
+      const surface = document.createElement("openclaw-custodian-surface");
+      surface.store = new CustodianSessionStore();
+      provider.append(surface);
+      document.body.append(provider);
+      await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
+      expect(surface.store.hasUnresolvedQuestion()).toBe(waitsForAccess);
+      const save = vi.spyOn(local, "setItem").mockImplementation(() => {
+        throw new Error("Quota exceeded");
+      });
+      const optOutButton = () =>
+        Array.from(surface.querySelectorAll("button")).find(
+          (button) => button.textContent?.trim() === "Don't ask again for this run in this browser",
+        );
+      let attempted = false;
+      let clicked = false;
+      const unsubscribe = surface.store.subscribe(() => {
+        if (boundary === "final send fence" && surface.store.sending && !attempted) {
+          attempted = true;
+          const button = optOutButton();
+          clicked = Boolean(button);
+          button?.click();
+        }
+      });
+      const onUpdateFailure = vi.fn(
+        (failure: UpdateFailureTriage, admission: UpdateTriageAdmission) =>
+          presentUpdateFailureTriage(context, failure, admission),
+      );
+      const overlays = createApplicationOverlays(context.gateway, { onUpdateFailure });
+      const messages = () =>
+        request.mock.calls.flatMap(([method, params]) =>
+          method === "openclaw.chat" && params?.message ? [params.message] : [],
+        );
+      try {
+        await vi.waitFor(() => expect(surface.textContent).toContain("Disk is full"));
+        if (waitsForAccess) {
+          expect(optOutButton()).toBeDefined();
+          optOutButton()?.click();
+        } else {
+          await vi.waitFor(() => expect(attempted).toBe(true));
+          expect(clicked).toBe(true);
+        }
+        await vi.waitFor(() =>
+          expect(surface.textContent).toContain("Could not save this choice in this browser"),
+        );
+        if (boundary === "scope return") {
+          const gatewayUrl = context.gateway.connection.gatewayUrl;
+          context.gateway.connection.gatewayUrl = "ws://other.test";
+          setGatewaySnapshot({});
+          await vi.waitFor(() => expect(onUpdateFailure).toHaveBeenCalledTimes(2));
+          context.gateway.connection.gatewayUrl = gatewayUrl;
+          setGatewaySnapshot({});
+          await vi.waitFor(() => expect(onUpdateFailure).toHaveBeenCalledTimes(3));
+          await vi.waitFor(() =>
+            expect(surface.textContent).toContain("Could not save this choice in this browser"),
+          );
+        }
+        expect(optOutButton()).toBeDefined();
+        expect(sessionStorage.getItem("openclaw:control-ui:update:v1")).toBeNull();
+        if (waitsForAccess) {
+          surface.querySelector<HTMLButtonElement>('[data-option-value="Ask first"]')?.click();
+          await vi.waitFor(() => expect(messages()).toEqual(["Ask first"]));
+        }
+        await vi.waitFor(() => expect(surface.store.sending).toBe(false));
+        expect(messages().filter((message) => message.includes("Disk is full"))).toEqual([]);
+        const composer = typeComposerDraft(surface, "Please inspect this update manually");
+        composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        await vi.waitFor(() => expect(messages()).toContain("Please inspect this update manually"));
+        save.mockRestore();
+        optOutButton()?.click();
+        await vi.waitFor(() => expect(custodianAlertStore.alert).toBeNull());
+        expect(local.getItem("openclaw:control-ui:update-triage-opt-out:v1")).toContain(run.runId);
+        expect(overlays.snapshot.updateRun).toEqual(run);
+      } finally {
+        unsubscribe();
+        overlays.dispose();
+      }
+    },
+  );
+
   it.each(["reply", "session invalidation"])(
     "preserves a draft after diagnostic %s",
     async (outcome) => {
@@ -82,7 +329,12 @@ describe("update triage presentation", () => {
       await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
       const draft = "Keep my unsent question";
       const composer = typeComposerDraft(surface, draft);
-      const admission = { isCurrent: () => true, admit: vi.fn(() => true) };
+      const admission = {
+        isCurrent: () => true,
+        canPresent: () => true,
+        admit: vi.fn(() => true),
+        optOut: UNSAVED_OPT_OUT,
+      };
       const openPanel = vi.fn();
       window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, openPanel, { once: true });
 
@@ -152,7 +404,12 @@ describe("update triage presentation", () => {
     );
     const draft = "Keep my workflow question";
     const composer = typeComposerDraft(surface, draft);
-    const admission = { isCurrent: () => true, admit: vi.fn(() => true) };
+    const admission = {
+      isCurrent: () => true,
+      canPresent: () => true,
+      admit: vi.fn(() => true),
+      optOut: UNSAVED_OPT_OUT,
+    };
 
     presentUpdateFailureTriage(context, FAILURE, admission);
     await surface.updateComplete;
@@ -372,7 +629,12 @@ describe("update triage presentation", () => {
           } as ApplicationGatewaySnapshot["hello"],
         });
       }
-      const admission = { isCurrent: () => boundary !== "stale owner", admit: vi.fn(() => true) };
+      const admission = {
+        isCurrent: () => boundary !== "stale owner",
+        canPresent: () => boundary !== "stale owner",
+        admit: vi.fn(() => true),
+        optOut: UNSAVED_OPT_OUT,
+      };
       presentUpdateFailureTriage(context, FAILURE, admission);
 
       expect(admission.admit).not.toHaveBeenCalled();
@@ -396,7 +658,12 @@ describe("update triage presentation", () => {
     surface.store = new CustodianSessionStore();
     provider.append(surface);
     document.body.append(provider);
-    const admission = { isCurrent: () => true, admit: vi.fn(() => true) };
+    const admission = {
+      isCurrent: () => true,
+      canPresent: () => true,
+      admit: vi.fn(() => true),
+      optOut: UNSAVED_OPT_OUT,
+    };
     presentUpdateFailureTriage(context, FAILURE, admission);
     await surface.updateComplete;
 
@@ -529,7 +796,9 @@ describe("update triage presentation", () => {
       const composer = typeComposerDraft(surface, draft);
       const admission = {
         isCurrent: () => true,
+        canPresent: () => true,
         admit: vi.fn(() => failure !== "consumed admission"),
+        optOut: UNSAVED_OPT_OUT,
       };
       presentUpdateFailureTriage(context, FAILURE, admission);
       await vi.waitFor(() => expect(admission.admit).toHaveBeenCalledOnce());
@@ -588,7 +857,12 @@ describe("update triage presentation", () => {
     if (!failure) {
       throw new Error("Expected a failed run projection");
     }
-    presentUpdateFailureTriage(context, failure, { isCurrent: () => true, admit: () => true });
+    presentUpdateFailureTriage(context, failure, {
+      isCurrent: () => true,
+      canPresent: () => true,
+      admit: () => true,
+      optOut: UNSAVED_OPT_OUT,
+    });
 
     const alert = custodianAlertStore.alert;
     expect(alert?.question).toContain(run.runId);

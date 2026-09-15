@@ -71,6 +71,136 @@ async function recordUpdateTraffic(page: Page): Promise<MockGatewayRequest[]> {
 }
 
 suite.define(() => {
+  it.each([1_400, 390])(
+    "remembers explicit browser opt-out across reload and new tabs at %ipx",
+    async (width) => {
+      const artifactDir = createControlUiE2eArtifactDir(`update-triage-browser-opt-out-${width}`);
+      const optOutKey = "openclaw:control-ui:update-triage-opt-out:v1";
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 1_000, width } },
+        async ({ page, context }) => {
+          const traffic = await recordUpdateTraffic(page);
+          const scenario = {
+            featureMethods: [...defaultControlUiFeatureMethods, "openclaw.chat"],
+            methodResponses: {
+              "update.status": { sentinel: FAILURE, schedule: SCHEDULE },
+              "openclaw.chat": {
+                sequence: [
+                  {
+                    sessionId: "browser-opt-out",
+                    reply: "Review access before continuing.",
+                    question: {
+                      id: "access",
+                      header: "Access",
+                      question: "How should OpenClaw work?",
+                      options: [{ label: "Full access" }, { label: "Ask first" }],
+                    },
+                  },
+                  { sessionId: "browser-opt-out", reply: "Ready for your question." },
+                  { sessionId: "browser-opt-out", reply: "I will inspect this manually." },
+                ],
+              },
+            },
+          };
+          const gateway = await installMockGateway(page, scenario);
+          await page.goto(`${suite.server.baseUrl}settings/updates`);
+          await gateway.waitForRequest("update.status");
+          const panel = page.locator("openclaw-assistant-panel");
+          const card = panel.locator(".custodian__alert-card");
+          const optOut = card.getByRole("button", {
+            name: "Don't ask again for this run in this browser",
+            exact: true,
+          });
+          await panel.locator('[data-option-value="Ask first"]').waitFor();
+          await optOut.waitFor();
+          const bounds = await optOut.boundingBox();
+          expect(bounds).not.toBeNull();
+          if (!bounds) {
+            throw new Error("Expected visible browser opt-out action");
+          }
+          expect(bounds.x).toBeGreaterThanOrEqual(0);
+          expect(bounds.x + bounds.width).toBeLessThanOrEqual(width);
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "01-before-choice.png"),
+          });
+          const restoreSetItem = await page.evaluateHandle((key) => {
+            const descriptor = Object.getOwnPropertyDescriptor(Storage.prototype, "setItem");
+            const original: unknown = descriptor?.value;
+            if (!descriptor || typeof original !== "function") {
+              throw new Error("Storage.setItem descriptor is unavailable");
+            }
+            const local = window.localStorage;
+            Object.defineProperty(Storage.prototype, "setItem", {
+              ...descriptor,
+              value(this: Storage, storageKey: string, value: string) {
+                if (this === local && storageKey === key) {
+                  throw new DOMException("Storage full", "QuotaExceededError");
+                }
+                Reflect.apply(original, this, [storageKey, value]);
+              },
+            });
+            return () => Object.defineProperty(Storage.prototype, "setItem", descriptor);
+          }, optOutKey);
+          await optOut.click();
+          await card.getByRole("alert").filter({ hasText: "Could not save this choice" }).waitFor();
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "02-save-failed.png"),
+          });
+          await panel.locator('[data-option-value="Ask first"]').click();
+          await panel.getByText("Ready for your question.", { exact: true }).waitFor();
+          const questions = () =>
+            traffic.flatMap(({ method, params }) =>
+              method === "openclaw.chat" &&
+              params &&
+              typeof params === "object" &&
+              "message" in params
+                ? [params.message]
+                : [],
+            );
+          expect(questions()).toEqual(["Ask first"]);
+          await panel.locator("textarea").fill("Please investigate manually");
+          await panel.locator(".chat-send-btn").click();
+          await panel.getByText("I will inspect this manually.", { exact: true }).waitFor();
+          expect(questions()).toEqual(["Ask first", "Please investigate manually"]);
+          await page.evaluate((restore) => {
+            restore();
+          }, restoreSetItem);
+          await restoreSetItem.dispose();
+          await optOut.click();
+          await card.waitFor({ state: "hidden" });
+          expect(await page.evaluate((key) => localStorage.getItem(key), optOutKey)).toContain(
+            FAILURE.stats.handoffId,
+          );
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "03-choice-saved.png"),
+          });
+          await page.reload();
+          await gateway.waitForRequest("update.status");
+          await expectRequestCountStable(gateway, "openclaw.chat", 0);
+          expect(await page.locator(".custodian__alert-card").count()).toBe(0);
+          await page.screenshot({
+            animations: "disabled",
+            path: path.join(artifactDir, "04-reloaded-without-investigation.png"),
+          });
+          const nextTab = await context.newPage();
+          const nextGateway = await installMockGateway(nextTab, scenario);
+          await nextTab.goto(`${suite.server.baseUrl}settings/updates`);
+          await nextGateway.waitForRequest("update.status");
+          await expectRequestCountStable(nextGateway, "openclaw.chat", 0);
+          expect(await nextTab.locator(".custodian__alert-card").count()).toBe(0);
+          await nextTab
+            .locator("#config-section-update .settings-status")
+            .getByText("openclaw triage", { exact: false })
+            .waitFor();
+          expect(traffic.filter(({ method }) => method === "update.run")).toHaveLength(0);
+        },
+      );
+    },
+  );
+
   it.each(["manual", "automatic", "missing triage module"])(
     "takes a pre-ledger %s failure into diagnosis without replaying the update",
     async (source) => {

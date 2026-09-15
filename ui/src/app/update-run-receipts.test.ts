@@ -4,6 +4,7 @@ import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunReceipts } from "./update-run-receipts.ts";
 
 const TRIAGED_KEY = "openclaw:control-ui:update:v1";
+const OPT_OUT_KEY = "openclaw:control-ui:update-triage-opt-out:v1";
 beforeEach(() => {
   vi.stubGlobal("sessionStorage", createStorageMock());
   vi.stubGlobal("localStorage", createStorageMock());
@@ -11,6 +12,58 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("update browser receipts", () => {
+  it("keeps explicit browser opt-out separate from acknowledgements and tab investigations", () => {
+    const receipts = createUpdateRunReceipts();
+    receipts.acknowledge("ws://gateway.test", "operator", "acknowledged");
+    receipts.recordTriage("ws://gateway.test", "operator", "investigated");
+    expect(receipts.triageOptOut("ws://gateway.test", "operator", "acknowledged")).toBe(false);
+    expect(receipts.triageOptOut("ws://gateway.test", "operator", "investigated")).toBe(false);
+    expect(receipts.recordTriageOptOut("ws://gateway.test", "operator", "declined")).toBe(true);
+    expect(receipts.acknowledged("ws://gateway.test", "operator", "declined")).toBe(false);
+    expect(receipts.triaged("ws://gateway.test", "operator", "declined")).toBe(false);
+    sessionStorage.clear();
+    const nextTab = createUpdateRunReceipts();
+    expect(nextTab.triageOptOut("ws://gateway.test", "operator", "declined")).toBe(true);
+    expect(nextTab.triageOptOut("ws://other.test", "operator", "declined")).toBe(false);
+    expect(nextTab.triageOptOut("ws://gateway.test", "other", "declined")).toBe(false);
+    expect(nextTab.triageOptOut("ws://gateway.test", "operator", "new-run")).toBe(false);
+    expect(nextTab.recordTriageOptOut("ws://gateway.test", "operator", "another")).toBe(true);
+    expect(receipts.triageOptOut("ws://gateway.test", "operator", "another")).toBe(true);
+  });
+
+  it("retains at most 32 browser opt-outs without clearing investigated history", () => {
+    const receipts = createUpdateRunReceipts();
+    receipts.recordTriage("ws://gateway.test", null, "investigated");
+    const previous = sessionStorage.getItem(TRIAGED_KEY);
+    for (let index = 0; index <= 32; index++) {
+      expect(receipts.recordTriageOptOut("ws://gateway.test", null, String(index))).toBe(true);
+    }
+    expect(receipts.triageOptOut("ws://gateway.test", null, "0")).toBe(false);
+    expect(receipts.triageOptOut("ws://gateway.test", null, "1")).toBe(true);
+    expect(receipts.triageOptOut("ws://gateway.test", null, "32")).toBe(true);
+    expect(sessionStorage.getItem(TRIAGED_KEY)).toBe(previous);
+  });
+
+  it.each(["unavailable", "read denied", "malformed", "oversized"])(
+    "does not treat %s browser opt-out history as permission to investigate",
+    (failure) => {
+      const local = createStorageMock();
+      if (failure === "malformed" || failure === "oversized") {
+        local.setItem(OPT_OUT_KEY, failure === "malformed" ? "[42]" : "x".repeat(32_768));
+      }
+      if (failure === "read denied") {
+        vi.spyOn(local, "getItem").mockImplementation(() => {
+          throw new Error("Access denied");
+        });
+      }
+      vi.stubGlobal("localStorage", failure === "unavailable" ? undefined : local);
+      const receipts = createUpdateRunReceipts();
+      expect(receipts.triageOptOut("ws://gateway.test", null, "run")).toBeNull();
+      expect(receipts.recordTriageOptOut("ws://gateway.test", null, "run")).toBe(false);
+      expect(sessionStorage.getItem(TRIAGED_KEY)).toBeNull();
+    },
+  );
+
   it("keeps result dismissal separate from automatic triage and scoped to Gateway and profile", () => {
     const receipts = createUpdateRunReceipts();
     expect(receipts.acknowledge("ws://gateway.test", "operator", "run-1")).toBe(true);

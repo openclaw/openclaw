@@ -3,7 +3,7 @@ import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts"
 
 // Only browser acknowledgments live here. Run identity, progress and outcomes
 // always come from the Gateway ledger, including after a bundle reload.
-type ReceiptKind = "acknowledged" | "triaged";
+type ReceiptKind = "acknowledged" | "triaged" | "triage-opt-out";
 const TRIAGED_KEY = "openclaw:control-ui:update:v1";
 const ARRAY_TRIAGED_KEY = "openclaw:control-ui:update-triaged:v1";
 
@@ -11,7 +11,7 @@ export function createUpdateRunReceipts() {
   const acknowledged = getSafeLocalStorage();
   const triaged = getSafeSessionStorage();
   const key = (kind: ReceiptKind) =>
-    kind === "triaged" ? TRIAGED_KEY : "openclaw:control-ui:update-acknowledged:v1";
+    kind === "triaged" ? TRIAGED_KEY : `openclaw:control-ui:update-${kind}:v1`;
   const read = (storage: Storage | null, storageKey: string): string[] | null => {
     try {
       const raw = storage?.getItem(storageKey);
@@ -76,5 +76,11 @@ export function createUpdateRunReceipts() {
       (readTriage() ?? []).includes(id(gateway, profile, runId)),
     recordTriage: (gateway: string, profile: string | null, runId: string) =>
       record(triaged, "triaged", id(gateway, profile, runId)),
+    triageOptOut: (gateway: string, profile: string | null, runId: string): boolean | null => {
+      const saved = acknowledged && read(acknowledged, key("triage-opt-out"));
+      return saved ? saved.includes(id(gateway, profile, runId)) : null;
+    },
+    recordTriageOptOut: (gateway: string, profile: string | null, runId: string) =>
+      record(acknowledged, "triage-opt-out", id(gateway, profile, runId)),
   };
 }

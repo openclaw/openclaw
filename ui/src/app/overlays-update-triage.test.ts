@@ -8,6 +8,7 @@ import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { client, flushMicrotasks, type RequestFn } from "./overlays-access.test-support.ts";
 import type { ApplicationUpdateOverlayHooks } from "./overlays-updates.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import { createUpdateRunReceipts } from "./update-run-receipts.ts";
 import { updateRunHarness } from "./update-run.test-support.ts";
 
 const FAILURE = updateRunFixture({
@@ -42,6 +43,180 @@ afterEach(() => {
 });
 
 describe("update failure triage admission", () => {
+  it("bounds transient failed-save declines without clearing the other retained runs", async () => {
+    const runAt = (index: number) => ({
+      ...FAILURE,
+      runId: `declined-${index}`,
+      createdAtMs: 4_000 + index,
+      updatedAtMs: 4_000 + index,
+    });
+    let run = runAt(0);
+    const harness = updateRunHarness(async () => ({ lastRun: run }));
+    const gatewayUrl = harness.gateway.connection.gatewayUrl;
+    const onUpdateFailure = vi.fn<NonNullable<ApplicationUpdateOverlayHooks["onUpdateFailure"]>>();
+    const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+    const save = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new Error("Storage full");
+    });
+    const returnToRun = async (index: number) => {
+      run = runAt(index);
+      harness.gateway.connection.gatewayUrl = "ws://other.test";
+      harness.update({});
+      await flushMicrotasks();
+      harness.gateway.connection.gatewayUrl = gatewayUrl;
+      harness.update({});
+      await flushMicrotasks();
+      return onUpdateFailure.mock.calls.at(-1)![1];
+    };
+    try {
+      await flushMicrotasks();
+      for (let index = 0; index <= 32; index++) {
+        run = runAt(index);
+        await overlays.refreshUpdateStatus();
+        expect(onUpdateFailure.mock.calls.at(-1)![1].optOut.apply()).toBe(false);
+      }
+      const retained = await returnToRun(1);
+      expect(retained.optOut.notice()).toBe("save-failed");
+      expect(retained.admit()).toBe(false);
+      const evicted = await returnToRun(0);
+      expect(evicted.optOut.notice()).toBeNull();
+      expect(evicted.admit()).toBe(true);
+      expect(localStorage.getItem("openclaw:control-ui:update-triage-opt-out:v1")).toBeNull();
+    } finally {
+      save.mockRestore();
+      overlays.dispose();
+    }
+  });
+
+  it.each(["Gateway", "profile"] as const)(
+    "retains a failed-save decline after returning to its %s without retaining callbacks",
+    async (boundary) => {
+      let run = FAILURE;
+      const request = vi.fn<RequestFn>(async () => ({ lastRun: run }));
+      const harness = updateRunHarness(request);
+      const initialGateway = harness.gateway.connection.gatewayUrl;
+      const admin = harness.gateway.snapshot.hello;
+      const onUpdateFailure =
+        vi.fn<NonNullable<ApplicationUpdateOverlayHooks["onUpdateFailure"]>>();
+      let overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+      const save = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+        throw new Error("Storage full");
+      });
+      const switchScope = (other: boolean) => {
+        harness.gateway.connection.gatewayUrl =
+          boundary === "Gateway" && other ? "ws://other.test" : initialGateway;
+        harness.update({ phase: "connecting", client: null, hello: null });
+        harness.update({
+          phase: "connected",
+          client: client(request),
+          hello: admin,
+          selfUser:
+            boundary === "profile" && other
+              ? ({ id: "other" } as NonNullable<ApplicationGatewaySnapshot["selfUser"]>)
+              : undefined,
+        });
+      };
+      try {
+        await flushMicrotasks();
+        const original = onUpdateFailure.mock.calls[0]![1];
+        expect(original.optOut.apply()).toBe(false);
+        expect(original.admit()).toBe(false);
+        switchScope(true);
+        await flushMicrotasks();
+        expect(original.isCurrent()).toBe(false);
+        expect(original.optOut.apply()).toBe(false);
+        expect(onUpdateFailure.mock.calls[1]![1].admit()).toBe(true);
+        switchScope(false);
+        await flushMicrotasks();
+        const returned = onUpdateFailure.mock.calls[2]![1];
+        expect(returned.isCurrent()).toBe(true);
+        expect(returned.canPresent()).toBe(true);
+        expect(returned.admit()).toBe(false);
+        expect(returned.optOut.notice()).toBe("save-failed");
+        expect(original.isCurrent()).toBe(false);
+        expect(overlays.snapshot.updateRun).toEqual(FAILURE);
+        expect(overlays.snapshot.updateRunAcknowledged).toBe(false);
+
+        run = { ...FAILURE, runId: "new-failed-run", createdAtMs: 4_000, updatedAtMs: 4_000 };
+        await overlays.refreshUpdateStatus();
+        expect(onUpdateFailure.mock.calls[3]![1].admit()).toBe(true);
+        overlays.dispose();
+        run = FAILURE;
+        overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+        await flushMicrotasks();
+        expect(returned.isCurrent()).toBe(false);
+        expect(onUpdateFailure.mock.calls[4]![1].admit()).toBe(true);
+        expect(localStorage.getItem("openclaw:control-ui:update-triage-opt-out:v1")).toBeNull();
+      } finally {
+        save.mockRestore();
+        overlays.dispose();
+      }
+    },
+  );
+
+  it("retains a declined run across reload and new tabs while a new run remains eligible", async () => {
+    let run = FAILURE;
+    const harness = updateRunHarness(async () => ({ lastRun: run }));
+    const onUpdateFailure = vi.fn<NonNullable<ApplicationUpdateOverlayHooks["onUpdateFailure"]>>();
+    let overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+    try {
+      await flushMicrotasks();
+      const admission = onUpdateFailure.mock.calls[0]![1];
+      expect(admission.optOut.apply()).toBe(true);
+      expect(admission.isCurrent()).toBe(true);
+      expect(admission.admit()).toBe(false);
+      expect(overlays.snapshot.updateRunAcknowledged).toBe(false);
+      expect(overlays.snapshot.updateRun).toEqual(FAILURE);
+      for (const newTab of [false, true]) {
+        overlays.dispose();
+        if (newTab) {
+          sessionStorage.clear();
+        }
+        overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+        await flushMicrotasks();
+        expect(onUpdateFailure).toHaveBeenCalledOnce();
+        expect(overlays.snapshot.updateRun).toEqual(FAILURE);
+      }
+      run = { ...FAILURE, runId: "new-failed-run", createdAtMs: 4_000, updatedAtMs: 4_000 };
+      await overlays.refreshUpdateStatus();
+      expect(onUpdateFailure).toHaveBeenCalledTimes(2);
+      expect(onUpdateFailure.mock.calls[1]![1].admit()).toBe(true);
+    } finally {
+      overlays.dispose();
+    }
+  });
+
+  it.each(["saved in another tab", "unreadable history"])(
+    "checks fresh browser intent at final admission after %s",
+    async (boundary) => {
+      const harness = updateRunHarness(async () => ({ lastRun: FAILURE }));
+      const onUpdateFailure =
+        vi.fn<NonNullable<ApplicationUpdateOverlayHooks["onUpdateFailure"]>>();
+      const overlays = createApplicationOverlays(harness.gateway, { onUpdateFailure });
+      try {
+        await flushMicrotasks();
+        const admission = onUpdateFailure.mock.calls[0]![1];
+        if (boundary === "saved in another tab") {
+          createUpdateRunReceipts().recordTriageOptOut(
+            gatewayCredentialScope(harness.gateway.connection.gatewayUrl),
+            null,
+            FAILURE.runId,
+          );
+        } else {
+          localStorage.setItem("openclaw:control-ui:update-triage-opt-out:v1", "unreadable");
+        }
+        expect(admission.isCurrent()).toBe(true);
+        expect(admission.admit()).toBe(false);
+        expect(admission.optOut.notice()).toBe(
+          boundary === "unreadable history" ? "history-unavailable" : null,
+        );
+        expect(sessionStorage.getItem("openclaw:control-ui:update:v1")).toBeNull();
+      } finally {
+        overlays.dispose();
+      }
+    },
+  );
+
   it("presents a manual terminal failure after its admission request releases the interlock", async () => {
     const harness = updateRunHarness(async (method) => {
       if (method === "update.run") {
@@ -149,6 +324,7 @@ describe("update failure triage admission", () => {
         switchScope(true);
         await flushMicrotasks();
         expect(admission.isCurrent()).toBe(false);
+        expect(admission.optOut.apply()).toBe(false);
         expect(onUpdateFailure).toHaveBeenCalledTimes(2);
         switchScope(false);
         await flushMicrotasks();

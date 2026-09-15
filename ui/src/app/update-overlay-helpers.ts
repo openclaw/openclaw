@@ -38,7 +38,12 @@ type UpdateOutcomeRecord = { id: string | null; timestampMs: number | null };
 
 export type UpdateTriageAdmission = {
   isCurrent: () => boolean;
+  canPresent: () => boolean;
   admit: () => boolean;
+  optOut: {
+    apply: () => boolean;
+    notice: () => "save-failed" | "history-unavailable" | null;
+  };
 };
 
 const UPDATE_FAILURE_REASON_KEYS: Record<string, string> = {

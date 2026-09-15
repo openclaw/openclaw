@@ -99,11 +99,13 @@ class CustodianSurface extends OpenClawLightDomElement {
 
   override render() {
     const store = this.store;
-    const alertCard = custodianAlertStore.alert
+    const alert = custodianAlertStore.alert;
+    const alertCard = alert
       ? renderCustodianAlertCard({
-          alert: custodianAlertStore.alert,
+          alert,
           context: this.context,
           onDismiss: () => custodianAlertStore.dismiss(),
+          onOptOut: () => custodianAlertStore.optOut(alert),
         })
       : nothing;
     if (store.setupRequired) {

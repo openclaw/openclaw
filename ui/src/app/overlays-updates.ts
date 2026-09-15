@@ -93,6 +93,7 @@ export function createApplicationUpdateOverlays(
   let updateAttempt: UpdateAdmissionAttempt | null = null;
   let currentFailure: UpdateFailureTriage | null = null;
   let presentedFailure: UpdateFailureTriage | null = null;
+  let declinedFailures: Array<{ key: string; saveFailed: boolean }> = [];
 
   const updateFailureReporter = createUpdateFailureReportController({
     getClient: () => gateway.snapshot.client,
@@ -149,25 +150,61 @@ export function createApplicationUpdateOverlays(
     ) {
       return;
     }
+    const declineKey = JSON.stringify([scope, profile, owned.id]);
+    const declined = () => declinedFailures.find(({ key }) => key === declineKey);
     const isCurrent = () =>
       !disposed &&
       currentFailure === owned &&
       gatewayCredentialScope(gateway.connection.gatewayUrl) === scope &&
       (gateway.snapshot.selfUser?.id ?? null) === profile &&
       readGatewayOperatorAccess(gateway.snapshot).canAdmin;
-    if (!isCurrent() || receipts.triaged(scope, profile, owned.id)) {
+    const canPresent = () =>
+      isCurrent() &&
+      !receipts.triaged(scope, profile, owned.id) &&
+      receipts.triageOptOut(scope, profile, owned.id) !== true;
+    if (!canPresent()) {
       return;
     }
     presentedFailure = owned;
     hooks.onUpdateFailure?.(owned, {
       isCurrent,
+      canPresent,
       admit: () =>
         isCurrent() &&
         gateway.snapshot.phase === "connected" &&
         !snapshot.updateRunning &&
         !snapshot.updateReconciliationPending &&
+        !declined() &&
+        receipts.triageOptOut(scope, profile, owned.id) === false &&
         !receipts.triaged(scope, profile, owned.id) &&
         receipts.recordTriage(scope, profile, owned.id),
+      optOut: {
+        apply: () => {
+          if (!isCurrent()) {
+            return false;
+          }
+          // The click retires queued automatic work even when durable storage fails.
+          // Keep presentation authority separate so the operator can retry the save.
+          const decline = { key: declineKey, saveFailed: true };
+          // Match the browser receipt bound, but retain intent across scope changes.
+          declinedFailures = [
+            ...declinedFailures.filter(({ key }) => key !== declineKey),
+            decline,
+          ].slice(-32);
+          const saved = receipts.recordTriageOptOut(scope, profile, owned.id);
+          decline.saveFailed = !saved;
+          if (!isCurrent()) {
+            return false;
+          }
+          return saved;
+        },
+        notice: () =>
+          declined()?.saveFailed
+            ? "save-failed"
+            : receipts.triageOptOut(scope, profile, owned.id) === null
+              ? "history-unavailable"
+              : null,
+      },
     });
   }
 

@@ -39,6 +39,22 @@ class CustodianAlertStore {
     this.emit();
   }
 
+  optOut(alert: CustodianAlert): void {
+    if (this.alert !== alert || !alert.optOut) {
+      return;
+    }
+    const saved = alert.optOut.apply();
+    // Storage and owner callbacks may synchronously replace the presented alert.
+    if (this.alert !== alert) {
+      return;
+    }
+    if (saved) {
+      this.dismiss();
+    } else {
+      this.emit();
+    }
+  }
+
   askIfReady(
     send: (question: string, admission?: CustodianTurnAdmission, display?: string) => void,
   ): void {

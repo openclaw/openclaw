@@ -12,7 +12,7 @@ export async function openUpdateFailureTriage(
     const { presentUpdateFailureTriage } = await import("./update-triage.runtime.ts");
     presentUpdateFailureTriage(context, failure, admission);
   } catch {
-    if (admission.isCurrent()) {
+    if (admission.canPresent()) {
       context.navigate("updates");
     }
   }
