@@ -229,6 +229,8 @@ Use the same `accountId` in both calls. Omit it from both to select the default 
 
 An explicitly started account appears in runtime status while the Gateway owns its lifecycle, even if the plugin's static account list does not yet include it. After a successful stop, that unlisted account disappears from status. Default-account selection and automatic health-monitor and host-thaw recovery continue to use the plugin's static account list.
 
+Host-thaw recovery detects maintenance gaps at least 45 seconds beyond the normal cadence. If process CPU time consumed at least half of the gap, the Gateway logs event-loop load and skips thaw recovery, preserving event-loop health measurements. Otherwise, it refreshes health and presence and attempts channel recovery when tracked work is idle. Busy checks leave work admission open. Channel restart retries expire ten minutes after thaw detection, including time spent waiting for admission to reopen; deferral and abandonment are each logged once per thaw. Ordinary channel health monitoring continues after this window expires.
+
 `outcome` explains the lifecycle owner's decision for the requested account:
 
 - `{ status: "handed-off" }`: startup was handed to the account runtime. Check status for provider connectivity.
