@@ -1,4 +1,4 @@
-import { existsSync, lstatSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pluginContractPatterns } from "../../test/vitest/vitest.contracts-paths.mjs";
 import {
@@ -7,6 +7,7 @@ import {
   isUiTestTarget,
 } from "../../test/vitest/vitest.ui-paths.mjs";
 import { detectChangedLanes } from "../changed-lanes.mts";
+import { listWindowsCiTestFiles } from "../ci-changed-scope.mjs";
 import {
   buildVitestRunPlans,
   CHANNEL_CONTRACT_CONFIG_PATTERNS,
@@ -62,6 +63,41 @@ type ChangedNodeTestShard = {
 };
 type ChangedExtensionConfigShard = ChangedNodeTestShard & { predictedSeconds: number };
 type CwdOptions = { cwd?: string };
+
+/** Only independent native test entries can replace the complete Windows suites. */
+export function resolveChangedWindowsTestTargets(
+  changedPaths: string[],
+  options: CwdOptions = {},
+): string[] | undefined {
+  const cwd = options.cwd ?? process.cwd();
+  if (
+    !Array.isArray(changedPaths) ||
+    changedPaths.length === 0 ||
+    changedPaths.some(
+      (file) =>
+        !file.endsWith(".test.ts") ||
+        path.posix.normalize(file) !== file ||
+        path.isAbsolute(file) ||
+        file.startsWith("../") ||
+        file.includes("\\") ||
+        !existsSync(path.join(cwd, file)) ||
+        !lstatSync(path.join(cwd, file)).isFile(),
+    )
+  ) {
+    return undefined;
+  }
+  const { scripts } = JSON.parse(readFileSync(path.join(cwd, "package.json"), "utf8")) as {
+    scripts: Record<string, string | undefined>;
+  };
+  const inventory = new Set(listWindowsCiTestFiles(scripts));
+  if (
+    changedPaths.some((file) => !inventory.has(file)) ||
+    hasImportGraphConsumers(changedPaths, cwd, { tooling: true })
+  ) {
+    return undefined;
+  }
+  return [...new Set(changedPaths)];
+}
 
 /** Ordinary UI unit entries retain their unit owner; fixtures and their consumers retain E2E. */
 export function hasUiE2eAffectingChange(changedPaths: string[], options: CwdOptions = {}) {

@@ -15,6 +15,7 @@ import {
   hasQaSmokeAffectingChange,
   hasSqliteSessionLifecycleAffectingChange,
   hasUiE2eAffectingChange,
+  resolveChangedWindowsTestTargets,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
@@ -46,6 +47,67 @@ const gitToolingTargets = [
   "release-workflow-git-lifecycle",
   "ci-workflow-guards",
 ].map((name) => `test/scripts/${name}.test.ts`);
+
+it("selects the canvas Windows test without unrelated native compiler suites", () => {
+  const target = "extensions/canvas/scripts/pnpm-runner.test.ts";
+  expect(resolveChangedWindowsTestTargets([target])).toEqual([target]);
+});
+
+it.each(
+  [
+    [],
+    ["package.json"],
+    ["extensions/canvas/scripts/pnpm-runner.mjs"],
+    ["extensions/canvas/scripts/pnpm-runner.test.ts", "test/helpers/temp-dir.ts"],
+    ["src/infra/deleted.windows.test.ts"],
+    ["extensions/canvas/scripts/../scripts/pnpm-runner.test.ts"],
+    ["ui/src/pages/activity/activity-page.test.ts"],
+  ].map((paths) => ({ paths })),
+)("keeps complete Windows coverage for unresolved changes $paths", ({ paths }) => {
+  expect(resolveChangedWindowsTestTargets(paths)).toBeUndefined();
+});
+
+it.each(["leaf", "source-consumer", "tooling-consumer", "archive", "untracked", "symlink"])(
+  "preserves Windows coverage for %s test entries",
+  (mode) => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-windows-test-selection-"));
+    const target = "test/native.test.ts";
+    try {
+      mkdirSync(path.join(cwd, "test"));
+      writeFileSync(path.join(cwd, "test/source.ts"), "export const fixture = 1;\n");
+      if (mode === "symlink") {
+        symlinkSync("source.ts", path.join(cwd, target));
+      } else {
+        writeFileSync(path.join(cwd, target), "export const fixture = 1;\n");
+      }
+      writeFileSync(
+        path.join(cwd, "package.json"),
+        JSON.stringify({
+          scripts: {
+            "test:windows:ci:1": `node scripts/test-projects.mts ${target}`,
+            "test:windows:ci:2": "node scripts/test-projects.mts test/other.test.ts",
+          },
+        }),
+      );
+      if (mode.endsWith("consumer")) {
+        const directory = mode === "tooling-consumer" ? "scripts" : "src";
+        mkdirSync(path.join(cwd, directory));
+        writeFileSync(path.join(cwd, directory, "consumer.ts"), `import "../${target}";\n`);
+      }
+      if (mode !== "archive") {
+        execFileSync("git", ["init", "-q"], { cwd });
+        if (mode !== "untracked") {
+          execFileSync("git", ["add", "."], { cwd });
+        }
+      }
+      expect(resolveChangedWindowsTestTargets([target], { cwd })).toEqual(
+        mode === "leaf" ? [target] : undefined,
+      );
+    } finally {
+      rmSync(cwd, { force: true, recursive: true });
+    }
+  },
+);
 
 it("keeps ordinary activity unit changes with their UI unit owner", () => {
   expect(hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.test.ts"])).toBe(false);
