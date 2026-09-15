@@ -320,7 +320,7 @@ async function dispatchDiscordCommandInteraction(params: {
     channel,
     client: interaction.client,
     hasGuild: Boolean(interaction.guild),
-    channelIdFallback: "",
+    channelIdFallback: interaction.rawData.channel_id ?? "",
   });
   if (policy?.isCurrent() === false) {
     await respond("Access policy changed. Try this interaction again.", { ephemeral: true });

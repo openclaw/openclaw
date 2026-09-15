@@ -132,7 +132,7 @@ async function resolveDiscordModelPickerRouteState(params: {
       channel: interaction.channel,
       client: interaction.client,
       hasGuild: Boolean(interaction.guild),
-      channelIdFallback: "unknown",
+      channelIdFallback: interaction.rawData.channel_id ?? "unknown",
     });
   const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
     ? interaction.rawData.member.roles.map((roleId: string) => roleId)
