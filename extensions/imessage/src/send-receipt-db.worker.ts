@@ -45,6 +45,16 @@ export function openExistingSqliteWorkerBackend(
         );
         return typeof row?.guid === "string" ? row.guid : null;
       }
+      if (command.type === "maxRowid") {
+        const row = executeSqliteQueryTakeFirstSync(
+          db,
+          query.selectFrom("message").select((eb) => eb.fn.max("ROWID").as("maxRowid")),
+        );
+        if (typeof row?.maxRowid === "number" && Number.isFinite(row.maxRowid)) {
+          return row.maxRowid;
+        }
+        return row && row.maxRowid === null ? 0 : null;
+      }
       const { target, text, sentAfterMs } = command.input;
       let selection = query
         .selectFrom("message as m")

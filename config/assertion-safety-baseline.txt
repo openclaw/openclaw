@@ -547,7 +547,7 @@ extensions/imessage/src/monitor/catchup-bridge.ts	1
 extensions/imessage/src/monitor/catchup.ts	2
 extensions/imessage/src/monitor/conversation-repair.ts	1
 extensions/imessage/src/monitor/inbound-processing.ts	2
-extensions/imessage/src/monitor/monitor-provider.ts	2
+extensions/imessage/src/monitor/monitor-provider.ts	1
 extensions/imessage/src/probe.ts	1
 extensions/imessage/src/remote-host.ts	1
 extensions/imessage/src/send.ts	2

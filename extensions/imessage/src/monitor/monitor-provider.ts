@@ -55,7 +55,6 @@ import {
   resolveSendPolicy,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
@@ -81,6 +80,7 @@ import {
   maybeResolveIMessageQuestionReaction,
 } from "../question-reactions.js";
 import { resolveIMessageRemoteHost } from "../remote-host.js";
+import { withIMessageReceiptGuidReader } from "../send-receipt-db.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
@@ -216,28 +216,24 @@ function resolveIMessageWatchSourceDbPath(params: {
   return resolveIMessageChatDbLookupPath(params);
 }
 
-async function resolveIMessageStartupRowidWatermark(dbPath: string): Promise<number | null> {
-  let database:
-    | {
-        close: () => void;
-        prepare: (sql: string) => { get: () => unknown };
-      }
-    | undefined;
-  try {
-    database = openNodeSqliteDatabase(dbPath, { readOnly: true });
-    const row = database.prepare("SELECT MAX(ROWID) AS maxRowid FROM message").get() as
-      | { maxRowid?: unknown }
-      | undefined;
-    if (typeof row?.maxRowid === "number" && Number.isFinite(row.maxRowid)) {
-      return row.maxRowid;
-    }
-    return row?.maxRowid === null ? 0 : null;
-  } catch (err) {
+// Reads MAX(ROWID) through the worker-backed chat.db reader (see #148750) so a
+// wedged chat.db blocks only that worker thread, not the gateway's main event
+// loop. `timeoutMs` bounds how long provider startup waits for the read; a
+// stuck open leaves the worker running but startup still proceeds.
+async function resolveIMessageStartupRowidWatermark(
+  dbPath: string,
+  timeoutMs: number,
+): Promise<number | null> {
+  const watermark = withIMessageReceiptGuidReader(dbPath, (read) =>
+    read({ type: "maxRowid", input: {} }),
+  ).catch((err: unknown) => {
     logVerbose(`imessage: startup rowid watermark unavailable for db=${dbPath}: ${String(err)}`);
     return null;
-  } finally {
-    database?.close();
-  }
+  });
+  const timedOut = new Promise<null>((resolve) => {
+    setTimeout(() => resolve(null), timeoutMs).unref();
+  });
+  return Promise.race([watermark, timedOut]);
 }
 
 const warnIfImsgUpgradeNeeded = (() => {
@@ -460,7 +456,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   // suppresses old backlog, just with the narrower live window.
   const watchSourceDbPath = resolveIMessageWatchSourceDbPath({ cliPath, dbPath, remoteHost });
   const recoveryBoundaryRowid = watchSourceDbPath
-    ? await resolveIMessageStartupRowidWatermark(watchSourceDbPath)
+    ? await resolveIMessageStartupRowidWatermark(watchSourceDbPath, probeTimeoutMs)
     : null;
   // Scope the cursor to the resolved database so a dbPath/remoteHost change
   // starts from the new DB's watermark instead of a stale high-water (#99638).

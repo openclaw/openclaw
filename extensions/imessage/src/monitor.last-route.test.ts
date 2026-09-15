@@ -18,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1322,6 +1323,30 @@ describe("iMessage monitor last-route updates", () => {
     const client = await runMessageCase({ monitor: { imessage: { dbPath } } });
 
     expectWatchSubscription(client, 5000);
+  });
+
+  it("starts the provider instead of hanging when the startup rowid read never returns (#148750)", async () => {
+    const dbPath = createRecoveryChatDb(
+      "openclaw-imsg-wedged-startup-rowid-",
+      undefined,
+      "watermark",
+    );
+    // Simulates a wedged chat.db: the worker-backed open/read never settles.
+    // Before the fix this ran on the gateway's main thread, so the `await`
+    // in resolveIMessageStartupRowidWatermark never returned and the whole
+    // provider start (and every other channel behind the same event loop)
+    // hung forever instead of just this since_rowid falling back to none.
+    vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockReturnValue(new Promise(() => {}));
+
+    const started = runMessageCase({
+      monitor: { imessage: { dbPath, probeTimeoutMs: 50 } },
+    });
+
+    const client = await started;
+
+    expect(client.request).toHaveBeenCalledWith("watch.subscribe", WATCH_SUBSCRIBE_PARAMS, {
+      timeoutMs: 50,
+    });
   });
 
   it("recovers over a remote cliPath: replays from the cursor even without a local chat.db boundary", async () => {
