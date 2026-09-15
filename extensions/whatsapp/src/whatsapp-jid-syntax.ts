@@ -10,13 +10,17 @@ type WhatsAppDirectJidInputServer = "s.whatsapp.net" | "c.us" | "hosted" | "lid"
 type WhatsAppDirectJidSyntaxServer = Exclude<WhatsAppDirectJidInputServer, "c.us">;
 type WhatsAppJidDomainType = 0 | 1 | 128 | 129;
 
-const DIRECT_JID_SERVERS = new Set<WhatsAppDirectJidInputServer>([
+const DIRECT_JID_SERVERS: ReadonlySet<string> = new Set([
   "s.whatsapp.net",
   "c.us",
   "hosted",
   "lid",
   "hosted.lid",
 ]);
+
+function isWhatsAppDirectJidInputServer(value: string): value is WhatsAppDirectJidInputServer {
+  return DIRECT_JID_SERVERS.has(value);
+}
 
 // These byte values mirror Baileys WAJIDDomains. Setup imports this dependency-free
 // parser; the runtime classifier cross-checks them against Baileys jidDecode.
@@ -110,8 +114,8 @@ export function parseWhatsAppJidSyntax(value: string | null | undefined): WhatsA
 
   const localPart = trimmed.slice(0, separatorIndex);
   const server = trimmed.slice(separatorIndex + 1).toLowerCase();
-  if (DIRECT_JID_SERVERS.has(server as WhatsAppDirectJidInputServer)) {
-    return parseDirectJidSyntax(localPart, server as WhatsAppDirectJidInputServer);
+  if (isWhatsAppDirectJidInputServer(server)) {
+    return parseDirectJidSyntax(localPart, server);
   }
   if (server === "g.us" && GROUP_LOCAL_PART_RE.test(localPart)) {
     return { kind: "group", user: localPart, server, input: `${localPart}@${server}` };

@@ -5,7 +5,7 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { listWhatsAppAccountIds, resolveWhatsAppAuthDir } from "./accounts.js";
 import { readWhatsAppLidToPnMappings } from "./lid-mapping-files.js";
 import {
@@ -155,7 +155,7 @@ function migrateLidAllowlistFields(params: {
 export function migrateWhatsAppLidAllowlistsConfig(
   cfg: OpenClawConfig,
 ): ChannelDoctorConfigMutation {
-  const channels = cfg.channels as Record<string, unknown> | undefined;
+  const channels = asObjectRecord(cfg.channels);
   const entry = asObjectRecord(channels?.whatsapp);
   if (!entry) {
     return { config: cfg, changes: [], warnings: [] };
@@ -208,14 +208,15 @@ export function migrateWhatsAppLidAllowlistsConfig(
   if (nextEntry === entry) {
     return { config: cfg, changes, warnings: [...new Set(warnings)] };
   }
+  const config: OpenClawConfig = {
+    ...cfg,
+    channels: {
+      ...channels,
+      whatsapp: nextEntry,
+    },
+  };
   return {
-    config: {
-      ...cfg,
-      channels: {
-        ...channels,
-        whatsapp: nextEntry,
-      },
-    } as OpenClawConfig,
+    config,
     changes,
     warnings: [...new Set(warnings)],
   };

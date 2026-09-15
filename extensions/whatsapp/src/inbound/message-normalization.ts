@@ -10,7 +10,8 @@ import { buildWhatsAppInboundAdmission } from "./admission.js";
 import { isRecentOutboundMessage } from "./dedupe.js";
 import { hasInboundUserContent } from "./extract.js";
 import type { WhatsAppGroupMetadataCacheOwner } from "./group-metadata-cache.js";
-import { isJidGroup } from "./runtime-api.js";
+import { classifyWhatsAppJid } from "../whatsapp-jid.js";
+import { prepareWhatsAppDirectInboundActor, prepareWhatsAppInboundActor } from "../identity.js";
 import type { WhatsAppAttachedSocketSession } from "./socket-session.js";
 
 const PAIRING_REPLY_HISTORY_GRACE_MS = 30_000;
@@ -65,7 +66,9 @@ export function createWhatsAppInboundMessageNormalizer(options: {
       return null;
     }
 
-    const group = isJidGroup(remoteJid) === true;
+    const classified = classifyWhatsAppJid(remoteJid);
+    const groupJid = classified.kind === "group" ? classified.jid : undefined;
+    const group = groupJid !== undefined;
     // Gateway-originated echoes must never become new inbound work, including
     // self-chat replies that return on the same upsert stream.
     if (shouldSkipRecentOutboundEcho(msg)) {
@@ -78,7 +81,15 @@ export function createWhatsAppInboundMessageNormalizer(options: {
     }
 
     const participantJid = msg.key?.participant ?? undefined;
-    const from = group ? remoteJid : await socketSession.resolveInboundJid(remoteJid);
+    const directActor = group
+      ? null
+      : prepareWhatsAppDirectInboundActor({
+          remoteJid,
+          remoteJidAlt: msg.key?.remoteJidAlt,
+          fromMe: Boolean(msg.key?.fromMe),
+          self: socketSession.self,
+        });
+    const from = groupJid ?? directActor?.e164 ?? await socketSession.resolveInboundJid(remoteJid);
     if (!from) {
       if (remoteJid.endsWith("@lid") || remoteJid.endsWith("@hosted.lid")) {
         // Missing LID mappings must retry instead of completing the durable claim.
@@ -86,10 +97,14 @@ export function createWhatsAppInboundMessageNormalizer(options: {
       }
       return null;
     }
+    const participant = group
+      ? prepareWhatsAppInboundActor({
+          primaryJid: participantJid,
+          alternateJid: msg.key?.participantAlt,
+        })
+      : null;
     const senderE164 = group
-      ? participantJid
-        ? await socketSession.resolveInboundJid(participantJid)
-        : null
+      ? participant?.e164 ?? (participantJid ? await socketSession.resolveInboundJid(participantJid) : null)
       : from;
 
     let groupSubject: string | undefined;
@@ -121,7 +136,7 @@ export function createWhatsAppInboundMessageNormalizer(options: {
       accountId: policy.account.accountId,
       log: (message) => logWhatsAppVerbose(options.verbose, message),
     });
-    const conversationId = group ? remoteJid : from;
+    const conversationId = groupJid ?? from;
     const accessSenderId = group ? senderE164 : from;
     const admissionSenderId = group ? (senderE164 ?? participantJid ?? from) : from;
     const resolveChannelIngress = async (
@@ -221,6 +236,7 @@ export function createWhatsAppInboundMessageNormalizer(options: {
       participantJid,
       from,
       senderE164,
+      remoteJids: directActor?.comparableJids,
       groupSubject,
       groupParticipants,
       messageTimestampMs,

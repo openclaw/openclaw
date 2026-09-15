@@ -407,7 +407,8 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
         inboundMessage.event.id,
         {
           participant: inboundMessage.platform.senderJid,
-          participantE164:
+          remoteJids: inbound.remoteJids,
+          remoteE164:
             messageAdmission.conversation.kind === "direct"
               ? inboundMessage.platform.senderE164
               : undefined,

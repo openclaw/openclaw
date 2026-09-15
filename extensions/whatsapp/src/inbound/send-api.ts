@@ -76,14 +76,7 @@ function prepareOutboundIdentity(params: {
 }
 
 export function createWebSendApi(params: {
-  sock: Omit<WhatsAppSocketOperationAdapter, "sendMessage"> & {
-    sendMessage: (
-      jid: string,
-      content: AnyMessageContent,
-      options?: MiscMessageGenerationOptions,
-      identity?: WhatsAppOutboundMessageIdentity,
-    ) => Promise<WAMessage | undefined>;
-  };
+  sock: WhatsAppSocketOperationAdapter;
   defaultAccountId: string;
   resolveOutboundMentions?: (params: {
     jid: string;

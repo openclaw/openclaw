@@ -34,6 +34,10 @@ export type WhatsAppJid = WhatsAppDirectJid | WhatsAppRoomJid | { kind: "unsuppo
 
 const UNSUPPORTED_JID = { kind: "unsupported" } as const;
 
+function isWhatsAppJidDomain(value: number | undefined): value is WAJIDDomains {
+  return value === 0 || value === 1 || value === 128 || value === 129;
+}
+
 function classifyCanonicalJid(jid: string): WhatsAppJid {
   const decoded = jidDecode(jid);
   const user = decoded?.user;
@@ -73,8 +77,11 @@ export function classifyWhatsAppJid(value: string | null | undefined): WhatsAppJ
 
   let canonicalInput = parsed.input;
   if (parsed.kind === "pn" || parsed.kind === "lid") {
+    if (!isWhatsAppJidDomain(decoded.domainType)) {
+      return UNSUPPORTED_JID;
+    }
     const decodedServer = decoded.server === "c.us" ? "s.whatsapp.net" : decoded.server;
-    const domainServer = getServerFromDomainType(decodedServer, decoded.domainType as WAJIDDomains);
+    const domainServer = getServerFromDomainType(decodedServer, decoded.domainType);
     if (
       decoded.domainType !== parsed.domainType ||
       decoded.device !== parsed.device ||
