@@ -26,7 +26,7 @@ import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversatio
 import type { RealtimeTalkCameraDevice } from "../realtime-talk-input.ts";
 import type { RealtimeTalkLevelSignal } from "../realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
-import type { ChatRunUiStatus } from "../run-lifecycle.ts";
+import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { HumanMentionDirectory, HumanMentionMenu } from "./chat-composer-mention-menu.ts";
@@ -84,7 +84,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   disabledReasonTone?: "info" | "danger";
   disabledReasonBusy?: boolean;
   disabledBanner?: ChatComposerDisabledBanner;
-  runError?: { summary: string } | null;
+  runError?: ChatRunError | null;
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;

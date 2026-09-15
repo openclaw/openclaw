@@ -30,13 +30,15 @@ import {
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { readTranscriptRunError } from "../chat-error-presentation.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import "../../../styles/chat/reply-preview.css";
 import "./chat-clawhub-card.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { readAsyncQuestions, type AsyncQuestionPresentation } from "./chat-async-question.ts";
+import { renderChatErrorCard } from "./chat-error-card.ts";
 import {
   renderAssistantAttachments,
   renderMessageAttachment,
@@ -287,6 +289,15 @@ export function renderGroupedMessage(
   const workspaceConflict = workspaceResultConflictFromTranscript(message);
   if (workspaceConflict) {
     return renderWorkspaceConflictTranscriptMessage(workspaceConflict, messageKey, opts.entryId);
+  }
+  const diagnostic = readTranscriptRunError(message);
+  if (diagnostic) {
+    return html`<div
+      class="chat-bubble chat-bubble--run-error"
+      data-message-id=${opts.entryId ?? messageKey}
+    >
+      ${renderChatErrorCard(diagnostic)}
+    </div>`;
   }
   const isToolShell = normalizedRole === "tool";
   const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
