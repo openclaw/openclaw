@@ -579,7 +579,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                   <span class="chat-reply-attribution__icon" aria-hidden="true"
                     >${icons.cornerDownLeft}</span
                   >
-                  <span>${replyToLabel}</span>
+                  <span class="chat-reply-attribution__source">${replyToLabel}</span>
                 </div>
               `
             : nothing
