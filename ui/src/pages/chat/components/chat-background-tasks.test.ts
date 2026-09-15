@@ -1001,3 +1001,75 @@ describe("running-tasks status row", () => {
     expect(container.querySelector(".chat-tasks-status")).toBeNull();
   });
 });
+
+describe("task detail lookup fields", () => {
+  it("keeps the lookup-only result when a completed task's snapshots share a timestamp", async () => {
+    const completed = makeTask({
+      id: "task-1",
+      status: "completed",
+      runtime: "cli",
+      terminalSummary: "Command completed",
+    });
+    const { host, request } = createHost({
+      request: (method) =>
+        method === "tasks.get"
+          ? Promise.resolve({
+              task: { ...completed, prompt: "pnpm test", result: "build ok\n3 tests passed" },
+            })
+          : Promise.resolve({ tasks: [completed] }),
+    });
+    createBackgroundTasksProps(host);
+    await flushAsync();
+
+    createBackgroundTasksProps(host, { onOpenTaskDetail: () => {} }).onLoadDetail?.(completed);
+    await flushAsync();
+
+    expect(request).toHaveBeenCalledWith("tasks.get", { taskId: "task-1" });
+    const props = createBackgroundTasksProps(host);
+    expect(props.taskDetails.get("task-1")?.result).toBe("build ok\n3 tests passed");
+    expect(props.taskDetails.get("task-1")?.prompt).toBe("pnpm test");
+  });
+
+  it("invalidates a running lookup so completion refetches the final result", async () => {
+    const running = makeTask({ id: "task-2", runtime: "cli", status: "running" });
+    const terminal = {
+      ...running,
+      status: "completed" as const,
+      terminalSummary: "Command completed",
+    };
+    let lookups = 0;
+    const { host } = createHost({
+      request: (method) => {
+        if (method !== "tasks.get") {
+          return Promise.resolve({ tasks: [running] });
+        }
+        lookups += 1;
+        return Promise.resolve({
+          task:
+            lookups === 1
+              ? { ...running, prompt: "pnpm test" }
+              : { ...terminal, prompt: "pnpm test", result: "final output tail" },
+        });
+      },
+    });
+    createBackgroundTasksProps(host);
+    await flushAsync();
+
+    createBackgroundTasksProps(host, { onOpenTaskDetail: () => {} }).onLoadDetail?.(running);
+    await flushAsync();
+    expect(createBackgroundTasksProps(host).taskDetails.get("task-2")?.result).toBeUndefined();
+
+    handleBackgroundTasksEvent(host, { action: "upserted", task: terminal });
+    expect(createBackgroundTasksProps(host).taskDetails.has("task-2")).toBe(false);
+
+    const reopened = createBackgroundTasksProps(host, { onOpenTaskDetail: () => {} });
+    reopened.onOpenTaskDetail?.(terminal);
+    createBackgroundTasksProps(host, { onOpenTaskDetail: () => {} }).onLoadDetail?.(terminal);
+    await flushAsync();
+
+    expect(lookups).toBe(2);
+    expect(createBackgroundTasksProps(host).taskDetails.get("task-2")?.result).toBe(
+      "final output tail",
+    );
+  });
+});

@@ -591,6 +591,26 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.prompt).toMatch(/…$/);
   });
 
+  it("surfaces the exec output tail as the bounded cli result", async () => {
+    const task = createTaskFixture("cli", {
+      ...mainSessionTaskScope,
+      task: "Background exec with output",
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      progressSummary: "Command running",
+      terminalSummary: "Command completed",
+      detail: { exitCode: 0, outputTail: "build succeeded\n3 tests passed" },
+    });
+
+    const listed = await runTaskHandler("tasks.list", {});
+    const listedTask = listed.payload?.tasks?.find((entry) => entry.id === task.taskId);
+    expect(listedTask?.terminalSummary).toBe("Command completed");
+    expect(listedTask?.result).toBeUndefined();
+
+    const { payload } = await getTaskPayload(task.taskId);
+    expect(payload?.task?.result).toBe("build succeeded\n3 tests passed");
+  });
+
   it("preserves prompt layout while removing internal runtime context", async () => {
     const visiblePrompt = [
       "Review this workflow:",

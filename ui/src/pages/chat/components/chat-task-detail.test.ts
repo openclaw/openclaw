@@ -697,3 +697,59 @@ describe("task activity monitor", () => {
     },
   );
 });
+
+describe("task inspector output", () => {
+  it("renders the bounded task result as the output block", () => {
+    const current: TaskSummary = {
+      id: "task-exec",
+      taskId: "task-exec",
+      agentId: "main",
+      status: "completed",
+      runtime: "cli",
+      title: "CLI command",
+      terminalSummary: "Command completed",
+    };
+    const props = backgroundTasks(current);
+    props.taskDetails = new Map([
+      [current.id, { ...current, prompt: "echo hello", result: "hello\nworld" }],
+    ]);
+    const host: TaskDetailHost = {
+      sessionKey: "agent:main:main",
+      client: createGatewayBrowserClientFixture({ request: vi.fn() }),
+      connected: true,
+      hello: null,
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    render(renderTaskDetailPanel({ backgroundTasks: props, host, task: current }), container);
+    const blocks = container.querySelectorAll(".chat-tasks-rail__task-inspector-block pre");
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]?.textContent).toBe("echo hello");
+    expect(blocks[1]?.textContent).toContain("hello");
+    expect(blocks[1]?.textContent).toContain("world");
+  });
+
+  it("falls back to the status summary when no result is available", () => {
+    const current: TaskSummary = {
+      id: "task-exec-no-result",
+      taskId: "task-exec-no-result",
+      agentId: "main",
+      status: "completed",
+      runtime: "cli",
+      title: "CLI command",
+      terminalSummary: "Command completed",
+    };
+    const props = backgroundTasks(current);
+    props.taskDetails = new Map([[current.id, { ...current, prompt: "echo hello" }]]);
+    const host: TaskDetailHost = {
+      sessionKey: "agent:main:main",
+      client: createGatewayBrowserClientFixture({ request: vi.fn() }),
+      connected: true,
+      hello: null,
+    };
+    const container = document.body.appendChild(document.createElement("div"));
+    render(renderTaskDetailPanel({ backgroundTasks: props, host, task: current }), container);
+    const blocks = container.querySelectorAll(".chat-tasks-rail__task-inspector-block pre");
+    expect(blocks).toHaveLength(2);
+    expect(blocks[1]?.textContent).toBe("Command completed");
+  });
+});

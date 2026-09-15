@@ -1,6 +1,6 @@
 import { t } from "../../../i18n/index.ts";
 import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
-import { isActiveTask, taskStatusLabel } from "../../../lib/tasks/data.ts";
+import { isActiveTask, taskStatusLabel, withLookupFields } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 
 registerBackgroundTasksEnglish();
@@ -52,6 +52,54 @@ export function backgroundTaskIsExecuting(task: TaskSummary): boolean {
     task.status === "running" &&
     (task.execution === undefined || task.execution.state === "running")
   );
+}
+
+/**
+ * Folds one `tasks.get` lookup into the cached detail map.
+ *
+ * A lookup taken while the task was still active cannot carry terminal-only
+ * fields (such as the bounded exec output tail), so completion drops the cached
+ * entry and lets the inspector refetch the finished record.
+ */
+export function mergeCachedTaskDetail(
+  taskDetails: ReadonlyMap<string, TaskSummary>,
+  task: TaskSummary,
+  detail: TaskSummary,
+): Map<string, TaskSummary> {
+  if (isActiveTask(detail) && !isActiveTask(task)) {
+    const dropped = new Map(taskDetails);
+    dropped.delete(task.id);
+    return dropped;
+  }
+  return new Map(taskDetails).set(
+    task.id,
+    withLookupFields(task, { prompt: detail.prompt, result: detail.result }),
+  );
+}
+
+/**
+ * Drops cached lookups that a list snapshot has since finished.
+ *
+ * Completion events normally invalidate the running entry, but a refresh can be
+ * the first thing that reports the finished row (for example when its event was
+ * missed or the rail stayed closed). The cached running lookup cannot carry
+ * terminal-only fields such as the bounded output tail, and `taskDetails.has`
+ * then blocks the refetch, so reconcile snapshots exactly like events do.
+ */
+export function reconcileCachedTaskDetails(
+  taskDetails: Map<string, TaskSummary>,
+  tasks: readonly TaskSummary[],
+): Map<string, TaskSummary> {
+  let next: Map<string, TaskSummary> | null = null;
+  for (const task of tasks) {
+    const detail = taskDetails.get(task.id);
+    if (!detail || !isActiveTask(detail) || isActiveTask(task)) {
+      continue;
+    }
+    next ??= new Map(taskDetails);
+    next.delete(task.id);
+  }
+  return next ?? taskDetails;
 }
 
 export function backgroundTaskDeliveryLabel(task: TaskSummary): string | undefined {

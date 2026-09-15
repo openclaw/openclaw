@@ -9,7 +9,7 @@ import type {
   TaskSystemAuditCode,
   TaskSystemAuditSeverity,
 } from "../tasks/task-system-audit.types.js";
-import { tasksAuditCommand, tasksListCommand } from "./tasks.js";
+import { tasksAuditCommand, tasksListCommand, tasksShowCommand } from "./tasks.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -242,4 +242,77 @@ describe("tasks list output", () => {
       }
     },
   );
+});
+
+describe("tasks show output", () => {
+  it("prints the retained output tail for background exec tasks", async () => {
+    const task: TaskRecord = {
+      taskId: "task-1",
+      runtime: "cli",
+      taskKind: "exec",
+      sourceId: "amber-reef",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: "pnpm test",
+      label: "pnpm test",
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: 1,
+      terminalSummary: "Command completed",
+      detail: { exitCode: 0, outputTail: "build ok\n3 tests passed" },
+    };
+    const lookup = vi
+      .spyOn(taskRegistryReconcile, "reconcileTaskLookupToken")
+      .mockReturnValue(task);
+    const runtime = createTestRuntime();
+    try {
+      await tasksShowCommand({ lookup: "task-1" }, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n");
+      expect(output).toContain("terminalSummary: Command completed");
+      expect(output).toContain("output:");
+      expect(output).toContain("  build ok");
+      expect(output).toContain("  3 tests passed");
+    } finally {
+      lookup.mockRestore();
+    }
+  });
+
+  it("omits the output block when a task retained no tail", async () => {
+    const task: TaskRecord = {
+      taskId: "task-2",
+      runtime: "cli",
+      taskKind: "exec",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      task: "true",
+      status: "succeeded",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: 1,
+      terminalSummary: "Command completed",
+      detail: { exitCode: 0 },
+    };
+    const lookup = vi
+      .spyOn(taskRegistryReconcile, "reconcileTaskLookupToken")
+      .mockReturnValue(task);
+    const runtime = createTestRuntime();
+    try {
+      await tasksShowCommand({ lookup: "task-2" }, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map((call) => String(call[0]))
+        .join("\n");
+      expect(output).not.toContain("output:");
+    } finally {
+      lookup.mockRestore();
+    }
+  });
 });

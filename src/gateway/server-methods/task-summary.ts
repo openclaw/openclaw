@@ -3,6 +3,7 @@
 import type { TaskSummary } from "../../../packages/gateway-protocol/src/index.js";
 import { getTaskExecutionObservation } from "../../tasks/task-execution-observation.js";
 import { hasTaskTranscript } from "../../tasks/task-history.js";
+import { TASK_OUTPUT_TAIL_MAX_CHARS, readTaskOutputTail } from "../../tasks/task-output-tail.js";
 import { getTaskActivitySnapshot } from "../../tasks/task-registry-activity.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import {
@@ -48,6 +49,12 @@ function sanitizeOptionalTaskText(
   return sanitized || undefined;
 }
 
+function readExecTaskOutputTail(detail: TaskRecord["detail"]): string {
+  // Background exec finalization stores a bounded, redacted output tail in the record detail;
+  // surface it as the canonical completion result without flattening its layout.
+  return sanitizeTaskPromptText(readTaskOutputTail(detail), TASK_OUTPUT_TAIL_MAX_CHARS);
+}
+
 export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolean }): TaskSummary {
   const activity = getTaskActivitySnapshot(task.taskId);
   const execution = getTaskExecutionObservation(task);
@@ -63,10 +70,11 @@ export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolea
   const prompt = opts?.includePrompt
     ? sanitizeTaskPromptText(task.task, TASK_PROMPT_MAX_CHARS) || undefined
     : undefined;
+  const outputTail = readExecTaskOutputTail(task.detail);
   const result = opts?.includePrompt
     ? (task.runtime === "subagent" || task.runtime === "acp"
         ? progressResult
-        : terminalResult || progressResult) || undefined
+        : outputTail || terminalResult || progressResult) || undefined
     : undefined;
   const toolUseCount =
     typeof task.toolUseCount === "number" && Number.isInteger(task.toolUseCount)

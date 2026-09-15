@@ -1,13 +1,37 @@
 // Projects detached exec processes into the durable task ledger used by clients.
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { BACKGROUND_EXEC_TASK_KIND } from "../tasks/background-exec-task-contract.js";
 import { createRunningTaskRun, finalizeTaskRunByRunId } from "../tasks/detached-task-runtime.js";
+import { TASK_OUTPUT_TAIL_MAX_CHARS } from "../tasks/task-output-tail.js";
 import type { ExecProcessOutcome } from "./bash-tools.exec-runtime.js";
 
 const log = createSubsystemLogger("agents/bash-exec-task-tracking");
+
+function execTaskOutputTail(aggregated: string): string | undefined {
+  // Strip escapes before masking so removed bytes cannot split a secret pattern;
+  // keep newlines/tabs so the stored tail stays readable in output views.
+  const cleaned = stripAnsi(aggregated).replace(/\p{Cc}/gu, (control) =>
+    control === "\n" || control === "\t" ? control : "",
+  );
+  const sanitized = redactToolPayloadText(cleaned)
+    .replace(/\r/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (!sanitized) {
+    return undefined;
+  }
+  if (sanitized.length <= TASK_OUTPUT_TAIL_MAX_CHARS) {
+    return sanitized;
+  }
+  // Keep the tail (most recent output); never split a surrogate pair at the boundary.
+  const sliced = sanitized.slice(sanitized.length - TASK_OUTPUT_TAIL_MAX_CHARS + 1);
+  const first = sliced.charCodeAt(0);
+  return `…${first >= 0xdc00 && first <= 0xdfff ? sliced.slice(1) : sliced}`;
+}
 
 export type BackgroundExecTaskHandle = {
   taskId: string;
@@ -72,6 +96,7 @@ export function finalizeBackgroundExecTask(params: {
     return;
   }
   const endedAt = Date.now();
+  const outputTail = execTaskOutputTail(params.outcome.aggregated);
   const status =
     params.outcome.status === "completed"
       ? params.outcome.exitCode === 0
@@ -103,6 +128,7 @@ export function finalizeBackgroundExecTask(params: {
           ? { exitSignal: String(params.outcome.exitSignal) }
           : {}),
         ...(params.outcome.status === "failed" ? { failureKind: params.outcome.failureKind } : {}),
+        ...(outputTail ? { outputTail } : {}),
       },
     });
   } catch (error) {

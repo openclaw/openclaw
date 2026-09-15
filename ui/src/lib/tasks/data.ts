@@ -109,13 +109,36 @@ export function taskTimestampMs(value: TaskTimestamp | undefined): number {
 
 type TaskSnapshotProvenance = "snapshot" | "event" | "detail";
 
-function preserveTaskPrompt(
+/**
+ * Lookup-only fields (bounded prompt and result) are returned by tasks.get and
+ * omitted from list/event summaries. Keep them attached to a snapshot while the
+ * snapshot's other fields stay authoritative.
+ */
+export function withLookupFields(
+  selected: TaskSummary,
+  fields: { prompt?: string; result?: string },
+): TaskSummary {
+  const promptChanged = fields.prompt !== undefined && selected.prompt !== fields.prompt;
+  const resultChanged = fields.result !== undefined && selected.result !== fields.result;
+  if (!promptChanged && !resultChanged) {
+    return selected;
+  }
+  return {
+    ...selected,
+    ...(promptChanged ? { prompt: fields.prompt } : {}),
+    ...(resultChanged ? { result: fields.result } : {}),
+  };
+}
+
+function preserveLookupOnlyFields(
   selected: TaskSummary,
   current: TaskSummary,
   lookup: TaskSummary,
 ): TaskSummary {
-  const prompt = lookup.prompt ?? current.prompt;
-  return prompt && selected.prompt !== prompt ? { ...selected, prompt } : selected;
+  return withLookupFields(selected, {
+    prompt: lookup.prompt ?? current.prompt,
+    result: lookup.result ?? current.result,
+  });
 }
 
 export function newestTaskSnapshot(
@@ -129,7 +152,7 @@ export function newestTaskSnapshot(
   const currentAt = taskTimestampMs(current.updatedAt ?? current.endedAt ?? current.createdAt);
   const lookupAt = taskTimestampMs(lookup.updatedAt ?? lookup.endedAt ?? lookup.createdAt);
   if (lookupAt > currentAt) {
-    return preserveTaskPrompt(lookup, current, lookup);
+    return preserveLookupOnlyFields(lookup, current, lookup);
   }
   if (lookupAt < currentAt) {
     return current;
@@ -139,26 +162,26 @@ export function newestTaskSnapshot(
   const currentActive = isActiveTask(current);
   const lookupActive = isActiveTask(lookup);
   if (currentActive !== lookupActive) {
-    return preserveTaskPrompt(currentActive ? lookup : current, current, lookup);
+    return preserveLookupOnlyFields(currentActive ? lookup : current, current, lookup);
   }
   if (!currentActive) {
-    return provenance === "event" ? preserveTaskPrompt(lookup, current, lookup) : current;
+    return provenance === "event" ? preserveLookupOnlyFields(lookup, current, lookup) : current;
   }
   if (current.status === "running" && lookup.status === "queued") {
-    return preserveTaskPrompt(current, current, lookup);
+    return preserveLookupOnlyFields(current, current, lookup);
   }
   if (current.status === "queued" && lookup.status === "running") {
-    return preserveTaskPrompt(lookup, current, lookup);
+    return preserveLookupOnlyFields(lookup, current, lookup);
   }
   const currentToolCount = current.toolUseCount ?? 0;
   const lookupToolCount = lookup.toolUseCount ?? 0;
   if (currentToolCount > lookupToolCount) {
-    return preserveTaskPrompt(current, current, lookup);
+    return preserveLookupOnlyFields(current, current, lookup);
   }
   if (lookupToolCount > currentToolCount || provenance !== "detail") {
-    return preserveTaskPrompt(lookup, current, lookup);
+    return preserveLookupOnlyFields(lookup, current, lookup);
   }
-  return preserveTaskPrompt(current, current, lookup);
+  return preserveLookupOnlyFields(current, current, lookup);
 }
 
 export function sortTasks(tasks: readonly TaskSummary[]): TaskSummary[] {

@@ -294,7 +294,8 @@ function renderTaskFallback(
 function renderTaskInspector(task: TaskSummary, props: BackgroundTasksProps): TemplateResult {
   const detailedTask = props.taskDetails.get(task.id);
   const newest = newestTaskSnapshot(task, detailedTask);
-  const output = taskDetail(newest);
+  // tasks.get carries the bounded canonical result (e.g. exec output tail); it wins over summaries.
+  const output = detailedTask?.result ?? taskDetail(newest);
   const detailLoading = props.taskDetailLoadingIds.has(task.id);
   const detailError = props.taskDetailErrors.get(task.id);
   if (detailLoading && !detailError) {

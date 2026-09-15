@@ -21,6 +21,7 @@ import {
   previewTaskFlowRegistryMaintenance,
   runTaskFlowRegistryMaintenance,
 } from "../tasks/task-flow-registry.maintenance.js";
+import { readTaskOutputTail } from "../tasks/task-output-tail.js";
 import {
   listTaskAuditFindings,
   summarizeRetainedLostTaskAuditFindings,
@@ -315,6 +316,7 @@ export async function tasksShowCommand(
     return;
   }
 
+  const outputTail = readTaskOutputTail(task.detail);
   const lines = [
     "Background task:",
     `taskId: ${task.taskId}`,
@@ -339,6 +341,7 @@ export async function tasksShowCommand(
     ...(task.error ? [`error: ${task.error}`] : []),
     ...(task.progressSummary ? [`progressSummary: ${task.progressSummary}`] : []),
     ...(task.terminalSummary ? [`terminalSummary: ${task.terminalSummary}`] : []),
+    ...(outputTail ? ["output:", ...outputTail.split(/\r?\n/).map((line) => `  ${line}`)] : []),
   ];
   for (const line of lines) {
     runtime.log(sanitizeTerminalText(line));

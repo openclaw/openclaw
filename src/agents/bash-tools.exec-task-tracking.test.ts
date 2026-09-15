@@ -128,33 +128,78 @@ describe("background exec task tracking", () => {
       status: "cancelled",
       error: "Cancelled by operator",
     },
-  ])(
-    "finalizes $label before wake without persisting process output",
-    ({ outcome, status, error }) => {
-      finalizeBackgroundExecTask({
-        handle: {
-          taskId: "task-1",
-          runId: "exec:amber-reef",
-          sessionKey: "agent:main:main",
-        },
-        outcome,
-      });
+  ])("finalizes $label with a bounded, redacted output tail", ({ outcome, status, error }) => {
+    finalizeBackgroundExecTask({
+      handle: {
+        taskId: "task-1",
+        runId: "exec:amber-reef",
+        sessionKey: "agent:main:main",
+      },
+      outcome,
+    });
 
-      expect(taskRuntime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: "exec:amber-reef",
-          runtime: "cli",
-          sessionKey: "agent:main:main",
-          status,
-          ...(error ? { error } : { clearError: true }),
-        }),
-      );
-      expect(JSON.stringify(taskRuntime.finalizeTaskRunByRunId.mock.calls)).not.toContain(
-        "secret output",
-      );
-      expect(JSON.stringify(taskRuntime.finalizeTaskRunByRunId.mock.calls)).not.toContain(
-        "processSessionId",
-      );
-    },
-  );
+    expect(taskRuntime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "exec:amber-reef",
+        runtime: "cli",
+        sessionKey: "agent:main:main",
+        status,
+        ...(error ? { error } : { clearError: true }),
+        detail: expect.objectContaining({ outputTail: "secret output" }),
+      }),
+    );
+    expect(JSON.stringify(taskRuntime.finalizeTaskRunByRunId.mock.calls)).not.toContain(
+      "processSessionId",
+    );
+  });
+
+  it("redacts and bounds the stored output tail to the most recent output", () => {
+    finalizeBackgroundExecTask({
+      handle: {
+        taskId: "task-1",
+        runId: "exec:amber-reef",
+        sessionKey: "agent:main:main",
+      },
+      outcome: {
+        status: "completed",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 25,
+        aggregated: `token sk-abcdef1234567890\n${"x".repeat(5_000)}\nEND`,
+        timedOut: false,
+      },
+    });
+
+    const detail = (
+      taskRuntime.finalizeTaskRunByRunId.mock.calls[0]?.[0] as {
+        detail?: { outputTail?: string };
+      }
+    )?.detail;
+    expect(typeof detail?.outputTail).toBe("string");
+    expect(detail?.outputTail).not.toContain("sk-abcdef1234567890");
+    expect(detail?.outputTail?.endsWith("END")).toBe(true);
+    expect(detail?.outputTail?.startsWith("…")).toBe(true);
+    expect(detail?.outputTail?.length).toBeLessThanOrEqual(4_000);
+  });
+
+  it("omits the output tail when the command produced no output", () => {
+    finalizeBackgroundExecTask({
+      handle: {
+        taskId: "task-1",
+        runId: "exec:amber-reef",
+        sessionKey: "agent:main:main",
+      },
+      outcome: {
+        status: "completed",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 25,
+        aggregated: "  \n\t ",
+        timedOut: false,
+      },
+    });
+
+    const detail = taskRuntime.finalizeTaskRunByRunId.mock.calls[0]?.[0]?.detail;
+    expect(detail).not.toHaveProperty("outputTail");
+  });
 });
