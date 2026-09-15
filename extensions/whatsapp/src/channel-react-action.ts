@@ -3,13 +3,12 @@ import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import {
-  isWhatsAppGroupJid,
   resolveAuthorizedWhatsAppOutboundTarget,
   resolveWhatsAppAccount,
   resolveWhatsAppMediaMaxBytes,
   resolveReactionMessageId,
+  resolveWhatsAppTargetFacts,
   handleWhatsAppAction,
-  normalizeWhatsAppTarget,
   readStringOrNumberParam,
   readStringParam,
   sendMessageWhatsApp,
@@ -17,6 +16,14 @@ import {
 } from "./channel-react-action.runtime.js";
 
 const WHATSAPP_CHANNEL = "whatsapp" as const;
+
+function resolveActionTargetFacts(raw: string | null | undefined) {
+  if (!raw?.trim()) {
+    return null;
+  }
+  const resolution = resolveWhatsAppTargetFacts({ target: raw });
+  return resolution.ok ? resolution.facts : null;
+}
 
 type WhatsAppMessageActionParams = {
   action: string;
@@ -72,7 +79,7 @@ function readWhatsAppActionChatJid(params: WhatsAppMessageActionParams): string 
   ) {
     return undefined;
   }
-  return normalizeWhatsAppTarget(params.toolContext.currentChannelId) ?? undefined;
+  return resolveActionTargetFacts(params.toolContext.currentChannelId)?.normalizedTarget;
 }
 
 function decodeUploadFileMediaPayload(params: {
@@ -187,15 +194,17 @@ export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionP
     throw new Error(`Action ${params.action} is not supported for provider ${WHATSAPP_CHANNEL}.`);
   }
   const isWhatsAppSource = params.toolContext?.currentChannelProvider === WHATSAPP_CHANNEL;
-  const explicitTarget = readWhatsAppActionChatJid(params);
-  const normalizedTarget = explicitTarget ? normalizeWhatsAppTarget(explicitTarget) : null;
-  const normalizedCurrent =
+  const explicitTarget =
+    readStringParam(params.params, "chatJid") ?? readStringParam(params.params, "to");
+  const explicitTargetFacts = resolveActionTargetFacts(explicitTarget);
+  const currentTargetFacts =
     isWhatsAppSource && params.toolContext?.currentChannelId
-      ? normalizeWhatsAppTarget(params.toolContext.currentChannelId)
+      ? resolveActionTargetFacts(params.toolContext.currentChannelId)
       : null;
   const isCrossChat =
-    normalizedTarget != null &&
-    (normalizedCurrent == null || normalizedTarget !== normalizedCurrent);
+    explicitTargetFacts != null &&
+    (currentTargetFacts == null ||
+      explicitTargetFacts.normalizedTarget !== currentTargetFacts.normalizedTarget);
   const scopedContext =
     !isWhatsAppSource || isCrossChat || !params.toolContext
       ? undefined
@@ -216,12 +225,13 @@ export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionP
   const emoji = readStringParam(params.params, "emoji", { allowEmpty: true });
   const remove = typeof params.params.remove === "boolean" ? params.params.remove : undefined;
   const explicitParticipant = readStringParam(params.params, "participant");
+  const participantTargetFacts = explicitTargetFacts ?? currentTargetFacts;
   const inferredParticipant =
     explicitParticipant ||
     explicitMessageId != null ||
     !isWhatsAppSource ||
     isCrossChat ||
-    !isWhatsAppGroupJid(explicitTarget ?? params.toolContext?.currentChannelId ?? "")
+    participantTargetFacts?.chatType !== "group"
       ? undefined
       : typeof params.requesterSenderId === "string" && params.requesterSenderId.trim().length > 0
         ? params.requesterSenderId.trim()

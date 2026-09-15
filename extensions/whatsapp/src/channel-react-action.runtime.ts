@@ -6,6 +6,6 @@ export { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 export { handleWhatsAppAction } from "./action-runtime.js";
 export { resolveAuthorizedWhatsAppOutboundTarget } from "./action-runtime-target-auth.js";
 export { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "./accounts.js";
-export { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize.js";
 export { sendWhatsAppUploadFile as sendMessageWhatsApp } from "./send.js";
+export { resolveWhatsAppTargetFacts } from "./target-facts.js";
 export { readStringOrNumberParam, readStringParam, type OpenClawConfig };

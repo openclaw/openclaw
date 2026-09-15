@@ -15,7 +15,7 @@ import {
 } from "./outbound-media-contract.js";
 import { WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
 import { lookupInboundMessageMetaForTarget } from "./quoted-message.js";
-import { toWhatsappJid } from "./text-runtime.js";
+import { requireWhatsAppTargetFacts } from "./target-facts.js";
 
 type WhatsAppSendMessage = typeof import("./send.js").sendMessageWhatsApp;
 type WhatsAppSendPoll = typeof import("./send.js").sendPollWhatsApp;
@@ -70,7 +70,7 @@ export function createWhatsAppOutboundBase({
     if (!replyToId) {
       return undefined;
     }
-    const targetJid = toWhatsappJid(params.to);
+    const targetJid = requireWhatsAppTargetFacts({ target: params.to }).wireDelivery.jid;
     const cachedMeta = lookupInboundMessageMetaForTarget(params.accountId, targetJid, replyToId);
     return {
       id: replyToId,

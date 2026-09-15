@@ -7,9 +7,9 @@ import type {
 } from "baileys";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
-import { isWhatsAppNewsletterJid } from "../normalize.js";
 import { buildQuotedMessageOptions } from "../quoted-message.js";
-import { toWhatsappJid, toWhatsappJidWithLid } from "../text-runtime.js";
+import { requireWhatsAppTargetFacts } from "../target-facts.js";
+import { toWhatsappJid } from "../targets-runtime.js";
 import {
   addWhatsAppOutboundMentionsToContent,
   type WhatsAppOutboundMentionResolution,
@@ -64,10 +64,13 @@ export function createWebSendApi(params: {
   // ending up in a sender-only ghost chat (#67378). Defaults to PN-only.
   authDir?: string;
 }) {
+  const resolveOutboundTargetFacts = (recipient: string) =>
+    requireWhatsAppTargetFacts({
+      target: recipient,
+      lidOptions: params.authDir ? { authDir: params.authDir } : undefined,
+    });
   const resolveOutboundJid = (recipient: string): string =>
-    params.authDir
-      ? toWhatsappJidWithLid(recipient, { authDir: params.authDir })
-      : toWhatsappJid(recipient);
+    resolveOutboundTargetFacts(recipient).wireDelivery.jid;
   const resolveMentions = async (
     jid: string,
     text: string,
@@ -292,11 +295,11 @@ export function createWebSendApi(params: {
       return normalizeWhatsAppSendResult(result, "reaction");
     },
     sendComposingTo: async (to: string): Promise<void> => {
-      const jid = resolveOutboundJid(to);
-      if (isWhatsAppNewsletterJid(jid)) {
+      const facts = resolveOutboundTargetFacts(to);
+      if (!facts.wireDelivery.shouldSendComposingPresence) {
         return;
       }
-      await params.sock.sendPresenceUpdate("composing", jid);
+      await params.sock.sendPresenceUpdate("composing", facts.wireDelivery.jid);
     },
   } as const;
 }
