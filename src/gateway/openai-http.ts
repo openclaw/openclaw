@@ -69,6 +69,7 @@ import {
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeOpenAiCompatibleHttpSession,
   isAgentSelectionRequiredError,
+  isGatewayAgentSelectionConflictError,
   isGatewaySessionKeyOverrideError,
   isInvalidGatewayModelError,
   isUnknownGatewayAgentError,
@@ -174,6 +175,7 @@ function buildAgentCommandInput(params: {
   prompt: { message: string; extraSystemPrompt?: string; images?: ImageContent[] };
   clientTools?: ClientToolDefinition[];
   modelOverride?: string;
+  agentId: string;
   sessionKey: string;
   runId: string;
   messageChannel: string;
@@ -187,6 +189,9 @@ function buildAgentCommandInput(params: {
     images: params.prompt.images,
     clientTools: params.clientTools,
     model: params.modelOverride,
+    // Command preparation otherwise derives the owner from the session key
+    // alone, which can disagree with the agent the request resolved to.
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     runId: params.runId,
     deliver: false as const,
@@ -920,7 +925,8 @@ export async function handleOpenAiHttpRequest(
       isAgentSelectionRequiredError(err) ||
       isUnknownGatewayAgentError(err) ||
       isInvalidGatewayModelError(err) ||
-      isGatewaySessionKeyOverrideError(err)
+      isGatewaySessionKeyOverrideError(err) ||
+      isGatewayAgentSelectionConflictError(err)
     ) {
       sendInvalidRequest(res, err.message);
       return true;
@@ -1009,6 +1015,7 @@ export async function handleOpenAiHttpRequest(
     },
     clientTools: resolvedClientTools.length > 0 ? resolvedClientTools : undefined,
     modelOverride,
+    agentId,
     sessionKey,
     runId,
     messageChannel,
