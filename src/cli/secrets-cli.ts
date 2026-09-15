@@ -197,8 +197,16 @@ export function registerSecretsCli(program: Command): void {
         (outcome) => outcome.report,
       );
       if (!opts.json) {
+        const skippedExecRefs = report.resolution.skippedExecRefs;
+        // Promote incomplete exec coverage into the header: a run that skips
+        // exec resolvability checks is UNMEASURED, never silently healthy.
+        // (Exit codes are unchanged; see docs/cli/secrets.md for gating.)
+        const coverage =
+          skippedExecRefs > 0
+            ? ` (UNMEASURED — ${skippedExecRefs} exec resolvability check(s) skipped; re-run with --allow-exec for a complete audit)`
+            : "";
         defaultRuntime.log(
-          `Secrets audit: ${report.status}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, storeResidue=${report.summary.storeResidueCount}, legacy=${report.summary.legacyResidueCount}.`,
+          `Secrets audit: ${report.status}${coverage}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, storeResidue=${report.summary.storeResidueCount}, legacy=${report.summary.legacyResidueCount}.`,
         );
         for (const finding of report.findings.slice(0, 20)) {
           defaultRuntime.log(
