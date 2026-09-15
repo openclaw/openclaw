@@ -282,7 +282,7 @@ describe("fleet service filesystem and removal", () => {
     );
 
     expect(containers.run).toHaveBeenCalledTimes(runCount + 1);
-    expect(containers.remove).toHaveBeenCalledWith("docker", "openclaw-cell-acme", true);
+    expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", true);
     expect(getFleetCell(env, "acme")).toBeUndefined();
     await expect(fs.readFile(betaConfig, "utf8")).resolves.toBe(betaBefore);
   });
@@ -316,7 +316,7 @@ describe("fleet service filesystem and removal", () => {
       { tenant: "acme", action: "rm", dataPurged: true },
     );
 
-    expect(containers.remove).toHaveBeenCalledWith("docker", "openclaw-cell-acme", true);
+    expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", true);
     expect(containers.removeNetwork).toHaveBeenCalledWith("docker", "openclaw-cell-acme-net");
     expect(getFleetCell(env, "acme")).toBeUndefined();
     await expect(fs.stat(path.join(root, "fleet", "cells", "acme"))).rejects.toMatchObject({
@@ -335,7 +335,7 @@ describe("fleet service filesystem and removal", () => {
 
     await service.remove({ tenant: "acme", force: true });
 
-    expect(containers.remove).toHaveBeenCalledWith("docker", "openclaw-cell-acme", true);
+    expect(containers.remove).toHaveBeenCalledWith("docker", "container-id", true);
   });
 
   it("retains state when network removal fails and completes on retry", async () => {
@@ -393,6 +393,32 @@ describe("fleet service filesystem and removal", () => {
       /acme-net.*ownership labels/iu,
     );
     expect(containers.remove).not.toHaveBeenCalled();
+    expect(containers.removeNetwork).not.toHaveBeenCalled();
+    expect(getFleetCell(env, "acme")).toBeDefined();
+  });
+
+  it("removes the ownership-validated generation, not whatever holds the cell name", async () => {
+    const containers = createContainerMock();
+    const service = createFleetService({ env, containers: containers.runtime, now: () => 1000 });
+    await service.create({ tenant: "acme", gatewayToken: "token" });
+
+    // Docker and Podman resolve a reference as an id first and a name second, so
+    // an id stays pinned to one container while a name follows whatever holds it
+    // now. Here the managed cell is gone and a foreign container has taken its
+    // name after `assertManagedInspection` proved the managed generation.
+    // Unforced `rm` of a missing container exits non-zero on both runtimes.
+    const live = new Set(["foreign-id"]);
+    containers.inspect.mockResolvedValue(runningInspection({ state: "exited", running: false }));
+    containers.remove.mockImplementation(async (_runtime, reference, force) => {
+      const resolved = reference === "openclaw-cell-acme" ? "foreign-id" : reference;
+      if (!live.delete(resolved) && !force) {
+        throw new Error(`Error response from daemon: No such container: ${reference}`);
+      }
+    });
+
+    await expect(service.remove({ tenant: "acme" })).rejects.toThrow(/no such container/iu);
+
+    expect(live).toEqual(new Set(["foreign-id"]));
     expect(containers.removeNetwork).not.toHaveBeenCalled();
     expect(getFleetCell(env, "acme")).toBeDefined();
   });
