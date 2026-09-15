@@ -135,11 +135,17 @@ type SessionMaintenanceBatch = {
   workItems: number;
 };
 
-function buildSessionMaintenanceBatches(params: {
+export type SessionMaintenanceOwnershipGroup = SessionMaintenanceBatch & {
+  /** Zero-based order assigned by the canonical maintenance planner. */
+  order: number;
+};
+
+/** Builds the indivisible ownership groups used by maintenance batching. */
+export function buildSessionMaintenanceOwnershipGroups(params: {
   archiveBytesBySessionId: ReadonlyMap<string, number>;
   entryRemovals: SessionEntryMaintenancePlan["entryRemovals"];
   stateDeletePlans: readonly SessionStateDeletePlan[];
-}): SessionMaintenanceBatch[] {
+}): SessionMaintenanceOwnershipGroup[] {
   const parent = params.entryRemovals.map((_, index) => index);
   const find = (index: number): number => {
     let root = index;
@@ -193,7 +199,7 @@ function buildSessionMaintenanceBatches(params: {
     }
   }
 
-  const groupsByRoot = new Map<number, SessionMaintenanceBatch & { order: number }>();
+  const groupsByRoot = new Map<number, SessionMaintenanceOwnershipGroup>();
   for (const [index, removal] of params.entryRemovals.entries()) {
     const root = find(index);
     const group = groupsByRoot.get(root) ?? {
@@ -214,7 +220,7 @@ function buildSessionMaintenanceBatches(params: {
     plans.push(plan);
     plansBySessionId.set(plan.sessionId, plans);
   }
-  const standaloneGroups: Array<SessionMaintenanceBatch & { order: number }> = [];
+  const standaloneGroups: SessionMaintenanceOwnershipGroup[] = [];
   let standaloneOrder = params.entryRemovals.length;
   for (const [sessionId, plans] of plansBySessionId) {
     const removalIndex = removalIndexesBySessionId.get(sessionId)?.[0];
@@ -236,7 +242,7 @@ function buildSessionMaintenanceBatches(params: {
     }
   }
 
-  const groups = [...groupsByRoot.values(), ...standaloneGroups]
+  return [...groupsByRoot.values(), ...standaloneGroups]
     .map((group) => {
       group.workItems = Math.max(
         group.entryRemovals.length,
@@ -245,6 +251,14 @@ function buildSessionMaintenanceBatches(params: {
       return group;
     })
     .toSorted((left, right) => left.order - right.order);
+}
+
+function buildSessionMaintenanceBatches(params: {
+  archiveBytesBySessionId: ReadonlyMap<string, number>;
+  entryRemovals: SessionEntryMaintenancePlan["entryRemovals"];
+  stateDeletePlans: readonly SessionStateDeletePlan[];
+}): SessionMaintenanceBatch[] {
+  const groups = buildSessionMaintenanceOwnershipGroups(params);
   const batches: SessionMaintenanceBatch[] = [];
   let batch: SessionMaintenanceBatch = {
     archiveBytes: 0,
