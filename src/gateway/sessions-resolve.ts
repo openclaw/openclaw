@@ -108,13 +108,12 @@ function findVisibleSessionIdMatches(params: {
   return filterAndSortSessionEntries({
     cfg: params.cfg,
     store: params.store,
+    entryFilter: (key, entry) =>
+      (entry.sessionId === params.sessionId || key === params.sessionId) &&
+      (params.entryFilter?.(key, entry) ?? true),
     now: Date.now(),
     opts: resolveSessionVisibilityFilterOptions(params.p),
-  }).filter(
-    ([key, entry]) =>
-      (params.entryFilter?.(key, entry) ?? true) &&
-      (entry?.sessionId === params.sessionId || key === params.sessionId),
-  );
+  });
 }
 
 function normalizeShortSessionId(shortId: string): string | null {
