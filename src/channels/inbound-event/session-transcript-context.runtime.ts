@@ -165,8 +165,7 @@ async function pruneInactiveBranchWindowMessages(
         typeof message !== "object" ||
         Array.isArray(message) ||
         !isInactiveBranchWindowMessage(
-          // SAFETY: the filter above retains non-objects, so only plain
-          // message objects reach this assertion.
+          // SAFETY: the filter above retains non-objects, so only plain message objects reach this assertion.
           message as PromptMessage,
           identities,
           channel,
