@@ -57,6 +57,14 @@ The detail levels are:
 - **Names only** — may include a sanitized person, session, device, agent, task, or automation label.
 - **Detailed** — currently uses the same bounded, sanitized producer-owned labels. Message excerpts, raw prompts, command arguments, output, environment values, and errors never enter the push payload.
 
+For browser **Agent finished** alerts, **Names only** and **Detailed** include the
+current explicit session label when the event has exactly one authoritative
+session target and the browser can read it. The label is sanitized and bounded
+by the existing notification-label policy. Unnamed sessions, multiple targets,
+and unavailable label metadata retain the agent-only fallback. Raw session keys,
+generated titles, and message text are never used as label fallbacks. **Private**
+remains generic. This does not change native macOS or mobile notifications.
+
 On iPhone and iPad, Web Push is available only after two steps. First, install the Control UI with **Share → Add to Home Screen**. Then open that installed app. A normal Safari tab remains usable for the Control UI. In that tab, the Notifications page reports the install requirement. It does not attempt to dereference an unavailable `PushManager`.
 
 **Send test** asks the Gateway to push a test message to every registered browser subscription. Tests intentionally check transport only. Approval requests are targeted to authorized device bindings. **Unsubscribe** removes the current browser's endpoint from the Gateway only when its paired device and user profile still own the subscription. It then unsubscribes locally. Reconnecting under another profile can transfer the browser subscription only with its existing subscription keys. Knowing an endpoint alone cannot change its owner or remove it.
