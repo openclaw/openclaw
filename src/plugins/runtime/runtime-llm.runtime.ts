@@ -53,6 +53,12 @@ export type RuntimeLlmAuthority = {
   allowAuthProfileOverride?: boolean;
   allowComplete?: boolean;
   denyReason?: string;
+  /**
+   * Live-ownership assertion captured by the admitting host. Re-checked after
+   * model acquisition and again at the final dispatch boundary so a capability
+   * retained past run close cannot reach provider I/O with revoked authority.
+   */
+  assertCurrent?: () => void;
 };
 
 export type CreateRuntimeLlmOptions = {
@@ -565,6 +571,10 @@ export function createRuntimeLlm(
           // an unbound call may fall back to the agent's configured selection.
           authProfileId:
             executionProfile ?? requestedModelProfile ?? preferredProfile ?? modelProfile,
+          // This branch returns before the deferred scope that bounds direct
+          // completions, so the captured run gate must bound isolated dispatch
+          // through the same assertion contract.
+          assertCurrent: options.authority?.assertCurrent,
         });
         return finalizePluginLlmCompletion({
           cfg,
@@ -607,6 +617,9 @@ export function createRuntimeLlm(
         try {
           callerResult.resolve(
             await work.track(async () => {
+              // Acquisition awaited external state; the admission may have been
+              // revoked while the capability was suspended on model selection.
+              options.authority?.assertCurrent?.();
               if (params.requiredAuthMode && prepared.auth.mode !== params.requiredAuthMode) {
                 throw completionError(
                   "LLM_COMPLETION_NOT_AUTHORIZED",
@@ -635,6 +648,10 @@ export function createRuntimeLlm(
                 auth: prepared.auth,
                 cfg,
                 context,
+                // The prepared executor re-runs this at the final provider
+                // boundary; a suspended capability must not dispatch with
+                // authority the admitting run already revoked.
+                assertCurrent: options.authority?.assertCurrent,
                 options: {
                   maxTokens: asFiniteNumber(params.maxTokens),
                   temperature: asFiniteNumber(params.temperature),

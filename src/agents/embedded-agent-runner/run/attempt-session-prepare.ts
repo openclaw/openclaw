@@ -527,6 +527,8 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
   onSessionManagerCreated: (sessionManager: AttemptSessionManager) => void;
   replayAllowedToolNames: ReadonlySet<string>;
   resolveActiveContextEnginePluginId: () => string | undefined;
+  /** Keeps retained engine completions from outliving the admitting run. */
+  assertRunAuthorityActive?: () => void;
   sessionAgentId: string;
   transcriptLifecycle: EmbeddedAttemptTranscriptLifecycle;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
@@ -662,6 +664,9 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
         tokenBudget: attempt.contextTokenBudget,
         activeAgentId: input.sessionAgentId,
         contextEnginePluginId: input.resolveActiveContextEnginePluginId(),
+        ...(input.assertRunAuthorityActive
+          ? { assertRunAuthorityActive: input.assertRunAuthorityActive }
+          : {}),
       }),
       contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
       providerId: attempt.provider,

@@ -512,6 +512,8 @@ export function buildAfterTurnRuntimeContext(params: {
   agentDir: string;
   activeAgentId?: string;
   contextEnginePluginId?: string;
+  /** Keeps retained engine completions from outliving the admitting run. */
+  assertRunAuthorityActive?: () => void;
   tokenBudget?: number;
   currentTokenCount?: number;
   promptCache?: ContextEnginePromptCacheInfo;
@@ -564,6 +566,9 @@ export function buildAfterTurnRuntimeContext(params: {
       explicitAgentId: params.attempt.contextEngineAgentId,
       authProfileId: params.attempt.authProfileId,
       contextEnginePluginId: params.contextEnginePluginId,
+      ...(params.assertRunAuthorityActive
+        ? { assertRunAuthorityActive: params.assertRunAuthorityActive }
+        : {}),
       purpose: "context-engine.after-turn",
     }),
     ...(typeof params.tokenBudget === "number" &&

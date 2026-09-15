@@ -427,6 +427,12 @@ export function installContextEngineLoopHook(params: {
         tokenBudget:
           tokenBudget === undefined ? undefined : Math.max(1, tokenBudget - pendingTokens),
         model: modelId,
+        // Mid-turn reassembly keeps the same runtime identity ingest used;
+        // dropping it here would strand sender-scoped recall inside tool loops.
+        runtimeContext: params.getRuntimeContext?.({
+          messages: transcriptMessages,
+          prePromptMessageCount,
+        }),
         runtimeSettings: params.runtimeSettings,
       });
       signal?.throwIfAborted();

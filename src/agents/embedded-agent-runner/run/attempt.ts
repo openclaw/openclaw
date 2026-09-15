@@ -181,6 +181,9 @@ export async function runEmbeddedAttempt(
     }
     const resolveActiveContextEnginePluginId = () =>
       resolveContextEngineOwnerPluginId(activeContextEngine);
+    // Engine-initiated completions must not outlive the admitting run; the same
+    // assertion also revokes them on external abort.
+    const assertRunAuthorityActive = assertActiveRun;
     const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
     const { diagnosticTrace, runTrace, emitCompleted } = startEmbeddedAttemptDiagnostics(params);
     emitDiagnosticRunCompleted = emitCompleted;
@@ -328,6 +331,7 @@ export async function runEmbeddedAttempt(
           agentDir,
           isRawModelRun,
           resolveActiveContextEnginePluginId,
+          ...(assertRunAuthorityActive ? { assertRunAuthorityActive } : {}),
           setup,
           toolBase: preparedToolBase,
           toolCatalog: preparedToolCatalog,
@@ -372,6 +376,7 @@ export async function runEmbeddedAttempt(
         agentDir,
         isRawModelRun,
         resolveActiveContextEnginePluginId,
+        ...(assertRunAuthorityActive ? { assertRunAuthorityActive } : {}),
         runAbortController,
         externalAbortController,
         prepared: {

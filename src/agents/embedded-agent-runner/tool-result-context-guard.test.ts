@@ -1148,6 +1148,18 @@ describe("installContextEngineLoopHook", () => {
     });
   });
 
+  it("threads the runtimeContext callback result into assemble, not just ingest", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    const getRuntimeContext = vi.fn(() => ({ senderId: "user-42" }));
+    installHook(agent, engine, 1, getRuntimeContext);
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+
+    expect(recordMockArg(engine.assemble).runtimeContext).toEqual({ senderId: "user-42" });
+  });
+
   it("projects marked model prompts for ingest without leaking the marker to assembly", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine();

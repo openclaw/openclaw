@@ -17,7 +17,10 @@ import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js"
 import { log } from "../logger.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
-import { prependSystemPromptAddition } from "./attempt-prompt-helpers.js";
+import {
+  buildAfterTurnRuntimeContext,
+  prependSystemPromptAddition,
+} from "./attempt-prompt-helpers.js";
 import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 import { estimateRenderedLlmBoundaryTokenPressure } from "./preemptive-compaction.js";
@@ -47,7 +50,7 @@ export async function prepareEmbeddedAttemptHistory(
   } = input.prepared.sessionRuntime;
   const { capabilityToolNames, replayAllowedToolNames } =
     input.prepared.toolCatalog.toolSearchRunPlan;
-  const { effectiveWorkspace, sessionAgentId } = input.setup;
+  const { effectiveCwd, effectiveWorkspace, sessionAgentId } = input.setup;
   const sandboxed = input.setup.sandbox?.enabled === true;
   const isSettledTurnFinalization = attempt.operation === "settled-tool-finalization";
   let systemPromptText = input.prepared.sessionRuntime.state.systemPromptText;
@@ -212,6 +215,20 @@ export async function prepareEmbeddedAttemptHistory(
         citationsMode: attempt.config?.memory?.citations,
         sandboxed,
         modelId: attempt.modelId,
+        // Recall sees the same runtime identity the capture path gets; engines
+        // routing by runtimeContext.senderId would otherwise lose per-user
+        // namespacing on every pre-turn assembly. The owner id keeps the
+        // exposed llm capability under the engine plugin's completion policy.
+        runtimeContext: buildAfterTurnRuntimeContext({
+          attempt,
+          workspaceDir: effectiveWorkspace,
+          cwd: effectiveCwd,
+          agentDir: input.agentDir,
+          contextEnginePluginId: input.resolveActiveContextEnginePluginId(),
+          ...(input.assertRunAuthorityActive
+            ? { assertRunAuthorityActive: input.assertRunAuthorityActive }
+            : {}),
+        }),
         maxOutputTokens: reserveTokens,
         contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
         providerId: attempt.provider,

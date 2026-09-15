@@ -186,6 +186,7 @@ export async function completeEmbeddedAttemptAfterTurn(
     activeContextEngine,
     agentDir,
     resolveActiveContextEnginePluginId,
+    assertRunAuthorityActive,
     state: executionState,
   } = input;
   const { withOwnedTranscriptWrite } = input.sessionLock;
@@ -251,6 +252,7 @@ export async function completeEmbeddedAttemptAfterTurn(
         promptCache,
         activeAgentId: sessionAgentId,
         contextEnginePluginId: resolveActiveContextEnginePluginId(),
+        ...(assertRunAuthorityActive ? { assertRunAuthorityActive } : {}),
       });
       await finalizeHarnessContextEngineTurn({
         contextEngine: activeContextEngine,

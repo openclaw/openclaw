@@ -860,7 +860,10 @@ vi.mock("../cache-ttl.js", () => ({
 }));
 
 vi.mock("../compaction-runtime-context.js", () => ({
-  buildEmbeddedCompactionRuntimeContext: () => ({}),
+  // Pass the inputs through: runtime-identity fields (senderId, workspaceDir,
+  // sessionKey) stay observable to context-engine assertions without resolving
+  // the real model target against the registry.
+  buildEmbeddedCompactionRuntimeContext: (params: Record<string, unknown>) => ({ ...params }),
 }));
 
 vi.mock("./preemptive-compaction.js", async (importOriginal) => {
@@ -1385,6 +1388,7 @@ export async function createContextEngineAttemptRunner(params: {
     info?: Partial<ContextEngineInfo>;
   };
   attemptOverrides?: Partial<Parameters<Awaited<ReturnType<typeof loadRunEmbeddedAttempt>>>[0]>;
+  configPatch?: Record<string, unknown>;
   createSession?: () => EmbeddedAttemptSession;
   sessionMessages?: AgentMessage[];
   sessionMessagesAfterRepair?: AgentMessage[];
@@ -1459,7 +1463,9 @@ export async function createContextEngineAttemptRunner(params: {
       },
       workspaceDir,
       agentDir,
-      config: { session: { store: sessionStore } },
+      // configPatch adds plugin/slot policy without clobbering session.store;
+      // attemptOverrides.config still replaces the whole object when needed.
+      config: { session: { store: sessionStore }, ...params.configPatch },
       prompt: "hello",
       timeoutMs: 10_000,
       runId: "run-context-engine-forwarding",
