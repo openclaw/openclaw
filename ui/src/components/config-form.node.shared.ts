@@ -33,7 +33,7 @@ const META_KEYS = new Set([
 ]);
 const jsonTextareaState = new WeakMap<
   HTMLTextAreaElement,
-  { sourceValue: unknown; fallback: string; pathKey: string }
+  { sourceValue: unknown; rowIdentity: unknown; fallback: string; pathKey: string }
 >();
 
 export type ConfigNodeRenderParams = {
@@ -47,6 +47,7 @@ export type ConfigNodeRenderParams = {
   isRequired?: boolean;
   sourceIdentity?: unknown;
   controlIdentity?: unknown;
+  rowIdentity?: unknown;
   structuredDraftOwner?: boolean;
   showLabel?: boolean;
   /** Section shells own the title while collection rows still own help/default metadata. */
@@ -179,15 +180,12 @@ export function renderSensitiveToggleButton(params: {
   `;
 }
 
-/* Sensitive fields inset the reveal eye inside the field (settings-secret
- * pattern); non-sensitive fields render the bare control unchanged. */
+/* Keep the wrapper stable as sensitive values become empty, so the control
+ * and its validation state survive the reveal toggle disappearing. */
 export function wrapSensitiveControl(
   control: TemplateResult,
   toggle: TemplateResult | typeof nothing,
 ): TemplateResult {
-  if (toggle === nothing) {
-    return control;
-  }
   return html`<span class="settings-secret">${control}${toggle}</span>`;
 }
 
@@ -337,12 +335,29 @@ export function configEnumOptionLabel(option: unknown, options: readonly unknown
   return option === "auto" ? t("configForm.enumAuto") : formatConfigValueText(option);
 }
 
+export function setControlValidity(
+  target: HTMLInputElement | HTMLTextAreaElement,
+  message: string,
+): boolean {
+  target.setCustomValidity(message);
+  target.setAttribute("aria-invalid", String(Boolean(message)));
+  const error = target
+    .closest(".cfg-scalar-input, .cfg-json-editor")
+    ?.querySelector<HTMLElement>(".cfg-field__error");
+  if (error) {
+    error.hidden = !message;
+    error.textContent = message;
+  }
+  return !message;
+}
+
 export function renderJsonTextareaControl(params: {
   schema: JsonSchema;
   path: Array<string | number>;
   ariaLabel: string;
   descriptionId?: string;
   sourceValue: unknown;
+  rowIdentity?: unknown;
   fallback: string;
   rows: number;
   sensitiveState: SensitiveRenderState;
@@ -354,17 +369,6 @@ export function renderJsonTextareaControl(params: {
   const { path, fallback, sensitiveState, disabled, onPatch } = params;
   const errorId = configFieldId(path, "json-error");
   const describedBy = [params.descriptionId, errorId].filter(Boolean).join(" ");
-  const setValidity = (target: HTMLTextAreaElement, message: string) => {
-    const error = target
-      .closest(".cfg-json-editor")
-      ?.querySelector<HTMLElement>(".cfg-field__error");
-    target.setCustomValidity(message);
-    target.setAttribute("aria-invalid", String(Boolean(message)));
-    if (error) {
-      error.hidden = !message;
-      error.textContent = message;
-    }
-  };
   const updateValidity = (target: HTMLTextAreaElement) => {
     let message = "";
     const raw = target.value.trim();
@@ -379,8 +383,7 @@ export function renderJsonTextareaControl(params: {
         message = t("configForm.invalidJson");
       }
     }
-    setValidity(target, message);
-    return !message;
+    return setControlValidity(target, message);
   };
   const renderedFallback = sensitiveState.isRedacted ? "" : fallback;
   const pathKey = JSON.stringify(path.filter((segment) => typeof segment === "string"));
@@ -406,14 +409,16 @@ export function renderJsonTextareaControl(params: {
           // (possibly not-yet-valid) JSON the operator is typing.
           ((!Object.is(previous.sourceValue, params.sourceValue) &&
             !configValuesEqual(previous.sourceValue, params.sourceValue)) ||
+            !Object.is(previous.rowIdentity, params.rowIdentity) ||
             previous.fallback !== renderedFallback ||
             previous.pathKey !== pathKey)
         ) {
           element.value = renderedFallback;
-          setValidity(element, "");
+          setControlValidity(element, "");
         }
         jsonTextareaState.set(element, {
           sourceValue: params.sourceValue,
+          rowIdentity: params.rowIdentity,
           fallback: renderedFallback,
           pathKey,
         });

@@ -1,8 +1,6 @@
 // Control UI controller manages form utils gateway state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
-import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
-import { translateActive } from "../i18n/lib/translate.ts";
+import { preserveConfigArrayRowIdentities } from "./config/config-array-row-state.ts";
 
 export function isSensitiveLeafValue(value: unknown): boolean {
   if (typeof value === "string") {
@@ -75,76 +73,10 @@ export function schemaMayAcceptString(schema: JsonSchema): boolean {
   return !schema.oneOf || schema.oneOf.some(schemaMayAcceptString);
 }
 
-export function pathKey(path: Array<string | number>): string {
-  return path.filter((segment) => typeof segment === "string").join(".");
-}
-
-const wildcardHintCache = new WeakMap<ConfigUiHints, Array<[string[], ConfigUiHint]>>();
-
-type ResolvedConfigUiHint = {
-  hint: ConfigUiHint;
-  hintPath: string;
-};
-
-function resolveHintForPath(
-  path: Array<string | number>,
-  hints: ConfigUiHints,
-): ResolvedConfigUiHint | undefined {
-  const directPath = pathKey(path);
-  const direct = hints[directPath];
-  if (direct) {
-    return { hint: direct, hintPath: directPath };
-  }
-  const segments = path.map(String);
-  let wildcardHints = wildcardHintCache.get(hints);
-  if (!wildcardHints) {
-    wildcardHints = Object.entries(hints).flatMap(([hintKey, hint]) =>
-      hintKey.includes("*") ? [[hintKey.split("."), hint]] : [],
-    );
-    wildcardHintCache.set(hints, wildcardHints);
-  }
-  for (const [hintSegments, hint] of wildcardHints) {
-    if (
-      hintSegments.length === segments.length &&
-      hintSegments.every((segment, index) => segment === "*" || segment === segments[index])
-    ) {
-      return { hint, hintPath: hintSegments.join(".") };
-    }
-  }
-  return undefined;
-}
-
-export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) {
-  return resolveHintForPath(path, hints)?.hint;
-}
-
-export function localizedHintForPath(path: Array<string | number>, hints: ConfigUiHints) {
-  const resolved = resolveHintForPath(path, hints);
-  if (!resolved) {
-    return undefined;
-  }
-  const { hint, hintPath } = resolved;
-  return {
-    ...hint,
-    label: hint.label
-      ? (translateActive(configHintTranslationKey(hintPath, "label", hint.label)) ?? hint.label)
-      : hint.label,
-    help: hint.help
-      ? (translateActive(configHintTranslationKey(hintPath, "help", hint.help)) ?? hint.help)
-      : hint.help,
-  };
-}
-
-export function humanize(raw: string) {
-  return raw
-    .replace(/_/g, " ")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/\s+/g, " ")
-    .replace(/^./, (m) => m.toUpperCase());
-}
-
-export function cloneConfigObject<T>(value: T): T {
-  return structuredClone(value);
+export function cloneConfigObject<T>(value: T, previous: unknown = value): T {
+  const cloned = structuredClone(value);
+  preserveConfigArrayRowIdentities(previous, cloned);
+  return cloned;
 }
 
 export function serializeConfigForm(form: Record<string, unknown>): string {

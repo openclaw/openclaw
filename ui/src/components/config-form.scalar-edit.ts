@@ -9,6 +9,7 @@ type ScalarEditState = {
   edit?: ScalarEditHint;
   pathKey: string;
   presentationIdentity: string;
+  rowIdentity: unknown;
 };
 
 const scalarEditState = new WeakMap<HTMLInputElement, ScalarEditState>();
@@ -28,6 +29,7 @@ export function scalarValueBranch(value: unknown): ScalarValueBranch | undefined
 
 export function syncScalarEditIdentity(
   element: Element | undefined,
+  rowIdentity: unknown,
   pathKey: string,
   presentationIdentity: string,
 ): void {
@@ -38,12 +40,14 @@ export function syncScalarEditIdentity(
   const preserveEdit =
     previous?.edit !== undefined &&
     element.ownerDocument.activeElement === element &&
+    Object.is(previous.rowIdentity, rowIdentity) &&
     previous.pathKey === pathKey &&
     previous.presentationIdentity === presentationIdentity;
   scalarEditState.set(element, {
     edit: preserveEdit ? previous.edit : undefined,
     pathKey,
     presentationIdentity,
+    rowIdentity,
   });
 }
 

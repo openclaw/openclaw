@@ -120,7 +120,8 @@ actor PortGuardian {
             }
             if mode == .remote {
                 let message = """
-                port \(port) held by \(listener.command)
+                port \(port, privacy: .public) held by \
+                \(listener.command, privacy: .public) \
                 (pid \(listener.pid)) in remote mode — not killing
                 """
                 self.logger.warning(message)

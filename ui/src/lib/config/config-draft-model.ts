@@ -327,15 +327,27 @@ export type ConfigSubmittedDraft = {
 
 export type ConfigWriteAck = { config: Record<string, unknown>; hash: string };
 
+function readPathValue(root: Record<string, unknown>, path: string[]): unknown {
+  let current: unknown = root;
+  for (const segment of path) {
+    if (!isRecord(current) || !Object.hasOwn(current, segment)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
 function replayConfigDraftEdits(
   submitted: Record<string, unknown> | null,
   current: Record<string, unknown> | null,
   acknowledgedConfig: Record<string, unknown>,
+  previousForm: Record<string, unknown> | null = null,
 ): Record<string, unknown> | null {
   if (!submitted || !current) {
     return null;
   }
-  const draft = cloneConfigObject(acknowledgedConfig);
+  const draft = cloneConfigObject(acknowledgedConfig, previousForm ?? acknowledgedConfig);
   const replay = (
     before: Record<string, unknown>,
     after: Record<string, unknown>,
@@ -349,7 +361,10 @@ function replayConfigDraftEdits(
       } else if (isRecord(before[key]) && isRecord(after[key]) && isRecord(canonical[key])) {
         replay(before[key], after[key], canonical[key], nextPath);
       } else if (stableStringify(before[key]) !== stableStringify(after[key])) {
-        setPathValue(draft, nextPath, cloneConfigObject(after[key]));
+        const previous =
+          (previousForm ? readPathValue(previousForm, nextPath) : undefined) ??
+          readPathValue(draft, nextPath);
+        setPathValue(draft, nextPath, cloneConfigObject(after[key], previous));
       }
     }
   };
@@ -447,10 +462,10 @@ export function adoptConfigWriteAck(
   );
   const draft =
     currentRaw === submitted.raw
-      ? cloneConfigObject(ack.config)
+      ? cloneConfigObject(ack.config, state.configForm)
       : staleForm
         ? null
-        : replayConfigDraftEdits(submitted.form, currentForm, ack.config);
+        : replayConfigDraftEdits(submitted.form, currentForm, ack.config, state.configForm);
   setConfigSnapshot(state, {
     ...state.configSnapshot,
     raw: acknowledgedRaw,
@@ -486,7 +501,7 @@ export function adoptConfigWriteAck(
     return state.configAutoSaveStatus;
   }
   setConfigRawOriginal(state, acknowledgedRaw);
-  state.configFormOriginal = cloneConfigObject(ack.config);
+  state.configFormOriginal = cloneConfigObject(ack.config, state.configForm);
   state.configForm = draft;
   state.configRaw = serializeConfigForm(draft);
   state.configFormDirty = state.configRaw !== serializeConfigForm(ack.config);
@@ -707,7 +722,7 @@ export function rebaseConfigDraft(state: RuntimeConfigState) {
   const editableConfig = resolveEditableSnapshotConfig(state.configSnapshot);
   // A retained draft can predate a reconnect snapshot. Adopt its document and
   // revision together; pairing old originals with the new hash bypasses CAS.
-  state.configFormOriginal = cloneConfigObject(editableConfig ?? {});
+  state.configFormOriginal = cloneConfigObject(editableConfig ?? {}, state.configForm);
   const raw =
     state.configSnapshot?.raw ??
     (editableConfig ? serializeConfigForm(editableConfig) : state.configRawOriginal);

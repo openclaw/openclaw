@@ -1,12 +1,12 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ConfigUiHints } from "../api/types.ts";
+import { arrayItemSchema, arrayItemSchemaIndexes } from "./config-form.array-items.ts";
 import {
   localizedHintForPath,
   humanize,
   schemaType,
   type JsonSchema,
-} from "../lib/config-form-utils.ts";
-import { arrayItemSchema, arrayItemSchemaIndexes } from "./config-form.array-items.ts";
+} from "./config-form.shared.ts";
 
 export type ConfigSearchCriteria = {
   text: string;

@@ -1,12 +1,16 @@
 // Control UI renderers for structured config form nodes.
 import { html, nothing, type TemplateResult } from "lit";
-import { Directive, directive } from "lit/directive.js";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import { removePathValue, setPathValue } from "../lib/config-form-utils.ts";
 import { arrayAddCandidates } from "./config-form-array-candidates.ts";
-import { ConfigFormArrayIdentity } from "./config-form-array-identity.ts";
+import {
+  appendArrayRowIdentities,
+  discardArrayRowIdentities,
+  preserveArrayRowIdentities,
+  rowIdentitiesForArray,
+} from "./config-form-array-identity.ts";
 import {
   openCollectionDraft,
   type ConfigFormCollectionDraftCommit,
@@ -202,32 +206,9 @@ export function renderObject(
   `;
 }
 
-class ConfigFormArrayDirective extends Directive {
-  private rows = new ConfigFormArrayIdentity();
-  private field = "";
-
-  render(params: ConfigNodeRenderParams, renderNode: ConfigNodeRenderer): TemplateResult {
-    // Keyed parents carry row identity. Indices still select patch destinations,
-    // but moving a row must not retire its nested field editors.
-    const field = JSON.stringify(params.path.filter((segment) => typeof segment === "string"));
-    if (field !== this.field) {
-      this.rows = new ConfigFormArrayIdentity();
-      this.field = field;
-    }
-    return renderArrayContent(params, renderNode, this.rows);
-  }
-}
-
-const arrayDirective = directive(ConfigFormArrayDirective);
-
-export function renderArray(params: ConfigNodeRenderParams, renderNode: ConfigNodeRenderer) {
-  return html`${arrayDirective(params, renderNode)}`;
-}
-
-function renderArrayContent(
+export function renderArray(
   params: ConfigNodeRenderParams,
   renderNode: ConfigNodeRenderer,
-  rows: ConfigFormArrayIdentity,
 ): TemplateResult {
   const {
     schema,
@@ -277,9 +258,7 @@ function renderArrayContent(
       ? schema.default
       : UNSET_ARRAY_SOURCE_IDENTITY;
   const defaultDescription = renderCollectionDefaultDescription(params, arrayValue);
-  const rowIdentities = rows.read(arrayValue);
-  const patch = (nextValue: unknown[], identities: readonly symbol[]) =>
-    rows.patch(nextValue, identities, (next) => onPatch(path, next));
+  const rowIdentities = rowIdentitiesForArray(arrayValue);
   const {
     minItems: minimumItems,
     maxItems: maximumItems,
@@ -343,7 +322,12 @@ function renderArrayContent(
       nextValue[itemIndex] = nextItem.value;
     }
     if (canApplyArrayCandidate(schema, arrayValue, nextValue, uniqueItems, true)) {
-      return patch(nextValue, rowIdentities);
+      preserveArrayRowIdentities(nextValue, rowIdentities);
+      const accepted = onPatch(path, nextValue) !== false;
+      if (!accepted) {
+        discardArrayRowIdentities(nextValue);
+      }
+      return accepted;
     }
     return false;
   };
@@ -382,11 +366,13 @@ function renderArrayContent(
               } else if (requiresDraft) {
                 openCollectionDraft(event, draftId);
               } else if (autoCandidate) {
-                const appended = Array.from(
-                  { length: autoCandidate.length - arrayValue.length },
-                  () => Symbol("array-row"),
+                appendArrayRowIdentities(
+                  autoCandidate,
+                  rowIdentities,
+                  autoCandidate.length - arrayValue.length,
                 );
-                if (!patch(autoCandidate, [...rowIdentities, ...appended])) {
+                if (onPatch(path, autoCandidate) === false) {
+                  discardArrayRowIdentities(autoCandidate);
                   openCollectionDraft(event, draftId);
                 }
               }
@@ -410,7 +396,11 @@ function renderArrayContent(
             (nextValue.length < minimumItems || isSupportedConfigValueValid(schema, nextValue));
           let accepted = false;
           if (canApply) {
-            accepted = patch(nextValue, [...rowIdentities, Symbol("array-row")]);
+            appendArrayRowIdentities(nextValue, rowIdentities, 1);
+            accepted = onPatch(path, nextValue) !== false;
+            if (!accepted) {
+              discardArrayRowIdentities(nextValue);
+            }
           }
           if (!accepted) {
             event.preventDefault();
@@ -453,18 +443,24 @@ function renderArrayContent(
                                 const add = document.activeElement
                                   ?.closest(".cfg-array")
                                   ?.querySelector<HTMLButtonElement>("button[aria-controls]");
-                                if (
-                                  canRemove &&
-                                  patch(nextValue, rowIdentities.toSpliced(index, 1)) &&
-                                  focused
-                                ) {
-                                  // A keyed removal retires the focused button; keep keyboard
-                                  // navigation in this array without stealing a later focus choice.
-                                  queueMicrotask(() => {
-                                    if (document.activeElement === document.body) {
-                                      add?.focus();
-                                    }
-                                  });
+                                if (canRemove) {
+                                  preserveArrayRowIdentities(
+                                    nextValue,
+                                    rowIdentities.toSpliced(index, 1),
+                                  );
+                                  const removed = onPatch(path, nextValue) !== false;
+                                  if (!removed) {
+                                    discardArrayRowIdentities(nextValue);
+                                  }
+                                  if (removed && focused) {
+                                    // A keyed removal retires the focused button; keep keyboard
+                                    // navigation in this array without stealing a later focus choice.
+                                    queueMicrotask(() => {
+                                      if (document.activeElement === document.body) {
+                                        add?.focus();
+                                      }
+                                    });
+                                  }
                                 }
                               }}
                             >
@@ -485,6 +481,7 @@ function renderArrayContent(
                         isRequired: true,
                         sourceIdentity: inherited ? undefined : item,
                         controlIdentity: arrayValue,
+                        rowIdentity: rowIdentities[index],
                         searchCriteria: childSearchCriteria,
                         showLabel: false,
                         revealSensitive,
