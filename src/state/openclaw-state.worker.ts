@@ -24,6 +24,7 @@ import { executePluginStateCommand } from "../plugin-state/plugin-state.worker.j
 import { readPluginMetadataStateRowSync } from "../plugins/installed-plugin-index-row.js";
 import {
   ensureProjectRegistrySchema,
+  insertProjectRegistryInDatabase,
   listProjectRegistryInDatabase,
   removeProjectRegistryInDatabase,
   resolveRecordedProjectRootInDatabase,
@@ -357,6 +358,21 @@ function createSharedStateWorkerBackend(
       if (command.type === "projects.list") {
         ensureProjectRegistrySchema(writeOptions);
         return listProjectRegistryInDatabase(database.db);
+      }
+      if (command.type === "projects.insert") {
+        ensureProjectRegistrySchema(writeOptions);
+        return runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            const { project, lease } = command.input;
+            if (lease.scope !== "projects.checkout" || lease.key !== project.repoRoot) {
+              throw new Error("Project registry mutation requires its checkout lifecycle lease");
+            }
+            assertOpenClawStateLeaseWorkerOwnedInTransaction(db, lease);
+            return insertProjectRegistryInDatabase(db, project);
+          },
+          writeOptions,
+          { operationLabel: "projects.registry.insert" },
+        );
       }
       if (command.type === "projects.remove") {
         return runOpenClawStateWriteTransaction(

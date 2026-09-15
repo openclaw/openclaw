@@ -7,11 +7,12 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { refreshProjectClone } from "../../projects/project-clone.js";
+import { registerProjectRegistry } from "../../projects/project-registry.js";
+import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
 import {
-  registerClonedProjectRegistry,
-  registerProjectRegistry,
-} from "../../projects/project-registry.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import {
   controlUiClient,
@@ -34,9 +35,10 @@ vi.mock("../../projects/project-clone.js", async (importOriginal) => {
   return { ...actual, materializeProjectClone: projectCloneMocks.materialize };
 });
 
-afterEach(() => {
+afterEach(async () => {
   projectCloneMocks.materialize.mockReset();
   dispatchInboundMessageMock.mockReset();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
 });

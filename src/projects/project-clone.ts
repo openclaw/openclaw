@@ -1,11 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
 import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { resolveProjectDirectory, withProjectCheckoutLifecycle } from "./project-checkout.js";
 import {
   cloneProjectCheckout,
   ensureProjectCheckoutCommit,
@@ -14,12 +20,14 @@ import {
 } from "./project-clone-runtime.js";
 import { parseProjectGitUrl } from "./project-git-url.js";
 import {
+  prepareProjectRegistration,
+  registerPreparedProjectRegistry,
+} from "./project-registration.js";
+import {
   listProjectRegistry,
-  registerClonedProjectRegistry,
   removeProjectCheckoutReference,
   resolveProjectCloneRefreshOwner,
   type ProjectRegistryRecord,
-  withProjectCheckoutLifecycle,
 } from "./project-registry.js";
 
 const PROJECT_CLONE_LEASE_MS = 30_000;
@@ -39,29 +47,33 @@ async function existingCanonicalProject(
 /** Materializes and registers a project from an accepted GitHub remote. */
 export async function materializeProjectClone(
   input: { cfg: OpenClawConfig; gitUrl: string; name?: string; requiredCommit?: string },
-  options: OpenClawStateDatabaseOptions & {
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
     signal?: AbortSignal;
     timeoutMs?: number;
     token?: string;
   } = {},
 ): Promise<ProjectRegistryRecord> {
-  const parsed = parseProjectGitUrl(input.gitUrl);
+  const { cfg, gitUrl, name, requiredCommit } = input;
+  const { signal, timeoutMs, token } = options;
+  const parsed = parseProjectGitUrl(gitUrl);
   if (!parsed) {
     throw new ProjectCloneError(
       "invalid_url",
       "Use a GitHub HTTPS or git@github.com repository URL. Local paths and file URLs are not accepted.",
     );
   }
-  const env = options.env ?? process.env;
+  const env = { ...(options.env ?? process.env) };
+  const context = captureOpenClawStateWorkerContext({ path: options.path, env });
+  const databaseOptions = { path: context.admission.databasePath, env };
   const fingerprint = sha256HexPrefixCore(parsed.url, 16);
   return await withOpenClawStateLease(
     {
       scope: "projects.clone",
       key: fingerprint,
-      database: { scope: "shared", options },
+      database: { scope: "shared", options: databaseOptions },
       leaseMs: PROJECT_CLONE_LEASE_MS,
       waitMs: PROJECT_CLONE_WAIT_MS,
-      ...(options.signal ? { signal: options.signal } : {}),
+      ...(signal ? { signal } : {}),
       leaseLabel: "project clone lease",
       operationLabel: "projects.clone.lease",
     },
@@ -69,25 +81,25 @@ export async function materializeProjectClone(
       // Keep clone as the outer lease and take one candidate checkout lease at a time. A row that
       // moves roots while we wait must be retried under its new root instead of returned stale.
       while (true) {
-        const candidate = await existingCanonicalProject(input.cfg, parsed.url, options);
+        const candidate = await existingCanonicalProject(cfg, parsed.url, databaseOptions);
         lease.assertOwned();
         if (!candidate) {
           break;
         }
         const existing = await withProjectCheckoutLifecycle(
           candidate.repoRoot,
-          { ...options, signal: lease.signal },
+          { ...databaseOptions, signal: lease.signal },
           async (checkoutLease) => {
-            const current = await existingCanonicalProject(input.cfg, parsed.url, options);
+            const current = await existingCanonicalProject(cfg, parsed.url, databaseOptions);
             lease.assertOwned();
             checkoutLease.assertOwned();
             if (current?.repoRoot !== candidate.repoRoot) {
               return undefined;
             }
-            if (input.requiredCommit) {
+            if (requiredCommit) {
               await ensureProjectCheckoutCommit(
-                { url: parsed.url, target: current.repoRoot, commit: input.requiredCommit },
-                { ...options, env, signal: checkoutLease.signal },
+                { url: parsed.url, target: current.repoRoot, commit: requiredCommit },
+                { env, signal: checkoutLease.signal, timeoutMs, token },
               );
               checkoutLease.assertOwned();
             }
@@ -98,28 +110,57 @@ export async function materializeProjectClone(
           return existing;
         }
       }
-      const displayName = input.name?.trim() || parsed.name;
+      const displayName = name?.trim() || parsed.name;
       const directoryName = slugifyWorktreeTitle(displayName) ?? "project";
       const target = path.join(resolveStateDir(env), "projects", fingerprint, directoryName);
       await cloneProjectCheckout(
-        { url: parsed.url, target, requiredCommit: input.requiredCommit },
+        { url: parsed.url, target, requiredCommit },
         {
           env,
           signal: lease.signal,
-          timeoutMs: options.timeoutMs,
-          token: options.token,
+          timeoutMs,
+          token,
         },
       );
-      try {
-        lease.assertOwned();
-        return await registerClonedProjectRegistry(
-          { path: target, name: displayName, originUrl: parsed.url },
-          options,
-        );
-      } catch (error) {
-        await fs.rm(target, { recursive: true, force: true }).catch(() => {});
-        throw error;
-      }
+      lease.assertOwned();
+      const repoRoot = await resolveProjectDirectory(target);
+      lease.assertOwned();
+      return await withProjectCheckoutLifecycle(
+        repoRoot,
+        { ...databaseOptions, signal: lease.signal },
+        async (checkoutLease) => {
+          let registered = false;
+          try {
+            lease.assertOwned();
+            const prepared = await prepareProjectRegistration({
+              path: repoRoot,
+              name: displayName,
+              originUrl: parsed.url,
+              source: "cloned",
+            });
+            return await registerPreparedProjectRegistry(prepared, checkoutLease, context, () => {
+              registered = true;
+            });
+          } catch (error) {
+            if (
+              registered ||
+              collectNestedErrorCandidates(error).some(
+                (candidate) => extractErrorCode(candidate) === "outcome-unknown",
+              )
+            ) {
+              throw error;
+            }
+            try {
+              lease.assertOwned();
+              checkoutLease.assertOwned();
+              await fs.rm(target, { recursive: true, force: true });
+            } catch {
+              // Preserve the registration failure if ownership verification or cleanup fails.
+            }
+            throw error;
+          }
+        },
+      );
     },
   );
 }

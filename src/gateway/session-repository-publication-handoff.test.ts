@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { registerClonedProjectRegistry } from "../projects/project-registry.js";
+import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
