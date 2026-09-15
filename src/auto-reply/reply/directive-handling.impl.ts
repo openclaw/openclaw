@@ -31,7 +31,7 @@ import { applyModelRuntimeDirective } from "./directive-handling.model-runtime.j
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
-import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
+import * as queueDirective from "./directive-handling.queue-validation.js";
 import {
   acknowledgeIgnoredSessionDirective,
   applySessionDirectiveFields,
@@ -58,6 +58,7 @@ import {
   prepareModelSelectionRuntime,
 } from "./model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
+import { resumeSuspendedFollowupDrain } from "./queue/drain.js";
 
 /** Handles inline directives that can be acknowledged without a model turn. */
 export async function handleDirectiveOnly(
@@ -392,7 +393,7 @@ export async function handleDirectiveOnly(
     }
   }
 
-  const queueAck = maybeHandleQueueDirective({
+  const queueAck = queueDirective.maybeHandleQueueDirective({
     directives,
     cfg: params.cfg,
     channel: provider,
@@ -442,6 +443,7 @@ export async function handleDirectiveOnly(
     elevatedEnabled &&
     elevatedAllowed;
   let modelSelectionUpdated = false;
+  let resumedQueuedWork = false;
   let configuredDefaultUpdate: ReturnType<typeof persistStickyModelSelectionBestEffort> | undefined;
   const touchedSessionFields = resolveDirectiveTouchedSessionFields({
     directives,
@@ -467,7 +469,7 @@ export async function handleDirectiveOnly(
     if (authProfileError) {
       return rejectModelTransaction(authProfileError);
     }
-    const initialSessionEntry = { ...sessionEntry };
+    const initialEntry = { ...sessionEntry };
     const directiveFieldsUpdated =
       !params.persistenceState &&
       applySessionDirectiveFields({
@@ -493,13 +495,16 @@ export async function handleDirectiveOnly(
       const appliedRuntime = applyModelRuntimeDirective(sessionEntry, modelRuntimeResolution);
       modelSelectionUpdated = applied.updated || appliedRuntime.updated;
     }
+    // Capture only this directive's changes before persistence can adopt
+    // concurrent edits to untouched fields from the authoritative snapshot.
+    const queueChanged = queueDirective.didQueueChange(directives, initialEntry, sessionEntry);
     sessionEntry.updatedAt = Date.now();
     sessionStore[sessionKey] = sessionEntry;
     if (storePath) {
       const persistence = await persistSessionDirectiveSnapshot({
         storePath,
         sessionKey,
-        initialEntry: initialSessionEntry,
+        initialEntry,
         sessionEntry,
         sessionStore,
         hasModelSelection: Boolean(modelSelection),
@@ -520,6 +525,15 @@ export async function handleDirectiveOnly(
                 : "Session settings were not applied because the session changed. Retry.";
         return rejectModelTransaction(errorText);
       }
+    }
+    // Ordinary scheduling and turn-local hints cannot restart a failed queue.
+    // Resume only after an authorized explicit settings change commits.
+    if (!params.persistenceState && allowPrivilegedPersistence && queueChanged) {
+      resumedQueuedWork = resumeSuspendedFollowupDrain(sessionKey, {
+        cfg: params.cfg,
+        channel: params.messageProviderKey ?? params.messageProvider ?? params.surface,
+        sessionEntry,
+      });
     }
     if (
       modelSelection &&
@@ -687,20 +701,7 @@ export async function handleDirectiveOnly(
       `Thinking level set to ${remappedUnsupportedThinkLevel} (${nextThinkLevel} not supported for ${resolvedProvider}/${resolvedModel}).`,
     );
   }
-  if (directives.hasQueueDirective && directives.queueMode) {
-    parts.push(formatDirectiveAck(`Queue mode set to ${directives.queueMode}.`));
-  } else if (directives.hasQueueDirective && directives.queueReset) {
-    parts.push(formatDirectiveAck("Queue mode reset to default."));
-  }
-  if (directives.hasQueueDirective && typeof directives.debounceMs === "number") {
-    parts.push(formatDirectiveAck(`Queue debounce set to ${directives.debounceMs}ms.`));
-  }
-  if (directives.hasQueueDirective && typeof directives.cap === "number") {
-    parts.push(formatDirectiveAck(`Queue cap set to ${directives.cap}.`));
-  }
-  if (directives.hasQueueDirective && directives.dropPolicy) {
-    parts.push(formatDirectiveAck(`Queue drop set to ${directives.dropPolicy}.`));
-  }
+  parts.push(...queueDirective.formatQueueDirectiveAcknowledgements(directives, resumedQueuedWork));
   if (fastModeChanged && !params.persistenceState) {
     const nextFastMode = directives.clearFastMode ? fastModeState.mode : sessionEntry.fastMode;
     const nextFastModeText =

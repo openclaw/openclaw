@@ -27,6 +27,7 @@ import {
 } from "./recent-message-ids.js";
 import {
   FOLLOWUP_QUEUES,
+  clearFollowupQueue,
   getExistingFollowupQueue,
   getFollowupQueue,
   trimSummaryElisionsToCap,
@@ -104,9 +105,24 @@ function appendQueueItem(params: {
       const queue = getExistingFollowupQueue(params.key);
       if (queue) {
         // Cancellation must release pending ownership even while normal draining is dormant.
-        void dropAbortedFollowups(queue, runFollowup).catch((error: unknown) => {
-          defaultRuntime.error?.(`followup queue cancellation failed: ${String(error)}`);
-        });
+        void dropAbortedFollowups(queue, runFollowup)
+          .then(() => {
+            // Canceling the last parked source retires the empty owner too;
+            // a future enqueue must not inherit its suspension or retry timer.
+            if (
+              FOLLOWUP_QUEUES.get(params.key) === queue &&
+              !queue.draining &&
+              queue.items.length === 0 &&
+              queue.inFlight.size === 0 &&
+              queue.droppedCount === 0
+            ) {
+              clearFollowupQueue(params.key);
+              clearFollowupDrainCallback(params.key);
+            }
+          })
+          .catch((error: unknown) => {
+            defaultRuntime.error?.(`followup queue cancellation failed: ${String(error)}`);
+          });
       }
     };
     const onSettled = lifecycle.onSettled;
