@@ -114,11 +114,14 @@ class QaChannelTransport extends QaStateBackedTransportAdapter {
       accountId: QA_CHANNEL_ACCOUNT_ID,
       channel: QA_CHANNEL_ID,
     });
-  buildAgentDelivery = ({ target }: { target: string }) => ({
-    channel: QA_CHANNEL_ID,
-    replyChannel: QA_CHANNEL_ID,
-    replyTo: target,
-  });
+  buildAgentDelivery = ({ target, threadId }: { target: string; threadId?: string }) => {
+    return {
+      channel: QA_CHANNEL_ID,
+      replyChannel: QA_CHANNEL_ID,
+      replyTo: target,
+      ...(threadId ? { threadId } : {}),
+    };
+  };
   async sendNativeCommand(input: QaTransportNativeCommandInput): Promise<void> {
     const { command, ...message } = input;
     await this.sendInbound({

@@ -5,7 +5,6 @@ import {
   startOpenClawCrablineAdapter,
   type OpenClawCrablineChannelDriverSelection,
   type OpenClawCrablineInbound,
-  type StartedOpenClawCrablineAdapter,
   type StartedOpenClawCrablineCorrelatedAdapter,
 } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -17,13 +16,14 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import {
+  createCrablineProviderCorrelationKey,
   createCrablineProviderDelivery,
   createCrablineProviderInboundInput,
   resolveCrablineStateConversation,
   resolveDiscordQaId,
-  resolveTelegramQaSenderId,
 } from "./crabline-provider-targets.js";
 import { readQaJsonResponse } from "./ignored-response-body.js";
+import { buildQaConversationTarget, parseQaTarget } from "./qa-bus-protocol.js";
 import {
   QaStateBackedTransportAdapter,
   type QaTransportActionName,
@@ -48,8 +48,17 @@ type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
   getOutboundEvents: () => Promise<readonly QaTransportOutboundEvent[]>;
   observeEvent: (event: unknown) => void;
-  rememberProviderTarget: (providerTargetKey: string, qaTarget: string) => void;
+  rememberProviderTarget: (providerTargetKey: string, target: QaCrablineTarget) => void;
 };
+
+type QaCrablineTarget = Pick<QaBusInboundMessageInput, "conversation" | "threadId">;
+
+function qaTargetForInput(input: QaBusInboundMessageInput): QaCrablineTarget {
+  return {
+    conversation: { ...input.conversation },
+    ...(input.threadId ? { threadId: input.threadId } : {}),
+  };
+}
 
 function normalizeCrablineSignalGatewayConfig(config: OpenClawConfig): OpenClawConfig {
   const signal = config.channels?.signal as unknown;
@@ -80,23 +89,6 @@ function normalizeCrablineSignalGatewayConfig(config: OpenClawConfig): OpenClawC
       },
     },
   } as OpenClawConfig;
-}
-
-function resolveLogicalQaTarget(
-  { conversation, threadId }: QaBusInboundMessageInput,
-  providerQaTarget: string,
-  providerPreservesConversationId: boolean,
-) {
-  if (conversation.kind !== "channel" && providerPreservesConversationId) {
-    return providerQaTarget;
-  }
-  const prefix = conversation.kind === "direct" ? "dm" : conversation.kind;
-  return threadId ? `thread:${conversation.id}/${threadId}` : `${prefix}:${conversation.id}`;
-}
-
-function formatLogicalQaConversationTarget({ conversation }: QaBusInboundMessageInput) {
-  const prefix = conversation.kind === "direct" ? "dm" : conversation.kind;
-  return `${prefix}:${conversation.id}`;
 }
 
 const TELEGRAM_LIFECYCLE_METHOD_RE = /\/(sendMessage|editMessageText|deleteMessage)$/u;
@@ -177,7 +169,7 @@ function readTelegramLifecycleEvent(params: {
 }
 
 async function postCrablineInbound(params: {
-  adapter: StartedOpenClawCrablineAdapter;
+  adapter: StartedOpenClawCrablineCorrelatedAdapter;
   providerInbound: OpenClawCrablineInbound;
 }) {
   const { response, release } = await fetchWithSsrFGuard({
@@ -195,30 +187,28 @@ async function postCrablineInbound(params: {
   });
   const label = `Crabline ${params.adapter.channel} inbound injection failed`;
   const result = await readQaJsonResponse<unknown>(response, release, label);
+  let providerMessageId: string | undefined;
   if (params.adapter.channel === "matrix" && isRecord(result) && isRecord(result.event)) {
-    return readStringValue(result.event.event_id);
-  }
-  if (params.adapter.channel === "slack" && isRecord(result) && isRecord(result.message)) {
-    return readStringValue(result.message.ts);
-  }
-  if (
+    providerMessageId = readStringValue(result.event.event_id);
+  } else if (params.adapter.channel === "slack" && isRecord(result) && isRecord(result.message)) {
+    providerMessageId = readStringValue(result.message.ts);
+  } else if (
     params.adapter.channel === "telegram" &&
     isRecord(result) &&
     isRecord(result.update) &&
     isRecord(result.update.message)
   ) {
-    return normalizeStringifiedOptionalString(result.update.message.message_id);
+    providerMessageId = normalizeStringifiedOptionalString(result.update.message.message_id);
   }
-  return undefined;
+  return { providerMessageId, response: result };
 }
 
 function createCrablineState(params: {
-  adapter: StartedOpenClawCrablineAdapter;
+  adapter: StartedOpenClawCrablineCorrelatedAdapter;
   state: QaBusState;
 }): QaCrablineTransportState {
   const baseState = params.state;
-  const targetByProviderTarget = new Map<string, string>();
-  const logicalRouteByTarget = new Map<string, { target: string; threadId?: string }>();
+  const targetByProviderTarget = new Map<string, QaCrablineTarget>();
   const telegramMessageByProviderId = new Map<string, QaBusMessage>();
   const pendingTelegramMessagesByChat = new Map<string, QaBusMessage[]>();
   const outboundEvents: QaTransportOutboundEvent[] = [];
@@ -227,7 +217,6 @@ function createCrablineState(params: {
     reset() {
       baseState.reset();
       targetByProviderTarget.clear();
-      logicalRouteByTarget.clear();
       telegramMessageByProviderId.clear();
       pendingTelegramMessagesByChat.clear();
       outboundEvents.length = 0;
@@ -261,45 +250,54 @@ function createCrablineState(params: {
               },
             }
           : event;
-      const outbound = params.adapter.createOutboundFromRecorderEvent({
-        event: normalizedEvent,
-        targetByProviderTarget,
-      }) as QaBusOutboundMessageInput | null;
-      if (outbound) {
-        const logicalRoute = logicalRouteByTarget.get(outbound.to);
-        baseState.addOutboundMessage(
-          logicalRoute
+      const observation = params.adapter.createOutboundObservation({ event: normalizedEvent });
+      const target = observation?.providerTargetKeys
+        .map((key) => targetByProviderTarget.get(key))
+        .find((candidate) => candidate !== undefined);
+      const outbound: QaBusOutboundMessageInput | null = observation
+        ? target
+          ? {
+              accountId: observation.accountId,
+              senderId: observation.senderId,
+              senderName: observation.senderName,
+              text: observation.text,
+              to: buildQaConversationTarget({
+                chatType: target.conversation.kind,
+                conversationId: target.conversation.id,
+              }),
+              threadId: target.threadId,
+            }
+          : observation.fallbackTarget
             ? {
-                ...outbound,
-                to: logicalRoute.target,
-                ...(logicalRoute.threadId ? { threadId: logicalRoute.threadId } : {}),
+                accountId: observation.accountId,
+                senderId: observation.senderId,
+                senderName: observation.senderName,
+                text: observation.text,
+                to: observation.fallbackTarget,
               }
-            : outbound,
-        );
+            : null
+        : null;
+      if (outbound) {
+        baseState.addOutboundMessage(outbound);
       }
     },
     async addInboundMessage(input: QaBusInboundMessageInput) {
       const providerInbound = params.adapter.createInbound({
         input: createCrablineProviderInboundInput(params.adapter, input),
       });
-      // Provider targets carry typed thread identity. Synthetic channels and Matrix's
-      // provider-native room ids still need their scenario-owned logical target restored.
-      const logicalTarget = resolveLogicalQaTarget(
-        input,
-        providerInbound.qaTarget,
-        params.adapter.channel !== "matrix" && params.adapter.channel !== "discord",
-      );
-      targetByProviderTarget.set(providerInbound.providerTargetKey, logicalTarget);
-      if (params.adapter.channel === "discord") {
-        logicalRouteByTarget.set(logicalTarget, {
-          target: formatLogicalQaConversationTarget(input),
-          ...(input.threadId ? { threadId: input.threadId } : {}),
-        });
-      }
-      const providerMessageId = await postCrablineInbound({
+      const ingress = await postCrablineInbound({
         adapter: params.adapter,
         providerInbound,
       });
+      // Register only the provider identity confirmed by successful ingress. Provider servers may
+      // realize a symbolic target as a different native conversation than the provisional input.
+      targetByProviderTarget.set(
+        params.adapter.resolveInboundProviderTargetKey({
+          inbound: providerInbound,
+          response: ingress.response,
+        }),
+        qaTargetForInput(input),
+      );
       return baseState.addInboundMessage(
         {
           ...input,
@@ -308,17 +306,12 @@ function createCrablineState(params: {
             input,
             providerInbound,
           }),
-          ...(input.threadId && params.adapter.channel === "discord"
-            ? { threadId: input.threadId }
-            : providerInbound.threadId
-              ? { threadId: providerInbound.threadId }
-              : {}),
         },
-        providerMessageId,
+        ingress.providerMessageId,
       );
     },
-    rememberProviderTarget(providerTargetKey, qaTarget) {
-      targetByProviderTarget.set(providerTargetKey, qaTarget);
+    rememberProviderTarget(providerTargetKey, target) {
+      targetByProviderTarget.set(providerTargetKey, target);
     },
     addOutboundMessage: baseState.addOutboundMessage.bind(baseState),
     readMessage: baseState.readMessage.bind(baseState),
@@ -464,7 +457,10 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     if (this.#selection.channel !== "telegram") {
       return config as QaTransportGatewayConfig;
     }
-    const senderAllowlist = this.#transportPolicy?.senderAllowlist?.map(resolveTelegramQaSenderId);
+    const senderAllowlist = this.#transportPolicy?.senderAllowlist?.map(
+      (senderId) =>
+        this.#adapter.createAgentDelivery({ target: `dm:${senderId}` }).providerTargetKey,
+    );
     if (!this.#transportPolicy?.requireGroupMention && !senderAllowlist) {
       return config as QaTransportGatewayConfig;
     }
@@ -500,10 +496,43 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
       channel: this.#adapter.channel,
     });
 
-  buildAgentDelivery = ({ target }: { target: string }) => {
-    const { delivery, providerTargetKey } = createCrablineProviderDelivery(this.#adapter, target);
-    this.#state.rememberProviderTarget(providerTargetKey, target);
-    return delivery;
+  buildAgentDelivery = ({ target, threadId }: { target: string; threadId?: string }) => {
+    const parsed = parseQaTarget(target);
+    if (parsed.threadId && threadId && parsed.threadId !== threadId) {
+      throw new Error("Crabline delivery received conflicting thread targets");
+    }
+    const logicalTarget = {
+      conversation: { id: parsed.conversationId, kind: parsed.chatType },
+      threadId: threadId ?? parsed.threadId,
+    };
+    // Provider-native targets must retain their own classification (for example,
+    // Telegram negative group ids and Slack C/G conversation ids). Matrix and
+    // Mattermost also require OpenClaw to forward threads separately at the
+    // Gateway request boundary instead of passing them into Crabline delivery setup.
+    const providerThreadId =
+      this.#selection.channel === "matrix" || this.#selection.channel === "mattermost"
+        ? undefined
+        : logicalTarget.threadId;
+    const { delivery, providerTargetKey } = createCrablineProviderDelivery(
+      this.#adapter,
+      target,
+      providerThreadId,
+    );
+    if (providerThreadId === undefined && logicalTarget.threadId) {
+      this.#state.rememberProviderTarget(providerTargetKey, {
+        conversation: logicalTarget.conversation,
+      });
+      this.#state.rememberProviderTarget(
+        createCrablineProviderCorrelationKey(this.#adapter, logicalTarget),
+        logicalTarget,
+      );
+    } else {
+      this.#state.rememberProviderTarget(providerTargetKey, logicalTarget);
+    }
+    return {
+      ...delivery,
+      ...(logicalTarget.threadId ? { threadId: logicalTarget.threadId } : {}),
+    };
   };
 
   createRuntimeEnvPatch = () =>
