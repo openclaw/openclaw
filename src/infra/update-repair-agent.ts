@@ -1,9 +1,8 @@
-import { z } from "zod";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { renderTriagePrompt } from "../commands/triage-prompt.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { truncateUtf8Prefix, truncateUtf8Suffix } from "../utils/utf8-truncate.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import {
   updateRepairBudgetSchema,
   updateRepairValidationSchema,
@@ -11,15 +10,11 @@ import {
   type UpdateRepairResult,
   type UpdateRepairValidation,
 } from "./update-repair-protocol.js";
+import { repairSummary, runLocalUpdateRepairTurn } from "./update-repair-turn.js";
 import { runUpdateRepairWorker } from "./update-repair-worker.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 
 type RepairAttempt = UpdateRepairResult["attempts"][number];
-
-const resultLineSchema = z.object({
-  status: z.enum(["fixed", "partial", "not-fixed"]),
-  summary: z.string().max(1024),
-});
 
 function repairPrompt(params: UpdateRepairParams, validation: UpdateRepairValidation): string {
   const redaction = { env: process.env, stateDir: params.target.stateDir };
@@ -58,29 +53,6 @@ function repairPrompt(params: UpdateRepairParams, validation: UpdateRepairValida
   return contract + truncateUtf8Prefix(`${evidence}\nSymptoms:\n${symptoms}`, remaining);
 }
 
-function repairSummary(text: string, params: UpdateRepairParams): string {
-  const lastLine = text.trim().split(/\r?\n/u).at(-1) ?? "";
-  let summary = text.trim() || "The agent returned no repair result.";
-  if (lastLine.startsWith("REPAIR_RESULT:")) {
-    try {
-      const parsed = resultLineSchema.safeParse(
-        JSON.parse(lastLine.slice("REPAIR_RESULT:".length)),
-      );
-      if (parsed.success) {
-        summary = parsed.data.summary;
-      }
-    } catch {
-      // Missing/garbled declarations are not fixed; only the oracle proves success.
-    }
-  }
-  const redacted = redactSupportString(
-    summary,
-    { env: process.env, stateDir: params.target.stateDir },
-    { maxLength: Number.MAX_SAFE_INTEGER },
-  );
-  return truncateUtf8Suffix(redacted, 1024);
-}
-
 /** Bound caller-owned read-only diagnostics outside temporary process paths. Late answers are ignored. */
 async function validateRepair(
   params: UpdateRepairParams,
@@ -100,7 +72,7 @@ async function validateRepair(
     }
     const value = await Promise.race([pending, cancelled.promise]);
     const parsed = updateRepairValidationSchema.parse(value);
-    return { ...parsed, summary: repairSummary(parsed.summary, params) };
+    return { ...parsed, summary: repairSummary(parsed.summary, params.target) };
   } finally {
     signal.removeEventListener("abort", abort);
   }
@@ -166,7 +138,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
     );
     assertCurrent();
     if (!selected.ok) {
-      return stop("unavailable", repairSummary(selected.reason, params));
+      return stop("unavailable", repairSummary(selected.reason, params.target));
     }
     const { route, modelFallbacks } = selected;
     params.onEvent?.({ type: "route-selected", model: route.model, provider: route.provider });
@@ -194,21 +166,19 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
       let outcome;
       try {
         outcome = await cleanup.run(() =>
-          runtime.withUpdateRepairEnvironment(params.target, () =>
-            runtime.runUpdateRepairTurn({
-              target: params.target,
-              route,
-              modelFallbacks,
-              prompt: repairPrompt(params, finalValidation),
-              timeoutMs,
-              maxToolCalls: remainingToolCalls,
-              signal: turnSignal,
-              isCurrent: () => {
-                assertCurrent();
-                return true;
-              },
-            }),
-          ),
+          runLocalUpdateRepairTurn({
+            target: params.target,
+            route,
+            modelFallbacks,
+            prompt: repairPrompt(params, finalValidation),
+            timeoutMs,
+            maxToolCalls: remainingToolCalls,
+            signal: turnSignal,
+            isCurrent: () => {
+              assertCurrent();
+              return true;
+            },
+          }),
         );
       } finally {
         clearTimeout(turnTimer);
@@ -218,14 +188,11 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
       }
       const attempt: RepairAttempt = {
         turn,
-        model: outcome.envelope.model ?? route.model,
-        provider: outcome.envelope.provider ?? route.provider,
+        model: outcome.model,
+        provider: outcome.provider,
         durationMs: Date.now() - started,
         toolCalls: outcome.toolCalls,
-        summary: repairSummary(
-          outcome.envelope.final || outcome.envelope.error?.message || "",
-          params,
-        ),
+        summary: outcome.summary,
         validation: {
           ok: false,
           score: previousScore,
@@ -270,7 +237,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
       if (finalValidation.ok) {
         return stop("repaired");
       }
-      if (turnController.signal.aborted || outcome.envelope.status === "timeout") {
+      if (turnController.signal.aborted || outcome.timedOut) {
         return stop("aborted", "per-turn-budget");
       }
       if (remainingToolCalls <= 0) {
@@ -287,7 +254,7 @@ export async function runUpdateRepairLoop(params: UpdateRepairParams): Promise<U
   } catch (error) {
     return stop(
       "aborted",
-      repairSummary(error instanceof Error ? error.message : String(error), params),
+      repairSummary(error instanceof Error ? error.message : String(error), params.target),
     );
   } finally {
     clearTimeout(timer);
