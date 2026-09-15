@@ -199,8 +199,8 @@ function typeScriptContainsModuleAccess(code: string, ts: typeof import("typescr
 function rejectsModuleAccess(
   code: string,
   typescriptRuntime?: typeof import("typescript"),
+  parsed = parseCodeModeScriptSyntax(code),
 ): boolean {
-  const parsed = parseCodeModeScriptSyntax(code);
   if (parsed.ok) {
     // The WASI guest has no host module loader. Only executable module syntax
     // belongs in this early check; ordinary guest methods are not capabilities.
@@ -229,11 +229,19 @@ export async function prepareSource(input: {
     throw new ToolInputError(`code mode ${language} input is disabled.`);
   }
   if (language === "javascript") {
-    if (rejectsModuleAccess(input.code)) {
+    const parsed = parseCodeModeScriptSyntax(input.code);
+    if (rejectsModuleAccess(input.code, undefined, parsed)) {
       throw new ToolInputError("code mode module access is disabled.");
     }
     if (isShellLikeCodeModeSource(input.code)) {
       throw new ToolInputError(CODE_MODE_SHELL_SOURCE_ERROR);
+    }
+    if (!parsed.ok) {
+      // Keep parser text bounded: some diagnostics include a user-sized identifier.
+      const message = parsed.message.slice(0, 240);
+      throw new ToolInputError(
+        `SyntaxError at openclaw-code-mode:user.js:${parsed.line}:${parsed.column + 1}: ${message}. No tools were dispatched; correct the JavaScript source and submit it again.`,
+      );
     }
     return input.code;
   }
