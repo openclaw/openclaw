@@ -1,7 +1,15 @@
 // Upgrade Survivor Baselines tests cover upgrade survivor baselines script behavior.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -31,6 +39,97 @@ function withJsonFixture<T>(name: string, contents: unknown, fn: (file: string) 
 }
 
 describe("scripts/resolve-upgrade-survivor-baselines", () => {
+  it.each([false, true])(
+    "discovers all release pages before publishing baselines (API failure: %s)",
+    (failApi) => {
+      const workflow = parse(readFileSync(".github/workflows/package-acceptance.yml", "utf8")) as {
+        jobs: { resolve_package: { steps: Array<{ id?: string; run?: string }> } };
+      };
+      const run = workflow.jobs.resolve_package.steps.find(
+        (step) => step.id === "upgrade_survivor_baselines",
+      )?.run;
+      assert(run);
+      // Mixed prereleases put the requested cutoff beyond the first 100 records.
+      const releases = Array.from({ length: 130 }, (_, index) => ({
+        tagName: `v2026.5.${130 - index}${index % 3 === 0 ? "-beta.1" : ""}`,
+        publishedAt: new Date(Date.UTC(2026, 8, 1) - index * 86_400_000).toISOString(),
+        isPrerelease: index % 3 === 0,
+      }));
+      const versions = releases
+        .filter((release) => !release.isPrerelease && release.tagName !== "v2026.5.26")
+        .map((release) => release.tagName.slice(1));
+      withReleaseFixture(releases, (file) => {
+        const root = path.dirname(file);
+        const bin = path.join(root, "bin");
+        const output = path.join(root, "output");
+        mkdirSync(bin);
+        mkdirSync(path.join(root, ".artifacts/package-candidate-input"), { recursive: true });
+        mkdirSync(path.join(root, "scripts"));
+        copyFileSync(
+          "scripts/resolve-upgrade-survivor-baselines.mts",
+          path.join(root, "scripts/resolve-upgrade-survivor-baselines.mts"),
+        );
+        symlinkSync(path.resolve("scripts/lib"), path.join(root, "scripts/lib"));
+        symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"));
+        writeFileSync(output, "");
+        writeFileSync(
+          path.join(bin, "npm"),
+          `#!/bin/sh\nprintf '%s' '${JSON.stringify(versions)}'\n`,
+          { mode: 0o755 },
+        );
+        writeFileSync(
+          path.join(bin, "gh"),
+          `#!/usr/bin/env node
+const fs = require("node:fs");
+const releases = JSON.parse(fs.readFileSync(process.env.RELEASE_FIXTURE, "utf8"));
+const args = process.argv.slice(2);
+if (args[0] === "release") {
+  console.log(JSON.stringify(releases.slice(0, Number(args[args.indexOf("--limit") + 1]))));
+} else {
+  require("node:assert/strict").deepEqual(args, ["api", "--paginate", "--slurp", "repos/openclaw/openclaw/releases?per_page=100"]);
+  const pages = [releases.slice(0, 100), releases.slice(100)].map(page => page.map(release => ({
+    tag_name: release.tagName, published_at: release.publishedAt, prerelease: release.isPrerelease,
+  })));
+  console.log(JSON.stringify(process.env.FAIL_API === "true" ? pages.slice(0, 1) : pages));
+}
+if (process.env.FAIL_API === "true") process.exit(75);
+`,
+          { mode: 0o755 },
+        );
+        const invoke = () =>
+          execFileSync("bash", ["-c", run], {
+            cwd: root,
+            encoding: "utf8",
+            stdio: "pipe",
+            env: {
+              ...process.env,
+              PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+              RELEASE_FIXTURE: file,
+              FAIL_API: String(failApi),
+              FALLBACK_BASELINE: "openclaw@2026.5.24",
+              REQUESTED_BASELINES: "all-since-2026.5.24",
+              CANDIDATE_VERSION: "2026.9.1",
+              CANDIDATE_PUBLISHED: "false",
+              GITHUB_REPOSITORY: "openclaw/openclaw",
+              GITHUB_OUTPUT: output,
+              RUNNER_TEMP: root,
+              TARGET_CONTEXT_REF: "",
+            },
+          });
+        if (failApi) {
+          expect(invoke).toThrow();
+          expect(readFileSync(output, "utf8")).toBe("");
+        } else {
+          invoke();
+          const expected = versions.filter((version) => Number(version.split(".")[2]) >= 24);
+          expect(readFileSync(output, "utf8")).toBe(
+            `baselines=${expected.map((version) => `openclaw@${version}`).join(" ")}\nbaseline_scope=all-scenarios\nbaseline=openclaw@2026.5.24\n`,
+          );
+        }
+      });
+    },
+  );
+
   it("rejects short flag values before resolving baselines", () => {
     expect(() => parseArgs(["--fallback", "-h"])).toThrow("missing value for --fallback");
     expect(() => parseArgs(["--github-output", "-h"])).toThrow("missing value for --github-output");
