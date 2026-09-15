@@ -64,4 +64,46 @@ describe("provider env vars", () => {
     expect(getProviderEnvVars("anthropic")).toEqual(["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]);
     expect(getProviderEnvVars("fal")).toEqual(["FAL_KEY", "FAL_API_KEY"]);
   });
+
+  // A manifest may declare a prototype-named provider id. The id is a key in the
+  // candidate buckets, so those buckets must be prototype-less: otherwise the name
+  // resolves an inherited member, `new Set(bucket)` throws, and the declared
+  // credentials disappear from the secret inventory that sandbox filtering and
+  // `.env` auditing consume.
+  const prototypeNamedProviders = [
+    {
+      id: "__proto__",
+      envVars: ["ACME_CREDENTIAL"],
+      authEvidence: [{ type: "local-file-with-env" }],
+    },
+    { id: "constructor", envVars: ["CTOR_CREDENTIAL"] },
+    { id: "prototype", envVars: ["PROTO_CREDENTIAL"] },
+  ];
+
+  function prototypeSnapshot() {
+    return {
+      config: {},
+      metadataSnapshot: {
+        plugins: [
+          {
+            id: "prototype-named-providers",
+            origin: "global",
+            setup: { providers: prototypeNamedProviders },
+          },
+        ],
+      },
+    } as never;
+  }
+
+  it("keeps prototype-named provider ids addressable instead of crashing the inventory", () => {
+    const params = prototypeSnapshot();
+    expect(() => listKnownSecretEnvVarNames(params)).not.toThrow();
+    const secretNames = listKnownSecretEnvVarNames(params);
+    for (const name of ["ACME_CREDENTIAL", "CTOR_CREDENTIAL", "PROTO_CREDENTIAL"]) {
+      expect(secretNames).toContain(name);
+    }
+    expect(getProviderEnvVars("__proto__", params)).toEqual(["ACME_CREDENTIAL"]);
+    expect(getProviderEnvVars("constructor", params)).toEqual(["CTOR_CREDENTIAL"]);
+    expect(getProviderEnvVars("prototype", params)).toEqual(["PROTO_CREDENTIAL"]);
+  });
 });
