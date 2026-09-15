@@ -17,17 +17,8 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import {
-  clearTuiLastSessionPointers,
-  readTuiLastSessionKey,
-  writeTuiLastSessionKey,
-} from "../tui/tui-last-session.js";
-import {
-  getTranscriptRecordMaxChars,
-  moveHeartbeatMainSessionEntry,
-  resolveHeartbeatMainSessionRepairCandidate,
-  summarizeTranscriptHeartbeatMessages,
-} from "./doctor-heartbeat-main-session-repair.test-support.js";
+import { readTuiLastSessionKey, writeTuiLastSessionKey } from "../tui/tui-last-session.js";
+import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import {
   doctorChangesText,
   hasRepairPromptMessage,
@@ -63,6 +54,32 @@ vi.mock("../plugins/doctor-contract-registry.js", async () => {
 describe("doctor transcript and heartbeat session repairs", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome = "";
+
+  async function inspectHeartbeatRepair(entry: SessionEntry, transcriptPath?: string) {
+    const warnings: string[] = [];
+    const changes: string[] = [];
+    const storePath = path.join(tempHome, "unwritten-repair-store.json");
+    const confirmRuntimeRepair = vi.fn(async () => false);
+    await expect(
+      repairHeartbeatPoisonedMainSession({
+        mainKey: "agent:main:main",
+        mainEntry: entry,
+        isSessionKeyOccupied: () => false,
+        store: { kind: "legacy", path: storePath },
+        stateDir: process.env.OPENCLAW_STATE_DIR ?? "",
+        sessionPathOpts: {
+          agentId: "main",
+          sessionsDir: transcriptPath ? path.dirname(transcriptPath) : tempHome,
+        },
+        prompter: { confirmRuntimeRepair },
+        warnings,
+        changes,
+      }),
+    ).resolves.toBe(false);
+    expect(changes).toEqual([]);
+    expect(fs.existsSync(storePath)).toBe(false);
+    return { warnings, confirmRuntimeRepair };
+  }
 
   beforeEach(() => {
     envSnapshot = captureEnv([
@@ -404,10 +421,7 @@ describe("doctor transcript and heartbeat session repairs", () => {
       expect(transcriptReads).toEqual([]);
     }
 
-    const summary = summarizeTranscriptHeartbeatMessages(transcriptPath);
-    expect(summary?.heartbeatUserMessages).toBe(repeats);
-    expect(summary?.nonHeartbeatUserMessages).toBe(0);
-    expect(summary?.userMessages).toBe(repeats);
+    expect(stateIntegrityText()).toContain(`${repeats} heartbeat-only user message(s)`);
 
     const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
     const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
@@ -425,7 +439,8 @@ describe("doctor transcript and heartbeat session repairs", () => {
     setupSessionState(cfg, process.env, tempHome);
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
     const transcriptPath = path.join(sessionsDir, "oversized-record-session.jsonl");
-    const maxChars = getTranscriptRecordMaxChars();
+    // Independent bound retained from the streaming-scan regression (#110721).
+    const maxChars = 256 * 1024;
     const oversizedRecord = `${"x".repeat(maxChars + 1)}\n`;
     const heartbeatLine = `${JSON.stringify({
       message: { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
@@ -454,9 +469,8 @@ describe("doctor transcript and heartbeat session repairs", () => {
       expect(transcriptReads).toEqual([]);
     }
 
-    expect(summarizeTranscriptHeartbeatMessages(transcriptPath)).toBeNull();
     expect(stateIntegrityText()).toContain(
-      "Skipped heartbeat main-session recovery for agent:main:main: the transcript contains a JSONL record larger than",
+      `Skipped heartbeat main-session recovery for agent:main:main: the transcript contains a JSONL record larger than ${maxChars} characters, so doctor left it unchanged.`,
     );
     expect(hasRepairPromptMessage(confirmRuntimeRepair, "Move heartbeat-owned main session")).toBe(
       false,
@@ -467,35 +481,37 @@ describe("doctor transcript and heartbeat session repairs", () => {
     expect(Object.keys(store).filter((key) => key.includes("heartbeat-recovered"))).toEqual([]);
   });
 
-  it("does not treat heartbeat-labeled routing metadata as heartbeat ownership", () => {
+  it("does not treat heartbeat-labeled routing metadata as heartbeat ownership", async () => {
     const entry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
       delivery: { kind: "internal" },
     };
-    expect(resolveHeartbeatMainSessionRepairCandidate({ entry })).toBeNull();
+    expect((await inspectHeartbeatRepair(entry)).confirmRuntimeRepair).not.toHaveBeenCalled();
   });
 
-  it("keeps synthetic heartbeat ownership metadata as direct repair proof", () => {
+  it("keeps synthetic heartbeat ownership metadata as direct repair proof", async () => {
     const entry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
       heartbeatIsolatedBaseSessionKey: "agent:main:main",
     };
-    expect(resolveHeartbeatMainSessionRepairCandidate({ entry })?.reason).toBe("metadata");
+    const result = await inspectHeartbeatRepair(entry);
+    expect(result.confirmRuntimeRepair).toHaveBeenCalledOnce();
+    expect(result.warnings.join("\n")).toContain("(heartbeat metadata)");
   });
 
-  it("does not move synthetic heartbeat-owned sessions after recorded human interaction", () => {
+  it("does not move synthetic heartbeat-owned sessions after recorded human interaction", async () => {
     const entry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
       heartbeatIsolatedBaseSessionKey: "agent:main:main",
       lastInteractionAt: 2,
     };
-    expect(resolveHeartbeatMainSessionRepairCandidate({ entry })).toBeNull();
+    expect((await inspectHeartbeatRepair(entry)).confirmRuntimeRepair).not.toHaveBeenCalled();
   });
 
-  it("does not let synthetic heartbeat metadata override mixed transcript history", () => {
+  it("does not let synthetic heartbeat metadata override mixed transcript history", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-main-mixed-"));
     try {
       const transcriptPath = path.join(tempDir, "session.jsonl");
@@ -514,13 +530,15 @@ describe("doctor transcript and heartbeat session repairs", () => {
         updatedAt: 1,
         heartbeatIsolatedBaseSessionKey: "agent:main:main",
       };
-      expect(resolveHeartbeatMainSessionRepairCandidate({ entry, transcriptPath })).toBeNull();
+      expect(
+        (await inspectHeartbeatRepair(entry, transcriptPath)).confirmRuntimeRepair,
+      ).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("does not let heartbeat-looking routing metadata skip mixed transcript checks", () => {
+  it("does not let heartbeat-looking routing metadata skip mixed transcript checks", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-main-route-"));
     try {
       const transcriptPath = path.join(tempDir, "session.jsonl");
@@ -541,13 +559,15 @@ describe("doctor transcript and heartbeat session repairs", () => {
         source: "heartbeat",
         origin: { provider: "heartbeat" },
       } as SessionEntry & Record<string, unknown>;
-      expect(resolveHeartbeatMainSessionRepairCandidate({ entry, transcriptPath })).toBeNull();
+      expect(
+        (await inspectHeartbeatRepair(entry, transcriptPath)).confirmRuntimeRepair,
+      ).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("does not classify transcripts with real user activity after 400 heartbeat messages", () => {
+  it("does not classify transcripts with real user activity after 400 heartbeat messages", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-main-cap-"));
     try {
       const transcriptPath = path.join(tempDir, "session.jsonl");
@@ -565,13 +585,15 @@ describe("doctor transcript and heartbeat session repairs", () => {
         ].join("\n"),
       );
       const entry: SessionEntry = { sessionId: "session", updatedAt: 1 };
-      expect(resolveHeartbeatMainSessionRepairCandidate({ entry, transcriptPath })).toBeNull();
+      expect(
+        (await inspectHeartbeatRepair(entry, transcriptPath)).confirmRuntimeRepair,
+      ).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("keeps the heartbeat main-session helper conservative", () => {
+  it("keeps the heartbeat main-session helper conservative", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-main-helper-"));
     try {
       const transcriptPath = path.join(tempDir, "session.jsonl");
@@ -586,59 +608,64 @@ describe("doctor transcript and heartbeat session repairs", () => {
         ].join("\n"),
       );
       const entry: SessionEntry = { sessionId: "session", updatedAt: 1 };
-      expect(resolveHeartbeatMainSessionRepairCandidate({ entry, transcriptPath })?.reason).toBe(
-        "transcript",
-      );
+      const result = await inspectHeartbeatRepair(entry, transcriptPath);
+      expect(result.confirmRuntimeRepair).toHaveBeenCalledOnce();
+      expect(result.warnings.join("\n")).toContain("(1 heartbeat-only user message(s))");
       entry.lastInteractionAt = 2;
-      expect(resolveHeartbeatMainSessionRepairCandidate({ entry, transcriptPath })).toBeNull();
+      expect(
+        (await inspectHeartbeatRepair(entry, transcriptPath)).confirmRuntimeRepair,
+      ).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
   it("moves store entries and clears matching TUI pointers without touching others", async () => {
-    const store: Record<string, SessionEntry> = {
-      "agent:main:main": { sessionId: "main-session", updatedAt: 1 },
-    };
-    expect(
-      moveHeartbeatMainSessionEntry({
-        store,
-        mainKey: "agent:main:main",
-        recoveredKey: "agent:main:heartbeat-recovered-2026-05-04t00-00-00.000z",
-      }),
-    ).toBe(true);
-    expect(store["agent:main:main"]).toBeUndefined();
-    expect(store["agent:main:heartbeat-recovered-2026-05-04t00-00-00.000z"]?.sessionId).toBe(
-      "main-session",
+    const cfg: OpenClawConfig = {};
+    writeSessionStore(cfg, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now(),
+        heartbeatIsolatedBaseSessionKey: "agent:main:main",
+      },
+    });
+    const stateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+    await writeTuiLastSessionKey({
+      scopeKey: "terminal",
+      sessionKey: "agent:main:main",
+      stateDir,
+    });
+    await writeTuiLastSessionKey({
+      scopeKey: "telegram",
+      sessionKey: "agent:main:telegram:thread",
+      stateDir,
+    });
+    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
+      "agent:main:main",
+    );
+    await expect(readTuiLastSessionKey({ scopeKey: "telegram", stateDir })).resolves.toBe(
+      "agent:main:telegram:thread",
     );
 
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tui-pointer-clear-"));
-    try {
-      await writeTuiLastSessionKey({
-        scopeKey: "terminal",
-        sessionKey: "agent:main:main",
-        stateDir: tempDir,
-      });
-      await writeTuiLastSessionKey({
-        scopeKey: "telegram",
-        sessionKey: "agent:main:telegram:thread",
-        stateDir: tempDir,
-      });
-      expect(
-        clearTuiLastSessionPointers({
-          stateDir: tempDir,
-          sessionKeys: new Set(["agent:main:main"]),
-        }),
-      ).toBe(1);
-      await expect(
-        readTuiLastSessionKey({ scopeKey: "terminal", stateDir: tempDir }),
-      ).resolves.toBeNull();
-      await expect(
-        readTuiLastSessionKey({ scopeKey: "telegram", stateDir: tempDir }),
-      ).resolves.toBe("agent:main:telegram:thread");
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    await noteStateIntegrity(cfg, {
+      confirmRuntimeRepair: vi.fn(async (params: { message: string }) =>
+        params.message.startsWith("Move heartbeat-owned main session"),
+      ),
+      note: noteMock,
+    });
+
+    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+    expect(store["agent:main:main"]).toBeUndefined();
+    const recovered = Object.entries(store).filter(([key]) =>
+      key.startsWith("agent:main:heartbeat-recovered-"),
+    );
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]?.[1].sessionId).toBe("main-session");
+    await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBeNull();
+    await expect(readTuiLastSessionKey({ scopeKey: "telegram", stateDir })).resolves.toBe(
+      "agent:main:telegram:thread",
+    );
+    expect(doctorChangesText()).toContain("Cleared 1 stale TUI last-session pointer");
   });
 });
