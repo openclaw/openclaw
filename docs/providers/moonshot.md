@@ -199,6 +199,19 @@ onboarding.
     [Kimi Code Console](https://www.kimi.com/code/console); current membership
     pricing lives on [Kimi's pricing page](https://www.kimi.com/membership/pricing).
 
+    To connect a Kimi Code account without copying an API key, choose **Kimi Code
+    sign-in** in Models, or run:
+
+    ```bash
+    openclaw models auth login --provider kimi --method device-code
+    ```
+
+    Open the sign-in page and enter the displayed code. The browser can be on a
+    different computer from the Gateway. OpenClaw stores the OAuth credentials
+    in its auth-profile store and refreshes them when needed. Sign-in preserves
+    your selected model. You can also use `/login kimi` in a supported private
+    chat. Kimi Code account access is required; API-key setup remains available.
+
     | Model ref | Name | Reasoning | Input | Context | Max output |
     | --- | --- | --- | --- | --- | --- |
     | `kimi/k3` | Kimi K3 | adaptive; low / high / max effort | text, image | 1,048,576 | 131,072 |

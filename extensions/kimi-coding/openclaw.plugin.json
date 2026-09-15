@@ -166,6 +166,18 @@
   "providerAuthChoices": [
     {
       "provider": "kimi",
+      "method": "device-code",
+      "choiceId": "kimi-code-oauth",
+      "choiceLabel": "Kimi Code sign-in",
+      "choiceHint": "Sign in with your Kimi Code account",
+      "appGuidedAuth": "device-code",
+      "credentialOnly": true,
+      "channelLogin": {},
+      "groupId": "moonshot",
+      "groupLabel": "Moonshot AI (Kimi)"
+    },
+    {
+      "provider": "kimi",
       "method": "api-key",
       "choiceId": "kimi-code-api-key",
       "appGuidedSecret": true,
