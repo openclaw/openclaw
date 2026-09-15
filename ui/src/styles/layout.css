@@ -300,7 +300,12 @@ html:is(.openclaw-native-macos, .openclaw-native-nav, .openclaw-native-web-chrom
 
 .shell--settings:not(.shell--mobile-nav) {
   --settings-content-block-start-padding: 44px;
-  --settings-content-inline-padding: clamp(28px, 5vw, 72px);
+  /* The dock reserves part of the window; gutters scale with the space left for settings. */
+  --settings-content-inline-padding: clamp(
+    var(--space-4),
+    calc((100vw - var(--shell-settings-nav-width) - var(--oc-assistant-reserve-right, 0px)) * 0.05),
+    72px
+  );
   grid-template-columns: var(--shell-settings-nav-width) minmax(0, 1fr);
   grid-template-rows: 0 1fr;
   --shell-nav-width: var(--shell-settings-nav-width);
@@ -4527,6 +4532,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
    =========================================== */
 
 .content {
+  /* Rows and page headers reflow with their pane, including dock reservations. */
+  container: settings-content / inline-size;
   grid-area: content;
   --content-inline-padding: 20px;
   padding: 16px var(--content-inline-padding) 32px;
@@ -4895,6 +4902,7 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
 
 .dreaming-header-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }

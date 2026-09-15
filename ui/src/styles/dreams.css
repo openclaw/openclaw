@@ -1068,13 +1068,11 @@
   font-size: 13px;
   font-style: italic;
   color: var(--muted);
-  opacity: 0.7;
 }
 
 .dreams-diary__empty-hint {
   font-size: 12px; /* was 11px */
   color: var(--muted);
-  opacity: 0.4;
 }
 
 .dreams-diary__error {
@@ -1087,11 +1085,20 @@
 
 /* ---- Responsive ---- */
 
-@media (max-width: 900px) {
-  .dreams {
-    min-height: calc(100vh - 96px);
+@container settings-content (max-width: 640px) {
+  .dreams__bubble {
+    left: 50%;
+    translate: -50% 0;
+    width: max-content;
+    max-width: calc(100% - 32px);
   }
 
+  .dreams__bubble-text {
+    min-width: 0;
+  }
+}
+
+@container settings-content (max-width: 900px) {
   .dreams-advanced {
     padding: 20px 16px 32px;
   }
@@ -1108,5 +1115,11 @@
 
   .dreams-diary__preview-header {
     flex-direction: column;
+  }
+}
+
+@media (max-width: 900px) {
+  .dreams {
+    min-height: calc(100vh - 96px);
   }
 }

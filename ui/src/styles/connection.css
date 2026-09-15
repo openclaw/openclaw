@@ -119,7 +119,7 @@
   background: var(--danger);
 }
 
-@media (max-width: 640px) {
+@container settings-content (max-width: 640px) {
   .config-host {
     grid-template-columns: 1fr;
   }
@@ -182,7 +182,7 @@
   color: var(--warn);
 }
 
-@media (max-width: 400px) {
+@container settings-content (max-width: 400px) {
   .connection-ping__stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

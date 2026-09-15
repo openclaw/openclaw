@@ -16,7 +16,7 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
-@media (max-width: 640px) {
+@container settings-content (max-width: 640px) {
   .agents-layout,
   .agents-main {
     grid-template-columns: minmax(0, 1fr);
@@ -32,5 +32,20 @@
     max-width: 100%;
     flex-wrap: wrap;
     justify-content: flex-start;
+  }
+
+  .agent-tools-group__summary {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .agent-tools-group__summary::before {
+    line-height: 18px;
+  }
+
+  .agent-tools-group__counts {
+    justify-content: flex-start;
+    width: 100%;
+    padding-left: 24px;
   }
 }

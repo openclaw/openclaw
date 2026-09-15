@@ -1133,7 +1133,7 @@
   height: 14px;
 }
 
-@media (max-width: 900px) {
+@container settings-content (max-width: 900px) {
   .mcp-command-card__grid {
     grid-template-columns: 1fr;
   }

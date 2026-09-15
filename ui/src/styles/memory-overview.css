@@ -50,11 +50,19 @@
   margin-top: var(--space-4);
 }
 
-@media (max-width: 640px) {
+/* The assistant dock changes the page width independently of the viewport. */
+@container settings-content (max-width: 640px) {
   .memory-overview__hero {
-    grid-template-columns: 112px minmax(0, 1fr);
-    min-height: 176px;
+    grid-template-columns: minmax(0, 1fr);
     padding: var(--space-4);
+  }
+
+  .memory-overview__lobster {
+    width: 112px;
+  }
+
+  .memory-overview__hero-copy h2 {
+    font-size: 1.55rem;
   }
 }
 

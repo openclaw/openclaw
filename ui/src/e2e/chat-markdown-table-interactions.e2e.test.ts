@@ -293,6 +293,8 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
       await page.waitForURL(controlUiSessionUrl(server.baseUrl, betaKey));
       const beta = page.locator('[data-entry-id="history-beta"]');
       await beta.waitFor({ state: "visible" });
+      // Equal-position session links can open a hovercard while navigation assertions wait.
+      await page.mouse.move(1, 450);
       const betaPane = await beta.evaluateHandle((entry) => entry.closest("openclaw-chat-pane"));
       const expectRetainedPanes = async (activeIndex: number) => {
         const states = await Promise.all(
@@ -324,6 +326,7 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
       await expect
         .poll(() => alphaPane.evaluate((pane) => pane?.getAttribute("aria-hidden")))
         .toBe("false");
+      await page.mouse.move(1, 450);
       if (captureProof) {
         await page.screenshot({ path: path.join(artifactDir, "history-back-to-alpha.png") });
       }
@@ -346,6 +349,7 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
       await expect
         .poll(() => betaPane.evaluate((pane) => pane?.getAttribute("aria-hidden")))
         .toBe("false");
+      await page.mouse.move(1, 450);
       await expectRetainedPanes(1);
       await beta.getByRole("button", { name: "Expand table" }).click();
       await dialog.waitFor({ state: "visible" });

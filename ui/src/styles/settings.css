@@ -53,7 +53,8 @@
   margin-top: var(--space-5);
 }
 
-.content-header--settings {
+.content-header--settings,
+.shell--settings .content-header {
   flex-wrap: wrap;
   max-height: none;
 }
@@ -431,7 +432,7 @@
   justify-content: flex-start;
 }
 
-@media (min-width: 769px) {
+@container settings-content (min-width: 769px) {
   .settings-row--stacked-on-narrow,
   .settings-row--stacked-on-narrow .settings-row__control {
     width: auto;
@@ -919,7 +920,10 @@ textarea.settings-input {
     --settings-header-inline-padding: 0;
     padding: var(--space-3) var(--space-3) var(--space-4);
   }
+}
 
+/* Use the remaining pane width for form geometry; touch targets still follow the device. */
+@container settings-content (max-width: 640px) {
   .shell--settings .content:has(.settings-workspace) .content-header,
   .content:has(.plugins-hub-header) .content-header,
   .shell--settings .settings-page,
@@ -930,7 +934,7 @@ textarea.settings-input {
     padding-inline: 0;
   }
 
-  .settings-section__header:has(.settings-section__copy) {
+  .settings-section__header:has(.settings-section__copy, .settings-section__actions) {
     align-items: stretch;
     flex-direction: column;
     gap: var(--space-2);
@@ -999,7 +1003,7 @@ textarea.settings-input {
     .settings-segmented__btn {
       max-width: 100%;
       white-space: normal;
-      overflow-wrap: anywhere;
+      overflow-wrap: break-word;
     }
 
     .identity-name-control {

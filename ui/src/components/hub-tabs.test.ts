@@ -47,7 +47,7 @@ describe("renderHubTabs", () => {
         "wa-tab-group",
       );
       await group?.updateComplete;
-      // syncTabGroupLabel resolves on the same updateComplete chain; yield once more.
+      // tabGroupRef resolves on the same updateComplete chain; yield once more.
       await group?.updateComplete;
       expect(group?.shadowRoot?.querySelector('[role="tablist"]')?.getAttribute("aria-label")).toBe(
         "Example sections",

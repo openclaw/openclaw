@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import "../styles/hub-tabs.css";
-import { syncTabGroupLabel } from "./web-awesome-tabs.ts";
+import { tabGroupRef } from "./web-awesome-tabs.ts";
 
 export type HubTabOption<T extends string> = {
   value: T;
@@ -79,7 +79,7 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
       .active=${props.active ?? NO_ACTIVE_TAB}
       activation="manual"
       without-scroll-controls
-      ${ref((element) => syncTabGroupLabel(element, props.ariaLabel))}
+      ${ref(tabGroupRef(props.ariaLabel))}
     >
       ${props.tabs.map((tab) => {
         const selected = props.active === tab.value;

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   createControlUiMockBootstrapConfig,
+  defaultControlUiFeatureMethods,
   installMockGateway,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -18,7 +19,20 @@ suite.define(() => {
       async ({ page }) => {
         const config = { ui: { prefs: { accent: "#c3cfdb", theme: "claw" } } };
         await installMockGateway(page, {
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "chat.history",
+            "chat.send",
+            "openclaw.chat",
+            "openclaw.chat.history",
+          ],
           methodResponses: {
+            "openclaw.chat": {
+              sessionId: "appearance-layout",
+              reply: "Ready to help.",
+              action: "none",
+            },
+            "openclaw.chat.history": { turns: [] },
             "config.get": {
               appliedConfigHash: "appearance-layout",
               config,
@@ -105,7 +119,18 @@ suite.define(() => {
         await expect
           .poll(() => colorMode.evaluate((element) => getComputedStyle(element).flexDirection))
           .toBe("column");
-        await page.setViewportSize({ height: 1000, width: 769 });
+        await page.setViewportSize({ height: 1000, width: 1440 });
+        await expect
+          .poll(() => colorMode.evaluate((element) => getComputedStyle(element).flexDirection))
+          .toBe("row");
+
+        await page.keyboard.press("ControlOrMeta+Shift+h");
+        await page.getByRole("button", { name: "Ask OpenClaw", exact: true }).click();
+        await page.locator(".assistant-panel--right textarea").waitFor();
+        await expect
+          .poll(() => colorMode.evaluate((element) => getComputedStyle(element).flexDirection))
+          .toBe("column");
+        await page.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
         await expect
           .poll(() => colorMode.evaluate((element) => getComputedStyle(element).flexDirection))
           .toBe("row");

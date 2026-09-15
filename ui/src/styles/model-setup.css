@@ -522,9 +522,10 @@
   border-top: 1px solid var(--border);
 }
 
-@media (max-width: 640px) {
+@container settings-content (max-width: 640px) {
   .model-setup__intro,
-  .model-setup__row {
+  .model-setup__row,
+  .model-setup .settings-section__header {
     align-items: stretch;
     flex-direction: column;
   }
@@ -541,7 +542,9 @@
   .model-setup__row-actions {
     justify-content: flex-start;
   }
+}
 
+@media (max-width: 640px) {
   .model-setup-success {
     width: calc(100vw - 24px);
     padding: 22px 18px;

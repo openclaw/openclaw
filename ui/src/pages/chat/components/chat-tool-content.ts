@@ -6,7 +6,7 @@ import { renderCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown-text.ts";
 import "../../../components/tooltip.ts";
-import { syncTabGroupLabel } from "../../../components/web-awesome-tabs.ts";
+import { tabGroupRef } from "../../../components/web-awesome-tabs.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import type { DiffFilePaths } from "../../../lib/chat/tool-call-diff.ts";
@@ -341,7 +341,7 @@ function renderToolCardModes(
       .active=${active}
       activation="auto"
       without-scroll-controls
-      ${ref((element) => syncTabGroupLabel(element, modeLabel))}
+      ${ref(tabGroupRef(modeLabel))}
     >
       <wa-tab
         slot="nav"

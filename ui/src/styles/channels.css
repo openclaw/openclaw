@@ -86,6 +86,7 @@
 /* ---------- detail overlay ---------- */
 
 .channels-detail {
+  container: settings-content / inline-size;
   display: flex;
   flex-direction: column;
   width: min(680px, calc(100vw - 48px));
@@ -227,7 +228,7 @@
   flex-wrap: wrap;
 }
 
-@media (max-width: 640px) {
+@container settings-content (max-width: 640px) {
   .channels-pairing-request__main {
     align-items: stretch;
     flex-direction: column;

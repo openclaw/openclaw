@@ -1636,7 +1636,7 @@ h3.settings-row__title {
 
 /* ---------- responsive ---------- */
 
-@media (max-width: 640px) {
+@container settings-content (max-width: 640px) {
   .settings-page.oc-app-surface:has(> .plugins-settings-content) {
     padding-top: 0;
   }

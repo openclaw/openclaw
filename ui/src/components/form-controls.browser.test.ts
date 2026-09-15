@@ -89,7 +89,7 @@ function revealedSensitiveInputHtml() {
 
 function mediaDeviceRowsHtml() {
   return `
-    <main style="width: 100%; max-width: 900px">
+    <main class="content" style="width: 100%; max-width: 900px">
       <div class="settings-row">
         <div class="settings-row__text"><span class="settings-row__title">Microphone input</span></div>
         <div class="settings-row__control">
@@ -211,13 +211,18 @@ describeBrowserLayout("settings icon buttons", () => {
 });
 
 describeBrowserLayout("settings row wrapping", () => {
-  it.each([393, 768, 1200])("keeps long copy beside its tile at %ipx", async (width) => {
+  it.each([
+    [393, 393],
+    [768, 768],
+    [1200, 1100],
+    [1200, 393],
+  ])("keeps long copy beside its tile at %ipx viewport and %ipx pane", async (width, paneWidth) => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setViewportSize({ width, height: 1000 });
       const description =
         "Calendar notes and reminders remain readable before enabling a connector. ".repeat(8);
       await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>${readUiCss()}</style></head>
-        <body><main style="max-width: 1100px">
+        <body><main class="content" style="width: ${paneWidth}px; max-width: 100%">
           <div class="settings-row plugins-item">
             <span class="plugins-tile" aria-hidden="true">C</span>
             <div class="settings-row__text"><span class="settings-row__title">Connector</span>
@@ -252,7 +257,7 @@ describeBrowserLayout("settings row wrapping", () => {
         };
       });
       expect(geometry.copyBesideTile).toBe(true);
-      expect(width <= 640 ? geometry.narrowControls : geometry.desktopControls).toBe(true);
+      expect(paneWidth <= 640 ? geometry.narrowControls : geometry.desktopControls).toBe(true);
       expect(geometry.messageBelow).toBe(true);
       expect(geometry.messageWidth).toBeCloseTo(geometry.contentWidth, 0);
       expect(geometry.overflow).toBeLessThanOrEqual(1);

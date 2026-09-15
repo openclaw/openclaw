@@ -233,7 +233,7 @@
   font-size: var(--control-ui-text-sm);
 }
 
-@media (max-width: 640px) {
+@container settings-content (max-width: 640px) {
   .device-entry {
     grid-template-columns: var(--device-tile-size) minmax(0, 1fr);
   }

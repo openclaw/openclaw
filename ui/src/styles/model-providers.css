@@ -447,7 +447,7 @@
   width: min(420px, 100%);
 }
 
-@media (max-width: 768px) {
+@container settings-content (max-width: 768px) {
   .model-providers__head {
     align-items: flex-start;
     flex-wrap: wrap;

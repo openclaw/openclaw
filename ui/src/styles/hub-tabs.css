@@ -87,15 +87,17 @@ wa-tab.hub-tab:focus-visible::part(base) {
 }
 
 .hub-page-header__title,
+.hub-page-header__tabs,
 .hub-page-header__actions {
   min-width: 0;
+  max-width: 100%;
 }
 
 .hub-page-header__actions {
   justify-self: end;
 }
 
-@media (min-width: 769px) and (max-width: 1100px) {
+@container settings-content (max-width: 1100px) {
   .content-header.hub-page-header {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
@@ -119,7 +121,7 @@ wa-tab.hub-tab:focus-visible::part(base) {
   }
 }
 
-@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+@container settings-content (max-width: 640px) {
   .content-header.hub-page-header {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
