@@ -349,6 +349,8 @@ export type EmbeddedRunAttemptResult = {
   modelIterations?: number;
   /** Saved provider retry setting resolved by the prepared session owner. */
   providerRetryMaxRetries?: number;
+  /** Saved retry.provider.maxRetryDelayMs from the same owner; 0 disables the cap. */
+  providerRetryMaxDelayMs?: number;
   messagesSnapshot: AgentMessage[];
   pluginRuntimeRefreshMessages?: AgentMessage[];
   /** Owner-eligible settled finalization, with frozen evidence or an unavailable projection. */

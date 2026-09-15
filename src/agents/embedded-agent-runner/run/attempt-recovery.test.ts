@@ -35,6 +35,8 @@ type TransportDropScenario = {
   pluginHarnessOwnsTransport?: boolean;
   retryAvailable?: boolean;
   replaySafe?: boolean;
+  fallbackConfigured?: boolean;
+  providerRetryMaxDelayMs?: number;
   terminal?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["terminal"];
   terminate?: boolean;
   yieldDetected?: boolean;
@@ -116,6 +118,9 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
     },
     ...(scenario.terminal ? { terminal: scenario.terminal } : {}),
     ...(scenario.yieldDetected ? { yieldDetected: true } : {}),
+    ...(scenario.providerRetryMaxDelayMs !== undefined
+      ? { providerRetryMaxDelayMs: scenario.providerRetryMaxDelayMs }
+      : {}),
     ...(scenario.replaySafe
       ? { currentAttemptReplayMetadata: { replaySafe: true, hadPotentialSideEffects: false } }
       : {}),
@@ -135,7 +140,7 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
     modelId: "gpt-5.6-luna",
     globalLane: "test",
     agentDir: "/tmp/provider-recovery-test",
-    fallbackConfigured: false,
+    fallbackConfigured: scenario.fallbackConfigured ?? false,
     profileFailureStore: { version: 1, profiles: {} },
     getLastProfileId: () => undefined,
     getSessionId: () => "session:transport-drop",
@@ -379,6 +384,67 @@ describe("recoverEmbeddedRunAttempt", () => {
       expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(delayMs, undefined);
     } finally {
       clock.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      label: "fails over past the saved maxRetryDelayMs when a fallback exists",
+      errorMessage:
+        '429 rate limit: {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account\'s rate limit. Please try again later."}}',
+      errorBody: JSON.stringify({ headers: { "retry-after": "9897" } }),
+      fallbackConfigured: true,
+      replaySafe: true,
+      providerRetryMaxDelayMs: 30_000,
+      expectedAction: "proceed",
+      expectedSleepMs: undefined,
+    },
+    {
+      // Live shape: exec/write already ran, so rotation and fallback are both
+      // refused downstream. Declining the wait would end the turn; keep waiting.
+      label: "keeps waiting past the cap when tool activity made the attempt replay-unsafe",
+      errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
+      fallbackConfigured: true,
+      replaySafe: false,
+      providerRetryMaxDelayMs: 30_000,
+      expectedAction: "retry",
+      expectedSleepMs: 9_897_000,
+    },
+    {
+      label: "still sleeps the same floor with no fallback",
+      errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
+      fallbackConfigured: false,
+      replaySafe: true,
+      providerRetryMaxDelayMs: 30_000,
+      expectedAction: "retry",
+      expectedSleepMs: 9_897_000,
+    },
+    {
+      label: "keeps a floor inside the cap on the same model",
+      errorMessage: "429 rate_limit_exceeded; Retry-After: 20",
+      fallbackConfigured: true,
+      replaySafe: true,
+      providerRetryMaxDelayMs: 30_000,
+      expectedAction: "retry",
+      expectedSleepMs: 20_000,
+    },
+  ])("$label", async (scenario) => {
+    vi.mocked(sleepWithAbort).mockClear();
+    const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
+      errorMessage: scenario.errorMessage,
+      errorBody: scenario.errorBody,
+      fallbackConfigured: scenario.fallbackConfigured,
+      replaySafe: scenario.replaySafe,
+      providerRetryMaxDelayMs: scenario.providerRetryMaxDelayMs,
+      diagnostics: [],
+    });
+    expect(recovery.action).toBe(scenario.expectedAction);
+    if (scenario.expectedSleepMs === undefined) {
+      expect(sleepWithAbort).not.toHaveBeenCalled();
+      expect(continueFromCurrentTranscript).not.toHaveBeenCalled();
+    } else {
+      expect(sleepWithAbort).toHaveBeenCalledExactlyOnceWith(scenario.expectedSleepMs, undefined);
+      expect(continueFromCurrentTranscript).toHaveBeenCalledOnce();
     }
   });
 
