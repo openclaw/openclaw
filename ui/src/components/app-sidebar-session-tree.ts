@@ -5,10 +5,7 @@ import {
   resolveUiSessionNavigationParentKey,
 } from "../lib/sessions/session-key.ts";
 import {
-  SIDEBAR_SESSION_NO_ATTENTION,
-  rowDemandsVisibility,
-  RowVisibilityReason,
-  sidebarSessionAttentionPriority,
+  summarizeSidebarSessionAttention,
   type SidebarKnownSessionAttention,
   type SidebarRecentSession,
   type SidebarSessionAttention,
@@ -92,14 +89,6 @@ export function projectSessionTree(params: {
     const unloadedChildKeys = childSessionKeys.filter((key) => !rowsByKey.has(key));
     // Only direct unloaded children can match: parents carry their keys, but not grandchildren's.
     // Grandchildren join the normal transitive fold after their branch is materialized.
-    const unloadedChildAttention = knownSessionAttention.reduce(
-      (current, entry) =>
-        unloadedChildKeys.some((key) => areUiSessionKeysEquivalent(entry.sessionKey, key)) &&
-        sidebarSessionAttentionPriority(entry.attention) > sidebarSessionAttentionPriority(current)
-          ? entry.attention
-          : current,
-      SIDEBAR_SESSION_NO_ATTENTION,
-    );
     const childAttention = [
       ...new Map(
         [
@@ -124,11 +113,7 @@ export function projectSessionTree(params: {
     // Unloaded terminal outcomes require the existing child-detail loader.
     // Child attention is transitive just like live-run counts: a collapsed
     // ancestor remains actionable even when the blocked descendant is hidden.
-    let attention =
-      sidebarSessionAttentionPriority(unloadedChildAttention) >
-      sidebarSessionAttentionPriority(projected.attention)
-        ? unloadedChildAttention
-        : projected.attention;
+    const attention = summarizeSidebarSessionAttention([projected.attention, ...childAttention]);
     let runningChildCount = 0;
     let failedChildCount = 0;
     let queuedChildCount = 0;
@@ -144,13 +129,6 @@ export function projectSessionTree(params: {
       queuedChildCount +=
         Number(child.hasActiveRun && child.status === "queued") + (child.queuedChildCount ?? 0);
       childWorkspaceConflictCount += child.workspaceConflictCount ?? 0;
-      if (
-        rowDemandsVisibility(child, RowVisibilityReason.Attention) &&
-        sidebarSessionAttentionPriority(child.attention) >
-          sidebarSessionAttentionPriority(attention)
-      ) {
-        attention = attributeChildAttention(child.attention, child.label);
-      }
       containsActiveDescendant ||=
         child.active || child.visuallyActive || child.containsActiveDescendant;
     }

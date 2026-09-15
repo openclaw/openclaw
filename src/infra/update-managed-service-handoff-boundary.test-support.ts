@@ -155,9 +155,7 @@ export function createManagedServiceManagerBoundary({
         configPath: path.join(root, "openclaw.json"),
         options,
       }),
-      {
-        mode: 0o755,
-      },
+      { mode: 0o755 },
     );
     const env = {
       ...process.env,

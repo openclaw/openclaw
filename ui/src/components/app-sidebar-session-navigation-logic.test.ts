@@ -636,7 +636,23 @@ describe("sidebar navigation lineage ownership", () => {
         rowsByKey: collectSidebarSessionRowsByKey({ rows, childRowsByParent: {} }),
         loadingChildKeys: new Set(),
         knownSessionAttention: known
-          ? [{ sessionKey: "missing", attention: { kind: "approval" } }]
+          ? [
+              {
+                sessionKey: "missing",
+                attention: {
+                  kind: "approval",
+                  requests: [
+                    {
+                      kind: "approval",
+                      id: "missing",
+                      preview: "Approve?",
+                      count: 1,
+                      createdAtMs: 1,
+                    },
+                  ],
+                },
+              },
+            ]
           : [],
         toSidebarSession: (row, isChild) => ({
           ...projectSidebarSession(row),
@@ -644,11 +660,40 @@ describe("sidebar navigation lineage ownership", () => {
           visuallyActive: row.key === "grandchild",
           attention:
             row.key === "root"
-              ? { kind: own }
+              ? own === "question"
+                ? {
+                    kind: own,
+                    requests: [
+                      { kind: own, id: "root", preview: "Continue?", count: 1, createdAtMs: 0 },
+                    ],
+                  }
+                : { kind: own }
               : row.key === "first"
-                ? { kind: "question" }
+                ? {
+                    kind: "question",
+                    requests: [
+                      {
+                        kind: "question",
+                        id: "first",
+                        preview: "Continue?",
+                        count: 1,
+                        createdAtMs: 2,
+                      },
+                    ],
+                  }
                 : row.key === "second"
-                  ? { kind: "approval" }
+                  ? {
+                      kind: "approval",
+                      requests: [
+                        {
+                          kind: "approval",
+                          id: "second",
+                          preview: "Approve?",
+                          count: 1,
+                          createdAtMs: 3,
+                        },
+                      ],
+                    }
                   : { kind: "none" },
           workspaceConflictCount:
             row.key === "root"

@@ -44,6 +44,7 @@ import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts"
 import { sidebarPluginTabs } from "./app-sidebar-nav-menus.ts";
 import {
   SIDEBAR_SESSION_NO_ATTENTION,
+  summarizeSidebarSessionAttention,
   type SidebarRecentSession,
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
@@ -59,13 +60,17 @@ export function resolveSidebarHomeAttention(
   sessionKey: string,
   row: GatewaySessionRow | null,
 ) {
-  const known = attention
-    .knownSessionAttention()
-    .find((entry) => areUiSessionKeysEquivalent(entry.sessionKey, sessionKey));
-  return (
-    known?.attention ??
-    (row ? attention.resolveSessionAttention(row) : SIDEBAR_SESSION_NO_ATTENTION)
+  const known = summarizeSidebarSessionAttention(
+    attention
+      .knownSessionAttention()
+      .filter((entry) => areUiSessionKeysEquivalent(entry.sessionKey, sessionKey))
+      .map((entry) => entry.attention),
   );
+  return known.kind !== "none"
+    ? known
+    : row
+      ? attention.resolveSessionAttention(row)
+      : SIDEBAR_SESSION_NO_ATTENTION;
 }
 
 type SidebarSessionSortOptions = {

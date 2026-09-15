@@ -5094,6 +5094,21 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
   margin-left: auto;
 }
 
+.sidebar-session-attention-tooltip {
+  display: grid;
+  gap: 4px;
+  max-width: 260px;
+  text-align: left;
+}
+
+.sidebar-session-attention-tooltip__preview {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
 .sidebar-session-attention__icon {
   display: inline-flex;
   align-items: center;

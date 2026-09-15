@@ -99,7 +99,7 @@ describe("AppSidebar session attention", () => {
     await sidebar.updateComplete;
     expect(
       row.querySelector('[data-session-attention="question"]')?.getAttribute("aria-label"),
-    ).toBe("Waiting for your answer");
+    ).toBe("Waiting for your answer\nContinue?");
     expect.soft(row.querySelector(".session-glyph__ring")).toBeNull();
     expect.soft(row.classList.contains("sidebar-recent-session--attention-amber")).toBe(false);
     gatewayHarness.publishEvent("question.resolved", {
@@ -218,17 +218,15 @@ describe("AppSidebar session attention", () => {
 
     const questionAttention = sidebar.querySelector('[data-session-attention="question"]');
     expect(questionAttention).not.toBeNull();
-    expect(questionAttention?.getAttribute("aria-label")).toBe("Waiting for your answer");
+    expect(questionAttention?.getAttribute("aria-label")).toBe(
+      "Waiting for your answer\nContinue?",
+    );
     expect(questionAttention?.getAttribute("tabindex")).toBe("0");
     expect(
-      (
-        questionAttention?.closest("openclaw-tooltip") as
-          | (HTMLElement & {
-              content?: string;
-            })
-          | null
-      )?.content,
-    ).toBe("Waiting for your answer");
+      questionAttention
+        ?.closest("openclaw-tooltip")
+        ?.querySelector(".sidebar-session-attention-tooltip__preview")?.textContent,
+    ).toBe("Continue?");
     expect(
       sidebar.querySelector(`[data-session-key="${sessionKey}"] .sidebar-recent-session__subtitle`),
     ).toBeNull();
@@ -343,28 +341,38 @@ describe("AppSidebar session attention", () => {
     expect(sidebar.textContent).not.toContain("Expired blocker");
   });
 
-  it("shows approval attention ahead of a run error", async () => {
-    const approval = {
-      id: "approval-1",
-      kind: "exec",
-      request: { command: "git status", sessionKey },
-      createdAtMs: Date.now(),
-      expiresAtMs: Date.now() + 60_000,
-    } satisfies ExecApprovalRequest;
-    const sessionsHarness = createSessionsHarness("main", [sessionKey]);
-    setRows(sessionsHarness, [failedRow()]);
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessionsHarness.sessions,
-      "panel",
-      null,
-      [approval],
-    );
+  it.each(["exec", "plugin", "system-agent"] as const)(
+    "shows %s approval request details ahead of a run error",
+    async (kind) => {
+      const approval = {
+        id: "approval-1",
+        kind,
+        pluginTitle: kind === "exec" ? undefined : "Enable the calendar plugin",
+        request: { command: "git status", sessionKey },
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      } satisfies ExecApprovalRequest;
+      const sessionsHarness = createSessionsHarness("main", [sessionKey]);
+      setRows(sessionsHarness, [failedRow()]);
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        sessionsHarness.sessions,
+        "panel",
+        null,
+        [approval],
+      );
 
-    expect(sidebar.querySelector('[data-session-attention="approval"]')).not.toBeNull();
-    expect(sidebar.textContent).toContain("Waiting for approval");
-    expect(sidebar.textContent).not.toContain("Run failed:");
-  });
+      const indicator = sidebar.querySelector('[data-session-attention="approval"]');
+      expect(indicator?.getAttribute("aria-label")).toBe(
+        `Waiting for approval\n${kind === "exec" ? "git status" : "Enable the calendar plugin"}`,
+      );
+      expect(indicator?.getAttribute("tabindex")).toBe("0");
+      expect(sidebar.querySelector(".sidebar-recent-session__subtitle")?.textContent).toBe(
+        "Waiting for approval",
+      );
+      expect(sidebar.textContent).not.toContain("Run failed:");
+    },
+  );
 
   it("uses canonical Home attention without duplicating an agent approval badge", async () => {
     const mainKey = "agent:main:main";
@@ -388,9 +396,10 @@ describe("AppSidebar session attention", () => {
     );
     expect(homeAttention).not.toBeNull();
     expect(
-      (homeAttention?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)
-        ?.content,
-    ).toBe("Waiting for approval");
+      homeAttention
+        ?.closest("openclaw-tooltip")
+        ?.querySelector(".sidebar-session-attention-tooltip__preview")?.textContent,
+    ).toBe("git status");
 
     expect(
       sidebar.querySelector(".sidebar-agent-card__main")?.getAttribute("aria-label"),
@@ -462,6 +471,9 @@ describe("AppSidebar session attention", () => {
     sidebar.sidebarAgentsMode = "roster";
     await waitForFast(() => {
       expect(
+        sidebar.querySelector(`openclaw-sidebar-agent-roster [data-session-key="${parentKey}"]`),
+      ).not.toBeNull();
+      expect(
         parentRow()
           ?.querySelector('[data-session-attention="error"]')
           ?.closest('[role="img"]')
@@ -473,8 +485,10 @@ describe("AppSidebar session attention", () => {
       row.key === failedKey ? Object.assign({}, row, { lastReadAt: 2 }) : row,
     );
     setRows(sessionsHarness, result.sessions);
-    await sidebar.updateComplete;
-    expect(parentRow().querySelector('[data-session-attention="error"]')).toBeNull();
+    await waitForFast(() => {
+      expect(parentRow()).not.toBeNull();
+      expect(parentRow().querySelector('[data-session-attention="error"]')).toBeNull();
+    });
   });
 
   it("shows attention again when a later failure follows a read", async () => {
@@ -573,6 +587,15 @@ describe("AppSidebar session attention", () => {
           `[data-session-key="${parentKey}"] [data-session-attention="${kind}"]`,
         ),
       ).not.toBeNull();
+      expect(
+        sidebar
+          .querySelector(`[data-session-key="${parentKey}"] [data-session-attention="${kind}"]`)
+          ?.getAttribute("aria-label"),
+      ).toBe(
+        kind === "question"
+          ? "Waiting for your answer\nContinue?"
+          : "Waiting for approval\ngit status",
+      );
       expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
       expect(sidebar.querySelector('[data-session-section="work"]')).not.toBeNull();
       sidebar.querySelector<HTMLButtonElement>(".sidebar-session-group-toggle")?.click();

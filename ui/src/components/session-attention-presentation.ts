@@ -1,7 +1,7 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 import {
-  sidebarSessionAttentionPriority,
+  summarizeSidebarSessionAttention,
   type SidebarRecentSession,
   type SidebarSessionAttention,
 } from "./app-sidebar-session-types.ts";
@@ -10,19 +10,19 @@ import { icons } from "./icons.ts";
 import { resolveSessionAttentionIcon } from "./session-attention-icon-registry.ts";
 import { renderSessionGlyph } from "./session-glyph.ts";
 
-function keepQuestionFocusOnTooltip(event: FocusEvent) {
-  // The hand is its own tooltip target; bubbling would also open the row hovercard.
+function keepAttentionFocusOnTooltip(event: FocusEvent) {
+  // Attention is its own tooltip target; bubbling would also open the row hovercard.
   event.stopPropagation();
 }
 
 export function renderSessionAttentionIcon(
   attention: SidebarSessionAttention,
-  showQuestionTooltip = false,
+  showTooltip = false,
 ) {
   if (attention.kind === "none") {
     return nothing;
   }
-  const questionLabel = attention.kind === "question" ? sessionAttentionSubtitle(attention) : null;
+  const label = showTooltip ? sessionAttentionTooltipLabel(attention) : undefined;
   const icon =
     attention.kind === "question"
       ? icons.hand
@@ -34,16 +34,14 @@ export function renderSessionAttentionIcon(
   const content = html`<span
     class="sidebar-session-attention__icon sidebar-session-attention__icon--${attention.kind}"
     data-session-attention=${attention.kind}
-    role=${questionLabel ? "img" : nothing}
-    aria-label=${questionLabel ?? nothing}
-    aria-hidden=${questionLabel ? nothing : "true"}
-    tabindex=${questionLabel ? "0" : nothing}
-    @focusin=${questionLabel ? keepQuestionFocusOnTooltip : nothing}
+    role=${label ? "img" : nothing}
+    aria-label=${label ?? nothing}
+    aria-hidden=${label ? nothing : "true"}
+    tabindex=${label ? "0" : nothing}
+    @focusin=${label ? keepAttentionFocusOnTooltip : nothing}
     >${icon}</span
   >`;
-  return showQuestionTooltip && questionLabel
-    ? html`<openclaw-tooltip .content=${questionLabel}>${content}</openclaw-tooltip>`
-    : content;
+  return showTooltip && label ? renderSessionAttentionTooltip(attention, content) : content;
 }
 
 export function sessionAttentionSubtitle(attention: SidebarSessionAttention): string | undefined {
@@ -69,6 +67,54 @@ export function sessionAttentionSubtitle(attention: SidebarSessionAttention): st
     default:
       return attention satisfies never;
   }
+}
+
+function sessionAttentionTooltipParts(attention: SidebarSessionAttention) {
+  const subtitle = sessionAttentionSubtitle(attention);
+  if (attention.kind !== "question" && attention.kind !== "approval") {
+    return { status: subtitle };
+  }
+  const requests = attention.requests.filter((request) => request.kind === attention.kind);
+  const count = requests.reduce((total, request) => total + request.count, 0);
+  return {
+    status:
+      count > 1
+        ? t(
+            attention.kind === "question"
+              ? "sessionsView.questionsNeedAnswer"
+              : "sessionsView.approvalsNeedApproval",
+            { count: String(count) },
+          )
+        : subtitle,
+    preview: requests[0]?.preview,
+    more: count > 1 ? t("sessionsView.attentionMore", { count: String(count - 1) }) : undefined,
+  };
+}
+
+export function sessionAttentionTooltipLabel(
+  attention: SidebarSessionAttention,
+): string | undefined {
+  const { status, preview, more } = sessionAttentionTooltipParts(attention);
+  return [status, preview, more].filter(Boolean).join("\n") || undefined;
+}
+
+function renderSessionAttentionTooltip(
+  attention: SidebarSessionAttention,
+  trigger: TemplateResult,
+) {
+  const { status, preview, more } = sessionAttentionTooltipParts(attention);
+  return html`<openclaw-tooltip .content=${preview ? "" : status}>
+    ${trigger}
+    ${
+      preview
+        ? html`<span slot="content" class="sidebar-session-attention-tooltip">
+            <strong>${status}</strong>
+            <span class="sidebar-session-attention-tooltip__preview">${preview}</span>
+            ${more ? html`<span>${more}</span>` : nothing}
+          </span>`
+        : nothing
+    }
+  </openclaw-tooltip>`;
 }
 
 export function renderSessionIdleState(session: SidebarRecentSession) {
@@ -106,22 +152,6 @@ export function renderSessionIdleState(session: SidebarRecentSession) {
     : nothing;
 }
 
-/** Keep each attention fact accessible once when its text moves out of the row. */
-function renderCompactSessionAttention(attention: SidebarSessionAttention) {
-  if (attention.kind === "none") {
-    return nothing;
-  }
-  if (attention.kind === "question") {
-    return renderSessionAttentionIcon(attention, true);
-  }
-  const label = sessionAttentionSubtitle(attention);
-  return html`<openclaw-tooltip .content=${label}
-    ><span role="img" aria-label=${label}
-      >${renderSessionAttentionIcon(attention)}</span
-    ></openclaw-tooltip
-  >`;
-}
-
 /** Share compact indicators between rows and collapsed groups; attention outranks activity. */
 export function renderTeamSessionSlots(
   rows: readonly SidebarRecentSession[],
@@ -129,12 +159,12 @@ export function renderTeamSessionSlots(
   childCount: number,
   groupConflicts = 0,
 ) {
-  const attention = rows
-    .flatMap((row) => [
+  const attention = summarizeSidebarSessionAttention(
+    rows.flatMap((row) => [
       row.ownAttention ?? row.attention,
       ...(includeChildren ? (row.childAttention ?? []) : []),
-    ])
-    .toSorted((a, b) => sidebarSessionAttentionPriority(b) - sidebarSessionAttentionPriority(a))[0];
+    ]),
+  );
   const active = rows.reduce(
     (n, row) => n + Number(row.hasActiveRun) + (includeChildren ? row.runningChildCount : 0),
     0,
@@ -158,7 +188,7 @@ export function renderTeamSessionSlots(
   );
   const state =
     attention && attention.kind !== "none"
-      ? renderCompactSessionAttention(attention)
+      ? renderSessionAttentionIcon(attention, true)
       : failed
         ? html`<span
             class="sidebar-child-session__status--failed"
@@ -181,8 +211,14 @@ export function renderTeamSessionSlots(
     return nothing;
   }
   return html`<span class="sidebar-session-team-state">
-    ${includeChildren && childCount > 0 ? html`<span class="sidebar-child-session-toggle__count" role="img" aria-label=${`${t("sessionsView.childSessions")}: ${childCount}`}>${childCount}</span>` : nothing}
-    ${unread > 0 ? html`<span class=${unread === 1 ? "session-unread-dot" : "sidebar-agent-roster__unread"} role="img" aria-label=${t("sessionsView.unread")} title=${t("sessionsView.unread")}>${unread > 1 ? unread : nothing}</span>` : nothing}
+    ${
+      (includeChildren && childCount > 0) || unread > 0
+        ? html`<span class="sidebar-session-team-state__counts">
+            ${includeChildren && childCount > 0 ? html`<span class="sidebar-child-session-toggle__count" role="img" aria-label=${`${t("sessionsView.childSessions")}: ${childCount}`}>${childCount}</span>` : nothing}
+            ${unread > 0 ? html`<span class=${unread === 1 ? "session-unread-dot" : "sidebar-agent-roster__unread"} role="img" aria-label=${t("sessionsView.unread")} title=${t("sessionsView.unread")}>${unread > 1 ? unread : nothing}</span>` : nothing}
+          </span>`
+        : nothing
+    }
     ${state === nothing ? nothing : html`<span class="sidebar-session-team-state__status">${state}</span>`}
   </span>`;
 }

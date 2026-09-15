@@ -128,7 +128,7 @@ describe("resolveSidebarSessionSubtitle", () => {
       activeRunIds: ["run-1"],
       status: "running",
       agentStatusNote: "Waiting for deployment",
-      attention: { kind: "question" },
+      attention: { kind: "question", requests: [] },
     };
     const observerDigest = {
       runId: "run-1",
@@ -280,11 +280,14 @@ describe("resolveSidebarSessionSubtitle", () => {
 
     expect(resolve({ agentStatusNote: "Waiting for deployment" })).toBe("Waiting for deployment");
     expect(
-      resolve({ attention: { kind: "question" }, agentStatusNote: "Waiting for deployment" }),
+      resolve({
+        attention: { kind: "question", requests: [] },
+        agentStatusNote: "Waiting for deployment",
+      }),
     ).toBeUndefined();
     expect(
       resolve({
-        attention: { kind: "approval" },
+        attention: { kind: "approval", requests: [] },
         agentStatusNote: "Waiting for deployment",
       }),
     ).toBe("Waiting for approval");
