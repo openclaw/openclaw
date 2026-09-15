@@ -119,3 +119,59 @@ describe("Anthropic tool-clearing policy", () => {
     });
   });
 });
+
+describe("applyAnthropicPayloadPolicyToParams system breakpoints", () => {
+  const cacheControl = { type: "ephemeral" } as const;
+  const policy = {
+    allowsServiceTier: false,
+    cacheControl,
+    compactThreshold: 50_000,
+    serviceTier: undefined,
+    useServerCompaction: false,
+  } as const;
+  const optOutIndexes = new Set<number>();
+
+  it("spends one system breakpoint when the OAuth preamble precedes a stable-prefix split", () => {
+    const payload = {
+      system: [
+        {
+          type: "text",
+          text: "x-anthropic-billing-header: cc_version=2.1.75; cc_entrypoint=sdk-cli;",
+        },
+        { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
+        {
+          type: "text",
+          text: "Stable identity prompt.\n<!-- OPENCLAW_CACHE_BOUNDARY -->\nDynamic runtime facts.",
+        },
+      ],
+      tools: [],
+      messages: [{ role: "user", content: "hi" }],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy, optOutIndexes);
+
+    const system = payload.system as Array<Record<string, unknown>>;
+    const marked = system.filter((block) => block.cache_control);
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.text).toBe("Stable identity prompt.");
+  });
+
+  it("anchors a fully unsplit system on its last text block only", () => {
+    const payload = {
+      system: [
+        { type: "text", text: "header one" },
+        { type: "text", text: "header two" },
+        { type: "text", text: "stable prompt" },
+      ],
+      tools: [],
+      messages: [{ role: "user", content: "hi" }],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy, optOutIndexes);
+
+    const system = payload.system as Array<Record<string, unknown>>;
+    const marked = system.filter((block) => block.cache_control);
+    expect(marked).toHaveLength(1);
+    expect(marked[0]?.text).toBe("stable prompt");
+  });
+});

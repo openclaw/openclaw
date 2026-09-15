@@ -260,6 +260,8 @@ function applyAnthropicCacheControlToSystem(
   }
 
   const normalizedBlocks: Array<unknown> = [];
+  const unsplitTextRecords: Array<Record<string, unknown>> = [];
+  let splitCount = 0;
   for (const block of system) {
     if (!block || typeof block !== "object") {
       normalizedBlocks.push(block);
@@ -277,12 +279,11 @@ function applyAnthropicCacheControlToSystem(
     record.text = text;
     const split = splitSystemPromptCacheBoundary(text);
     if (!split) {
-      if (record.cache_control === undefined) {
-        record.cache_control = cacheControl;
-      }
+      unsplitTextRecords.push(record);
       normalizedBlocks.push(record);
       continue;
     }
+    splitCount++;
 
     const { cache_control: existingCacheControl, ...rest } = record;
     if (split.stablePrefix) {
@@ -297,6 +298,17 @@ function applyAnthropicCacheControlToSystem(
         ...rest,
         text: split.dynamicSuffix,
       });
+    }
+  }
+
+  // Anthropic prefix-caches everything up to a breakpoint, so header blocks that
+  // precede a stable-prefix split are covered by the split's own marker and must
+  // not burn one of the four cache_control breakpoints. When no block splits,
+  // anchor the system once on its last text block.
+  if (splitCount === 0) {
+    const lastRecord = unsplitTextRecords.at(-1);
+    if (lastRecord && lastRecord.cache_control === undefined) {
+      lastRecord.cache_control = cacheControl;
     }
   }
 
