@@ -27,11 +27,14 @@ export class ComposerMicrophonePicker {
   private discoveryRequest = 0;
   private catalogClient: GatewayBrowserClient | null = null;
   private catalogConnected = false;
+  private eagerCatalog = true;
   private catalogRequest = 0;
   private realtimeStatusValue: ComposerTalkCapabilityStatus = "unknown";
   private dictationStatusValue: ComposerTalkCapabilityStatus = "unknown";
   // Terminal login changes credentials without replacing the Gateway connection.
-  private readonly refreshOnFocus = (): void => this.loadCatalog();
+  private readonly refreshOnFocus = (): void => {
+    void this.loadCatalog();
+  };
 
   constructor(private readonly requestUpdate: () => void) {}
 
@@ -59,7 +62,8 @@ export class ComposerMicrophonePicker {
     return this.dictationStatusValue;
   }
 
-  syncCatalog(client: GatewayBrowserClient | null, connected: boolean): void {
+  syncCatalog(client: GatewayBrowserClient | null, connected: boolean, eager = true): void {
+    this.eagerCatalog = eager;
     if (client === this.catalogClient && connected === this.catalogConnected) {
       return;
     }
@@ -67,13 +71,15 @@ export class ComposerMicrophonePicker {
     this.catalogClient = client;
     this.catalogConnected = connected;
     this.catalogRequest++;
+    this.realtimeStatusValue = "unknown";
+    this.dictationStatusValue = "unknown";
     if (!client || !connected) {
-      this.realtimeStatusValue = "unknown";
-      this.dictationStatusValue = "unknown";
       return;
     }
-    window.addEventListener("focus", this.refreshOnFocus);
-    this.loadCatalog(false);
+    if (eager || this.openValue) {
+      window.addEventListener("focus", this.refreshOnFocus);
+      void this.loadCatalog(false);
+    }
   }
 
   readonly handleOpen = (): void => {
@@ -81,9 +87,10 @@ export class ComposerMicrophonePicker {
       return;
     }
     this.openValue = true;
+    window.addEventListener("focus", this.refreshOnFocus);
     this.deviceWatch ??= observeRealtimeTalkDevices(this.discover);
     this.discover();
-    this.loadCatalog();
+    void this.loadCatalog();
   };
 
   readonly handleClose = (): void => {
@@ -92,6 +99,9 @@ export class ComposerMicrophonePicker {
     }
     this.release();
     this.openValue = false;
+    if (!this.eagerCatalog) {
+      window.removeEventListener("focus", this.refreshOnFocus);
+    }
     this.requestUpdate();
   };
 
@@ -145,10 +155,21 @@ export class ComposerMicrophonePicker {
       });
   };
 
-  private loadCatalog(notify = true): void {
+  /** Prepare only after voice intent; superseded connections never authorize capture. */
+  async prepareDictation(): Promise<boolean | null> {
+    const client = this.catalogClient;
+    const pending = this.loadCatalog();
+    const request = this.catalogRequest;
+    const loaded = await pending;
+    return request === this.catalogRequest && client === this.catalogClient && this.catalogConnected
+      ? loaded && this.dictationStatusValue === "ready"
+      : null;
+  }
+
+  private loadCatalog(notify = true): Promise<boolean> {
     const client = this.catalogClient;
     if (!client || !this.catalogConnected) {
-      return;
+      return Promise.resolve(false);
     }
     const request = ++this.catalogRequest;
     if (this.realtimeStatusValue === "unknown") {
@@ -160,18 +181,19 @@ export class ComposerMicrophonePicker {
     if (notify) {
       this.requestUpdate();
     }
-    void client
+    return client
       .request<TalkCatalogResult>("talk.catalog", {})
       .then((catalog) => {
         if (request !== this.catalogRequest) {
-          return;
+          return false;
         }
         this.realtimeStatusValue = catalog.realtime?.ready === true ? "ready" : "unavailable";
         this.dictationStatusValue = catalog.transcription?.ready === true ? "ready" : "unavailable";
+        return true;
       })
       .catch(() => {
         if (request !== this.catalogRequest) {
-          return;
+          return false;
         }
         if (this.realtimeStatusValue === "checking") {
           this.realtimeStatusValue = "unknown";
@@ -179,6 +201,7 @@ export class ComposerMicrophonePicker {
         if (this.dictationStatusValue === "checking") {
           this.dictationStatusValue = "unknown";
         }
+        return false;
       })
       .finally(() => {
         if (request === this.catalogRequest) {

@@ -20,6 +20,34 @@ afterEach(() => {
 });
 
 describe("composer voice readiness", () => {
+  it("does not discover speech for an on-demand text composer or window focus", async () => {
+    const request = vi.fn().mockResolvedValue(catalog(true));
+    const client = { request } as unknown as GatewayBrowserClient;
+    picker = new ComposerMicrophonePicker(vi.fn());
+    picker.syncCatalog(client, true, false);
+    window.dispatchEvent(new Event("focus"));
+    expect(request).not.toHaveBeenCalled();
+    expect(picker.dictationStatus).toBe("unknown");
+    await expect(picker.prepareDictation()).resolves.toBe(true);
+    expect(request).toHaveBeenCalledOnce();
+    window.dispatchEvent(new Event("focus"));
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("does not authorize capture from a catalog resolved after reconnect", async () => {
+    const stale = createDeferred<ReturnType<typeof catalog>>();
+    const request = vi.fn().mockReturnValue(stale.promise);
+    const client = { request } as unknown as GatewayBrowserClient;
+    picker = new ComposerMicrophonePicker(vi.fn());
+    picker.syncCatalog(client, true, false);
+    const preparation = picker.prepareDictation();
+    picker.syncCatalog(client, false, false);
+    picker.syncCatalog(client, true, false);
+    stale.resolve(catalog(true));
+    await expect(preparation).resolves.toBeNull();
+    expect(picker.dictationStatus).toBe("unknown");
+  });
+
   it("refreshes after returning from login on the same Gateway connection", async () => {
     const request = vi.fn().mockResolvedValueOnce(catalog(false)).mockResolvedValue(catalog(true));
     const client = { request } as unknown as GatewayBrowserClient;

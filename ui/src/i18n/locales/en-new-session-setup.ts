@@ -83,6 +83,8 @@ const enNewSessionSetup = {
     placementSetupInterrupted:
       "This session's runner setup was interrupted. Check recent sessions before starting this task again.",
     catalogUnavailable: "This session target is unavailable.",
+    cloudOptionsLoading: "Loading cloud options…",
+    cloudOptionsFailed: "Cloud options could not be loaded.",
     placementNotReady: "The selected runner isn't ready yet. Try again in a moment.",
     nodeUnavailable: "The selected device is unavailable. Pick another place.",
     terminalCapabilityOverridesUnsupported:

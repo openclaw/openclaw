@@ -126,3 +126,29 @@ it("separates canonical roster capture and deferrals from child session queries"
     "roster-next",
   ]);
 });
+
+it("selects omitted full-profile fields without deferring lightweight inventory", async ({
+  gatewayPage,
+}) => {
+  const { window, execute, responses: frames } = gatewayPage;
+  execute(createControlUiMockGatewayInitScript());
+  const gateway = (window as typeof window & { openclawControlUiE2eGateway?: ControlUiMockGateway })
+    .openclawControlUiE2eGateway;
+  if (!gateway) {
+    throw new Error("Mock Gateway was not installed");
+  }
+  const { send } = gatewayPage.connect("ws://mock-gateway/catalog");
+  await flush();
+  gateway.deferNext("environments.list", { includeProfiles: undefined });
+  send("inventory", "environments.list", { includeProfiles: false });
+  send("cloud", "environments.list", {});
+  await flush();
+  expect(frames.map((frame) => frame.id)).toEqual(["inventory"]);
+  expect(
+    gateway
+      .findRequests("environments.list", { includeProfiles: undefined })
+      .map((request) => request.id),
+  ).toEqual(["cloud"]);
+  gateway.resolveDeferred("environments.list");
+  expect(frames.at(-1)).toMatchObject({ id: "cloud", ok: true });
+});

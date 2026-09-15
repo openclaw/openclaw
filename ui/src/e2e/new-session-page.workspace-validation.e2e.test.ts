@@ -481,6 +481,17 @@ suite.define(() => {
         profiles: [],
       });
       await gateway.setMethodResponse("worktrees.branches", branchList("beta"));
+      const oldInventoryCount = (
+        await gateway.getRequests("environments.list", { includeProfiles: false })
+      ).length;
+      await gateway.deferNext("environments.list", { includeProfiles: false });
+      await gateway.emitGatewayEvent("node.runnerInventory.changed");
+      await gateway.waitForRequest("environments.list", {
+        after: oldInventoryCount,
+        match: { includeProfiles: false },
+      });
+      // Queue one trailing refresh on the old client; replacement must retire it.
+      await gateway.emitGatewayEvent("node.runnerInventory.changed");
       const socketsBefore = await gateway.getSocketCount();
       const environmentsBefore = (await gateway.getRequests("environments.list")).length;
       const branchesBefore = (await gateway.getRequests("worktrees.branches")).length;
@@ -489,8 +500,12 @@ suite.define(() => {
 
       await expect.poll(() => gateway.getSocketCount()).toBe(socketsBefore + 1);
       await expect
-        .poll(async () => (await gateway.getRequests("environments.list")).length)
-        .toBe(environmentsBefore + 1);
+        .poll(async () =>
+          (await gateway.getRequests("environments.list"))
+            .slice(environmentsBefore)
+            .map((request) => request.params),
+        )
+        .toEqual([{ includeProfiles: false }, {}]);
       await expect
         .poll(async () =>
           (await gateway.getRequests("worktrees.branches"))
@@ -523,6 +538,16 @@ suite.define(() => {
       await expect.poll(() => checkout.getByLabel("From").inputValue()).toBe("beta");
       await page.keyboard.press("Escape");
 
+      const currentCatalogRequests = (await gateway.getRequests("environments.list")).length;
+      await gateway.resolveDeferred("environments.list", {
+        environments: [deviceEnvironment("stale-device")],
+        profiles: [],
+      });
+      await whereTrigger.click();
+      await whereSelect.getByRole("button", { name: "New device" }).waitFor();
+      expect(await whereSelect.getByRole("button", { name: "Stale device" }).count()).toBe(0);
+      expect(await gateway.getRequests("environments.list")).toHaveLength(currentCatalogRequests);
+      await page.keyboard.press("Escape");
       await gateway.resolveDeferred("fs.listDir", {
         path: "/stale-device-path",
         home: "/stale-device-path",

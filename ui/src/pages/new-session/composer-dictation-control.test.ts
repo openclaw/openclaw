@@ -2,6 +2,9 @@
 
 import { html, render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+const client = {} as never;
+const pickerHarness = vi.hoisted(() => ({ sync: vi.fn(), prepare: vi.fn(), open: vi.fn() }));
 
 const dictationHarness = vi.hoisted(() => ({
   options: null as null | {
@@ -70,8 +73,9 @@ vi.mock("../chat/composer-microphone-picker.ts", () => ({
     issue = null;
     realtimeStatus = "ready";
     dictationStatus = "ready";
-    syncCatalog() {}
-    handleOpen() {}
+    syncCatalog = pickerHarness.sync;
+    prepareDictation = pickerHarness.prepare;
+    handleOpen = pickerHarness.open;
     handleClose() {}
     dispose() {}
   },
@@ -83,6 +87,87 @@ describe("NewSessionDictationControl", () => {
   beforeEach(() => {
     dictationHarness.options = null;
     dictationHarness.controllers = [];
+    pickerHarness.sync.mockClear();
+    pickerHarness.open.mockClear();
+    pickerHarness.prepare.mockReset().mockResolvedValue(true);
+  });
+
+  it.each(["escape", "blur", "dispose", "route", "disconnect", "submit", "superseded"] as const)(
+    "never starts capture after %s while catalog preparation is pending",
+    async (transition) => {
+      const pending = createDeferred<boolean | null>();
+      pickerHarness.prepare.mockReturnValue(pending.promise);
+      let connected = true;
+      let canCommit = true;
+      const control = new NewSessionDictationControl({
+        textarea: { captureSelection: vi.fn(), insertTranscript: vi.fn() } as never,
+        getClient: () => client,
+        isConnected: () => connected,
+        canCommit: () => canCommit,
+        onMessage: vi.fn(),
+        onError: vi.fn(),
+        onSubmit: vi.fn(),
+        requestUpdate: vi.fn(),
+      });
+      const container = document.createElement("div");
+      render(control.render("a"), container);
+      container.querySelector<HTMLButtonElement>(".chat-send-btn--voice")?.click();
+      const dictation = dictationHarness.controllers[0];
+      expect(pickerHarness.prepare).toHaveBeenCalledOnce();
+      expect(dictation?.startDirect).not.toHaveBeenCalled();
+      const status = document.createElement("div");
+      render(control.renderStatus(), status);
+      expect(status.querySelector('[role="status"] .btn__spinner')).not.toBeNull();
+      if (transition === "escape") {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      }
+      if (transition === "blur") {
+        window.dispatchEvent(new Event("blur"));
+      }
+      if (transition === "dispose") {
+        control.dispose();
+      }
+      if (transition === "route") {
+        control.render("b");
+        control.render("a");
+      }
+      if (transition === "disconnect") {
+        connected = false;
+        control.render("a");
+        connected = true;
+        control.render("a");
+      }
+      if (transition === "submit") {
+        canCommit = false;
+        control.render("a");
+      }
+      pending.resolve(transition === "superseded" ? null : true);
+      await pending.promise;
+      await Promise.resolve();
+      expect(dictation?.startDirect).not.toHaveBeenCalled();
+      expect(pickerHarness.open).not.toHaveBeenCalled();
+      control.dispose();
+    },
+  );
+
+  it("shows microphone setup instead of capturing when readiness is unavailable", async () => {
+    pickerHarness.prepare.mockResolvedValue(false);
+    const control = new NewSessionDictationControl({
+      textarea: { captureSelection: vi.fn(), insertTranscript: vi.fn() } as never,
+      getClient: () => client,
+      isConnected: () => true,
+      canCommit: () => true,
+      onMessage: vi.fn(),
+      onError: vi.fn(),
+      onSubmit: vi.fn(),
+      requestUpdate: vi.fn(),
+    });
+    const container = document.createElement("div");
+    render(control.render("a"), container);
+    container.querySelector<HTMLButtonElement>(".chat-send-btn--voice")?.click();
+    await vi.waitFor(() => expect(pickerHarness.open).toHaveBeenCalledOnce());
+    expect(dictationHarness.controllers[0]?.startDirect).not.toHaveBeenCalled();
+    control.dispose();
   });
 
   it("drops a final transcript when cloud placement claims the draft in flight", () => {
@@ -91,7 +176,7 @@ describe("NewSessionDictationControl", () => {
     const onMessage = vi.fn();
     const control = new NewSessionDictationControl({
       textarea: { captureSelection: vi.fn(), insertTranscript } as never,
-      getClient: () => ({}) as never,
+      getClient: () => client,
       isConnected: () => true,
       canCommit: () => canCommit,
       onMessage,
@@ -108,7 +193,7 @@ describe("NewSessionDictationControl", () => {
     expect(onMessage).not.toHaveBeenCalled();
   });
 
-  it("starts canonical dictation from a plain microphone click", () => {
+  it("starts canonical dictation from one microphone click after readiness", async () => {
     const onError = vi.fn();
     const captureSelection = vi.fn();
     const control = new NewSessionDictationControl({
@@ -116,7 +201,7 @@ describe("NewSessionDictationControl", () => {
         captureSelection,
         insertTranscript: vi.fn(() => "spoken task"),
       } as never,
-      getClient: () => ({}) as never,
+      getClient: () => client,
       isConnected: () => true,
       canCommit: () => true,
       onMessage: vi.fn(),
@@ -137,7 +222,11 @@ describe("NewSessionDictationControl", () => {
         ?.content,
     ).toBe("Dictate");
     expect(captureSelection).toHaveBeenCalledOnce();
-    expect(dictationHarness.controllers[0]?.startDirect).toHaveBeenCalledOnce();
+    await vi.waitFor(() =>
+      expect(dictationHarness.controllers[0]?.startDirect).toHaveBeenCalledOnce(),
+    );
+    expect(pickerHarness.sync).toHaveBeenCalledWith(client, true, false);
+    expect(pickerHarness.prepare).toHaveBeenCalledOnce();
     expect(dictationHarness.controllers[0]?.handleClick).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
     control.dispose();
@@ -152,7 +241,7 @@ describe("NewSessionDictationControl", () => {
         insertTranscript: vi.fn(() => "draft spoken task"),
         previewTranscript: vi.fn(() => "draft spoken"),
       } as never,
-      getClient: () => ({}) as never,
+      getClient: () => client,
       isConnected: () => true,
       canCommit: () => true,
       onMessage,
@@ -198,7 +287,7 @@ describe("NewSessionDictationControl", () => {
     const onMessage = vi.fn();
     const control = new NewSessionDictationControl({
       textarea: { captureSelection: vi.fn(), insertTranscript } as never,
-      getClient: () => ({}) as never,
+      getClient: () => client,
       isConnected: () => true,
       canCommit: () => true,
       onMessage,

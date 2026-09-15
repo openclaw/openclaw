@@ -136,7 +136,7 @@ suite.define(() => {
         .poll(async () =>
           (await gateway.getRequests("environments.list")).map((request) => request.params),
         )
-        .toContainEqual({ runtimeId: "codex" });
+        .toContainEqual({ runtimeId: "codex", includeProfiles: false });
       await expect
         .poll(() => tooltipTitleText(restrictedDevice))
         .toBe(
@@ -345,7 +345,7 @@ suite.define(() => {
       }
       await page.keyboard.press("Tab");
       await selectedRow.focus();
-      await gateway.deferNext("environments.list");
+      await gateway.deferNext("environments.list", { includeProfiles: false });
       await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "alpha-device" });
       await gateway.waitForRequest("environments.list", { after: beforeRefresh });
       for (let index = 0; index < 31; index += 1) {
@@ -365,7 +365,7 @@ suite.define(() => {
       expect(await place.getAttribute("open")).not.toBeNull();
       expect(await selectedRow.getAttribute("aria-pressed")).toBe("true");
       for (let cycle = 1; cycle <= 4; cycle += 1) {
-        await gateway.deferNext("environments.list");
+        await gateway.deferNext("environments.list", { includeProfiles: false });
         await gateway.resolveDeferred(
           "environments.list",
           catalog("available", 2, `Build runner ${cycle}`),

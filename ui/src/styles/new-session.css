@@ -819,6 +819,15 @@ wa-popover.new-session-page__where-popover::part(body) {
   font-size: var(--control-ui-text-sm);
 }
 
+.new-session-page__environment-empty[data-cloud-catalog-status] {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 12px;
+}
+
 .new-session-page__environment-skeletons {
   display: grid;
   gap: 8px;

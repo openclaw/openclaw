@@ -21,7 +21,7 @@ const REGISTERED_PROJECT = {
 };
 
 suite.define(() => {
-  it("ignores a restored cloud preference for a write-scoped caller", async () => {
+  it("retains a blocked cloud preference until a write-scoped caller explicitly chooses Local", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const appUrl = new URL(suite.server.baseUrl);
@@ -66,16 +66,32 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
       const where = page.locator("#new-session-where-trigger");
-      await expect.poll(() => where.getAttribute("data-cloud-profile")).toBeNull();
+      await expect.poll(() => where.getAttribute("data-cloud-profile")).toBe("aws");
+      const message = page.locator(".new-session-page__message");
+      await message.fill("start locally");
+      expect(await gateway.getRequests("talk.catalog")).toHaveLength(0);
+      const start = page.getByRole("button", { name: "Start session" });
+      await expect.poll(() => start.isEnabled()).toBe(false);
+      await message.press("Enter");
+      await page
+        .locator(".agent-chat__composer-status-text")
+        .getByText("This action requires operator.admin access.", { exact: true })
+        .waitFor();
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
       await where.click();
       const picker = page.locator("wa-popover.new-session-page__where-popover");
       await picker.locator('[data-value="device:writer-runner"]').waitFor();
       expect(await picker.locator('[data-value="cloud:aws"]').count()).toBe(0);
-      await page.keyboard.press("Escape");
-      await page.locator(".new-session-page__message").fill("start locally");
-      await expect
-        .poll(() => page.getByRole("button", { name: "Start session" }).isEnabled())
-        .toBe(true);
+      await picker.locator('[data-value="gateway"]').click();
+      await expect.poll(() => where.getAttribute("data-cloud-profile")).toBeNull();
+      await expect.poll(() => start.isEnabled()).toBe(true);
+      await start.click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({ message: "start locally" });
+      expect(create.params).not.toHaveProperty("profileId");
+      expect(create.params).not.toHaveProperty("deviceId");
+      expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
     } finally {
       await context.close();
     }

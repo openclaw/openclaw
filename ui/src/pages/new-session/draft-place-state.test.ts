@@ -58,7 +58,6 @@ function createRepositoryFixture(
   } as unknown as ApplicationContext;
   const gateway = {
     cloudProfiles: [{ id: "aws", providerId: "crabbox" }],
-    cloudProfilesReady: true,
     environments: [
       {
         id: "node:desktop",

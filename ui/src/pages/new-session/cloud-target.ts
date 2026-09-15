@@ -24,11 +24,12 @@ registerNewSessionSetupEnglish();
 export async function requestPlaceCatalog(
   client: Pick<GatewayBrowserClient, "request">,
   runtimeId?: string,
+  includeProfiles = true,
 ): Promise<{ profiles: DraftCloudProfile[]; environments: DraftEnvironment[] }> {
-  const result = await client.request<EnvironmentsListResult>(
-    "environments.list",
-    runtimeId ? { runtimeId } : {},
-  );
+  const result = await client.request<EnvironmentsListResult>("environments.list", {
+    ...(runtimeId ? { runtimeId } : {}),
+    ...(!includeProfiles ? { includeProfiles: false } : {}),
+  });
   return {
     profiles: readDraftCloudProfiles(result?.profiles),
     environments: readDraftEnvironments(result?.environments),

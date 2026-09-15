@@ -192,7 +192,6 @@ describe("DraftSubmissionFlow", () => {
     vi.spyOn(gateway, "cloudProfiles", "get").mockReturnValue([
       { id: "cloud", providerId: "crabbox", executionModes: ["worker-turn", "remote-exec"] },
     ]);
-    vi.spyOn(gateway, "cloudProfilesReady", "get").mockReturnValue(true);
     vi.spyOn(gateway, "cloudProfilesPending", "get").mockReturnValue(false);
     const start = vi.fn();
     context.placementStartup.start = start;

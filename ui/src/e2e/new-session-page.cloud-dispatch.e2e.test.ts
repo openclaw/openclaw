@@ -347,20 +347,37 @@ suite.define(() => {
       await pastePng(composer);
       await page.getByRole("img", { name: "pixel.png" }).waitFor();
       const startButton = page.getByRole("button", { name: "Start session" });
-      await gateway.deferNext("environments.list");
+      const cloudsBeforeNodeRefresh = (
+        await gateway.getRequests("environments.list", { includeProfiles: undefined })
+      ).length;
+      const inventoryBeforeNodeRefresh = (
+        await gateway.getRequests("environments.list", { includeProfiles: false })
+      ).length;
+      await gateway.deferNext("environments.list", { includeProfiles: false });
+      await gateway.emitGatewayEvent("node.runnerInventory.changed");
+      await gateway.waitForRequest("environments.list", {
+        after: inventoryBeforeNodeRefresh,
+        match: { includeProfiles: false },
+      });
+      expect(await startButton.isEnabled()).toBe(true);
+      expect(
+        await gateway.getRequests("environments.list", { includeProfiles: undefined }),
+      ).toHaveLength(cloudsBeforeNodeRefresh);
+      await gateway.resolveDeferred("environments.list");
+      await gateway.deferNext("environments.list", { includeProfiles: undefined });
       const profileRequests = (await gateway.getRequests("environments.list")).length;
       await replaceGatewayClient(page);
       await expect
         .poll(async () => (await gateway.getRequests("environments.list")).length)
         .toBeGreaterThan(profileRequests);
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await expect.poll(() => startButton.isDisabled()).toBe(true);
+      await expect.poll(() => startButton.isDisabled()).toBe(false);
       await gateway.rejectDeferred("environments.list", {
         code: "UNAVAILABLE",
         message: "profile lookup unavailable",
       });
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await expect.poll(() => startButton.isDisabled()).toBe(true);
+      await expect.poll(() => startButton.isDisabled()).toBe(false);
       const failedProfileRequests = (await gateway.getRequests("environments.list")).length;
       await expect
         .poll(async () => (await gateway.getRequests("environments.list")).length)
@@ -384,15 +401,21 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "profile catalog remains unavailable",
       };
-      await gateway.setMethodResponse("environments.list", { __mockError: profileCatalogError });
-      await gateway.deferNext("environments.list");
-      const requestsBeforePersistentFailure = (await gateway.getRequests("environments.list"))
-        .length;
-      await gateway.emitGatewayEvent("node.runnerInventory.changed");
+      await gateway.setMethodResponse("environments.list", {
+        cases: [
+          { match: { includeProfiles: false }, response: { environments: [], profiles: [] } },
+          { match: {}, response: { __mockError: profileCatalogError } },
+        ],
+      });
+      await gateway.deferNext("environments.list", { includeProfiles: undefined });
+      const requestsBeforePersistentFailure = (
+        await gateway.getRequests("environments.list", { includeProfiles: undefined })
+      ).length;
+      await gateway.emitGatewayEvent("config.changed");
       await gateway.waitForRequest("environments.list", {
         after: requestsBeforePersistentFailure,
       });
-      await expect.poll(() => startButton.isDisabled()).toBe(true);
+      await expect.poll(() => startButton.isDisabled()).toBe(false);
       if (captureUiProofEnabled) {
         await writeFile(
           path.join(suite.artifactDir, "cloud-profile-refresh-retention", "02-refresh-pending.png"),
@@ -401,27 +424,33 @@ suite.define(() => {
       }
       await gateway.rejectDeferred("environments.list", profileCatalogError);
 
-      // A recorded request is not a processed failure. Let the page settle and
-      // schedule its next retry before advancing the clock.
+      // A failed read is not an authoritative removal; retained choices remain usable.
       await expect.poll(() => startButton.isDisabled()).toBe(false);
       for (const delayMs of CLOUD_PROFILE_RETRY_DELAYS_MS) {
-        await gateway.deferNext("environments.list");
-        const requestsBeforeRetry = (await gateway.getRequests("environments.list")).length;
+        await gateway.deferNext("environments.list", { includeProfiles: undefined });
+        const requestsBeforeRetry = (
+          await gateway.getRequests("environments.list", { includeProfiles: undefined })
+        ).length;
         await page.clock.fastForward(delayMs + 1);
-        await gateway.waitForRequest("environments.list", { after: requestsBeforeRetry });
-        await expect.poll(() => startButton.isDisabled()).toBe(true);
+        await gateway.waitForRequest("environments.list", {
+          after: requestsBeforeRetry,
+          match: { includeProfiles: undefined },
+        });
+        await expect.poll(() => startButton.isDisabled()).toBe(false);
         await gateway.rejectDeferred("environments.list", profileCatalogError);
         await expect.poll(() => startButton.isDisabled()).toBe(false);
       }
       await page.clock.resume();
-      expect(await gateway.getRequests("environments.list")).toHaveLength(
-        requestsBeforePersistentFailure + 1 + CLOUD_PROFILE_RETRY_DELAYS_MS.length,
-      );
+      expect(
+        await gateway.getRequests("environments.list", { includeProfiles: undefined }),
+      ).toHaveLength(requestsBeforePersistentFailure + 1 + CLOUD_PROFILE_RETRY_DELAYS_MS.length);
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
       expect(await trigger.getAttribute("aria-label")).toContain("aws, Fast");
       await expect.poll(() => startButton.isDisabled()).toBe(false);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      // Dispatch while discovery is still failed: Gateway owns final profile/machine validation.
       await trigger.click();
       const retainedCloudProfile = place.locator('[data-value="cloud:aws"]');
       await expect.poll(() => retainedCloudProfile.isDisabled()).toBe(false);
@@ -429,6 +458,7 @@ suite.define(() => {
       const retainedMachine = place.locator('[data-value="machine:fast"]');
       await expect.poll(() => retainedMachine.isVisible()).toBe(true);
       expect(await retainedMachine.getAttribute("aria-pressed")).toBe("true");
+      await place.locator('[data-cloud-catalog-status="error"]').waitFor();
       if (captureUiProofEnabled) {
         await writeFile(
           path.join(

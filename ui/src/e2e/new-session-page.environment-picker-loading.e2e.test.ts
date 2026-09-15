@@ -35,7 +35,9 @@ suite.define(() => {
         const picker = page.locator("wa-popover.new-session-page__where-popover");
         const loading = picker.locator(".new-session-page__environment-skeletons");
         await loading.first().waitFor();
-        expect(await loading.count()).toBe(2);
+        expect(await loading.count()).toBe(1);
+        const cloudLoading = picker.locator('[data-cloud-catalog-status="loading"]');
+        await cloudLoading.waitFor();
         expect(await loading.first().getAttribute("aria-busy")).toBe("true");
         const skeletonWidths = await picker
           .locator(".new-session-page__environment-skeleton-row")
@@ -48,7 +50,8 @@ suite.define(() => {
           );
         }
 
-        await gateway.resolveDeferred("environments.list", {
+        // Resolve both initial reads, then independently hold only Cloud on config refresh.
+        const catalog = {
           environments: [
             {
               id: "node:studio",
@@ -71,9 +74,22 @@ suite.define(() => {
             { id: "GCP", providerId: "crabbox" },
             { id: "Machine0", providerId: "crabbox" },
           ],
-        });
+        };
+        await gateway.setMethodResponse("environments.list", catalog);
+        await gateway.resolveDeferred("environments.list", catalog);
         const daytona = picker.getByRole("button", { name: "Daytona Crabbox", exact: true });
         await daytona.waitFor();
+        await expect.poll(() => loading.count()).toBe(0);
+        await expect.poll(() => cloudLoading.count()).toBe(0);
+        await gateway.deferNext("environments.list", { includeProfiles: undefined });
+        await gateway.emitGatewayEvent("config.changed");
+        await cloudLoading.waitFor();
+        expect(await loading.count()).toBe(0);
+        await expect
+          .poll(() => picker.getByRole("button", { name: "Studio Mac", exact: true }).isEnabled())
+          .toBe(true);
+        await gateway.resolveDeferred("environments.list");
+        await expect.poll(() => cloudLoading.count()).toBe(0);
         await daytona.hover();
         const configuration = picker.locator(".new-session-page__cloud-configuration");
         await configuration.waitFor();

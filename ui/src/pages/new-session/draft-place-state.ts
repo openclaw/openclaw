@@ -271,6 +271,9 @@ export class DraftPlaceState {
   }
 
   devicePlacementDisabledReason(): string | undefined {
+    if ((this.deviceIdValue || this.autoDeviceValue) && this.gateway.deviceCatalogDisabledReason) {
+      return this.gateway.deviceCatalogDisabledReason;
+    }
     if (this.autoDeviceValue) {
       return resolveAutomaticDevicePlacementDisabledReason(
         this.gateway.environments,
@@ -350,7 +353,8 @@ export class DraftPlaceState {
       return;
     }
     const preference = this.agentIdValue ? this.gateway.readPreference(this.agentIdValue) : null;
-    const keepSelectedFolder = options.preserveSelectedFolder && this.folderSelectedByUser;
+    const keepSelectedFolder =
+      options.preserveSelectedFolder && (this.folderSelectedByUser || this.projectSelectedByUser);
     if (!keepSelectedFolder && !snapshot.pendingPlacementSessionKey) {
       const workspace = this.workspacePath();
       const savedFolder = resolveNewSessionFolderPreference(preference, workspace);
@@ -692,6 +696,9 @@ export class DraftPlaceState {
   }
 
   restorePreferenceSelections() {
+    if (this.read().submitting || this.read().pendingPlacementSessionKey) {
+      return;
+    }
     let changed = false;
     const preferredWhere = this.whereSelectedByUser ? null : this.preferredWhereRestore;
     const preferredProject = this.projectSelectedByUser ? "" : this.preferredProjectRestore;
@@ -709,10 +716,7 @@ export class DraftPlaceState {
       }
     }
 
-    if (
-      (preferredWhere?.kind === "device" || preferredWhere?.kind === "auto-device") &&
-      this.gateway.cloudProfilesReady
-    ) {
+    if (preferredWhere?.kind === "device" || preferredWhere?.kind === "auto-device") {
       const automatic = preferredWhere.kind === "auto-device";
       this.autoDeviceValue = automatic;
       this.deviceIdValue = preferredWhere.kind === "device" ? preferredWhere.id : "";
@@ -720,23 +724,13 @@ export class DraftPlaceState {
       this.repositoryState.forceWorktree(this.remotePlacement);
       this.preferredWhereRestore = null;
       changed = true;
-    } else if (preferredWhere?.kind === "cloud" && this.gateway.cloudProfilesReady) {
-      const preferredProfile = this.gateway.cloudProfiles.find(
-        (profile) => profile.id === preferredWhere.id,
-      );
-      if (
-        this.isAdmin() &&
-        preferredProfile &&
-        !this.modelControl.cloudRuntimeUnsupportedReason(preferredProfile)
-      ) {
-        this.deviceIdValue = "";
-        this.autoDeviceValue = false;
-        this.cloudProfileIdValue = preferredWhere.id;
-        this.repositoryState.forceWorktree(true);
-      } else {
-        this.cloudProfileIdValue = "";
-        this.persistPreference({ where: { kind: "local" } });
-      }
+    } else if (preferredWhere?.kind === "cloud") {
+      // Restore intent independently of discovery. A missing profile still blocks the target;
+      // failed refreshes retain known choices and must never turn a Cloud start local.
+      this.deviceIdValue = "";
+      this.autoDeviceValue = false;
+      this.cloudProfileIdValue = preferredWhere.id;
+      this.repositoryState.forceWorktree(true);
       this.preferredWhereRestore = null;
       changed = true;
     }

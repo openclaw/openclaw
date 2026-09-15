@@ -67,7 +67,15 @@ type DraftGatewayCallbacks = {
 export class DraftGatewayState {
   private cloudProfilesValue: DraftCloudProfile[] = [];
   private environmentsValue: DraftEnvironment[] | null = null;
-  private cloudProfilesReadyValue = false;
+  private cloudProfilesErrorValue = false;
+  private environmentsRuntimeId = "";
+  private environmentRefresh: Promise<void> | null = null;
+  private environmentRetryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+  private environmentRetryAttempt = 0;
+  private readonly environmentTask: Task<
+    readonly unknown[],
+    { environments: DraftEnvironment[]; runtimeId: string }
+  >;
   private catalogRetryingValue = false;
   private catalogRevalidationPending = false;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
@@ -112,6 +120,46 @@ export class DraftGatewayState {
       task: ([client, advertised, _connectionEpoch], { signal }) =>
         discoverGatewayName(client, advertised, signal),
     });
+    this.environmentTask = new Task(host, {
+      args: () =>
+        [
+          this.read().isConnected && this.gatewayConnectedValue ? this.gatewayClientValue : null,
+          this.gatewayConnectionEpochValue,
+          hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null),
+          this.gatewayRecoveryScopeValue,
+          this.read().runtimeId,
+        ] as const,
+      task: async ([client, _epoch, canWrite, _scope, runtimeId]) => {
+        if (!client) {
+          return initialState;
+        }
+        const result = canWrite
+          ? await requestPlaceCatalog(client, runtimeId, false)
+          : { environments: [] };
+        return { environments: result.environments, runtimeId };
+      },
+      onComplete: ({ environments, runtimeId }) => {
+        this.environmentsValue = environments;
+        this.environmentsRuntimeId = runtimeId;
+        this.environmentRetryAttempt = 0;
+        globalThis.clearTimeout(this.environmentRetryTimer);
+        this.environmentRetryTimer = undefined;
+      },
+      onError: () => {
+        if (
+          !this.gatewayConnectedValue ||
+          this.environmentRetryTimer ||
+          this.environmentRetryAttempt >= CLOUD_PROFILE_RETRY_DELAYS_MS.length
+        ) {
+          return;
+        }
+        const delay = CLOUD_PROFILE_RETRY_DELAYS_MS[this.environmentRetryAttempt++];
+        this.environmentRetryTimer = globalThis.setTimeout(() => {
+          this.environmentRetryTimer = undefined;
+          void this.refreshEnvironments();
+        }, delay);
+      },
+    });
     this.cloudProfileTask = new Task(host, {
       args: () =>
         [
@@ -120,26 +168,25 @@ export class DraftGatewayState {
           hasOperatorWriteAccess(this.read().context?.gateway.snapshot.hello?.auth ?? null),
           this.read().isAdmin,
           this.gatewayRecoveryScopeValue,
-          this.read().runtimeId,
         ] as const,
-      task: async ([client, _connectionEpoch, canWrite, isAdmin, _recoveryScope, runtimeId]) => {
+      task: async ([client, _connectionEpoch, canWrite, isAdmin, _recoveryScope]) => {
         if (!client) {
           return initialState;
         }
-        if (!canWrite) {
+        if (!canWrite || !isAdmin) {
           return { profiles: [], environments: [] };
         }
-        const result = await requestPlaceCatalog(client, runtimeId);
+        const result = await requestPlaceCatalog(client);
         return { ...result, profiles: isAdmin ? result.profiles : [] };
       },
       onComplete: (placeCatalog) => {
         this.resetCloudProfileRetry();
-        this.environmentsValue = placeCatalog.environments;
+        this.cloudProfilesErrorValue = false;
         this.applyCloudProfiles(placeCatalog.profiles);
-        this.cloudProfilesReadyValue = true;
       },
       onError: () => {
-        // A failed refresh cannot invalidate this Gateway's last successful place catalog.
+        // Retain known choices, but never treat failed metadata as a successful empty catalog.
+        this.cloudProfilesErrorValue = true;
         this.scheduleCloudProfileRetry();
       },
     });
@@ -160,17 +207,19 @@ export class DraftGatewayState {
     return this.environmentsValue;
   }
 
-  get cloudProfilesReady(): boolean {
-    return this.cloudProfilesReadyValue;
-  }
-
   get cloudProfilesPending(): boolean {
     return this.cloudProfileTask.status === TaskStatus.PENDING;
   }
 
+  get cloudProfilesError(): boolean {
+    return this.cloudProfilesErrorValue && !this.cloudProfilesPending;
+  }
+
   get deviceCatalogDisabledReason(): string | undefined {
-    // Cached cloud profiles survive refresh failures; live node capacity does not.
-    return this.cloudProfilesReadyValue && this.cloudProfileTask.status === TaskStatus.COMPLETE
+    // Only current runtime-scoped node inventory establishes device readiness.
+    return !this.environmentRefresh &&
+      this.environmentTask.status === TaskStatus.COMPLETE &&
+      this.environmentsRuntimeId === this.read().runtimeId
       ? undefined
       : t("newSession.placementNotReady");
   }
@@ -216,6 +265,27 @@ export class DraftGatewayState {
     ) === true
       ? catalog.resolvedGroupName(snapshot.data, snapshot.context?.sessions)
       : undefined;
+  }
+
+  refreshEnvironments(): Promise<void> {
+    if (this.environmentTask.status === TaskStatus.PENDING) {
+      const queued =
+        this.environmentRefresh ??
+        this.environmentTask.taskComplete
+          .catch(() => undefined)
+          .then(() => {
+            if (this.environmentRefresh === queued) {
+              this.environmentRefresh = null;
+              return this.refreshEnvironments();
+            }
+            return undefined;
+          });
+      this.environmentRefresh = queued;
+      return queued;
+    }
+    globalThis.clearTimeout(this.environmentRetryTimer);
+    this.environmentRetryTimer = undefined;
+    return this.environmentTask.run();
   }
 
   refreshCloudProfiles(): Promise<void> {
@@ -326,11 +396,17 @@ export class DraftGatewayState {
 
   invalidateDiscovery(resetHostSelection: boolean, submissionOutcome: SubmissionOutcomeReason) {
     this.cloudProfileRefresh = null;
+    this.environmentRefresh = null;
+    void this.environmentTask.run([null, -1, false, "", ""]);
+    globalThis.clearTimeout(this.environmentRetryTimer);
+    this.environmentRetryTimer = undefined;
+    this.environmentRetryAttempt = 0;
     // Retire pending results synchronously; Lit may not run hostUpdate before they settle.
     void this.cloudProfileTask.run([null, -1, false, false, ""]);
-    this.cloudProfilesValue = [];
-    this.cloudProfilesReadyValue = false;
+    // Retire requests on reconnect; only a different authenticated owner retires its cached catalog.
     if (resetHostSelection) {
+      this.cloudProfilesValue = [];
+      this.cloudProfilesErrorValue = false;
       this.environmentsValue = null;
     }
     this.resetCloudProfileRetry();
@@ -492,6 +568,11 @@ export class DraftGatewayState {
 
   disconnect() {
     this.cloudProfileRefresh = null;
+    this.environmentRefresh = null;
+    void this.environmentTask.run([null, -1, false, "", ""]);
+    globalThis.clearTimeout(this.environmentRetryTimer);
+    this.environmentRetryTimer = undefined;
+    this.environmentRetryAttempt = 0;
     this.gatewaySource = null;
     this.gatewayClientValue = null;
     this.gatewayConnectedValue = false;
@@ -514,10 +595,13 @@ export class DraftGatewayState {
     if ((!this.gatewayConnectedValue || !canWrite) && !pendingPlacement) {
       this.callbacks.onCloudProfileCleared();
     }
-    const selectionUnavailable =
-      !pendingPlacement &&
-      Boolean(snapshot.cloudProfileId) &&
-      !profiles.some((profile) => profile.id === snapshot.cloudProfileId);
+    // Background cloud discovery cannot clear a node failure or an in-flight start error.
+    if (!snapshot.cloudProfileId || pendingPlacement) {
+      return;
+    }
+    const selectionUnavailable = !profiles.some(
+      (profile) => profile.id === snapshot.cloudProfileId,
+    );
     if (selectionUnavailable) {
       this.callbacks.onCloudState(t("newSession.catalogUnavailable"));
     } else if (recoveryUnsupported) {
@@ -538,10 +622,6 @@ export class DraftGatewayState {
       return;
     }
     if (this.cloudProfileRetryAttempt >= CLOUD_PROFILE_RETRY_DELAYS_MS.length) {
-      if (!this.cloudProfilesReadyValue) {
-        this.applyCloudProfiles([]);
-        this.cloudProfilesReadyValue = true;
-      }
       return;
     }
     const delayMs = CLOUD_PROFILE_RETRY_DELAYS_MS[this.cloudProfileRetryAttempt];
@@ -597,43 +677,14 @@ export class DraftGatewayState {
         this.preferenceModeValue = "local";
         return;
       }
-      let preferences = decodeIdentityPreferences(result.entries);
+      const remotePreferences = decodeIdentityPreferences(result.entries);
       const browserPreferences = loadBrowserPreferences(params.gatewayUrl);
-      if (result.entries[PREFS_MIGRATION_KEY] !== true) {
-        const missingBrowserPreferences = Object.fromEntries(
-          Object.entries(browserPreferences).filter(
-            ([agentId]) => !Object.hasOwn(preferences, agentId),
-          ),
-        );
-        const migrationEntries = [
-          ...Object.entries(encodeIdentityPreferences(missingBrowserPreferences)),
-          [PREFS_MIGRATION_KEY, true] as const,
-        ];
-        let migrationFailed = false;
-        for (let offset = 0; offset < migrationEntries.length; offset += 32) {
-          const batch = Object.fromEntries(migrationEntries.slice(offset, offset + 32));
-          let response: UsersPrefsSetResult;
-          try {
-            response = await params.client.request<UsersPrefsSetResult>("users.prefs.set", {
-              entries: batch,
-            });
-          } catch {
-            migrationFailed = true;
-            break;
-          }
-          if (this.preferenceScope !== params.scope) {
-            return;
-          }
-          if (response.status !== "ok") {
-            migrationFailed = true;
-            break;
-          }
-          Object.assign(preferences, decodeIdentityPreferences(batch));
-        }
-        if (migrationFailed) {
-          preferences = { ...browserPreferences, ...preferences };
-        }
-      }
+      const needsMigration = result.entries[PREFS_MIGRATION_KEY] !== true;
+      const preferences = needsMigration
+        ? { ...browserPreferences, ...remotePreferences }
+        : remotePreferences;
+      // Reading resolves user intent. Migration writes stay serialized ahead of later
+      // preference writes, but cannot block Start or reapply a late snapshot to the draft.
       this.identityPreferences = preferences;
       this.preferenceModeValue = "remote";
       for (const [agentId, preference] of Object.entries(preferences)) {
@@ -643,6 +694,34 @@ export class DraftGatewayState {
         this.callbacks.onAdoptAgentDefaults();
       }
       this.callbacks.requestUpdate();
+      if (needsMigration) {
+        const missingBrowserPreferences = Object.fromEntries(
+          Object.entries(browserPreferences).filter(
+            ([agentId]) => !Object.hasOwn(remotePreferences, agentId),
+          ),
+        );
+        const migrationEntries = [
+          ...Object.entries(encodeIdentityPreferences(missingBrowserPreferences)),
+          [PREFS_MIGRATION_KEY, true] as const,
+        ];
+        for (let offset = 0; offset < migrationEntries.length; offset += 32) {
+          if (this.preferenceScope !== params.scope) {
+            return;
+          }
+          const batch = Object.fromEntries(migrationEntries.slice(offset, offset + 32));
+          try {
+            const response = await params.client.request<UsersPrefsSetResult>("users.prefs.set", {
+              entries: batch,
+            });
+            if (response.status !== "ok") {
+              return;
+            }
+          } catch {
+            // Keep the resolved in-memory preference; a later load retries migration.
+            return;
+          }
+        }
+      }
     } catch {
       if (this.preferenceScope === params.scope) {
         this.preferenceModeValue = "local";

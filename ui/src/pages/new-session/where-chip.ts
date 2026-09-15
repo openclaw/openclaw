@@ -174,6 +174,9 @@ export function renderWhereChip(params: {
   deviceId: string;
   autoDevice?: boolean;
   cloudDisabledReason?: string;
+  cloudProfilesPending?: boolean;
+  cloudProfilesError?: boolean;
+  onRetryCloudProfiles?: () => void;
   cloudProfileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
   submitting: boolean;
   pendingPlacement: boolean;
@@ -245,8 +248,11 @@ export function renderWhereChip(params: {
         ),
       )
     : [];
+  const showCloudStatus =
+    params.isAdmin && (params.cloudProfilesPending || params.cloudProfilesError);
   const showMissingCloud =
     params.isAdmin &&
+    !showCloudStatus &&
     Boolean(params.cloudProfileId) &&
     !params.state.cloudProfiles.some((profile) => profile.id === params.cloudProfileId) &&
     matches(t("newSession.cloud"), params.cloudProfileId);
@@ -263,7 +269,8 @@ export function renderWhereChip(params: {
   const busy = params.submitting || params.pendingPlacement;
   const destinationDisabled = busy;
   const showDeviceSkeletons = params.catalogLoading && devices.length === 0;
-  const showCloudSkeletons = params.isAdmin && params.catalogLoading && cloudProfiles.length === 0;
+  const showCloudSkeletons =
+    params.isAdmin && params.catalogLoading && cloudProfiles.length === 0 && !showCloudStatus;
   let cleanupScrollFade: (() => void) | undefined;
   const bindScrollFade = (element: Element | undefined) => {
     cleanupScrollFade?.();
@@ -477,7 +484,7 @@ export function renderWhereChip(params: {
             )}
             ${showDeviceSkeletons ? renderEnvironmentSkeletons("devices") : nothing}
             ${
-              cloudProfiles.length || showMissingCloud || showCloudSkeletons
+              cloudProfiles.length || showMissingCloud || showCloudStatus || showCloudSkeletons
                 ? html`<div
                     class="new-session-page__environment-heading new-session-page__devices-heading"
                   >
@@ -495,6 +502,31 @@ export function renderWhereChip(params: {
                             ${connectDeviceIcon}
                           </button>`
                         : nothing
+                    }
+                  </div>`
+                : nothing
+            }
+            ${
+              showCloudStatus
+                ? html`<div
+                    class="new-session-page__environment-empty"
+                    role="status"
+                    aria-live="polite"
+                    data-cloud-catalog-status=${params.cloudProfilesPending ? "loading" : "error"}
+                  >
+                    ${
+                      params.cloudProfilesPending
+                        ? html`<span class="btn__spinner" aria-hidden="true"></span>
+                            ${t("newSession.cloudOptionsLoading")}`
+                        : html`${t("newSession.cloudOptionsFailed")}
+                            <button
+                              type="button"
+                              class="btn btn--sm"
+                              ?disabled=${busy}
+                              @click=${params.onRetryCloudProfiles}
+                            >
+                              ${t("common.retry")}
+                            </button>`
                     }
                   </div>`
                 : nothing
@@ -538,6 +570,7 @@ export function renderWhereChip(params: {
               devices.length === 0 &&
               cloudProfiles.length === 0 &&
               !showMissingCloud &&
+              !showCloudStatus &&
               !showDeviceSkeletons &&
               !showCloudSkeletons
                 ? html`<div class="new-session-page__environment-empty" role="status">

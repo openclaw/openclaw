@@ -1652,7 +1652,11 @@ function installControlUiMockGateway(
       return false;
     }
     return entries.every(
-      ([key, expected]) => hasOwn(params, key) && valuesEqual(params[key], expected),
+      // Undefined selects an omitted optional wire field.
+      ([key, expected]) =>
+        expected === undefined
+          ? !hasOwn(params, key)
+          : hasOwn(params, key) && valuesEqual(params[key], expected),
     );
   }
 

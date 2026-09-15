@@ -367,8 +367,11 @@ export function renderComposerVoiceButton(props: ComposerVoiceButtonProps) {
             }
             if (startsDictationDirectly) {
               event.preventDefault();
-              props.onDirectDictationStart?.();
-              props.dictation?.startDirect();
+              if (props.onDirectDictationStart) {
+                props.onDirectDictationStart();
+              } else {
+                props.dictation?.startDirect();
+              }
               return;
             }
             if (props.dictation) {

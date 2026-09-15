@@ -72,7 +72,8 @@ suite.define(() => {
             },
           ],
         });
-        await gateway.emitGatewayEvent("node.runnerInventory.changed");
+        // Provider capabilities belong to the cloud catalog, not node inventory.
+        await gateway.emitGatewayEvent("config.changed");
         const linux = picker.locator('[data-value="os:linux"]');
         await picker.locator('[data-value="cloud:aws"]').hover();
         await linux.waitFor();

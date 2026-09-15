@@ -459,7 +459,7 @@ describe("DraftGatewayState", () => {
       if (method === "projects.list") {
         return { projects: [{ id: "project", displayName: "Project" }] };
       }
-      return { environments: [], profiles: [] };
+      return { environments: [], profiles: [{ id: "discovered", providerId: "test" }] };
     });
     const fixture = createBrowser(request, undefined, false);
     fixture.hello.features.methods.push("system.info");
@@ -468,7 +468,9 @@ describe("DraftGatewayState", () => {
     fixture.update();
     await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
     await waitForFast(() => expect(fixture.browser.projects).toHaveLength(1));
-    await waitForFast(() => expect(fixture.gateway.cloudProfilesReady).toBe(true));
+    await fixture.gateway.refreshCloudProfiles();
+    expect(fixture.gateway.cloudProfilesPending).toBe(false);
+    expect(fixture.gateway.cloudProfiles).toEqual([]);
     fixture.browser.selectProject({ kind: "local", id: "project" });
 
     fixture.client.recoveryScope = "principal-a";

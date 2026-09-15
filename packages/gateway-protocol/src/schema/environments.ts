@@ -155,6 +155,8 @@ export const EnvironmentSummarySchema = closedObject({
 /** Optional runtime scope for listing known environments. */
 export const EnvironmentsListParamsSchema = closedObject({
   runtimeId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  /** Omit provider metadata discovery for lightweight node readiness. Defaults to true. */
+  includeProfiles: Type.Optional(Type.Boolean()),
 });
 
 /** Provider-authored machine choice for one configured worker profile. */

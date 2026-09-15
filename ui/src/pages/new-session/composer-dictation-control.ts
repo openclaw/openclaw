@@ -34,6 +34,8 @@ export class NewSessionDictationControl {
   private readonly devicePicker: ComposerMicrophonePicker;
   private dictation: ComposerDictationController | null = null;
   private owner: { key: string } | null = null;
+  private preparation: { client: GatewayBrowserClient | null; abort: AbortController } | null =
+    null;
 
   constructor(private readonly options: NewSessionDictationOptions) {
     this.devicePicker = new ComposerMicrophonePicker(options.requestUpdate);
@@ -41,6 +43,8 @@ export class NewSessionDictationControl {
 
   dispose(): void {
     this.owner = null;
+    this.preparation?.abort.abort();
+    this.preparation = null;
     this.dictation?.dispose();
     this.dictation = null;
     this.devicePicker.dispose();
@@ -58,12 +62,19 @@ export class NewSessionDictationControl {
   }
 
   renderStatus() {
+    if (this.preparation) {
+      return html`<div class="agent-chat__composer-status" role="status">
+        <span class="btn__spinner" aria-hidden="true"></span>${t("common.loading")}
+      </div>`;
+    }
     return renderComposerDictationStatus(this.dictation ?? undefined);
   }
 
   render(ownerKey: string, inputDeviceId?: string) {
     if (this.owner?.key !== ownerKey) {
       this.owner = { key: ownerKey };
+      this.preparation?.abort.abort();
+      this.preparation = null;
       this.dictation?.dispose();
       this.dictation = null;
     }
@@ -71,7 +82,14 @@ export class NewSessionDictationControl {
     const ownsDraft = () => this.owner === owner;
     const client = this.options.getClient();
     const connected = this.options.isConnected() && client !== null;
-    this.devicePicker.syncCatalog(client, connected);
+    if (
+      this.preparation &&
+      (!connected || this.preparation.client !== client || !this.options.canCommit())
+    ) {
+      this.preparation.abort.abort();
+    }
+    // A text draft must not activate unrelated speech-provider discovery.
+    this.devicePicker.syncCatalog(client, connected, false);
     const enabled = this.options.canCommit();
     const dictationOptions = {
       client,
@@ -111,7 +129,7 @@ export class NewSessionDictationControl {
       ${renderComposerVoiceButton({
         connected,
         sending: false,
-        isBusy: !enabled,
+        isBusy: !enabled || this.preparation !== null,
         dictation,
         idleLabel: t("newSession.dictate"),
         microphonePicker: renderMicrophonePicker({
@@ -131,7 +149,72 @@ export class NewSessionDictationControl {
             this.devicePicker.handleClose();
           },
         }),
-        onDirectDictationStart: () => this.options.textarea.captureSelection(),
+        onDirectDictationStart: () => {
+          if (!owner || this.preparation || !ownsDraft() || !this.options.canCommit()) {
+            return;
+          }
+          this.options.textarea.captureSelection();
+          const abort = new window.AbortController();
+          this.preparation = { client, abort };
+          const cancel = () => abort.abort();
+          abort.signal.addEventListener(
+            "abort",
+            () => {
+              if (this.preparation?.abort === abort) {
+                this.preparation = null;
+                this.options.requestUpdate();
+              }
+            },
+            { once: true },
+          );
+          window.addEventListener("blur", cancel, { signal: abort.signal });
+          document.addEventListener(
+            "visibilitychange",
+            () => {
+              if (document.hidden) {
+                cancel();
+              }
+            },
+            { signal: abort.signal },
+          );
+          document.addEventListener(
+            "keydown",
+            (event) => {
+              if (event.key === "Escape") {
+                cancel();
+              }
+            },
+            { signal: abort.signal },
+          );
+          this.options.requestUpdate();
+          void this.devicePicker
+            .prepareDictation()
+            .then((ready) => {
+              if (
+                abort.signal.aborted ||
+                ready === null ||
+                !ownsDraft() ||
+                this.dictation !== dictation ||
+                this.options.getClient() !== client ||
+                !this.options.isConnected() ||
+                !this.options.canCommit()
+              ) {
+                return;
+              }
+              if (!ready) {
+                this.devicePicker.handleOpen();
+                return;
+              }
+              dictation.update({ ...dictationOptions, dictationAvailable: true });
+              dictation.startDirect();
+            })
+            .catch((error: unknown) => {
+              if (!abort.signal.aborted && ownsDraft()) {
+                this.options.onError(error instanceof Error ? error.message : String(error));
+              }
+            })
+            .finally(cancel);
+        },
       })}
       ${renderComposerDictationSendAction(dictation, () => {
         if (ownsDraft() && this.options.canCommit()) {

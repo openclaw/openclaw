@@ -64,6 +64,112 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("environment gateway methods", () => {
+  it.each(["listMachineOptions", "listOperatingSystems"] as const)(
+    "returns node inventory while %s remains pending for 30 seconds",
+    async (method) => {
+      vi.useFakeTimers();
+      const pending = createDeferred();
+      const metadata = vi.fn(async () => {
+        await pending.promise;
+        return undefined;
+      });
+      const service = workerService({ [method]: metadata });
+      let fullCompleted = false;
+      const full = callEnvironmentMethod("environments.list", {}, { service }).then((result) => {
+        fullCompleted = true;
+        return result;
+      });
+      try {
+        const [ok, payload] = await callEnvironmentMethod(
+          "environments.list",
+          { includeProfiles: false },
+          { service },
+        );
+        expect(ok).toBe(true);
+        expect(payload).toMatchObject({
+          environments: expect.arrayContaining([
+            expect.objectContaining({ id: "node:node-live", status: "available" }),
+          ]),
+        });
+        expect(payload).not.toHaveProperty("profiles");
+        expect(metadata).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(fullCompleted).toBe(false);
+        const [statusOk] = await callEnvironmentMethod(
+          "environments.status",
+          { environmentId: "node:node-live" },
+          { service },
+        );
+        expect(statusOk).toBe(true);
+      } finally {
+        pending.resolve();
+        await full;
+        vi.useRealTimers();
+      }
+      expect(fullCompleted).toBe(true);
+    },
+  );
+
+  it.each(["listMachineOptions", "listOperatingSystems"] as const)(
+    "keeps node inventory and profile summaries when %s fails for one provider",
+    async (failedMethod) => {
+      const machines = [{ id: "standard", label: "Standard", default: true }];
+      const operatingSystems = [
+        { id: "linux", label: "Linux", default: true },
+        { id: "windows", label: "Windows" },
+      ];
+      for (const includeProfiles of [undefined, true, false]) {
+        const service = workerService({
+          supportsExecutionMode: vi.fn((_profileId, mode) => mode === "worker-turn"),
+          listMachineOptions: vi.fn(async (profileId) => {
+            if (profileId === "aws" && failedMethod === "listMachineOptions") {
+              throw new Error("provider metadata failure");
+            }
+            return machines;
+          }),
+          listOperatingSystems: vi.fn(async (profileId) => {
+            if (profileId === "aws" && failedMethod === "listOperatingSystems") {
+              throw new Error("provider metadata failure");
+            }
+            return operatingSystems;
+          }),
+        });
+        const [ok, payload, error] = await callEnvironmentMethod(
+          "environments.list",
+          includeProfiles === undefined ? {} : { includeProfiles },
+          { service },
+        );
+        expect([ok, error]).toEqual([true, undefined]);
+        expect(payload).toMatchObject({
+          environments: expect.arrayContaining([
+            expect.objectContaining({ id: "node:node-live", status: "available" }),
+          ]),
+        });
+        if (includeProfiles === false) {
+          expect(payload).not.toHaveProperty("profiles");
+          expect(service.listMachineOptions).not.toHaveBeenCalled();
+          expect(service.listOperatingSystems).not.toHaveBeenCalled();
+        } else {
+          expect(payload).toHaveProperty("profiles", [
+            {
+              id: "aws",
+              providerId: "crabbox",
+              executionMode: "worker-turn",
+              executionModes: ["worker-turn"],
+            },
+            {
+              id: "zeta",
+              providerId: "static-ssh",
+              executionMode: "worker-turn",
+              executionModes: ["worker-turn"],
+              machines,
+              operatingSystems,
+            },
+          ]);
+        }
+      }
+    },
+  );
   it.each(["locked", "unlocked", "unknown"])(
     "projects %s desktop availability only from its matching live node",
     async (state) => {

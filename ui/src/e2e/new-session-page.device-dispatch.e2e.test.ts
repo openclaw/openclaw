@@ -24,6 +24,115 @@ const gitRepository = {
 };
 
 suite.define(() => {
+  it.each(["complete", "failure"] as const)(
+    "starts the selected node while cloud discovery is pending, then handles %s",
+    async (outcome) => {
+      const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+      const page = await context.newPage();
+      const sessionKey = "agent:main:independent-node-readiness";
+      const inventory = {
+        environments: [
+          {
+            id: "node:paired-runner",
+            type: "node",
+            label: "Paired runner",
+            status: "available",
+            sessionHost: true,
+            workerSlots: { total: 2, available: 1 },
+          },
+          {
+            id: "node:offline-runner",
+            type: "node",
+            label: "Offline runner",
+            status: "unavailable",
+            sessionHost: true,
+          },
+        ],
+      };
+      const profiles = [
+        {
+          id: "proof-cloud",
+          providerId: "crabbox",
+          executionModes: ["worker-turn"],
+          machines: [{ id: "small", label: "Small", default: true }],
+        },
+      ];
+      const gateway = await installMockGateway(page, {
+        heldMethods: ["environments.list", "sessions.create"],
+        operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+        workspace: WORKSPACE,
+        workspaceGit: true,
+        methodResponses: {
+          "environments.list": { ...inventory, profiles },
+          "worktrees.branches": gitRepository,
+          "sessions.create": { key: sessionKey },
+          "sessions.list": createdSessionListResult(sessionKey),
+          "sessions.dispatch": { placement: { state: "active", generation: 1 } },
+          "sessions.send": { runId: "independent-node-run", status: "started" },
+        },
+      });
+      try {
+        await page.goto(suite.server.baseUrl + "new");
+        await gateway.waitForRequest("environments.list", { match: { includeProfiles: false } });
+        await page.locator("#new-session-where-trigger").click();
+        const released = new Set<string>();
+        await expect
+          .poll(async () => {
+            for (const request of await gateway.getRequests("environments.list", {
+              includeProfiles: false,
+            })) {
+              if (!released.has(request.id)) {
+                released.add(request.id);
+                await gateway.deliverLatest({
+                  type: "res",
+                  id: request.id,
+                  ok: true,
+                  payload: inventory,
+                });
+              }
+            }
+            return page.locator('[data-value="device:paired-runner"]').isEnabled();
+          })
+          .toBe(true);
+        const status = page.locator('[data-cloud-catalog-status="loading"]');
+        await status.waitFor({ state: "visible" });
+        expect(await status.locator(".btn__spinner").count()).toBe(1);
+        expect(await page.locator('[data-value="device:offline-runner"]').isDisabled()).toBe(true);
+        await page.locator('[data-value="device:paired-runner"]').click();
+        await page.locator(".new-session-page__message").fill("Run on exactly my selected node");
+        await page.locator("#new-session-where-trigger").click();
+        await status.waitFor({ state: "visible" });
+        await page.locator("#new-session-where-trigger").click();
+        const start = page.getByRole("button", { name: "Start session" });
+        await expect.poll(() => start.isEnabled()).toBe(true);
+        await start.click();
+        const create = await gateway.waitForRequest("sessions.create");
+        expect(create.params).toMatchObject({
+          message: "",
+          worktree: true,
+          worktreeSource: "empty",
+        });
+        expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+        // Late metadata settles after Start. It cannot redirect the frozen target.
+        if (outcome === "complete") {
+          await gateway.resolveDeferred("environments.list", { environments: [], profiles });
+        } else {
+          await gateway.rejectDeferred("environments.list", {
+            code: "UNAVAILABLE",
+            message: "cloud catalog unavailable",
+          });
+        }
+        await gateway.resolveDeferred("sessions.create");
+        const dispatch = await gateway.waitForRequest("sessions.dispatch");
+        expect(dispatch.params).toMatchObject({ key: sessionKey, deviceId: "paired-runner" });
+        expect(dispatch.params).not.toHaveProperty("profileId");
+        expect(dispatch.params).not.toHaveProperty("autoDevice");
+      } finally {
+        await context.close();
+      }
+    },
+  );
+
   it("groups environments and selects Auto before named devices", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
@@ -439,14 +548,19 @@ suite.define(() => {
             window.dispatchEvent(new Event("test-release-recovery-scope"));
           });
           await waitForGatewayRecoveryScope(page);
-          expect(await gateway.getRequests("environments.list")).toHaveLength(1);
+          const requests = await gateway.getRequests("environments.list");
+          const inventoryRequests = await gateway.getRequests("environments.list", {
+            includeProfiles: false,
+          });
+          expect(requests.length - inventoryRequests.length).toBe(1);
+          expect(inventoryRequests.length).toBeGreaterThan(0);
         }
         await page.locator(".new-session-page__message").fill("keep my chosen remote destination");
         const start = page.getByRole("button", { name: "Start session" });
         await expect.poll(() => start.isDisabled()).toBe(true);
         await expect
           .poll(() => start.locator("xpath=..").getAttribute("content"))
-          .toContain("Restoring your last session setup");
+          .toContain("The selected runner isn't ready yet");
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
 
         await gateway.resolveDeferred("environments.list");

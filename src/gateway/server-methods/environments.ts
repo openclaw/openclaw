@@ -500,7 +500,8 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       environments.push(
         ...workers.map((record) => summarizeWorkerEnvironment(record, summarizedAtMs)),
       );
-      const profiles = await listWorkerProfilesWithMachines(context);
+      const profiles =
+        params.includeProfiles === false ? [] : await listWorkerProfilesWithMachines(context);
       respond(true, { environments, ...(profiles.length > 0 ? { profiles } : {}) }, undefined);
     });
   },

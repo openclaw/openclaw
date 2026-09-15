@@ -286,6 +286,11 @@ describe("worker environment protocol schemas", () => {
     }
 
     expect(validateEnvironmentsListParams({})).toBe(true);
+    expect(validateEnvironmentsListParams({ includeProfiles: false })).toBe(true);
+    expect(validateEnvironmentsListParams({ includeProfiles: true, runtimeId: "openclaw" })).toBe(
+      true,
+    );
+    expect(validateEnvironmentsListParams({ includeProfiles: "false" })).toBe(false);
     expect(validateEnvironmentsListParams({ runtimeId: "codex" })).toBe(true);
     expect(validateEnvironmentsListParams({ runtimeId: "" })).toBe(false);
     expect(validateEnvironmentsListParams({ runtimeId: "x".repeat(129) })).toBe(false);
