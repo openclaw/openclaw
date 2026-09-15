@@ -68,9 +68,21 @@ function resolveSqliteWorkerBroker() {
   );
 }
 
+/** Separate admission + worker pool for foreign/plugin DBs (e.g. iMessage chat.db). */
+function resolveIsolatedSqliteWorkerBroker() {
+  return resolveGlobalSingleton(
+    Symbol.for("openclaw.sqliteWorkerBroker.isolated"),
+    () => new SqliteWorkerBroker(),
+    (broker) => withCallerErrors(broker.close()),
+  );
+}
+
 /** Read the broker's recorded lifecycle state without probing native storage. */
 export function isSqliteWorkerStoreAvailable(store: object): boolean {
-  return resolveSqliteWorkerBroker().isAvailable(store);
+  return (
+    resolveSqliteWorkerBroker().isAvailable(store) ||
+    resolveIsolatedSqliteWorkerBroker().isAvailable(store)
+  );
 }
 
 /** Recorded orphan custody at its original shared-state opening path. */
@@ -104,6 +116,36 @@ export function openSqliteWorkerStore<Operations extends SqliteWorkerOperations>
     );
   }
   return resolveSqliteWorkerBroker().open<Operations>(options);
+}
+
+/**
+ * Open a foreign/plugin database on an isolated broker admission lane.
+ *
+ * Use for existing-only reads against paths outside OpenClaw state (e.g. macOS
+ * Messages chat.db). A wedged native open then pins only this lane's worker pool
+ * and admissionTail — shared OpenClaw SQLite admission stays responsive (#148750).
+ */
+export function openIsolatedSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
+  options: SqliteWorkerStoreOptions & { existingOnly: true },
+): Promise<SqliteWorkerStore<Operations> | undefined>;
+export function openIsolatedSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
+  options: SqliteWorkerStoreOptions & { existingOnly?: false },
+): Promise<SqliteWorkerStore<Operations>>;
+export function openIsolatedSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
+  options: SqliteWorkerStoreOptions,
+): Promise<SqliteWorkerStore<Operations> | undefined>;
+export function openIsolatedSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
+  options: SqliteWorkerStoreOptions,
+): Promise<SqliteWorkerStore<Operations> | undefined> {
+  if (!isMainThread) {
+    return Promise.reject(
+      new SqliteWorkerError(
+        "SQLite stores in application workers require the host broker connection",
+        "unavailable",
+      ),
+    );
+  }
+  return resolveIsolatedSqliteWorkerBroker().open<Operations>(options);
 }
 
 /** Host-internal admission for the canonical shared-state actor. */

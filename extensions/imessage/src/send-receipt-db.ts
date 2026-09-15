@@ -1,6 +1,6 @@
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
-  openSqliteWorkerStore,
+  openIsolatedSqliteWorkerStore,
   type SqliteWorkerCommand,
   type SqliteWorkerStore,
 } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -29,7 +29,8 @@ export async function withIMessageReceiptGuidReader<T>(
       throw new Error("iMessage receipt lookup is closed");
     }
     try {
-      store ??= await openSqliteWorkerStore<IMessageReceiptDbOperations>({
+      // Isolated admission lane: wedged chat.db must not stall shared OpenClaw SQLite (#148750).
+      store ??= await openIsolatedSqliteWorkerStore<IMessageReceiptDbOperations>({
         moduleUrl: resolveRuntimeWorkerUrl({
           currentModuleUrl: import.meta.url,
           sourceWorkerName: "send-receipt-db.worker",

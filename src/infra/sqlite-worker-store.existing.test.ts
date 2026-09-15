@@ -7,7 +7,11 @@ import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
-import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
+import {
+  openIsolatedSqliteWorkerStore,
+  openSqliteWorkerStore,
+  type SqliteWorkerStore,
+} from "./sqlite-worker-store.js";
 import type { FixtureOpenInput, FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
 const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
@@ -240,4 +244,49 @@ describe("existing-only SQLite worker admission", () => {
       expect(await original.execute({ type: "read", input: undefined })).toEqual(["original"]);
     },
   );
+
+  it("keeps shared admission free while an isolated foreign existing-only open is wedged (#148750)", async () => {
+    const foreign = databasePath();
+    await writeFile(foreign, "");
+    const hangModule = new URL("./sqlite-worker-store.hang-open.test-support.ts", import.meta.url);
+    const seenWorkers = new Set<Worker>();
+    const postMessage = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+      this: Worker,
+      request: unknown,
+      transferList?: readonly import("node:worker_threads").TransferListItem[],
+    ) {
+      seenWorkers.add(this);
+      postMessage.mockRestore();
+      return this.postMessage(request, transferList);
+    });
+    try {
+      // Do not await: models a wedged chat.db open that never settles.
+      const hung = openIsolatedSqliteWorkerStore({
+        moduleUrl: hangModule,
+        databasePath: foreign,
+        existingOnly: true,
+        input: undefined,
+      });
+      void hung.catch(() => undefined);
+
+      const healthyPath = path.join(path.dirname(foreign), "shared-healthy.sqlite");
+      const opened = open(healthyPath, false);
+      const result = await Promise.race([
+        opened.then((store) => {
+          assert.ok(store);
+          return store;
+        }),
+        new Promise<null>((resolve) => {
+          setTimeout(() => resolve(null), 2_000);
+        }),
+      ]);
+      assert.ok(result, "shared SQLite admission stalled behind wedged foreign open");
+      expect(await result.execute({ type: "append", input: { value: "alive" } })).toMatchObject({
+        writes: 1,
+      });
+    } finally {
+      postMessage.mockRestore();
+      await Promise.allSettled([...seenWorkers].map((worker) => worker.terminate()));
+    }
+  });
 });
