@@ -1,6 +1,11 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
+import {
+  projectQaEvidenceScenarioOutcomes,
+  type QaEvidenceSummaryJson,
+  type QaEvidenceSummaryV3Json,
+} from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import {
   createQaTransportAdapter,
@@ -55,8 +60,9 @@ const mocks = vi.hoisted(() => ({
       channel?: string | null;
       channelDriver?: string | null;
       channelDriverSelection?: unknown;
+      recordedEvidence?: QaEvidenceSummaryJson;
     }) => ({
-      evidence: { kind: "test" },
+      evidence: _params.recordedEvidence,
       evidencePath: "/qa-output/qa-evidence.json",
       report: "",
       reportPath: "/qa-output/qa-suite-report.md",
@@ -117,6 +123,10 @@ vi.mock("./web-runtime.js", () => ({
   closeQaWebSessions: vi.fn(async () => {}),
 }));
 
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -173,19 +183,20 @@ function createCleanupTestFactory(
   };
 }
 
-function runCleanupTestSuite(params: {
+async function runCleanupTestSuite(params: {
   factory: QaTransportAdapterFactory;
   lab: QaLabServerHandle;
   progressEnabled?: boolean;
   runChild: QaSuiteRunner;
 }) {
+  const repoRoot = await tempDirs.makeTempDir("qa-parity-cleanup-");
   return runQaRuntimeParitySuite({
     runQaFlowSuite: params.runChild,
     adapterFactories: [params.factory],
     channelDriver: "live",
     channelId: "leased",
-    repoRoot: "/qa-repo",
-    outputDir: "/qa-output",
+    repoRoot,
+    outputDir: path.join(repoRoot, "output"),
     startedAt: new Date("2026-08-04T00:00:00.000Z"),
     providerMode: "mock-openai",
     transportId: "qa-channel",
@@ -201,6 +212,54 @@ function runCleanupTestSuite(params: {
 }
 
 describe("runtime parity suite transport cleanup", () => {
+  it("executes repeated flow instances in request order through the standard producer", async () => {
+    const repoRoot = await tempDirs.makeTempDir("qa-repeated-flow-");
+    const scenarios = [makeQaSuiteTestScenario("first"), makeQaSuiteTestScenario("second")];
+    vi.spyOn(scenarioCatalog, "readQaBootstrapScenarioCatalog").mockReturnValue({
+      agentIdentityMarkdown: "test",
+      kickoffTask: "test",
+      scenarios,
+    });
+    const observed: string[] = [];
+    const runScenario = vi
+      .spyOn(suite, "runQaSuiteScenarioDefinitionForRuntime")
+      .mockImplementation(async (_env, scenario) => {
+        observed.push(scenario.id);
+        return {
+          name: scenario.title,
+          status: "pass",
+          details: `invocation ${observed.length}`,
+          steps: [],
+        };
+      });
+    const lab = createCleanupTestLab();
+    const result = await runQaFlowSuiteFromRuntime({
+      repoRoot,
+      outputDir: path.join(repoRoot, "output"),
+      scenarioIds: ["first", "second", "first"],
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/test-model",
+      alternateModel: "mock-openai/test-model-alt",
+      lab,
+      startLab: async () => lab,
+      concurrency: 1,
+    });
+    const evidence = result.evidence as QaEvidenceSummaryV3Json;
+    expect(observed).toEqual(["first", "second", "first"]);
+    expect(new Set(runScenario.mock.calls.map(([, scenario]) => scenario)).size).toBe(3);
+    const outcomes = projectQaEvidenceScenarioOutcomes(evidence);
+    expect(outcomes.map((outcome) => outcome.scenarioId)).toEqual(observed);
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(["pass", "pass", "pass"]);
+    expect(new Set(outcomes.map((outcome) => outcome.scenarioInstanceId)).size).toBe(3);
+    expect(new Set(outcomes.map((outcome) => outcome.occurrenceId)).size).toBe(3);
+    expect(result.scenarios.map((scenario) => scenario.details)).toEqual([
+      "invocation 1",
+      "invocation 2",
+      "invocation 3",
+    ]);
+    expect(evidence.entries.map((entry) => entry.test.id)).toEqual(observed);
+  });
+
   it("does not publish parent artifacts when owned lab cleanup fails", async () => {
     const cleanupError = Object.assign(new Error("owned lab shutdown reset"), {
       code: "ECONNRESET",

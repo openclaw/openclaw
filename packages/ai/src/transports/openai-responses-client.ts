@@ -47,6 +47,7 @@ import {
   buildOpenAIResponsesParams,
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
+import { resolveOpenAIResponsesPayloadPolicy } from "./openai-responses-payload-policy.js";
 import { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
 import {
   recordResponsesReasoningState,
@@ -332,15 +333,18 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           return;
         }
         const sessionId = options?.sessionId;
+        // Custom routes require an explicit capability; native routes retain
+        // their existing eligibility and final request storage checks below.
         const httpContinuationEligible =
           config.httpContinuation &&
           !websocketMode &&
           !getAiTransportHost().requiresManagedTransport(model) &&
-          supportsNativeOpenAIResponsesEndpoint({
+          (supportsNativeOpenAIResponsesEndpoint({
             provider: model.provider,
             api: model.api,
             baseUrl: model.baseUrl,
-          });
+          }) ||
+            resolveOpenAIResponsesPayloadPolicy(model).explicitContinuationOptIn);
         if (
           httpContinuationEligible &&
           sessionId &&

@@ -38,6 +38,21 @@ import { tuiPtyRuntimeEntrypoints } from "../../src/tui/tui-pty-runtime-test-sup
 import { channelIngressGatewayRestartEntrypoint } from "../../test/fixtures/channel-ingress-gateway-restart-entrypoint.ts";
 import { runtimeProcessBuildEntries } from "./runtime-process-build-entries.mts";
 
+// These fixture hooks require physical module boundaries and complete namespaces.
+export const legacyFinalizerBuildSources = [
+  "src/cli/update-cli/update-command-legacy-finalize.test-support.ts",
+  "src/infra/update-migrated-finalize.worker.ts",
+  "src/infra/runtime-process-entrypoints.ts",
+  "src/cli/update-cli/update-command-service-plan.ts",
+  "src/cli/update-cli/update-command-repair-service.ts",
+  "src/infra/tmp-openclaw-dir.ts",
+  "src/cli/update-cli/update-command-convergence.ts",
+  "src/cli/update-cli/update-command-restart-context.ts",
+  "src/daemon/gateway-entrypoint.ts",
+  "src/cli/update-cli/update-command-verification.ts",
+  "src/cli/update-cli/shared.ts",
+];
+
 // Test-only roots share the invocation generation without changing package entries.
 export const vitestWorkerBuildEntries = {
   ...runtimeProcessBuildEntries,

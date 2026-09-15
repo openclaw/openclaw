@@ -195,6 +195,42 @@ artifacts, replay, moved refs, mismatched digests, divergent or rewound `main`,
 or a conflicting immutable ref. App Review and production promotion remain
 manual.
 
+### Read-only protected inspection
+
+After review and landing, dispatch `iOS Beta Release` from `main` with
+`operation=inspect`, the approved `target_ref` and exact `target_sha`, and
+`inspect_build_number` for the existing build. The App Store version comes from
+that candidate's validated cutter output, not a free-form version override.
+A fresh `ios-beta-release` environment approval is required. Inspection shares
+the uploader's concurrency group and revalidates the live actor, original run
+attempt, trusted workflow lineage, and unchanged candidate before credential
+access and again before retaining observations.
+
+Only the trusted workflow-SHA checkout executes Node, Fastlane 2.238.0, and
+locked dependencies. The candidate checkout supplies version/changelog data;
+none of its scripts, Fastfile, Gemfile, or actions execute. The canonical planner
+runs against this data without a forced revision/build override. Its `plan.json`
+selects the next live upload, not the historical build being inspected. A failed
+planner produces no plan; `inspection.json` records `planValidation=failed`.
+
+The separate `ios-release-inspection-<run>-1` artifact retains only the plan,
+selected app/build IDs, group IDs/policy flags/exact build relationships, and
+validation outcomes for seven days. It contains no tester lists, emails, group
+names, signing data, intent, or authority receipt. Relationship API failures stop
+inspection; planner failures produce no plan. Unsafe or missing relationships
+are reported without repair. These are sequential observations, not an atomic
+store snapshot. Even a successful
+inspection always says `publicationVerified=false`: current relationships do
+not prove historical upload provenance or authorize recording. The upload and
+`record-only` contracts are unchanged, including rejection of a missing original
+intent. No automatic-access toggle, group assignment, signing, screenshot,
+archive, upload, App Review submission, or release-ref mutation runs here.
+
+A green inspection job means observations were captured, not that its plan or
+distribution passed. Review the report's plan and policy outcomes before making
+a separate source, recovery-contract, audience, or publication decision. This
+operation neither changes the selected source nor authorizes any such decision.
+
 Maintainer recovery path for a fresh clone on the same Mac:
 
 1. Reuse the existing Keychain-backed App Store Connect key on that machine.

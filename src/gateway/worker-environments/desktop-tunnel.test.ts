@@ -195,7 +195,12 @@ describe("worker desktop tunnels", () => {
     expect(start.argv[start.argv.indexOf("-L") + 1]).toMatch(
       /openclaw-worker-desktop-.+\/desktop\.sock:127\.0\.0\.1:5900$/u,
     );
-    expect(start.options.input).toContain("OPENCLAW_WORKER_TUNNEL_READY");
+    expect(start.argv).toContain("-N");
+    expect(start.argv).toContain("-n");
+    expect(start.argv).toContain("PermitLocalCommand=yes");
+    expect(start.argv).toContain("LocalCommand=printf 'OPENCLAW_WORKER_TUNNEL_READY\\n'");
+    expect(start.argv.at(-1)).toBe("worker@worker.example.test");
+    expect(start.options.input).toBeUndefined();
     start.process.becomeReady();
     const result = await starting;
     expect(result).toMatchObject({ vncPassword: "vnc-secret" });

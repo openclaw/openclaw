@@ -75,16 +75,17 @@ async function convergePluginReleaseCohortWithLease(
   let config = sync.config;
   let changed = sync.changed;
   let npmChanged = false;
-  const sourceBundledIds = resolveSourceCheckoutBundledPluginIds({
-    config,
-    installRecords: config.plugins?.installs ?? {},
-    env: params.env,
-  });
-  const installOwners = Object.entries(config.plugins?.installs ?? {})
-    .filter(
-      ([id, record]) => isPluginInstallRecordUpdateSource(record) && !sourceBundledIds.has(id),
-    )
+  let installOwners = Object.entries(config.plugins?.installs ?? {})
+    .filter(([, record]) => isPluginInstallRecordUpdateSource(record))
     .map(([id]) => id);
+  if (installOwners.length > 0) {
+    const sourceBundledIds = resolveSourceCheckoutBundledPluginIds({
+      config,
+      installRecords: config.plugins?.installs ?? {},
+      env: params.env,
+    });
+    installOwners = installOwners.filter((id) => !sourceBundledIds.has(id));
+  }
   // Without prior package owners there is no retired child policy to reconcile.
   const beforeIndex = installOwners.length
     ? withPluginCache(createPluginCache(), () =>

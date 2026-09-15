@@ -999,13 +999,15 @@ describe("config observe recovery", () => {
           "utf-8",
         );
         const clobbered = await writeClobberedUpdateChannel(configPath);
-        const input = { deps, configPath, ...clobbered, prepareBackup: approveRecoveryCandidate };
+        const prepareBackup = vi.fn(approveRecoveryCandidate);
+        const input = { deps, configPath, ...clobbered, prepareBackup };
 
         const recovered =
           mode === "async"
             ? await maybeRecoverSuspiciousConfigRead(input)
             : maybeRecoverSuspiciousConfigReadSync(input);
 
+        expect(prepareBackup).not.toHaveBeenCalled();
         expect(recovered).toEqual(clobbered);
         await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
         await expect(readObserveEvents(auditPath)).resolves.toEqual([]);

@@ -11,7 +11,12 @@ const { createChildAdapterMock } = vi.hoisted(() => ({
   createChildAdapterMock: vi.fn(),
 }));
 vi.mock("../process/supervisor/adapters/child.js", () => ({
-  createChildAdapter: createChildAdapterMock,
+  createChildAdapter: async (
+    ...args: Parameters<typeof import("../process/supervisor/adapters/child.js").createChildAdapter>
+  ) => ({
+    adapter: await createChildAdapterMock(...args),
+    ready: Promise.resolve(),
+  }),
 }));
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => supervisor,

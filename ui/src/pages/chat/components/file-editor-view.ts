@@ -23,6 +23,7 @@ export type FileEditorViewHandle = {
   destroy: () => void;
   setContent: (content: string) => void;
   setEditable: (editable: boolean) => void;
+  setLineWrapping: (wrap: boolean) => void;
   setDecorations: (decorations: FileEditorDecorations) => void;
   scrollToLine: (line: number, center: boolean) => void;
   getContent: () => string;
@@ -49,13 +50,16 @@ export async function createFileEditorView(params: {
   content: string;
   name: string;
   editable?: boolean;
+  wrap?: boolean;
   onSave: () => void;
 }): Promise<FileEditorViewHandle> {
   const editable = new Compartment();
+  const wrapping = new Compartment();
   const language = await loadCodeLanguage(params.name);
   let docChanged: ((content: string) => void) | null = null;
   let destroyed = false;
   let isEditable = params.editable === true;
+  let isWrapped = params.wrap === true;
   let separator = detectLineSeparator(params.content);
 
   const buildState = (content: string) =>
@@ -83,6 +87,7 @@ export async function createFileEditorView(params: {
         syntaxHighlighting(classHighlighter),
         ...(language ? [language] : []),
         editable.of([EditorState.readOnly.of(!isEditable), EditorView.editable.of(isEditable)]),
+        wrapping.of(isWrapped ? EditorView.lineWrapping : []),
         lineDecorations,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
@@ -139,6 +144,14 @@ export async function createFileEditorView(params: {
           EditorView.editable.of(nextEditable),
         ]),
       });
+    },
+    setLineWrapping: (wrap) => {
+      if (destroyed || wrap === isWrapped) {
+        return;
+      }
+      // Tracked so a setContent state rebuild keeps the current wrap mode.
+      isWrapped = wrap;
+      view.dispatch({ effects: wrapping.reconfigure(wrap ? EditorView.lineWrapping : []) });
     },
     setDecorations: ({ targetLine, matches = [], currentMatch }) => {
       if (destroyed) {

@@ -554,49 +554,35 @@ describe("buildChildCompletionFindings", () => {
     },
   );
 
-  it("hard-bounds each child result and the aggregate parent prompt", () => {
-    const findings = buildChildCompletionFindings(
-      Array.from({ length: 8 }, (_, index) => ({
-        childSessionKey: `agent:main:subagent:${index}`,
-        task: `worker ${index}`,
-        createdAt: index,
-        completion: { resultText: "🚀".repeat(60_000) },
-        execution: { outcome: { status: "ok" as const } },
-      })),
+  it("retains complete results and failures in chronological parent-visible findings", () => {
+    const result = `${"<🚀>".repeat(300)}-required-tail`;
+    const children = Array.from({ length: 4 }, (_, index) => ({
+      childSessionKey: `agent:main:subagent:${index}`,
+      task: `child task ${index}`,
+      createdAt: index,
+      completion: { resultText: `${result}-${index}` },
+      execution: {
+        outcome:
+          index === 3
+            ? { status: "error" as const, error: "Permission required." }
+            : { status: "ok" as const },
+      },
+    }));
+    const findings = buildChildCompletionFindings(children.toReversed());
+    const results = Array.from(
+      findings?.matchAll(/Child result[^\n]*\n<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/g) ?? [],
+      (match) => match[1],
     );
 
-    expect(findings).toBeDefined();
-    expect(findings!.length).toBeLessThanOrEqual(4_096);
-    expect(findings).toContain("status: ok");
-    expect(findings).toContain("[child result truncated]");
-    expect(findings).toContain("additional child completion result");
-    expect(findings).toContain("</prompt-data>");
-    for (const character of findings ?? "") {
-      const code = character.charCodeAt(0);
-      expect(character.length > 1 || code < 0xd800 || code > 0xdfff).toBe(true);
-    }
+    expect(results).toEqual(
+      children.map((_, index) => `${"&lt;🚀&gt;".repeat(300)}-required-tail-${index}`),
+    );
+    expect(findings).toContain("status: error: Permission required.");
+    expect(findings).not.toContain("[child result truncated]");
+    expect(findings).not.toContain("additional child completion result");
   });
 
-  it("bounds a single child result's escaped output with a visible marker", () => {
-    const findings = buildChildCompletionFindings([
-      {
-        childSessionKey: "agent:main:subagent:angle-dense",
-        task: "angle-dense result",
-        createdAt: 1,
-        completion: { resultText: `${"<".repeat(6_000)}-tail` },
-        execution: { outcome: { status: "ok" } },
-      },
-    ]);
-
-    const block = findings?.match(
-      /Child result[^\n]*\n<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/,
-    )?.[1];
-    expect(block).toBeDefined();
-    expect(block!.length).toBeLessThanOrEqual(512);
-    expect(block!.endsWith("[child result truncated]")).toBe(true);
-  });
-
-  it("sanitizes child results before applying their escaped output budget", () => {
+  it("sanitizes control characters without losing the visible child result", () => {
     const findings = buildChildCompletionFindings([
       {
         childSessionKey: "agent:main:subagent:control-prefix",
@@ -608,88 +594,26 @@ describe("buildChildCompletionFindings", () => {
     ]);
 
     expect(findings).toContain("useful child result");
-    expect(findings).not.toContain("[child result truncated]");
+    expect(findings).not.toContain("\u0000");
   });
 
-  it("retains a later actionable failure when earlier children exceed the remaining budget", () => {
-    // Bounding each child's escaped output (this fix) shrank a single
-    // oversized child from ~4x the 512-char budget down to ~512, so it now
-    // takes 7 oversized successes (not 2) to pressure the 4096-char
-    // aggregate cap in buildChildCompletionFindings.
-    const findings = buildChildCompletionFindings([
-      ...Array.from({ length: 7 }, (_, index) => ({
-        childSessionKey: `agent:main:subagent:success-${index}`,
-        task: `large result ${index + 1}`,
-        createdAt: index + 1,
-        completion: { resultText: "<".repeat(100_000) },
-        execution: { outcome: { status: "ok" as const } },
-      })),
-      {
-        childSessionKey: "agent:main:subagent:failure",
-        task: "later actionable failure",
-        createdAt: 8,
-        completion: { resultText: "Permission required." },
-        execution: {
-          outcome: { status: "error", error: "Writable session authorization required." },
-        },
-      },
-    ]);
-
-    expect(findings!.length).toBeLessThanOrEqual(4_096);
-    expect(findings).toContain("large result 1");
-    expect(findings).toContain("later actionable failure");
-    expect(findings).toContain("status: error: Writable session authorization required.");
-    expect(findings).toContain("additional child completion results omitted");
-  });
-
-  it("prioritizes an oversized failed completion over a competing oversized success", () => {
-    // Five separately quoted titles/results fit the aggregate cap; an
-    // oversized failure appended after them must still win its slot,
-    // displacing the lowest-priority (chronologically last) success.
-    const findings = buildChildCompletionFindings([
-      ...Array.from({ length: 5 }, (_, index) => ({
-        childSessionKey: `agent:main:subagent:success-${index}`,
-        task: `large result ${index + 1}`,
-        createdAt: index + 1,
-        completion: { resultText: "<".repeat(100_000) },
-        execution: { outcome: { status: "ok" as const } },
-      })),
-      {
-        childSessionKey: "agent:main:subagent:failure",
-        task: "later oversized failure",
-        createdAt: 100,
-        completion: { resultText: "<".repeat(100_000) },
-        execution: {
-          outcome: { status: "error", error: "Writable session authorization required." },
-        },
-      },
-    ]);
-
-    expect(findings!.length).toBeLessThanOrEqual(4_096);
-    expect(findings).toContain("later oversized failure");
-    expect(findings).toContain("status: error: Writable session authorization required.");
-    expect(findings).not.toContain("large result 5");
-    expect(findings).toContain("[1 additional child completion result omitted");
-  });
-
-  it("keeps escaped child data and oversized failure metadata inside the same hard cap", () => {
+  it("bounds failure metadata while preserving the complete escaped child result", () => {
     const findings = buildChildCompletionFindings([
       {
         childSessionKey: "agent:main:subagent:child",
         label: "L".repeat(20_000),
         task: "child task",
         createdAt: 1,
-        completion: { resultText: "<".repeat(100_000) },
+        completion: { resultText: `${"<".repeat(2_000)}-required-tail` },
         execution: { outcome: { status: "error", error: "E".repeat(20_000) } },
       },
     ]);
+    const title = findings?.match(/Child task[^\n]*\n<prompt-data>\n([^\n]*)\n/)?.[1];
+    const status = findings?.match(/^status: (.*)$/m)?.[1];
 
-    expect(findings).toBeDefined();
-    expect(findings!.length).toBeLessThanOrEqual(4_096);
-    expect(findings).toContain("status: error:");
-    expect(findings).toContain("&lt;");
-    expect(findings).toContain("[child result truncated]");
-    expect(findings).toContain("</prompt-data>");
+    expect(title).toBe(`${"L".repeat(255)}…`);
+    expect(status).toBe(`error: ${"E".repeat(248)}…`);
+    expect(findings).toContain(`${"&lt;".repeat(2_000)}-required-tail\n</prompt-data>`);
   });
 
   it("does not convert ANNOUNCE_SKIP child completions into no-output findings", () => {

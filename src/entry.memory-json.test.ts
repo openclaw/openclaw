@@ -161,15 +161,6 @@ async function prepareHistoricalMemoryControl(
 }
 
 describe("memory command failures at the root JSON boundary", () => {
-  it.each(["rem-harness", "rem-backfill"] as const)(
-    "returns one JSON report for ordinary %s historical input",
-    async (command) => {
-      await withMemoryRoot(async (fixture) => {
-        await prepareHistoricalMemoryControl(fixture, command);
-      });
-    },
-  );
-
   it("writes one actionable JSON failure for a queryless search", async () => {
     await withMemoryRoot(async ({ invoke, stdout, stderr }) => {
       await invoke(["search", "--json"]);

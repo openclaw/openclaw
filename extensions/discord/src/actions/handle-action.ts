@@ -367,6 +367,7 @@ export async function handleDiscordMessageAction(
         before: readStringParam(params, "before"),
         after: readStringParam(params, "after"),
         around: readStringParam(params, "around"),
+        messageId: readStringParam(params, "messageId"),
       },
       cfg,
       actionOptions,

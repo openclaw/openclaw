@@ -402,7 +402,7 @@ export function createPlacementFailureActions(deps: {
       environment.error === STALE_WORKER_BUILD_REASON &&
       environment.leaseId === null &&
       !placements
-        .listPendingWorkspaceResults()
+        .listPendingWorkspaceResults(placement.sessionId)
         .some((result) => result.sessionId === placement.sessionId)
     ) {
       // Retained conflict reports and staged refs survive redispatch; only pending results

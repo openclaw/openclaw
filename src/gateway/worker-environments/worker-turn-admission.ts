@@ -43,7 +43,7 @@ export async function waitForPendingWorkerResult(params: {
   if (
     !params.placements.get(params.sessionId)?.turnClaim &&
     params.placements
-      .listPendingWorkspaceResults()
+      .listPendingWorkspaceResults(params.sessionId)
       .some((pending) => pending.sessionId === params.sessionId)
   ) {
     throw new Error(
@@ -319,7 +319,7 @@ export async function claimWorkerTurn(params: {
       throw error;
     }
     const resultIsReconciling = params.placements
-      .listPendingWorkspaceResults()
+      .listPendingWorkspaceResults(params.identity.sessionId)
       .some(
         (pending) =>
           activeClaim?.owner === "worker" &&

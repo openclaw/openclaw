@@ -21,6 +21,7 @@ import {
 import {
   shouldRebuildSessionTranscriptIndexSynchronously,
   SYNC_REBUILD_MAX_BYTES,
+  SYNC_REBUILD_MAX_ROWS,
 } from "./session-transcript-index.js";
 import { transcriptMessage } from "./transcript-message.test-support.js";
 
@@ -202,6 +203,44 @@ it.each(["incoming", "stored"])(
           source === "incoming" ? [event] : [],
         ),
       ).toBe(false);
+    } finally {
+      db.close();
+    }
+  },
+);
+
+it.each([
+  { incomingRows: 0, storedRows: SYNC_REBUILD_MAX_ROWS, synchronous: true },
+  { incomingRows: 0, storedRows: SYNC_REBUILD_MAX_ROWS * 2, synchronous: false },
+  { incomingRows: 1, storedRows: SYNC_REBUILD_MAX_ROWS - 1, synchronous: true },
+  { incomingRows: 1, storedRows: SYNC_REBUILD_MAX_ROWS * 2, synchronous: false },
+  { incomingRows: SYNC_REBUILD_MAX_ROWS + 1, storedRows: 1, synchronous: false },
+])(
+  "bounds rebuild preflight with $storedRows stored and $incomingRows incoming rows",
+  ({ incomingRows, storedRows, synchronous }) => {
+    const db = openNodeSqliteDatabase(":memory:");
+    try {
+      db.exec("CREATE TABLE transcript_events (session_id TEXT, event_json TEXT)");
+      const event = { message: { role: "user", content: "small" } };
+      const serialized = JSON.stringify(event);
+      const insert = db.prepare("INSERT INTO transcript_events VALUES (?, ?)");
+      for (let index = 0; index < storedRows; index++) {
+        insert.run("budget", serialized);
+      }
+      let sizedRows = 0;
+      db.function("octet_length", (value) => {
+        sizedRows++;
+        return Buffer.byteLength(String(value));
+      });
+      expect(
+        shouldRebuildSessionTranscriptIndexSynchronously(
+          db,
+          "budget",
+          Array.from({ length: incomingRows }, () => event),
+        ),
+      ).toBe(synchronous);
+      const remainingRows = SYNC_REBUILD_MAX_ROWS - incomingRows;
+      expect(sizedRows).toBeLessThanOrEqual(Math.max(0, remainingRows + 1));
     } finally {
       db.close();
     }

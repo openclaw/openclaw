@@ -1,15 +1,153 @@
 import fs from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { resolveGatewayPort } from "../../src/config/paths.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { resolveGatewayUrlOverride } from "../../src/gateway/client-bootstrap.js";
 import { captureFullEnv, withEnvAsync } from "../../src/test-utils/env.js";
+import { createFixtureLifetime } from "./fixture-lifetime.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
+import { createDeferred, withTestTimeout } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 describe("createOpenClawTestInstance acquisition", () => {
+  it.each(["state", "config", "rollback failure"] as const)(
+    "joins and rolls back owner cancellation during %s acquisition",
+    async (stage) => {
+      const controller = new AbortController();
+      const cancelled = new Error("instance acquisition cancelled");
+      const cleanupFailure = new Error("cancelled instance state cleanup failed");
+      const entered = createDeferred();
+      const released = createDeferred();
+      // Deliberate failed rollback must retain this synthetic owner, not the
+      // resource namespace of the runner executing the regression.
+      const lifetimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "instance-cancel-owner-"));
+      const lifetimeOwner = createVitestResourceOwner(lifetimeRoot);
+      const lifetime = createFixtureLifetime(lifetimeRoot);
+      const serverSpy = vi.spyOn(net, "createServer");
+      let root: string | undefined;
+      let reservedPort: number | undefined;
+      let acquired: Awaited<ReturnType<typeof createOpenClawTestInstance>> | undefined;
+      let settled = false;
+      const mkdtemp = fs.mkdtemp;
+      const allocationSpy = vi.spyOn(fs, "mkdtemp").mockImplementation(async (...args) => {
+        const allocated = await mkdtemp(...args);
+        if (args[0].endsWith("instance-owner-cancel-")) {
+          root = await fs.realpath(allocated);
+          const address = serverSpy.mock.results[0]?.value.address();
+          reservedPort = address && typeof address !== "string" ? address.port : undefined;
+          if (stage === "state") {
+            entered.resolve();
+            await released.promise;
+          }
+        }
+        return allocated;
+      });
+      const writeFile = fs.writeFile;
+      const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+        if (
+          stage !== "state" &&
+          root &&
+          args[0] === path.join(root, "home", ".openclaw", "openclaw.json")
+        ) {
+          entered.resolve();
+          await released.promise;
+        }
+        return writeFile(...args);
+      });
+      const rm = fs.rm;
+      const cleanupSpy = vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
+        if (stage === "rollback failure" && args[0] === root) {
+          throw cleanupFailure;
+        }
+        return rm(...args);
+      });
+      // A variable keeps the pre-fix call type-correct while the old owner ignores
+      // these options. The regression must exercise its actual acquisition path.
+      const options = {
+        name: "owner-cancel-acquisition",
+        state: { prefix: "instance-owner-cancel-" },
+        signal: controller.signal,
+        verifyCleanup: lifetime.verifyCleanup,
+      };
+      const acquisition = lifetime.run(async () => {
+        acquired = await createOpenClawTestInstance(options);
+        return acquired;
+      });
+      const outcome = acquisition
+        .then(
+          () => ({ error: undefined }),
+          (error: unknown) => ({ error }),
+        )
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await withTestTimeout(
+          entered.promise,
+          5_000,
+          "instance acquisition did not reach its gate",
+        );
+        controller.abort(cancelled);
+        expect(settled).toBe(false);
+        expect(root).toBeDefined();
+        await expect(fs.stat(root!)).resolves.toBeDefined();
+        released.resolve();
+        const result = await outcome;
+        const drained = await lifetime.cleanup().then(
+          () => ({ error: undefined }),
+          (error: unknown) => ({ error }),
+        );
+        if (stage === "rollback failure") {
+          expect(result.error).toBeInstanceOf(AggregateError);
+          expect((result.error as AggregateError).errors).toEqual([cancelled, cleanupFailure]);
+          expect(drained.error).toBeInstanceOf(AggregateError);
+          expect((drained.error as AggregateError).errors).toContain(cleanupFailure);
+          expect(() => lifetimeOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+          await expect(fs.stat(root!)).resolves.toBeDefined();
+        } else {
+          expect(result.error).toBe(cancelled);
+          expect(drained.error).toBeUndefined();
+          expect(() => lifetimeOwner.assertReleased()).not.toThrow();
+          await expect(fs.stat(root!)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        expect(acquired).toBeUndefined();
+        expect(reservedPort).toBeTypeOf("number");
+        const competitor = net.createServer();
+        try {
+          await new Promise<void>((resolve, reject) => {
+            competitor.once("error", reject);
+            competitor.listen(reservedPort!, "127.0.0.1", resolve);
+          });
+        } finally {
+          if (competitor.listening) {
+            await new Promise<void>((resolve, reject) => {
+              competitor.close((error) => (error ? reject(error) : resolve()));
+            });
+          }
+        }
+      } finally {
+        released.resolve();
+        await outcome;
+        allocationSpy.mockRestore();
+        writeSpy.mockRestore();
+        cleanupSpy.mockRestore();
+        serverSpy.mockRestore();
+        // The unchanged owner can return an instance instead of rejecting; keep
+        // that failing control finite and close its real reserved listener.
+        await acquired?.cleanup();
+        await lifetime.cleanup().catch(() => undefined);
+        if (root) {
+          await fs.rm(root, { recursive: true, force: true });
+        }
+        await fs.rm(lifetimeRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.each(["state", "merge", "serialization", "write", "cleanup"] as const)(
     "cleans up available resources after %s acquisition failure",
     async (stage) => {

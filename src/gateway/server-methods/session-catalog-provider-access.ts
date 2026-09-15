@@ -4,6 +4,9 @@ import {
   type SessionCatalogShareRoute,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { allowsProcessHomeSessionScan } from "../../config/paths.js";
+import { PluginInstanceUnavailableError } from "../../plugins/plugin-instance-error.js";
+import { getPluginValueInstance } from "../../plugins/plugin-instance-scope.js";
+import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types.js";
 import { getPluginRegistryRuntime } from "../../plugins/registry-runtime-binding.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -34,26 +37,134 @@ export function allowProcessHomeFallback(logGateway?: {
 }
 
 // Catalog adapters may scan local databases or invoke external CLIs. Bound the
-// expensive provider operation itself so adding providers cannot multiply the cap.
+// executing provider work itself so adding providers cannot multiply the cap.
 const sessionCatalogListAdmission = new SessionCatalogListAdmission(
   MAX_CONCURRENT_SESSION_CATALOG_LISTS,
   MAX_QUEUED_SESSION_CATALOG_LISTS,
 );
 
+// Publication tails must not retain the source operation's entry snapshot or node hook.
+function createCatalogListCompletionOwner(
+  registerCompletion: SessionCatalogListProviderParams["waitUntil"],
+) {
+  let registrationOpen = true;
+  const completions = new Set<Promise<void>>();
+  return {
+    waitUntil: (completion: Promise<void>) => {
+      if (!registrationOpen) {
+        throw new Error("Session catalog completion registration is closed");
+      }
+      const settled = completion.then(
+        () => undefined,
+        () => undefined,
+      );
+      completions.add(settled);
+      void settled.then(() => completions.delete(settled));
+      registerCompletion?.(completion);
+    },
+    finishRegistration() {
+      registrationOpen = false;
+    },
+    async release(consumer: PluginInstanceConsumer | undefined) {
+      if (!consumer) {
+        return;
+      }
+      // Keep admitted publication callbacks live without delaying the filled result.
+      const released = Promise.all(completions).then(() => consumer.release());
+      try {
+        registerCompletion?.(released);
+      } catch (error) {
+        await released;
+        throw error;
+      }
+    },
+  };
+}
+
+async function runSessionCatalogListSteps(
+  provider: SessionCatalogProvider,
+  createListOperation: NonNullable<SessionCatalogProvider["createListOperation"]>,
+  params: SessionCatalogListProviderParams,
+  diagnostics: ReturnType<typeof startSessionCatalogListDiagnostics>,
+  assertOwnerCurrent: (() => void) | undefined,
+) {
+  const instance = getPluginValueInstance(createListOperation);
+  const registry = resolveSessionCatalogRegistry() ?? undefined;
+  let consumer: PluginInstanceConsumer | undefined;
+  let operation: ReturnType<typeof createListOperation> | undefined;
+  const completionOwner = createCatalogListCompletionOwner(params.waitUntil);
+  const run = <T>(work: () => T): T => (consumer ? consumer.run(work) : work());
+  const assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    assertOwnerCurrent?.();
+    // Custody permits teardown after quiesce, never another source step.
+    if (instance && (!instance.acceptingCalls || instance.owner?.revoked)) {
+      throw new PluginInstanceUnavailableError(instance.pluginId);
+    }
+  };
+  try {
+    return await sessionCatalogListAdmission.runSteps(
+      async () => {
+        assertCurrent();
+        if (!operation) {
+          consumer = instance?.retainConsumer(undefined, registry);
+          diagnostics?.providerStarted();
+          operation = run(() =>
+            createListOperation.call(provider, {
+              ...params,
+              waitUntil: completionOwner.waitUntil,
+            }),
+          );
+        }
+        assertCurrent();
+        const current = operation;
+        const step = await run(() => current.next());
+        assertCurrent();
+        return step.done ? { done: true, value: step.hosts } : step;
+      },
+      params.signal,
+      diagnostics?.timing,
+    );
+  } finally {
+    completionOwner.finishRegistration();
+    try {
+      const closing = operation;
+      if (closing) {
+        run(() => closing.close());
+      }
+    } finally {
+      operation = undefined;
+      const retained = consumer;
+      consumer = undefined;
+      await completionOwner.release(retained);
+    }
+  }
+}
+
 export function listSessionCatalogProvider(
   provider: SessionCatalogProvider,
   params: SessionCatalogListProviderParams,
+  assertOwnerCurrent?: () => void,
 ) {
   const diagnostics = startSessionCatalogListDiagnostics(provider, params.signal);
-  const result = sessionCatalogListAdmission.run(
-    () => {
-      params.signal?.throwIfAborted();
-      diagnostics?.providerStarted();
-      return provider.list(params);
-    },
-    params.signal,
-    diagnostics?.timing,
-  );
+  const createListOperation = provider.createListOperation;
+  const result = createListOperation
+    ? runSessionCatalogListSteps(
+        provider,
+        createListOperation,
+        params,
+        diagnostics,
+        assertOwnerCurrent,
+      )
+    : sessionCatalogListAdmission.run(
+        () => {
+          params.signal?.throwIfAborted();
+          diagnostics?.providerStarted();
+          return provider.list(params);
+        },
+        params.signal,
+        diagnostics?.timing,
+      );
   return diagnostics
     ? result.then(
         (hosts) => {

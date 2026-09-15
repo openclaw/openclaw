@@ -50,8 +50,6 @@ type AgentTaskCompletionInternalEvent = {
 
 type TaskCompletionPromptMode = "plain" | "protected" | "data";
 
-const MAX_TASK_COMPLETION_RESULT_ESCAPED_CHARS = 6_000;
-const TASK_COMPLETION_RESULT_TRUNCATION_NOTICE = "\n[child result truncated]";
 // Status labels embed provider/lifecycle error text ("failed: <cause>",
 // "timed out: <cause>"), which is caller-supplied and unbounded. Keep the
 // single status line short so a large error cannot crowd out the child result
@@ -130,14 +128,10 @@ function sanitizeMediaDirectiveValue(value: string, raw = false): string | null 
 }
 
 function formatChildResultDataBlock(value: string): string {
-  // The event retains the authoritative full result; only model-visible
-  // projections share this escaped-output budget.
   return (
     wrapPromptDataBlock({
       label: "Child result",
       text: value,
-      maxEscapedChars: MAX_TASK_COMPLETION_RESULT_ESCAPED_CHARS,
-      truncationMarker: TASK_COMPLETION_RESULT_TRUNCATION_NOTICE,
     }) || "Child result: (no output)"
   );
 }
@@ -180,17 +174,7 @@ function formatTaskCompletionEvent(
     },
   );
   const result =
-    mode === "data"
-      ? truncateWithMarker(
-          event.result || "(no output)",
-          MAX_TASK_COMPLETION_RESULT_ESCAPED_CHARS,
-          {
-            marker: TASK_COMPLETION_RESULT_TRUNCATION_NOTICE,
-            reserve: TASK_COMPLETION_RESULT_TRUNCATION_NOTICE.length,
-            trimEnd: true,
-          },
-        )
-      : formatChildResultDataBlock(event.result);
+    mode === "data" ? event.result || "(no output)" : formatChildResultDataBlock(event.result);
   const modelRouteChange = normalizeAgentRunRouteChange(event.modelRouteChange);
   const attachmentLines = formatGeneratedAttachmentLines(event.attachments);
   const mediaDirectiveLines = formatGeneratedMediaDirectiveLines(event, mode === "data");

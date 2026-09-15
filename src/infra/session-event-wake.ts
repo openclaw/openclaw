@@ -16,6 +16,10 @@ type WakeHandler = (
 ) => Promise<SessionEventWakeResult>;
 export type SessionEventWakeWaitOptions = {
   abortSignal?: AbortSignal;
+  /** Called when the queue starts an attempt for this waiter. */
+  onAttemptStarted?: () => void;
+  /** Called whenever this waiter enters the queue, including retained retries. */
+  onQueued?: () => void;
   /** Detach this waiter while the queue retains the wake at its retry deadline. */
   stopWaitingOnRetry?: (
     result: Extract<SessionEventWakeResult, { status: "skipped" }>,
@@ -25,6 +29,8 @@ export type SessionEventWakeWaitOptions = {
 type Settlement = {
   active: boolean;
   settle: (result: SessionEventWakeResult) => void;
+  onAttemptStarted?: SessionEventWakeWaitOptions["onAttemptStarted"];
+  onQueued?: SessionEventWakeWaitOptions["onQueued"];
   stopWaitingOnRetry?: SessionEventWakeWaitOptions["stopWaitingOnRetry"];
 };
 type PendingWake = SessionEventWakeRequest & {
@@ -160,6 +166,11 @@ function createSessionEventWakeRuntime() {
     group[slot] = group[slot] ? merge(group[slot], wake) : wake;
     group.blockedUntil = Math.max(group.blockedUntil, blockedUntil);
     pending.set(key, group);
+    for (const entry of wake.settlements) {
+      if (entry.active) {
+        entry.onQueued?.();
+      }
+    }
     return key;
   }
 
@@ -321,6 +332,11 @@ function createSessionEventWakeRuntime() {
         try {
           result = await runWithGatewayDetachedWorkAdmission(() => {
             signal.throwIfAborted();
+            for (const entry of wake.settlements) {
+              if (entry.active) {
+                entry.onAttemptStarted?.();
+              }
+            }
             // Subscribe before calling the handler: it can synchronously replace its owner.
             const aborted = new Promise<never>((_resolve, reject) => {
               onAbort = () =>
@@ -516,6 +532,8 @@ function createSessionEventWakeRuntime() {
       const signal = lifecycle?.abortSignal;
       const settlement: Settlement = {
         active: true,
+        onAttemptStarted: lifecycle?.onAttemptStarted,
+        onQueued: lifecycle?.onQueued,
         stopWaitingOnRetry: lifecycle?.stopWaitingOnRetry,
         settle: (result) => {
           if (settlement.active) {

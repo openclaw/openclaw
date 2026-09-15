@@ -97,6 +97,8 @@ describe("session catalog provider diagnostics", () => {
           providerInvoked: true,
           admissionWaitMs: 2_000,
           providerElapsedMs: 400,
+          stepCount: 1,
+          admittedStepMs: 400,
           completionDelayMs: 0,
           elapsedMs: 2_400,
           outcome: "resolved",
@@ -116,6 +118,8 @@ describe("session catalog provider diagnostics", () => {
         )?.fields,
       ).toMatchObject({
         providerElapsedMs: 2_100,
+        stepCount: 1,
+        admittedStepMs: 2_100,
         completionDelayMs: 400,
       });
       expect(JSON.stringify(records)).not.toContain(privateText);

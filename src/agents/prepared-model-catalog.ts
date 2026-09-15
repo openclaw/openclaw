@@ -44,6 +44,8 @@ import {
 import { normalizeThinkingCatalogProviders } from "./thinking-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
+export { withPreparedModelRuntimeReadBatch } from "./prepared-model-runtime.owner.js";
+
 export type LoadPreparedModelCatalogParams = {
   agentId?: string;
   agentDir?: string;

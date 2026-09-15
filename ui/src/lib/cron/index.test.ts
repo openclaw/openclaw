@@ -563,7 +563,7 @@ describe("cron controller", () => {
     });
   });
 
-  it("sends explicit null model/thinking clears when blanking stored overrides on edit", async () => {
+  it("sends explicit null clears when blanking stored overrides on edit", async () => {
     const { call } = await createCronSubmitHarness("job-clear-overrides", {
       method: "cron.update",
       jobs: [
@@ -574,6 +574,7 @@ describe("cron controller", () => {
             message: "do work",
             model: "openai/gpt-5.5",
             thinking: "high",
+            timeoutSeconds: 90,
           },
         } as unknown as CronState["cronJobs"][number],
       ],
@@ -583,6 +584,7 @@ describe("cron controller", () => {
         payloadText: "do work",
         payloadModel: "",
         payloadThinking: "",
+        timeoutSeconds: "",
       },
     }).submit();
 
@@ -591,6 +593,7 @@ describe("cron controller", () => {
       message: "do work",
       model: null,
       thinking: null,
+      timeoutSeconds: null,
     });
   });
 

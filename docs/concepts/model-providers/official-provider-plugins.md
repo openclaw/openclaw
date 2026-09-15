@@ -22,11 +22,13 @@ Official provider plugins publish their own model catalog rows. These providers 
 - CLI: `openclaw onboard --auth-choice openai-api-key`
 - Direct OpenAI API-key Responses requests default to `"sse"`.
 - Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, `"websocket-cached"`, or `"auto"`). Cached WebSockets reuse the session connection and send only new input with `previous_response_id` when history still matches.
+- The `"sse"` transport also supports HTTP continuation for a native `openai/openai-responses` model at the exact public `https://api.openai.com/v1` base URL (ChatGPT/Codex `openai-chatgpt-responses` routes are excluded and deliberately stay `store: false`): OpenClaw caches the request per session+credential and, when the next turn's history is a strict extension, sends only the new input plus `previous_response_id` instead of the full growing history. A rejected/expired `previous_response_id` (Zero Data Retention, TTL eviction) retries once, same turn, with the full request.
+  - For a custom `openai-responses` model, set `models.providers.<provider>.models[].compat.supportsResponsesContinuation: true` after verifying that its endpoint supports stored responses and `previous_response_id`. This enables `store: true` for that model, allowing the backend to retain requests even when a turn cannot continue. Other custom models remain stateless. `compat.supportsStore: false` disables this opt-in. The `azure-openai-responses` and ChatGPT/Codex transports, plus the `azure-openai` and `azure-openai-responses` provider IDs, are excluded.
 - Set an explicit OpenAI API service tier with `params.serviceTier` or `params.service_tier`; Fast mode (formerly Priority processing) uses `service_tier=priority`.
 - On native public OpenAI and ChatGPT/Codex Responses requests, precedence is payload/transport `service_tier`, then a valid explicit model param, then the fast-mode default.
 - `/fast` and valid `params.fastMode` / `params.fast_mode` values are shared agent-runtime controls; on direct embedded `openai/*` Responses requests they supply `service_tier=priority` only when no higher-precedence tier exists.
 - Hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`) apply only on native OpenAI traffic to `api.openai.com`, not generic OpenAI-compatible proxies
-- Native OpenAI routes also keep Responses `store`, prompt-cache hints, and OpenAI reasoning-compat payload shaping; proxy routes do not
+- Native OpenAI provider-managed storage, prompt-cache hints, and reasoning payload shaping are unchanged. Raw native transport calls retain `store: false` by default. The custom-model continuation opt-in enables storage only; it does not enable prompt-cache hints or server compaction.
 - `openai/gpt-5.3-codex-spark` is available only through ChatGPT/Codex OAuth; direct OpenAI API-key and Azure API-key routes reject it
 
 ```json5

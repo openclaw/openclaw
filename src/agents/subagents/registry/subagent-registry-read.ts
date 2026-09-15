@@ -28,6 +28,7 @@ import {
   getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead,
+  getSubagentRunsSnapshotForSessions,
 } from "./subagent-registry-state.js";
 import { loadSubagentRunsForChildSessionFromSqlite } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -102,7 +103,7 @@ export function countActiveDescendantRuns(
   requesterAgentId?: string,
 ): number {
   return countActiveDescendantRunsFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
+    getSubagentRunsSnapshotForSessions(subagentRuns, [rootSessionKey]),
     rootSessionKey,
     requesterAgentId,
   );
@@ -119,7 +120,7 @@ export function listDescendantRunsForRequester(rootSessionKey: string): Subagent
 /** Counts pending descendant runs below a requester/session tree. */
 export function countPendingDescendantRuns(rootSessionKey: string): number {
   return countPendingDescendantRunsFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
+    getSubagentRunsSnapshotForSessions(subagentRuns, [rootSessionKey]),
     rootSessionKey,
   );
 }
@@ -131,7 +132,7 @@ export function hasDescendantRunAwaitingSettle(
   requesterAgentId?: string,
 ): boolean {
   return hasDescendantRunAwaitingSettleFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
+    getSubagentRunsSnapshotForSessions(subagentRuns, [rootSessionKey]),
     rootSessionKey,
     excludeRunId,
     requesterAgentId,

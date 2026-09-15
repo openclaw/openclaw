@@ -2,7 +2,7 @@ import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtim
 import { escapeHtml, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
-import { parsePostContent } from "./post.js";
+import { renderPostContent } from "./post.js";
 
 export function formatFeishuMediaContent(
   parsed: Record<string, unknown>,
@@ -29,7 +29,7 @@ function formatSubMessageContent(content: string, contentType: string): string {
       case "text":
         return parsed.text || content;
       case "post":
-        return parsePostContent(content).textContent;
+        return renderPostContent(parsed).textContent;
       case "interactive":
         return parseInteractiveCardContent(parsed);
       case "image":

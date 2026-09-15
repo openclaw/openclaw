@@ -1,8 +1,10 @@
-import { sql } from "kysely";
+import type { DatabaseSync } from "node:sqlite";
+import { sql, type RawBuilder } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   prepareSqliteQuerySync,
+  prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import {
@@ -33,11 +35,26 @@ export type VisibleHistoryProjection = {
   total: number;
 };
 
-function selectVisibleHistoryBoundaries(
+type HistoryBoundaryQueryShape = "markers" | "branch" | "reset";
+
+function resolveHistoryBoundaryQueryShape(
   projection: CurrentTranscriptProjection,
   boundaryActivePosition: number | undefined,
+): HistoryBoundaryQueryShape {
+  return boundaryActivePosition !== undefined
+    ? "reset"
+    : projection.state.activeEventCount >= projection.state.indexedSeq
+      ? "markers"
+      : "branch";
+}
+
+function selectVisibleHistoryBoundaries(
+  database: CurrentTranscriptProjection["database"],
+  sessionId: string | RawBuilder<string>,
+  shape: HistoryBoundaryQueryShape,
+  boundaryActivePosition: number | RawBuilder<number> | undefined,
 ) {
-  const db = getActiveTranscriptKysely(projection.database);
+  const db = getActiveTranscriptKysely(database);
   const identity = db
     .selectFrom("transcript_event_identities")
     .select(["session_id", "event_id", "seq", "event_type"])
@@ -53,8 +70,7 @@ function selectVisibleHistoryBoundaries(
   // The zero-based sequence/count bound permits at most one inactive row;
   // short branches must not scan a much larger stored marker history.
   const query =
-    boundaryActivePosition === undefined &&
-    projection.state.activeEventCount >= projection.state.indexedSeq
+    shape === "markers"
       ? db
           .selectFrom(identity)
           .crossJoin("session_transcript_active_events as active")
@@ -75,7 +91,7 @@ function selectVisibleHistoryBoundaries(
               .onRef("event.session_id", "=", "active.session_id")
               .onRef("event.seq", "=", "active.event_seq"),
           );
-  return query.where("active.session_id", "=", projection.resolved.sessionId).where((eb) => {
+  return query.where("active.session_id", "=", sessionId).where((eb) => {
     const type = eb.ref("identity.event_type");
     const event = eb.ref("event.event_json");
     const activeEventSeq = eb.ref("active.event_seq");
@@ -97,17 +113,57 @@ function selectVisibleHistoryBoundaries(
   });
 }
 
+type HistoryCountParameters = { sessionId: string; boundaryActivePosition: number };
+
+const historyCountReaders = new WeakMap<
+  DatabaseSync,
+  Map<
+    HistoryBoundaryQueryShape,
+    (params: HistoryCountParameters) => { event_count: number } | undefined
+  >
+>();
+
+function getHistoryCountReader(
+  database: CurrentTranscriptProjection["database"],
+  shape: HistoryBoundaryQueryShape,
+) {
+  let readers = historyCountReaders.get(database.db);
+  if (!readers) {
+    readers = new Map();
+    historyCountReaders.set(database.db, readers);
+  }
+  let read = readers.get(shape);
+  if (!read) {
+    // Retain compilation only; each snapshot supplies its current session and reset bound.
+    read = prepareSqliteQueryTakeFirstSync<HistoryCountParameters, { event_count: number }>(
+      database.db,
+      (parameter) =>
+        selectVisibleHistoryBoundaries(
+          database,
+          parameter((params) => params.sessionId),
+          shape,
+          shape === "reset" ? parameter((params) => params.boundaryActivePosition) : undefined,
+        ).select((eb) => eb.fn.countAll<number>().as("event_count")),
+    );
+    readers.set(shape, read);
+  }
+  return read;
+}
+
 export function resolveVisibleHistoryEventCount(projection: CurrentTranscriptProjection): number {
   if (projection.state.activeEventCount === projection.state.activeMessageCount) {
     return projection.state.activeMessageCount;
   }
   const visibleMessages = resolveVisibleMessagePositions(projection);
-  const row = executeSqliteQueryTakeFirstSync(
-    projection.database.db,
-    selectVisibleHistoryBoundaries(projection, visibleMessages.boundaryActivePosition).select(
-      (eb) => eb.fn.countAll<number>().as("event_count"),
-    ),
+  const shape = resolveHistoryBoundaryQueryShape(
+    projection,
+    visibleMessages.boundaryActivePosition,
   );
+  const readCount = getHistoryCountReader(projection.database, shape);
+  const row = readCount({
+    sessionId: projection.resolved.sessionId,
+    boundaryActivePosition: visibleMessages.boundaryActivePosition ?? 0,
+  });
   return visibleMessages.total + (row?.event_count ?? 0);
 }
 
@@ -128,7 +184,12 @@ export function resolveVisibleHistoryProjection(
   const db = getActiveTranscriptKysely(projection.database);
   const rows = executeSqliteQuerySync(
     projection.database.db,
-    selectVisibleHistoryBoundaries(projection, visibleMessages.boundaryActivePosition)
+    selectVisibleHistoryBoundaries(
+      projection.database,
+      projection.resolved.sessionId,
+      resolveHistoryBoundaryQueryShape(projection, visibleMessages.boundaryActivePosition),
+      visibleMessages.boundaryActivePosition,
+    )
       .leftJoin("session_transcript_active_events as following", (join) =>
         join
           .onRef("following.session_id", "=", "active.session_id")

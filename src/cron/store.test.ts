@@ -473,7 +473,7 @@ describe("cron store", () => {
     await saveCronStore(storePath, store);
     const database = openOpenClawStateDatabase().db;
     database.exec(
-      "CREATE TEMP TRIGGER fail_cron_quarantine_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron update rejected'); END",
+      "CREATE TRIGGER fail_cron_quarantine_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron update rejected'); END",
     );
     try {
       await expect(
@@ -505,7 +505,7 @@ describe("cron store", () => {
     saveCronQuarantinedJobs({ storePath, nowMs: 123, entries: [entry] });
     const database = openOpenClawStateDatabase().db;
     database.exec(
-      "CREATE TEMP TRIGGER fail_cron_recovery_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron recovery rejected'); END",
+      "CREATE TRIGGER fail_cron_recovery_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron recovery rejected'); END",
     );
     try {
       await expect(

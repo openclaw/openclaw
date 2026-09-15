@@ -21,7 +21,7 @@ import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { parseMergeForwardContent } from "./message-content.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
-import { parsePostContent } from "./post.js";
+import { renderPostContent } from "./post.js";
 import { resolveFeishuReceiptKind, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
@@ -231,7 +231,7 @@ function parseFeishuMessageContent(
   }
 
   if (msgType === "post") {
-    return parsePostContent(rawContent).textContent;
+    return renderPostContent(parsed).textContent;
   }
 
   if (msgType === "interactive") {

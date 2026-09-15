@@ -347,7 +347,7 @@ type CliPreparedBackend = {
     adoptProcessToken: (processToken: string) => void;
     /** Revoke the bearer when the child process that holds it exits. */
     revokeProcessToken: () => void;
-    activate: (captureKey: string) => void;
+    activate: (captureKey: string, assertCurrent: () => void) => void;
     deactivate: (captureKey: string) => void;
     captureNativeTools?: (tools: unknown) => void;
   };

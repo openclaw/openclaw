@@ -1,6 +1,8 @@
 // Cron service job tests cover job creation, updates, and runtime scheduling.
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
+import { normalizeCronJobPatch } from "./normalize.js";
+import { DEFAULT_CRON_SCRIPT_TIMEOUT_SECONDS } from "./script-payload.js";
 import {
   computeJobNextRunAtMs,
   computeJobPreviousRunAtOrBeforeMs,
@@ -49,6 +51,35 @@ describe("applyJobPatch", () => {
       ...overrides,
     };
   };
+
+  it.each([
+    { kind: "agentTurn", message: "Synthetic reminder" },
+    { kind: "command", argv: ["printf", "synthetic-proof"] },
+    { kind: "script", script: "return { output: 'synthetic-proof' };" },
+  ] satisfies CronJob["payload"][])(
+    "restores the default $kind timeout through a normalized update",
+    (payload) => {
+      const job = createIsolatedAgentTurnJob(
+        "timeout-job",
+        { mode: "none" },
+        {
+          payload: { ...payload, timeoutSeconds: 30 },
+        },
+      );
+      const patch = normalizeCronJobPatch({
+        payload: { kind: payload.kind, timeoutSeconds: null },
+      });
+      if (!patch) {
+        throw new Error("expected normalized patch");
+      }
+      applyJobPatch(job, patch);
+      if (job.payload.kind === "script") {
+        expect(job.payload.timeoutSeconds).toBe(DEFAULT_CRON_SCRIPT_TIMEOUT_SECONDS);
+      } else {
+        expect(job.payload).not.toHaveProperty("timeoutSeconds");
+      }
+    },
+  );
 
   const switchToMainPatch = (): CronJobPatch => ({
     sessionTarget: "main",

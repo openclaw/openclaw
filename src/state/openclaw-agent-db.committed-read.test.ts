@@ -1,17 +1,19 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import * as sqliteRuntime from "../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import * as agentDatabaseIdentity from "./openclaw-agent-db-identity.js";
 import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   closeOpenClawAgentDatabaseByPath,
-  listOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db.js";
+import { listOpenClawAgentDatabasesForTest } from "./openclaw-agent-db.test-support.js";
 
 const stampQuery = "SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'";
 
@@ -39,6 +41,56 @@ function inWriterTransaction<T>(db: DatabaseSync, operation: () => T): T {
 }
 
 describe("committed agent database reads", () => {
+  it("closes a newly opened reader when post-open identity validation throws", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const options = { agentId: "main", env };
+      const owner = openOpenClawAgentDatabase(options);
+      const readers: DatabaseSync[] = [];
+      const failure = Object.assign(new Error("synthetic post-open identity failure"), {
+        code: "EACCES",
+      });
+      const openDatabase = sqliteRuntime.openNodeSqliteDatabase;
+      const open = vi
+        .spyOn(sqliteRuntime, "openNodeSqliteDatabase")
+        .mockImplementation((location, settings) => {
+          const db = openDatabase(location, settings);
+          if (location === owner.path && settings?.readOnly) {
+            readers.push(db);
+          }
+          return db;
+        });
+      const isPathCurrent = agentDatabaseIdentity.isOpenClawAgentDatabasePathCurrent;
+      const identity = vi
+        .spyOn(agentDatabaseIdentity, "isOpenClawAgentDatabasePathCurrent")
+        .mockImplementation((database) => {
+          // Opening captures identity first; fail only its later ownership check.
+          if (readers.length > 0 && database.db === owner.db) {
+            throw failure;
+          }
+          return isPathCurrent(database);
+        });
+      const read = vi.fn();
+      try {
+        inWriterTransaction(owner.db, () => {
+          expect(() => withOpenClawAgentDatabaseReadOnly(read, options)).toThrow(failure);
+          expect(read).not.toHaveBeenCalled();
+          expect(readers).toHaveLength(1);
+          expect(readers[0]?.isOpen).toBe(false);
+          expect(owner.db.isOpen).toBe(true);
+          expect(owner.db.isTransaction).toBe(true);
+        });
+      } finally {
+        identity.mockRestore();
+        open.mockRestore();
+        for (const reader of readers) {
+          if (reader.isOpen) {
+            reader.close();
+          }
+        }
+      }
+    });
+  });
+
   it("reuses a separate reader while observing committed changes between writer transactions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const options = { agentId: "main", env };

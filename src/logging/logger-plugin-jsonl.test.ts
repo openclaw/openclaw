@@ -228,6 +228,27 @@ it("registered plugin service logger preserves default credential and benign fie
   expect(JSON.stringify(result.console)).not.toContain("opaque-value");
 });
 
+it.each([
+  { key: "Kam_abcdefghij", expected: "K***", registered: undefined, masked: "am_abcdefghij" },
+  {
+    key: "https://abc def:opaque@host.invalid",
+    expected: "https://***:***@host.invalid",
+    registered: "abc def",
+    masked: "opaque",
+  },
+])("registered plugin logger preserves serialized property-name masks: $key", async (fixture) => {
+  if (fixture.registered) {
+    registerSecretValueForRedaction(fixture.registered);
+  }
+  const result = await logFromPlugin("ordinary record", { [fixture.key]: "benign" });
+  for (const record of [result.records[0]["1"], result.console[0]]) {
+    expect(record[fixture.expected]).toBe("benign");
+    expect(Object.hasOwn(record, fixture.key)).toBe(false);
+  }
+  expect(JSON.stringify(result.records)).not.toContain(fixture.masked);
+  expect(JSON.stringify(result.console)).not.toContain(fixture.masked);
+});
+
 it.each([":", "="])(
   "registered plugin logger masks line-separated JWT header diagnostics (%s)",
   async (separator) => {

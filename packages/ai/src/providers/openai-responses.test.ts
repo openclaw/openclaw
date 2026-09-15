@@ -166,7 +166,7 @@ describe("OpenAI Responses provider", () => {
 
     expect(result.stopReason).toBe("error");
     for (const params of [transportParams, openAiMockState.params[0]]) {
-      expect(params).toMatchObject({ max_output_tokens: 16, store: false });
+      expect(params).toMatchObject({ store: false, max_output_tokens: 16 });
     }
     expect(openAiMockState.requestOptions[0]).toMatchObject({ maxRetries: 0 });
   });

@@ -9,6 +9,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { createMemoryChunkWriter, type IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import {
@@ -16,6 +17,8 @@ import {
   memoryTableExists,
 } from "./manager-vector-rebuild-state.js";
 import { createMemoryVectorWriter } from "./manager-vector-write.js";
+
+const MAX_VECTOR_POINT_DELETES = 32;
 
 export type MemorySourceIndexReplacement = {
   entry: { path: string; hash: string; mtimeMs: number; size: number };
@@ -34,7 +37,7 @@ type SourceIndexDatabase = {
     mtime: number;
     size: number;
   };
-  memory_index_chunks: { path: string; source: MemorySource };
+  memory_index_chunks: { id: string; path: string; source: MemorySource };
 };
 
 type SourceIndexState = {
@@ -145,13 +148,35 @@ export class MemorySourceIndexKernel {
         markMemoryVectorRebuildRequired(this.database);
       } else {
         try {
-          this.database
-            .prepare(
-              `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id IN (
-               SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?
-             )`,
-            )
-            .run(pathname, source);
+          // Point lookups avoid scanning unrelated vectors for small sources;
+          // larger batches use one scan to bound native calls. Keep either path
+          // atomic before recording rebuild debt on a caught failure.
+          runSqliteImmediateTransactionSync(this.database, () => {
+            const rows = executeSqliteQuerySync(
+              this.database,
+              getNodeSqliteKysely<SourceIndexDatabase>(this.database)
+                .selectFrom("memory_index_chunks")
+                .select("id")
+                .where("path", "=", pathname)
+                .where("source", "=", source)
+                .limit(MAX_VECTOR_POINT_DELETES + 1),
+            ).rows;
+            if (rows.length > MAX_VECTOR_POINT_DELETES) {
+              this.database
+                .prepare(
+                  `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id IN (` +
+                    "SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?)",
+                )
+                .run(pathname, source);
+              return;
+            }
+            const removeVector = this.database.prepare(
+              `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id = ?`,
+            );
+            for (const { id } of rows) {
+              removeVector.run(id);
+            }
+          });
         } catch {
           markMemoryVectorRebuildRequired(this.database);
         }

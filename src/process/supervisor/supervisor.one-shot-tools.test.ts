@@ -16,7 +16,12 @@ const { createChildAdapterMock, createPtyAdapterMock, getProcessSupervisorMock }
 );
 
 vi.mock("./adapters/child.js", () => ({
-  createChildAdapter: createChildAdapterMock,
+  createChildAdapter: async (
+    ...args: Parameters<typeof import("./adapters/child.js").createChildAdapter>
+  ) => ({
+    adapter: await createChildAdapterMock(...args),
+    ready: Promise.resolve(),
+  }),
 }));
 
 vi.mock("./adapters/pty.js", () => ({ createPtyAdapter: createPtyAdapterMock }));

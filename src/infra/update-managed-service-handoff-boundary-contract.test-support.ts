@@ -16,6 +16,7 @@ export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions
   trigger?: "cli" | "api";
   origin?: UpdateRunRecord["origin"];
   controlDisconnect?: "transferred" | "unarmed" | "dead-parent";
+  beforeDisconnect?: (run: UpdateRunRecord | undefined, env: NodeJS.ProcessEnv) => void;
   relativeInput?: boolean;
   validationResult?: "failed" | "skipped";
   validationClockAdvanceMs?: number;

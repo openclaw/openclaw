@@ -809,7 +809,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
       ...input,
       activeSession,
       images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
-      leasedSteering: { leaseId: "lease-1", runIds: ["missing-run"] },
+      leasedSteering: { leaseId: "lease-1", runIds: ["missing-run"], isCurrent: () => true },
       promptActiveSession,
       runtimeOnly: true,
     });

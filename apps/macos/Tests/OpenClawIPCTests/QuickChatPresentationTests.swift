@@ -9,6 +9,7 @@ import XCTest
 final class QuickChatPresentationTests: XCTestCase {
     func testShortcutPresentsAnEditorWithoutRequiringForegroundOwnership() async throws {
         let application = AppKitTestSupport.application
+        XCTAssertTrue(AppKitTestSupport.didSetActivationPolicy)
         var shortcut: (() -> Void)?
         let model = QuickChatModel(
             sessionKeyProvider: { "agent:main:main" },

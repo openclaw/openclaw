@@ -95,7 +95,9 @@ export const recordAnnounceDeliveryResult = (
     deliveryState.enqueuedAt ??= delivery.enqueuedAt;
   }
   if (!delivery.delivered && delivery.disposition !== "intentional_non_delivery") {
-    if (
+    if (delivery.reason === "message_tool_delivery_missing") {
+      deliveryState.lastDropReason = "message_tool_delivery_missing";
+    } else if (
       delivery.reason === "steer_dropped" ||
       delivery.phases?.some((phase) => phase.reason === "steer_dropped")
     ) {

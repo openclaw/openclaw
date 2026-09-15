@@ -159,17 +159,6 @@ export async function prepareGatewayServerBootstrap(input: {
       : inspectDatabaseSchemas(),
   );
   if (databaseSchemas.incompatible.length > 0) {
-    for (const database of databaseSchemas.incompatible) {
-      log.error("database schema preflight rejected newer schema", {
-        kind: database.kind,
-        path: database.path,
-        ...(database.agentId ? { agentId: database.agentId } : {}),
-        foundVersion: database.foundVersion,
-        supportedVersion: database.supportedVersion,
-        writerAppVersion: database.writerAppVersion ?? "unknown",
-        docsUrl: OPENCLAW_DATABASE_SCHEMA_DOCS_URL,
-      });
-    }
     throw new OpenClawDatabaseSchemaPreflightError(databaseSchemas.incompatible);
   }
   for (const database of databaseSchemas.indeterminate) {

@@ -204,7 +204,7 @@ async function capturePanel(page: Page, name: string): Promise<void> {
 }
 
 suite.define(() => {
-  it("reserves page-header clearance only for collapsed navigation", async () => {
+  it("keeps the page title centered beside the collapsed-navigation controls", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -217,16 +217,28 @@ suite.define(() => {
 
         const shell = page.locator(".shell");
         const header = page.locator(".content:not(.content--chat) .content-header").first();
-        await header.waitFor();
-        await expect
-          .poll(() => header.evaluate((element) => getComputedStyle(element).marginTop))
-          .toBe("0px");
+        const tabs = header.locator(".hub-page-header__tabs");
+        await tabs.waitFor();
+        const rowCenter = async () => {
+          const box = await tabs.boundingBox();
+          return box ? box.y + box.height / 2 : -1;
+        };
+        // The toolbar row sits at the top of the content column in both states.
+        await expect.poll(rowCenter).toBe(26);
 
         await page.locator(".sidebar-brand__collapse").click();
         await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-collapsed");
-        await expect
-          .poll(() => header.evaluate((element) => getComputedStyle(element).marginTop))
-          .toBe("48px");
+        await expect.poll(rowCenter).toBe(26);
+        const controls = page.locator(".shell-chrome-controls button:visible");
+        const controlBoxes = await controls.evaluateAll((buttons) =>
+          buttons.map((button) => button.getBoundingClientRect()),
+        );
+        expect(controlBoxes.length).toBeGreaterThan(0);
+        const tabsBox = (await tabs.boundingBox())!;
+        for (const box of controlBoxes) {
+          expect(box.top + box.height / 2).toBe(26);
+          expect(box.right).toBeLessThan(tabsBox.x);
+        }
       },
     );
   });

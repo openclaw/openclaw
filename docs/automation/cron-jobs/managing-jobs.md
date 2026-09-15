@@ -154,6 +154,8 @@ The agent `automations` tool returns compact job summaries (`id`, `name`, `enabl
 
 The webhook URL remains subject to the [strict outbound policy](/automation/cron-jobs/delivery#delivery-and-output); configure `cron.webhookSsrfPolicy` for an intentional local or private receiver.
 
+Clearing **Timeout (seconds)** in the Control UI and saving removes the saved override, restoring the [default runtime budget](/automation/cron-jobs/how-it-works). For API clients, a `cron.update` payload patch sets a timeout with a number, clears it with `timeoutSeconds: null`, and preserves the saved value when `timeoutSeconds` is omitted. New jobs omit the field to use the default; `null` is only an update instruction.
+
 <Note>
 Model override note:
 

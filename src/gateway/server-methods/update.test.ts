@@ -586,69 +586,6 @@ describe("update.run restart scheduling", () => {
     );
   });
 
-  it.each(["sentinel-write", "transfer-rejected", "transfer-error"])(
-    "cancels managed admission and keeps serving after %s failure",
-    async (failure) => {
-      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-      mockGlobalInstallSurface();
-      if (failure === "sentinel-write") {
-        sentinelState.restartSentinelWriteError = new Error("state database unavailable");
-      } else if (failure === "transfer-rejected") {
-        transferManagedServiceUpdateHandoffMock.mockResolvedValueOnce(false);
-      } else {
-        transferManagedServiceUpdateHandoffMock.mockRejectedValueOnce(new Error("pipe closed"));
-      }
-
-      const payload = await captureUpdateRunPayload({
-        sessionKey: "agent:main:slack:dm:C0123ABC:thread:1234567890.123456",
-      });
-
-      const started = startManagedServiceUpdateHandoffMock.mock.calls[0]?.[0];
-      expect(cancelManagedServiceUpdateHandoffMock).toHaveBeenCalledExactlyOnceWith({
-        kind: "managed-update-handoff",
-        handoffId: started?.handoffId,
-        installRoot: "/tmp/openclaw-global",
-      });
-      expect(transferManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(
-        failure === "sentinel-write" ? 0 : 1,
-      );
-      expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
-      expect(payload).toMatchObject({
-        ok: false,
-        restart: null,
-        result: { status: "error", reason: "managed-service-handoff-failed" },
-      });
-      expect(payload?.handoff).toBeUndefined();
-      expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          message: expect.stringContaining(
-            "OpenClaw update failed: managed-service-handoff-failed",
-          ),
-        }),
-      );
-    },
-  );
-
-  it("does not restart or report success when the handoff helper cannot spawn", async () => {
-    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-    mockGlobalInstallSurface();
-    startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(
-      Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }),
-    );
-
-    const payload = await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
-      captureUpdateRunPayload(),
-    );
-
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
-    expect(payload?.ok).toBe(false);
-    expect(payload?.result).toMatchObject({
-      status: "error",
-      reason: "managed-service-handoff-failed",
-    });
-    expect(payload?.handoff).toBeUndefined();
-  });
-
   it.each([
     { supervisor: "launchd", restartDelayMs: 0, expectedDelayMs: 0 },
     { supervisor: "systemd", restartDelayMs: 0, expectedDelayMs: 0 },

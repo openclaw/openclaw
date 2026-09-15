@@ -63,42 +63,45 @@ describe("session row provenance", () => {
     expect(provenance.hasObservation(row)).toBe(false);
   });
 
-  it("keeps accepted writer ancestry without changing the source of a newer read", () => {
-    const provenance = createSessionRowProvenance();
-    const initial: GatewaySessionRow = {
-      key: "agent:main:provenance",
-      sessionId: "provenance",
-      kind: "direct",
-      updatedAt: 10,
-      label: "initial",
-    };
-    provenance.observeReadRow(initial, 1);
-    const event = { ...initial, updatedAt: 20, label: "writer" };
-    provenance.inheritRow(event, initial);
-    provenance.observeFields(event, ["label"], createSessionWriteObservation(3, 20));
-    const accepted = provenance.mergeRow(initial, event);
-    const read = { ...initial, updatedAt: 20, label: "read" };
-    const selectRead = provenance.observeReadRow(read, 4, "main", [accepted]);
-    const projected = provenance.mergeRow(accepted, read);
-    expect(projected.label).toBe("read");
-    expect(selectRead(projected, ["label"])).toEqual(["label"]);
+  it.each(["merged", "self-projected"])(
+    "keeps %s writer ancestry without changing the source of a newer read",
+    (admission) => {
+      const provenance = createSessionRowProvenance();
+      const initial: GatewaySessionRow = {
+        key: "agent:main:provenance",
+        sessionId: "provenance",
+        kind: "direct",
+        updatedAt: 10,
+        label: "initial",
+      };
+      provenance.observeReadRow(initial, 1);
+      const event = { ...initial, updatedAt: 20, label: "writer" };
+      provenance.inheritRow(event, initial);
+      provenance.observeFields(event, ["label"], createSessionWriteObservation(3, 20));
+      const accepted = provenance.mergeRow(admission === "self-projected" ? event : initial, event);
+      const read = { ...initial, updatedAt: 20, label: "read" };
+      const selectRead = provenance.observeReadRow(read, 4, "main", [accepted]);
+      const projected = provenance.mergeRow(accepted, read);
+      expect(projected.label).toBe("read");
+      expect(selectRead(projected, ["label"])).toEqual(["label"]);
 
-    const olderAck = { ...initial, label: "older acknowledgement" };
-    provenance.inheritRow(olderAck, initial);
-    provenance.observeFields(olderAck, ["label"], createSessionWriteObservation(2, null, 5));
-    const retained = provenance.mergeRow(projected, olderAck);
-    expect(retained.label).toBe("read");
-    expect(selectRead(retained, ["label"])).toEqual(["label"]);
-    expect(provenance.rowRevision(retained)).toBe(4);
+      const olderAck = { ...initial, label: "older acknowledgement" };
+      provenance.inheritRow(olderAck, initial);
+      provenance.observeFields(olderAck, ["label"], createSessionWriteObservation(2, null, 5));
+      const retained = provenance.mergeRow(projected, olderAck);
+      expect(retained.label).toBe("read");
+      expect(selectRead(retained, ["label"])).toEqual(["label"]);
+      expect(provenance.rowRevision(retained)).toBe(4);
 
-    const stale = { ...read, updatedAt: 10, label: "stale event" };
-    provenance.inheritRow(stale, read);
-    provenance.observeFields(stale, ["label"], createSessionWriteObservation(6, 10));
-    const afterStale = provenance.mergeRow(retained, stale);
-    expect(afterStale.label).toBe("read");
-    const newerAck = { ...initial, label: "newer acknowledgement" };
-    provenance.inheritRow(newerAck, initial);
-    provenance.observeFields(newerAck, ["label"], createSessionWriteObservation(5, null, 7));
-    expect(provenance.mergeRow(afterStale, newerAck).label).toBe("newer acknowledgement");
-  });
+      const stale = { ...read, updatedAt: 10, label: "stale event" };
+      provenance.inheritRow(stale, read);
+      provenance.observeFields(stale, ["label"], createSessionWriteObservation(6, 10));
+      const afterStale = provenance.mergeRow(retained, stale);
+      expect(afterStale.label).toBe("read");
+      const newerAck = { ...initial, label: "newer acknowledgement" };
+      provenance.inheritRow(newerAck, initial);
+      provenance.observeFields(newerAck, ["label"], createSessionWriteObservation(5, null, 7));
+      expect(provenance.mergeRow(afterStale, newerAck).label).toBe("newer acknowledgement");
+    },
+  );
 });

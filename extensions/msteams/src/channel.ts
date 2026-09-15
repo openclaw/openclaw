@@ -194,13 +194,15 @@ function resolveGraphActionTarget(
   const currentChannelTarget = currentChannelId?.trim();
   const currentGraphTarget = currentGraphChannelId?.trim();
   if (explicitTarget) {
-    // Core materializes omitted action targets as currentChannelId before
-    // plugin dispatch. Restore the prepared Graph route for channel actions.
+    // Current-conversation aliases need the prepared Graph route, including
+    // targets materialized by core before plugin dispatch.
     if (
       currentChatType === "channel" &&
       currentGraphTarget &&
       currentChannelTarget &&
-      explicitTarget === currentChannelTarget
+      msteamsContextTargetsMatch(normalizeMSTeamsMessagingTarget(explicitTarget) ?? "", {
+        currentChannelId: currentChannelTarget,
+      })
     ) {
       return currentGraphTarget;
     }

@@ -282,7 +282,6 @@ export async function runEmbeddedAttempt(
           setup,
           preparedToolBase,
           bundleTools: { clientTools, uncompactedEffectiveTools },
-          runTrace,
           abortSignal: runAbortController.signal,
           executeCodeModeTool: (toolParams) => {
             if (!toolSearchCatalogExecutor) {

@@ -239,8 +239,8 @@ describe("session accessor readonly listing", () => {
       listed
         .filter(({ sessionKey }) => !["global", "unknown"].includes(sessionKey))
         .map(({ sessionKey }) => sessionKey)
-        .toSorted(),
-    ).toEqual(expectedKeys.toSorted());
+        .toSorted((left, right) => left.localeCompare(right)),
+    ).toEqual(expectedKeys.toSorted((left, right) => left.localeCompare(right)));
     const summary = readSessionStoreSummaryReadOnly(scope, options);
     expect(summary.count).toBe(7);
     expect(summary.recent.map(({ sessionKey }) => sessionKey)).toEqual(expectedKeys.slice(0, 3));
@@ -479,6 +479,32 @@ describe("session accessor readonly listing", () => {
     expect(hasSessionEntriesByStatusReadOnly({ agentId, env }, ["done"])).toBe(false);
     expect(countRegisteredAgentDatabases(env)).toBe(0);
   });
+
+  it.each(["interrupted", "failed"] as const)(
+    "probes canonical %s without conflating its shared derived status",
+    async (status) => {
+      const env = { OPENCLAW_STATE_DIR: autoTempDirs.make("openclaw-readonly-canonical-status-") };
+      const scope = { agentId: "worker-1", env };
+      await upsertSessionEntryCore(
+        { ...scope, sessionKey: "agent:worker-1:main" },
+        { sessionId: "session-1", status, updatedAt: 10 },
+      );
+      closeOpenClawAgentDatabasesForTest();
+      clearRegisteredAgentDatabases(env);
+
+      expect(hasSessionEntriesByStatusReadOnly(scope, [status])).toBe(true);
+      expect(
+        hasSessionEntriesByStatusReadOnly(scope, [
+          status === "interrupted" ? "failed" : "interrupted",
+        ]),
+      ).toBe(false);
+      expect(hasSessionEntriesByStatusReadOnly(scope, ["interrupted", "failed"])).toBe(true);
+      expect(hasSessionEntriesByStatusReadOnly(scope, ["running", "done"])).toBe(false);
+      expect(hasSessionEntriesByStatusReadOnly(scope, [])).toBe(false);
+      expect(countRegisteredAgentDatabases(env)).toBe(0);
+      expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
+    },
+  );
 
   it("resolves a missing session identity without creating or registering a database", () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-missing-identity-");

@@ -143,6 +143,7 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
   storePath: string;
   logger: ReturnType<typeof createNoopLogger>;
   requestHeartbeatAndWait?: CronServiceDeps["requestHeartbeatAndWait"];
+  resolveHeartbeatTimeoutMs?: CronServiceDeps["resolveHeartbeatTimeoutMs"];
   onEvent?: CronServiceDeps["onEvent"];
 }): {
   cron: CronService;
@@ -164,6 +165,7 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
     enqueueSystemEvent,
     requestHeartbeat,
     requestHeartbeatAndWait,
+    resolveHeartbeatTimeoutMs: params.resolveHeartbeatTimeoutMs,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     onEvent: (event) => {
       finished.onEvent(event);

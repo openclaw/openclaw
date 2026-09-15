@@ -387,15 +387,12 @@ describe("createAcpxRuntimeService", () => {
     delete process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE;
     const workspaceDir = testWorkspace.dir;
     const ctx = createServiceContext(workspaceDir);
-    let releaseProbe!: () => void;
-    const probeStarted = vi.fn();
-    const doctor = vi.fn(
-      () =>
-        new Promise<{ ok: boolean; message: string }>((resolve) => {
-          probeStarted();
-          releaseProbe = () => resolve({ ok: true, message: "ok" });
-        }),
-    );
+    const probeStarted = createDeferred<void>();
+    const releaseProbe = createDeferred<{ ok: boolean; message: string }>();
+    const doctor = vi.fn(() => {
+      probeStarted.resolve();
+      return releaseProbe.promise;
+    });
     const runtime = createMockRuntime({
       doctor,
       isHealthy: () => true,
@@ -404,25 +401,29 @@ describe("createAcpxRuntimeService", () => {
       runtimeFactory: () => runtime as never,
     });
 
-    const startPromise = service.start(ctx) as Promise<void>;
-    await vi.waitFor(() => {
-      expect(probeStarted).toHaveBeenCalledOnce();
-    });
-
     let resolved = false;
-    void startPromise.then(() => {
+    const startPromise = Promise.resolve(service.start(ctx)).then(() => {
       resolved = true;
     });
-    await Promise.resolve();
+    try {
+      await Promise.race([probeStarted.promise, startPromise]);
+      expect(doctor).toHaveBeenCalledOnce();
+      await Promise.resolve();
 
-    expect(resolved).toBe(false);
-    releaseProbe();
-    await startPromise;
+      expect(resolved).toBe(false);
+      releaseProbe.resolve({ ok: true, message: "ok" });
+      await startPromise;
 
-    expect(resolved).toBe(true);
-    expect(ctx.logger.info).toHaveBeenCalledWith("embedded acpx runtime backend ready");
-
-    await service.stop?.(ctx);
+      expect(resolved).toBe(true);
+      expect(ctx.logger.info).toHaveBeenCalledWith("embedded acpx runtime backend ready");
+    } finally {
+      releaseProbe.resolve({ ok: true, message: "ok" });
+      try {
+        await startPromise;
+      } finally {
+        await service.stop?.(ctx);
+      }
+    }
   });
 
   it("emits ACPX-owned startup trace subspans", async () => {

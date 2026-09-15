@@ -31,6 +31,7 @@ import {
   extractPromotionKeys,
   hashMemoryContent,
   isAtomicReplacePermissionError,
+  MemoryAtomicPublicationError,
   MemoryWriteConflictError,
   readMemoryContent,
   resolveMemoryWritePath,
@@ -541,8 +542,8 @@ export async function applyShortTermPromotions(
         }
       }
       if (consolidationResult && consolidationPlan) {
-        // Reserve the union before publishing its replacement. A failed origin
-        // write must leave MEMORY unchanged; uncommitted rewrites release only new rows.
+        // Reserve lineage before publication; release new rows only when the
+        // file owner rules out a replacement or reconciles an unchanged target.
         const rollbackOrigins = reserveMemoryEntryOrigins({
           agentIds: originAgentIds,
           previousMemory: existingMemory,
@@ -561,6 +562,9 @@ export async function applyShortTermPromotions(
           }
           appendedCandidates = toAppend.length;
         } catch (error) {
+          if (error instanceof MemoryAtomicPublicationError) {
+            throw error;
+          }
           rollbackOrigins();
           if (
             !(error instanceof MemoryWriteConflictError) &&

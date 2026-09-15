@@ -56,7 +56,7 @@ suite.define(() => {
             role: index % 2 === 0 ? "user" : "assistant",
             timestamp: Date.UTC(2026, 8, 4, 12, index),
           }));
-          await installMockGateway(page, { historyMessages: messages });
+          const gateway = await installMockGateway(page, { historyMessages: messages });
           await page.addInitScript(createControlUiMockSameOriginGatewayScript());
           await page.addInitScript(
             ({ key, mode }) => {
@@ -87,6 +87,9 @@ suite.define(() => {
           const trackBounds = (await track.boundingBox())!;
           const transcriptBounds = (await transcript.boundingBox())!;
           const contentBounds = (await transcript.locator(".chat-thread-inner").boundingBox())!;
+          const conversationBounds = (await page
+            .locator(".chat-main__conversation")
+            .boundingBox())!;
           expect(trackBounds.x).toBeGreaterThanOrEqual(transcriptBounds.x);
           expect(trackBounds.x + trackBounds.width).toBeLessThan(contentBounds.x);
           expect(trackBounds.height).toBeCloseTo(900 * 0.45, 2);
@@ -94,7 +97,7 @@ suite.define(() => {
             Math.abs(
               trackBounds.y +
                 trackBounds.height / 2 -
-                (transcriptBounds.y + transcriptBounds.height / 2),
+                (conversationBounds.y + conversationBounds.height / 2),
             ),
           ).toBeLessThan(2);
           const markBounds = await markers.evaluateAll((items) =>
@@ -559,6 +562,33 @@ suite.define(() => {
           await transcript.evaluate((element) =>
             element.style.removeProperty("--chat-thread-max-width"),
           );
+          await transcript.hover();
+          await page.mouse.wheel(0, -100000);
+          await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
+          await transcript.focus();
+          await page.keyboard.press("Tab");
+          await page.keyboard.press("End");
+          const exploredMarker = markers.nth(239);
+          await expect.poll(focusedMarkerId).toBe("position-rail-239");
+          const exploredTop = (await exploredMarker.boundingBox())!.y;
+          await gateway.setHistoryMessages([
+            ...messages,
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "A new checkpoint arrived." }],
+              __openclaw: { id: "incoming-checkpoint", seq: 241, runId: "incoming-rail-run" },
+            },
+          ]);
+          await gateway.emitChatFinal({
+            runId: "incoming-rail-run",
+            text: "A new checkpoint arrived.",
+          });
+          await expect.poll(() => markers.count()).toBe(241);
+          expect(await focusedMarkerId()).toBe("position-rail-239");
+          expect((await exploredMarker.boundingBox())!.y).toBe(exploredTop);
+          expect(await preview.isVisible()).toBe(true);
+          expect(await preview.textContent()).toContain("checkpoint 239");
+          expect(await transcript.evaluate((element) => element.scrollTop)).toBe(0);
           expect(pageErrors).toEqual([]);
         },
       );
@@ -579,8 +609,8 @@ suite.define(() => {
           ) => ({
             role,
             content,
-            timestamp: seq * 1_000,
-            __openclaw: { id, seq, ...(runId ? { runId } : {}) },
+            timestamp: (seq + 80) * 1_000,
+            __openclaw: { id, seq: seq + 80, ...(runId ? { runId } : {}) },
           });
           const longReply = Array.from(
             { length: 18 },
@@ -593,6 +623,12 @@ suite.define(() => {
           ).join("");
           await installMockGateway(page, {
             historyMessages: [
+              ...Array.from({ length: 80 }, (_, index) => ({
+                role: index % 2 === 0 ? "user" : "assistant",
+                content: [{ type: "text", text: `Earlier checkpoint ${index + 1}.` }],
+                timestamp: (index + 1) * 1_000,
+                __openclaw: { id: `earlier-${index}`, seq: index + 1 },
+              })),
               message("question", "user", "Review the shared design", 1),
               message("first", "assistant", "I will inspect the design", 2, "review-run"),
               message(
@@ -637,7 +673,7 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat`);
           const thread = page.locator(".chat-thread");
           const marks = thread.locator(".chat-position-rail__marker");
-          await expect.poll(() => marks.count()).toBe(4);
+          await expect.poll(() => marks.count()).toBe(84);
           const runMarker = thread.locator('[data-position-marker-id="run:review-run"]');
           await runMarker.focus();
           await runMarker.press("Enter");
@@ -678,6 +714,29 @@ suite.define(() => {
               return rect.top < viewport.top && rect.bottom > viewport.bottom;
             }),
           ).toBe(true);
+          const composerInput = page.locator(".agent-chat__composer-combobox textarea");
+          await composerInput.fill(
+            Array.from({ length: 6 }, (_, index) => `Review note ${index + 1}`).join("\n"),
+          );
+          const markerFits = () =>
+            runMarker.evaluate((element) => {
+              const marker = element.getBoundingClientRect();
+              const scroller = element.closest(".chat-position-rail__marks")!;
+              const viewport = scroller.getBoundingClientRect();
+              return (
+                marker.top >= viewport.top && marker.bottom <= viewport.top + scroller.clientHeight
+              );
+            });
+          await expect.poll(markerFits).toBe(false);
+          const readerOffset = await thread.evaluate((element) => element.scrollTop);
+          await thread.hover();
+          await page.mouse.wheel(0, 120);
+          await expect
+            .poll(() => thread.evaluate((element) => element.scrollTop))
+            .toBeGreaterThan(readerOffset);
+          await expect.poll(() => runMarker.getAttribute("aria-current")).toBe("true");
+          await expect.poll(markerFits).toBe(true);
+          await composerInput.fill("");
           await captureUiProof(
             suite,
             page,

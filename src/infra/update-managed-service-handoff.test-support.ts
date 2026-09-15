@@ -5,6 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 import type { Writable } from "node:stream";
 import { vi } from "vitest";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 
 export type MockManagedUpdateHandoffLeaseFailure =
   | "absent"
@@ -119,7 +122,7 @@ export async function writeConcurrentManagedHandoffParams(
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const { getFileLockProcessStartTime: readParentStartTime } =
     await import("../shared/pid-alive.js");
-  const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+  const parent = spawn(testNodeExecPath, ["-e", "process.stdin.resume()"], {
     stdio: ["pipe", "ignore", "ignore"],
   });
   const parentPid = parent.pid;
@@ -144,7 +147,7 @@ export async function writeConcurrentManagedHandoffParams(
         updateLeaseDatabasePath:
           params.leaseDatabasePath ?? params.baseParams.updateLeaseDatabasePath,
         commandArgv: params.commandArgv,
-        triageCommandArgv: [process.execPath, "-e", "process.exit(0)", "--"],
+        triageCommandArgv: [testNodeExecPath, "-e", "process.exit(0)", "--"],
         triageContextPath: path.join(params.tmpDir, `${params.name}-failure.json`),
         logPath: path.join(params.tmpDir, `${params.name}.log`),
         sensitivePaths: [],

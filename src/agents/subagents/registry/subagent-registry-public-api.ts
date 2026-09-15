@@ -31,13 +31,21 @@ export function createSubagentRegistryPublicApi(config: {
   const findRunById = (records: Map<string, SubagentRunRecord>, runId: string) =>
     records.get(runId) ?? [...records.values()].find((entry) => entry.swarmRunId === runId);
 
-  function leasePendingAgentSteeringItems(params: {
+  async function leasePendingAgentSteeringItems(params: {
     requesterSessionKey: string;
     leaseId: string;
     now?: number;
   }) {
     restoreOnce();
-    const leased = leasePendingAgentSteeringItemsFromSubagentRuns({ ...params, runs });
+    const leased = await leasePendingAgentSteeringItemsFromSubagentRuns({
+      ...params,
+      runs,
+      readResult: async (entry) => {
+        const { readSubagentRunAnnounceResult } =
+          await import("../announce/subagent-announce-output.js");
+        return readSubagentRunAnnounceResult(entry);
+      },
+    });
     if (leased) {
       persist(...leased.runIds);
     }

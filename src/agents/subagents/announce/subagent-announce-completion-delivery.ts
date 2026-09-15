@@ -3,6 +3,7 @@
  */
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery-state.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
@@ -44,6 +45,9 @@ export async function runAnnounceAgentCall(params: {
   const signal = params.signal
     ? AbortSignal.any([params.signal, deadline.signal])
     : deadline.signal;
+  // A private input stays owned by Gateway admission when an observer times out.
+  // Only the caller's lifecycle cancellation may stop that underlying turn.
+  const executionSignal = params.privateCompletion ? params.signal : signal;
   const timer =
     params.timeoutMs === undefined
       ? undefined
@@ -53,7 +57,8 @@ export async function runAnnounceAgentCall(params: {
         );
   timer?.unref?.();
   try {
-    return await dispatchSubagentAnnounceAgent(params.agentParams, {
+    signal.throwIfAborted();
+    const dispatch = dispatchSubagentAnnounceAgent(params.agentParams, {
       cancelOnDeadline: true,
       privateCompletion: params.privateCompletion,
       expectFinal: params.expectFinal,
@@ -62,12 +67,12 @@ export async function runAnnounceAgentCall(params: {
       ),
       operatorRoleActor: { kind: "system" },
       delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
-      signal,
+      signal: executionSignal,
       // Accepted queue waits belong to session admission; execution belongs to
       // the requester runtime budget, not the announcement handoff deadline.
       onAccepted: () => clearTimeout(timer),
       onExecutionStarted: () => {
-        signal.throwIfAborted();
+        executionSignal?.throwIfAborted();
         if (!params.isExecutionAllowed()) {
           throw new SourceOwnerChangedError();
         }
@@ -76,6 +81,9 @@ export async function runAnnounceAgentCall(params: {
       },
       resolveGatewayContext: params.resolveGatewayContext,
     });
+    return params.privateCompletion
+      ? await waitForGatewayDispatch("agent", dispatch, undefined, signal)
+      : await dispatch;
   } finally {
     clearTimeout(timer);
   }

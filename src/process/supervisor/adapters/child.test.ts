@@ -10,6 +10,7 @@ import {
   createWindowsNpmShim,
   firstMockArg,
   firstSpawnWithFallbackParams,
+  readyChildAdapter,
 } from "./child.test-support.js";
 import {
   expectRealExitWinsOverSigkillFallback,
@@ -58,7 +59,7 @@ vi.mock("../service-child-relay-host.js", () => ({
   createServiceChildRelayAdapter: createServiceChildRelayAdapterMock,
 }));
 
-let createChildAdapter: typeof import("./child.js").createChildAdapter;
+let startChildAdapter: ReturnType<typeof readyChildAdapter>;
 let getWindowsInstallRoots: typeof import("../../../infra/windows-install-roots.js").getWindowsInstallRoots;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -66,14 +67,14 @@ async function createAdapterHarness(params?: {
   pid?: number;
   argv?: string[];
   env?: NodeJS.ProcessEnv;
-  stdinMode?: Parameters<typeof createChildAdapter>[0]["stdinMode"];
+  stdinMode?: Parameters<typeof startChildAdapter>[0]["stdinMode"];
 }) {
   const stub = createStubChild(params?.pid);
   spawnWithFallbackMock.mockResolvedValue({
     child: stub.child,
     usedFallback: false,
   });
-  const adapter = await createChildAdapter({
+  const adapter = await startChildAdapter({
     argv: params?.argv ?? ["node", "-e", "setTimeout(() => {}, 1000)"],
     env: params?.env,
     stdinMode: params?.stdinMode ?? "pipe-open",
@@ -106,7 +107,7 @@ describe("createChildAdapter", () => {
       return accessSync(filePath, mode);
     });
     ({ getWindowsInstallRoots } = await import("../../../infra/windows-install-roots.js"));
-    ({ createChildAdapter } = await import("./child.js"));
+    startChildAdapter = readyChildAdapter((await import("./child.js")).createChildAdapter);
     spawnWithFallbackMock.mockClear();
     signalProcessTreeMock.mockClear();
     killProcessTreeMock.mockReset();
@@ -177,7 +178,7 @@ describe("createChildAdapter", () => {
     const { child, disconnectMock, sendMock } = createStubChild();
     spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
 
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: ["node", "worker"],
       ownedWorker: true,
       input: "{}",
@@ -216,7 +217,7 @@ describe("createChildAdapter", () => {
         });
       });
       spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
-      const adapter = await createChildAdapter({
+      const adapter = await startChildAdapter({
         argv: ["node", "worker"],
         ownedWorker: true,
         stdinMode: "pipe-open",
@@ -260,7 +261,7 @@ describe("createChildAdapter", () => {
     setPlatform("darwin");
     const { child, emitClose, emitExit } = createStubChild();
     spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
-    const adapter = await createChildAdapter({ argv: ["node", "-e", "process.exit(0)"] });
+    const adapter = await startChildAdapter({ argv: ["node", "-e", "process.exit(0)"] });
     const settled = vi.fn();
     const wait = adapter.wait();
     void wait.then(settled);
@@ -323,7 +324,7 @@ describe("createChildAdapter", () => {
     async ({ first, waitBefore }) => {
       const { child, disconnectMock, emitClose } = createStubChild(7866);
       spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
-      const adapter = await createChildAdapter({
+      const adapter = await startChildAdapter({
         argv: ["node", "worker"],
         ownedWorker: true,
       });
@@ -391,7 +392,7 @@ describe("createChildAdapter", () => {
     });
     const transient = Buffer.from("selected-secret", "utf8");
 
-    await createChildAdapter({
+    await startChildAdapter({
       argv: ["claude", "-p"],
       stdinMode: "pipe-open",
       secretInput: {
@@ -428,7 +429,7 @@ describe("createChildAdapter", () => {
       usedFallback: false,
     });
 
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: ["claude", "-p"],
       stdinMode: "pipe-open",
       secretInput: {
@@ -452,7 +453,7 @@ describe("createChildAdapter", () => {
       usedFallback: false,
     });
 
-    await createChildAdapter({
+    await startChildAdapter({
       argv: ["claude.exe", "-p"],
       secretInput: {
         fd: 3,
@@ -475,7 +476,7 @@ describe("createChildAdapter", () => {
       child,
       usedFallback: true,
     });
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
       stdinMode: "pipe-open",
     });
@@ -494,7 +495,7 @@ describe("createChildAdapter", () => {
   it("selects the exact service relay instead of direct shared-group signaling", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "1";
     try {
-      await createChildAdapter({
+      await startChildAdapter({
         argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
         exactEnv: true,
         stdinMode: "pipe-open",
@@ -532,7 +533,7 @@ describe("createChildAdapter", () => {
       child,
       usedFallback: true,
     });
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
       stdinMode: "pipe-open",
     });
@@ -551,7 +552,7 @@ describe("createChildAdapter", () => {
     const force = vi.fn();
     killProcessTreeMock.mockReturnValue({ force });
     spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: true });
-    const adapter = await createChildAdapter({ argv: ["node", "worker.js"] });
+    const adapter = await startChildAdapter({ argv: ["node", "worker.js"] });
 
     adapter.kill("SIGTERM");
     adapter.kill("SIGTERM");
@@ -575,7 +576,7 @@ describe("createChildAdapter", () => {
     setPlatform("linux");
     const { child, killMock } = createStubChild(8765);
     spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: true });
-    const adapter = await createChildAdapter({ argv: ["node", "worker.js"] });
+    const adapter = await startChildAdapter({ argv: ["node", "worker.js"] });
     adapter.kill("SIGTERM");
     adapter.kill("SIGKILL");
     await Promise.resolve();
@@ -590,7 +591,7 @@ describe("createChildAdapter", () => {
     setPlatform("linux");
     const { child, emitExit } = createStubChild(8765);
     spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: true });
-    const adapter = await createChildAdapter({ argv: ["node", "worker.js"] });
+    const adapter = await startChildAdapter({ argv: ["node", "worker.js"] });
     emitExit(0);
     adapter.kill("SIGTERM");
     adapter.kill("SIGKILL");
@@ -603,7 +604,7 @@ describe("createChildAdapter", () => {
     setPlatform("linux");
     const { child } = createStubChild(8765);
     spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: true });
-    const adapter = await createChildAdapter({ argv: ["node", "worker.js"] });
+    const adapter = await startChildAdapter({ argv: ["node", "worker.js"] });
     adapter.kill("SIGKILL");
     await Promise.resolve();
     expect(killProcessTreeMock).toHaveBeenCalledExactlyOnceWith(8765, {
@@ -631,7 +632,7 @@ describe("createChildAdapter", () => {
       usedFallback: false,
     });
 
-    const adapter = await createChildAdapter({
+    const adapter = await startChildAdapter({
       argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
     });
 
@@ -819,7 +820,7 @@ describe("createChildAdapter", () => {
 
       const stub = createStubChild(9755);
       spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
-      const adapter = await createChildAdapter({
+      const adapter = await startChildAdapter({
         argv: ["node", "-e", "setInterval(() => {}, 1000)"],
         stdinMode: "pipe-closed",
         ...(ownedWorker ? { ownedWorker: true } : {}),
@@ -1045,7 +1046,7 @@ describe("createChildAdapter", () => {
     const { child } = createStubChild(3335);
     spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
     try {
-      const adapter = await createChildAdapter({
+      const adapter = await startChildAdapter({
         argv: ["/usr/bin/node", "-e", "process.exit(0)"],
         env: { HOME: "/worker-home", PATH: "/usr/bin" },
         exactEnv: true,

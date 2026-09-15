@@ -4,6 +4,7 @@ import { setTimeout as realSetTimeout } from "node:timers";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import { observeUpdateCandidateIoProgress } from "./update-candidate-io.test-support.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
@@ -55,7 +56,7 @@ it.each([undefined, 600_000])(
     const controller = new AbortController();
     const operation = readUpdateStateDatabaseSizes([file], {
       nodeRunner: process.execPath,
-      sourceEnv: { ...process.env, NODE_OPTIONS: `--require ${JSON.stringify(preload)}` },
+      sourceEnv: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
       stagingRoot: root,
       timeoutMs,
       signal: controller.signal,

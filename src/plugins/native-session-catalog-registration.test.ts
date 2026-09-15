@@ -1,15 +1,22 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionCatalogHost } from "../../packages/gateway-protocol/src/index.js";
 import { createConfigIO } from "../config/io.factory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
+import { SessionCatalogListLifetime } from "../gateway/server-methods/session-catalog-list-lifetime.js";
+import { listSessionCatalogProvider } from "../gateway/server-methods/session-catalog-provider-access.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createPluginRegistry } from "./registry.js";
+import { withPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { validatePluginSchemaValue } from "./schema-validator.js";
+import type { SessionCatalogProvider } from "./session-catalog.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
 const roots: string[] = [];
@@ -23,7 +30,11 @@ afterEach(async () => {
 async function registerCatalog(
   configExists: boolean | "dangling" | "fresh",
   initial?: boolean,
-  options: { pluginId?: string; legacyDefaultEnabled?: boolean } = {},
+  options: {
+    pluginId?: string;
+    legacyDefaultEnabled?: boolean;
+    createListOperation?: SessionCatalogProvider["createListOperation"];
+  } = {},
 ) {
   const pluginId = options.pluginId ?? "fixture";
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-catalog-"));
@@ -147,7 +158,13 @@ async function registerCatalog(
   const available = vi.fn(() => true);
   const handle = vi.fn(async () => "[]");
   const staticHandle = vi.fn(async () => "[]");
-  api.registerSessionCatalog({ id: "fixture", label: "Fixture", list, read });
+  api.registerSessionCatalog({
+    id: "fixture",
+    label: "Fixture",
+    list,
+    read,
+    ...(options.createListOperation ? { createListOperation: options.createListOperation } : {}),
+  });
   api.registerNodeHostCommand({ command: "fixture.sessions.list", isAvailable: available, handle });
   // Static definitions use the registrar directly even in setup-only modes.
   registry.registerNodeHostCommand(record, {
@@ -156,6 +173,8 @@ async function registerCatalog(
   });
   return {
     dispose,
+    instance: getPluginInstance(record)!,
+    registry: registry.registry,
     provider: registry.registry.sessionCatalogs[0]!.provider,
     node: registry.registry.nodeHostCommands[0]!.command,
     staticNode: registry.registry.nodeHostCommands[1]!.command,
@@ -176,6 +195,262 @@ async function registerCatalog(
 }
 
 describe("registered native catalog access", () => {
+  it.each(["close", "release registration"] as const)(
+    "retains issued completion through a %s failure",
+    async (failure) => {
+      const completion = createDeferredCore();
+      const error = new Error("cleanup boundary failed");
+      const cleanup = vi.fn();
+      const close = vi.fn(() => {
+        if (failure === "close") {
+          throw error;
+        }
+      });
+      const state = await registerCatalog(true, true, {
+        createListOperation: (params) => ({
+          next: async () => {
+            params.waitUntil?.(completion.promise);
+            return { done: true, hosts: [] };
+          },
+          close,
+        }),
+      });
+      state.instance.lifecycle.onDispose(cleanup);
+      let registrations = 0;
+      let settled = false;
+      const pending = withPluginRuntimeGatewayRequestScope(
+        { pluginRegistry: state.registry, pluginId: "fixture", isWebchatConnect: () => false },
+        () =>
+          listSessionCatalogProvider(state.provider, {
+            waitUntil: () => {
+              if (++registrations === 2 && failure === "release registration") {
+                throw error;
+              }
+            },
+          }),
+      );
+      const outcome = pending
+        .catch((reason: unknown) => reason)
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+        const disposal = state.dispose();
+        expect(cleanup).not.toHaveBeenCalled();
+        expect(state.instance.hasRetainedConsumers).toBe(true);
+        if (failure === "close") {
+          expect(await outcome).toBe(error);
+        } else {
+          expect(settled).toBe(false);
+        }
+        completion.resolve();
+        expect(await outcome).toBe(error);
+        await disposal;
+        expect(registrations).toBe(2);
+        expect(cleanup).toHaveBeenCalledOnce();
+        expect(state.instance.hasRetainedConsumers).toBe(false);
+      } finally {
+        completion.resolve();
+        await outcome;
+      }
+    },
+  );
+
+  it("owns cleanup before a factory can retire its own instance", async () => {
+    let retire = () => {};
+    const next = vi.fn(async () => ({ done: true as const, hosts: [] }));
+    const close = vi.fn();
+    const cleanup = vi.fn();
+    const state = await registerCatalog(true, true, {
+      createListOperation: () => {
+        retire();
+        return { next, close };
+      },
+    });
+    retire = () => {
+      void state.dispose();
+    };
+    state.instance.lifecycle.onDispose(cleanup);
+    await expect(
+      withPluginRuntimeGatewayRequestScope(
+        { pluginRegistry: state.registry, pluginId: "fixture", isWebchatConnect: () => false },
+        () => listSessionCatalogProvider(state.provider, {}),
+      ),
+    ).rejects.toThrow("reloaded or disabled");
+    await state.dispose();
+    expect(next).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(state.instance.hasRetainedConsumers).toBe(false);
+  });
+
+  it.each(["queued", "completed"] as const)(
+    "retains the registered instance through a %s operation and its publication tail",
+    { timeout: 15_000 },
+    async (phase) => {
+      const blockers = createDeferredCore<SessionCatalogHost[]>();
+      const first = createDeferredCore<{ done: false }>();
+      const publication = createDeferredCore();
+      const close = vi.fn();
+      const next = vi.fn();
+      const cleanup = vi.fn();
+      let guardedPublication: () => void = () => {};
+      const state = await registerCatalog(true, true, {
+        createListOperation: (params) => {
+          return {
+            async next() {
+              next();
+              params.waitUntil?.(publication.promise.then(() => guardedPublication()));
+              return phase === "queued" ? await first.promise : { done: true, hosts: [] };
+            },
+            close,
+          };
+        },
+      });
+      state.instance.lifecycle.onDispose(cleanup);
+      const published = vi.fn(() => {
+        if (phase === "queued") {
+          throw new Error("publication rejected");
+        }
+      });
+      guardedPublication = state.instance.wrap(published);
+      const owner = new AbortController();
+      const lifetime = new SessionCatalogListLifetime(() => true, [owner.signal]);
+      const blocker: SessionCatalogProvider = {
+        id: "blocking",
+        label: "Blocking",
+        list: () => blockers.promise,
+        read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
+      };
+      const active = Array.from({ length: phase === "queued" ? 3 : 0 }, () =>
+        listSessionCatalogProvider(blocker, {}),
+      );
+      const pending = withPluginRuntimeGatewayRequestScope(
+        { pluginRegistry: state.registry, pluginId: "fixture", isWebchatConnect: () => false },
+        () =>
+          lifetime.runProvider(undefined, (params) =>
+            listSessionCatalogProvider(state.provider, params),
+          ),
+      );
+      const outcome = pending.catch((error: unknown) => error);
+      const successorStarted = createDeferredCore();
+      const successor =
+        phase === "queued"
+          ? listSessionCatalogProvider(
+              {
+                ...blocker,
+                list: () => {
+                  successorStarted.resolve();
+                  return blockers.promise;
+                },
+              },
+              {},
+            )
+          : Promise.resolve([]);
+      try {
+        if (phase === "queued") {
+          first.resolve({ done: false });
+          await successorStarted.promise;
+        } else {
+          await expect(pending).resolves.toEqual([]);
+          expect(close).toHaveBeenCalledOnce();
+        }
+        const disposal = state.dispose();
+        await delay(5_050);
+        expect(cleanup).not.toHaveBeenCalled();
+        expect(state.instance.lifecycle.signal.aborted).toBe(false);
+        expect(state.instance.hasRetainedConsumers).toBe(true);
+        if (phase === "queued") {
+          const retirement = new Error("catalog owner retired");
+          owner.abort(retirement);
+          expect(await outcome).toBe(retirement);
+          expect(close).toHaveBeenCalledOnce();
+        }
+        expect(next).toHaveBeenCalledOnce();
+        expect(published).not.toHaveBeenCalled();
+        publication.resolve();
+        await disposal;
+        expect(published).toHaveBeenCalledOnce();
+        expect(cleanup).toHaveBeenCalledOnce();
+        expect(state.instance.hasRetainedConsumers).toBe(false);
+        expect(state.instance.lifecycle.signal.aborted).toBe(true);
+      } finally {
+        owner.abort(new Error("test cleanup"));
+        first.resolve({ done: false });
+        blockers.resolve([]);
+        publication.resolve();
+        await Promise.allSettled([...active, pending, successor]);
+        lifetime.finishListing();
+      }
+    },
+  );
+
+  it("keeps initially disabled list operations empty without constructing a source", async () => {
+    const next = vi.fn(async () => ({ done: true as const, hosts: [] }));
+    const close = vi.fn();
+    const createListOperation = vi.fn<NonNullable<SessionCatalogProvider["createListOperation"]>>(
+      function (this: SessionCatalogProvider, query) {
+        expect(this.id).toBe("fixture");
+        expect(query.agentId).toBe("research");
+        return { next, close };
+      },
+    );
+    const state = await registerCatalog(true, false, { createListOperation });
+    const operation = state.provider.createListOperation!({ agentId: "research" });
+    expect(createListOperation).not.toHaveBeenCalled();
+    await expect(operation.next()).resolves.toEqual({ done: true, hosts: [] });
+    await state.setPreference(true);
+    await expect(operation.next()).resolves.toEqual({ done: true, hosts: [] });
+    expect(createListOperation).not.toHaveBeenCalled();
+    operation.close();
+    await expect(operation.next()).rejects.toThrow("operation is closed");
+
+    const enabled = state.provider.createListOperation!({ agentId: "research" });
+    await expect(enabled.next()).resolves.toEqual({ done: true, hosts: [] });
+    enabled.close();
+    enabled.close();
+    expect(createListOperation).toHaveBeenCalledOnce();
+    expect(next).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+    expect(state.list).not.toHaveBeenCalled();
+  });
+
+  it.each(["between steps", "during a step"] as const)(
+    "rejects consent revoked %s without publishing a partial success",
+    async (when) => {
+      const held = createDeferredCore<{ done: false }>();
+      const next = vi.fn(() => held.promise);
+      const close = vi.fn();
+      const state = await registerCatalog(true, true, {
+        createListOperation: () => ({ next, close }),
+      });
+      const operation = state.provider.createListOperation!({});
+      const first = operation.next();
+      try {
+        if (when === "between steps") {
+          held.resolve({ done: false });
+          await expect(first).resolves.toEqual({ done: false });
+          await state.setPreference(false);
+          await expect(operation.next()).rejects.toThrow("discovery is disabled");
+        } else {
+          const rejected = expect(first).rejects.toThrow("discovery is disabled");
+          await state.setPreference(false);
+          expect(close).not.toHaveBeenCalled();
+          held.resolve({ done: false });
+          await rejected;
+        }
+        expect(next).toHaveBeenCalledOnce();
+        operation.close();
+        expect(close).toHaveBeenCalledOnce();
+      } finally {
+        held.resolve({ done: false });
+        await first.catch(() => {});
+        operation.close();
+      }
+    },
+  );
+
   it.each([false, true])(
     "rejects retained catalog and node calls after instance retirement (enabled: %s)",
     async (enabled) => {

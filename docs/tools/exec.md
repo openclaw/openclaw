@@ -38,6 +38,11 @@ Background the command immediately instead of waiting for `yieldMs`. The process
 Limit the command's total lifetime, in **seconds**, overriding the configured exec timeout for this call. Expiry terminates the process even after `background` or `yieldMs` returns a session ID. `yieldMs` controls how long the tool waits before backgrounding. The `process` tool's `timeout` controls how long a poll waits, also in milliseconds.
 
 Applies to gateway, sandbox, and node `system.run` execution. `timeoutSeconds: 0` disables the exec process timeout for that call. For a persistent service on the gateway or in a sandbox, use `background: true` with `timeoutSeconds: 0`, then stop it with `process` action `kill` when finished. Disabling this timeout does not make the process survive its host or worker shutting down.
+
+Codex foreground `node_exec` inherits this budget, including per-agent defaults,
+instead of the ordinary dynamic-tool timeout. Node transport waits remain bounded
+even when the command timer is disabled; Stop and turn cancellation still apply.
+See [Codex timeouts](/plugins/codex-harness-reference/timeouts).
 </ParamField>
 
 <ParamField path="pty" type="boolean" default="false">

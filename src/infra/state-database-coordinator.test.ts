@@ -16,6 +16,7 @@ import {
   resolveStateDatabaseCoordinatorPath,
   resolveStateLifecycleRuntimeDirectory,
   tryCreateGatewaySchemaFenceDelegate,
+  tryCreateStateLifecycleDelegate,
   withStateDatabaseCoordinatorRuntimeDirectory,
   withStateSchemaFence,
 } from "./state-database-coordinator.js";
@@ -66,7 +67,14 @@ describe("state database coordinator", () => {
       actorId: "shared-state-test",
     };
     // An actor can open before Gateway startup without opening a coordinator on main.
-    expect(tryCreateGatewaySchemaFenceDelegate(params)).toBeUndefined();
+    const realpath = vi.spyOn(fsSync.realpathSync, "native");
+    try {
+      expect(tryCreateGatewaySchemaFenceDelegate(params)).toBeUndefined();
+      expect(tryCreateStateLifecycleDelegate(params)).toBeUndefined();
+      expect(realpath).not.toHaveBeenCalled();
+    } finally {
+      realpath.mockRestore();
+    }
     expect(fsSync.existsSync(params.runtimeDirectory)).toBe(false);
     expect(
       withStateSchemaFence(params, () => tryCreateGatewaySchemaFenceDelegate(params)),
@@ -139,7 +147,10 @@ describe("state database coordinator", () => {
       const { result: coordinator, database } = captureCoordinatorDatabase(() =>
         acquireStateDatabaseCoordinator(params),
       );
+      let delegation: ReturnType<typeof tryCreateStateLifecycleDelegate>;
       try {
+        delegation = tryCreateStateLifecycleDelegate({ ...params, actorId: "state-worker" });
+        expect(delegation).toBeDefined();
         expect(coordinator.path).toBe(
           resolveStateDatabaseCoordinatorPath({
             ...params,
@@ -148,6 +159,7 @@ describe("state database coordinator", () => {
           }),
         );
       } finally {
+        delegation?.release();
         coordinator.release();
         expect(database.isOpen).toBe(false);
       }

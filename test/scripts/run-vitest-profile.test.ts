@@ -442,6 +442,7 @@ it("holds admitted work until the caller releases it", async () => {
     lifetime.run(async () => {
       const root = createTempDir("oc-profile-help-");
       const ordering = path.join(root, "hash-order.jsonl");
+      const drained = path.join(root, "event-loop-drained");
       const stages = path.join(root, "profile-stages.jsonl");
       const profiles = path.join(root, "profiles");
       const preload = path.join(root, "observe-hash-order.mjs");
@@ -472,6 +473,9 @@ function recordStage(stage, code = null, signal = null) {
   }
 }
 recordStage("preload");
+if (role === "inner") {
+  process.once("beforeExit", () => fs.writeFileSync(${JSON.stringify(drained)}, "drained"));
+}
 if (role === "inner") process.once("exit", code => recordStage("exit-event", code));
 const spawn = childProcess.spawn;
 childProcess.spawn = function(...args) {
@@ -556,6 +560,8 @@ syncBuiltinESMExports();`,
       ).toEqual([{ tlsLoaded: false, profiling: mode === "main" }]);
       expect(result.code, result.output).toBe(0);
       expect(result.output).toContain("Usage:");
+      expect(fs.existsSync(drained), result.output).toBe(true);
+      expect(fs.readdirSync(profiles)).toHaveLength(mode === "main" ? 1 : 0);
     }),
   );
 

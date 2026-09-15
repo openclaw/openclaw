@@ -15,6 +15,7 @@ import {
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
+  addSafeTimeoutDelayGraceMs,
   addTimerTimeoutGraceMs,
   parseStrictNonNegativeInteger,
 } from "openclaw/plugin-sdk/number-runtime";
@@ -38,7 +39,7 @@ export { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reaso
 
 /** Default timeout for Codex dynamic tool calls. */
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
-/** Hard cap for per-call Codex dynamic tool timeout overrides. */
+/** Hard cap for ordinary per-call Codex dynamic tool timeout overrides. */
 const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 // timeoutSeconds is an inner tool budget. Keep enough outer-watchdog headroom
 // for bounded setup RPCs and the tool's structured timeout result to complete.
@@ -510,8 +511,21 @@ export function hasPendingDynamicToolTerminalDiagnostic(params: {
 export function resolveDynamicToolCallTimeoutMs(params: {
   call: CodexDynamicToolCallParams;
   config: EmbeddedRunAttemptParams["config"];
+  toolBridge?: Pick<CodexDynamicToolBridge, "availableTools">;
 }): number {
   const args = isJsonObject(params.call.arguments) ? params.call.arguments : undefined;
+  if (params.call.tool === "node_exec") {
+    const executionTimeoutMs = params.toolBridge?.availableTools
+      .find((tool) => tool.name === params.call.tool)
+      ?.getExecutionTimeoutMs?.(params.call.arguments);
+    if (executionTimeoutMs !== undefined) {
+      // Foreground node execution owns its command and transport budgets.
+      return addSafeTimeoutDelayGraceMs(
+        executionTimeoutMs,
+        CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
+      );
+    }
+  }
   if (
     params.call.tool === "openclaw" ||
     params.call.tool === "ask_user" ||

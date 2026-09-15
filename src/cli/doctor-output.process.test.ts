@@ -11,7 +11,7 @@ import {
   runBuiltRuntime,
   runSourceRuntime,
 } from "../commands/doctor-config-preflight.process.test-support.js";
-import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -390,13 +390,11 @@ describe("Doctor report process output", () => {
       }),
     );
 
-    const entryPath = fileURLToPath(new URL("../entry.ts", import.meta.url));
+    const entryUrl = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli);
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        "tsx",
-        entryPath,
+        ...resolveRuntimeWorkerArgv(entryUrl),
         "doctor",
         "--lint",
         "--only",

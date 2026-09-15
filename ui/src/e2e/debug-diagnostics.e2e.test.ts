@@ -231,6 +231,9 @@ suite.define(() => {
         );
         expect(Number.isFinite(initialPingMs)).toBe(true);
         const nextSystemInfoCount = (await gateway.getRequests("system.info")).length;
+        const minimizedCurrentWorkCount = (
+          await gateway.getRequests("sessions.list", currentWorkQuery)
+        ).length;
         await gateway.deferNext("system.info");
         await gateway.setMethodResponse("system.info", {
           ...deviceSystemInfo,
@@ -269,6 +272,9 @@ suite.define(() => {
           )
           .toBeGreaterThanOrEqual(initialPingMs + 200);
         await gateway.waitForRequest("system.info", { after: systemInfoCount + 2 });
+        expect(await gateway.getRequests("sessions.list", currentWorkQuery)).toHaveLength(
+          minimizedCurrentWorkCount,
+        );
         for (const metric of metrics) {
           const points = await widget
             .locator(`.gateway-vital--${metric} polyline`)

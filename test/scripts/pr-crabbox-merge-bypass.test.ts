@@ -357,6 +357,7 @@ const save = () => fs.writeFileSync("input.json", JSON.stringify(value));
 const fail = (message, code = 19) => { console.error(message); process.exit(code); };
 const out = (data) => console.log(typeof data === "string" ? data : JSON.stringify(data));
 const repo = {id:123,nameWithOwner:"openclaw/openclaw",url:"https://github.com/openclaw/openclaw"};
+const repoNodeId = "fixture-repo";
 const reviewComments = ${JSON.stringify(reviewComments)};
 const pr = {id:"fixture-pr",number:131091,url:repo.url+"/pull/131091",state:"OPEN",isDraft:false,
   headRefOid:value.headSha,headRefName:"topic",baseRefName:"main",baseRefOid:"${baseSha}",
@@ -377,7 +378,7 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("viewerMergeBod
   out({data:{repository:{pullRequest:{...pr,viewerMergeBodyText:value.mergePreview}}}});
 }
 else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(owner:"))) {
-  out({data:{repository:{...repo,ref:{target:{oid:"${mainSha}"}},pullRequest:pr}}});
+  out({data:{repository:{...repo,id:repoNodeId,databaseId:repo.id,ref:{target:{oid:"${mainSha}"}},pullRequest:pr}}});
 } else if (endpoint === "user") out(args[args.indexOf("--jq")+1] === ".login" ? "relay-reader" : {login:"relay-reader"});
 else if (endpoint === "graphql" && args.includes("query=query { viewer { login } }")) {
   const json = JSON.stringify({data:{viewer:value.actor}});
@@ -392,7 +393,8 @@ else if (endpoint === "graphql" && args.includes("query=query { viewer { login }
     if (!args.includes("--paginate") || !args.includes("--slurp")) fail("missing pagination");
   }
   const prefix = "repos/openclaw/openclaw/";
-  if (endpoint === prefix + "pulls/131091") out(value.pullRequest);
+  if (endpoint === "repos/openclaw/openclaw") out({id:repo.id,node_id:repoNodeId,full_name:repo.nameWithOwner,html_url:repo.url});
+  else if (endpoint === prefix + "pulls/131091") out(value.pullRequest);
   else if (endpoint === prefix + "commits/" + value.headSha && args.includes("--jq")) out({name:"Fixture Contributor",email:"fixture@example.com",user:{login:"fixture-contributor",type:"User"}});
   else if (endpoint === prefix + "issues/131091/comments?per_page=100") out(reviewComments);
   else if (endpoint === prefix + "commits/" + value.headSha + "/check-runs?filter=latest&per_page=100") out(value.checkRuns.check_runs.map(check => ({check_runs:[check]})));

@@ -149,6 +149,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
 </ParamField>
 <ParamField path="context" type='"isolated" | "fork"'>
   `fork` branches the requester's current transcript into the child session, including the in-progress user turn and completed tool results. The requester can keep running while its visible or hidden child starts. Native sub-agents only. Non-thread spawns default to `isolated`; thread-bound spawns follow `threadBindings.defaultSpawnContext`, which defaults to `fork`. Pass `isolated` explicitly to guarantee clean context. All native forks, hidden or visible, must target the same agent as the requester.
+  Codex-backed forked children receive completed tool output with secrets redacted and historical tool inputs summarized. Context size limits still apply.
 </ParamField>
 <ParamField path="visible" type="boolean" default="false">
   Create a persistent dashboard session only when the user requests a separate session or needs to return to and steer the work independently. Omit this flag or use `false` for internal QA, research, coding, review, and test workers supporting the parent task. Visible spawns support only `runtime: "subagent"` and always keep the created session.
@@ -248,6 +249,12 @@ waiting.
 An operator can also resume the existing child with the `sessions.send` Gateway
 method and its paused session key. This preserves the original task, requester,
 and parent completion batch, so the parent continues when the child finishes.
+
+A background `exec` command cannot wake a yielded sub-agent. Collect its result
+with `process` before yielding; the tool rejects a self-yield while that process
+is running or its result is uncollected. If an older version left a child waiting
+this way, resume that existing child with `sessions.send` and have it reconcile
+the retained result. Elapsed time alone does not prove that its work completed.
 
 Collector runs are the exception, because their result is collected explicitly
 rather than announced. Where collector context reaches the tool factory, such as

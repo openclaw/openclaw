@@ -76,6 +76,13 @@ To upgrade history from an older file-backed installation, stop the Gateway
 (`openclaw gateway stop`), back up its state (`openclaw backup create --verify`),
 and run `openclaw doctor --fix` before restarting it with
 `openclaw gateway start`.
+
+Doctor migrates existing databases at every configured `agents.entries.<id>.agentDir`,
+including custom paths outside the default agent tree and databases absent from the
+registry. Configured session stores and retained legacy databases are also checked.
+If a configured database still needs a schema migration after `--fix`, Doctor reports
+its path and exits non-zero instead of printing `Doctor complete`.
+
 `openclaw doctor --session-sqlite <mode>` provides targeted inspection,
 import, validation, and SQLite maintenance. Legacy `sessions.json` files are
 migration sources. Hot transcript JSONL files are imported and archived after

@@ -27,6 +27,7 @@ import type {
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
   TranscriptArchivePublishWorkerMessage,
+  TranscriptArchiveReadResult,
   TranscriptArchiveWorkerMessage,
   TranscriptArchiveWorkerPlan,
   TranscriptArchiveWorkerResult,
@@ -462,6 +463,14 @@ async function runArchiveSession(
         settled: true,
         results: plans.map((plan) => publishTranscriptArchiveInWorker(plan, env)),
       };
+    } else if (request.operation === "read-final") {
+      const { readTranscriptArchiveFinalInWorker } =
+        await import("./session-accessor.sqlite-archive-read.js");
+      const results: TranscriptArchiveReadResult[] = [];
+      for (const plan of request.plans) {
+        results.push(await readTranscriptArchiveFinalInWorker(plan, env));
+      }
+      response = { type: "final-read", operationId, settled: true, results };
     } else {
       throw new Error("SQLite archive Worker received an unsupported operation");
     }

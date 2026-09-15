@@ -1,10 +1,8 @@
-import { getDeliveryQueueEntryStatus } from "../../../infra/delivery-queue-sqlite.js";
 import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sqlite.kernel.js";
 import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import { releaseSessionDeliveryClaim } from "../../../infra/session-delivery-queue-storage.js";
 import {
   prepareClaimedSessionDelivery,
-  SESSION_DELIVERY_QUEUE_NAME,
   type QueuedSessionDelivery,
   type QueuedSessionDeliveryPayload,
   type SessionDeliverySettledOutcome,
@@ -130,8 +128,7 @@ export function admitCorrelatedSubagentSessionDelivery(params: {
     task: projectedTask,
   });
   publishCommittedRecords(subagent, projectedTask);
-  const status = getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueEntry.id);
-  return { id: queueEntry.id, claimed: admission.claimed, status: status ?? "pending" };
+  return { id: queueEntry.id, ...admission };
 }
 
 export function resolveCorrelatedSubagentDelivery(
@@ -252,6 +249,7 @@ export async function retrySubagentCompletionDelivery(
     suspendedAt: undefined,
     suspendedReason: undefined,
     attemptCount: 0,
+    lastDropReason: undefined,
     lastError: undefined,
     nextAttemptAt: undefined,
   });

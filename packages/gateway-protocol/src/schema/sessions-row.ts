@@ -182,6 +182,10 @@ export const SessionRowSchema = Type.Object(
     execCwd: Type.Optional(Type.String()),
     spawnedWorkspaceDir: Type.Optional(Type.String()),
     spawnedCwd: Type.Optional(Type.String()),
+    /** Persisted project registry association, distinct from a cloud repository workspace. */
+    projectId: Type.Optional(Type.String()),
+    /** Persisted task cwd or spawned workspace; no filesystem resolution is implied. */
+    workspaceDir: Type.Optional(Type.String()),
     permissionMode: Type.Optional(SessionPermissionModeSchema),
     permissionModePending: Type.Optional(Type.Boolean()),
     sessionRoot: Type.Optional(Type.String()),

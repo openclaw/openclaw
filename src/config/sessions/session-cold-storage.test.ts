@@ -870,6 +870,38 @@ describe("cold transcript storage workers", () => {
     expect(fixture.snapshot()).toEqual(resumed);
   });
 
+  it("preserves a cold transcript when its reader is revoked at restore commit", async () => {
+    const fixture = await createFixture();
+    const { descriptor } = await archiveFixture(fixture);
+    const before = fixture.snapshot();
+    const originalWorker = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
+    let revoked = false;
+    vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
+      (params) => {
+        if (params.expectedMessageType !== "reclaimed") {
+          return originalWorker(params);
+        }
+        return originalWorker({
+          ...params,
+          onCommitRequest: () => {
+            revoked = true;
+            params.onCommitRequest();
+          },
+        });
+      },
+    );
+    await expect(
+      restoreSessionColdTranscript(fixture.scope, () => {
+        if (revoked) {
+          throw new Error("Cold transcript reader was revoked");
+        }
+      }),
+    ).rejects.toThrow("Cold transcript reader was revoked");
+    expect(revoked).toBe(true);
+    expect(readSessionColdTranscript(fixture.database(), historicalId)).toEqual(descriptor);
+    expect(fixture.snapshot()).toEqual(before);
+  });
+
   it.each(["missing", "corrupt"] as const)(
     "retains the descriptor when its file is %s and recovers after repair",
     async (damage) => {

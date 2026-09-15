@@ -5,11 +5,13 @@ import { getAiTransportHost, type AssistantMessage, type Model } from "@openclaw
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../../config/validation-core.js";
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -27,6 +29,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { AgentSession } from "../sessions/agent-session.js";
@@ -47,6 +50,9 @@ type Mode =
   | "provider-tail"
   | "cleanup-tail"
   | "preparation-failure"
+  | "lsp-caller-abort"
+  | "lsp-parent-abort"
+  | "lsp-ready"
   | "before_compaction"
   | "after_compaction"
   | "raw";
@@ -311,10 +317,18 @@ vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => ({
 
 vi.mock("../agent-bundle-lsp-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent-bundle-lsp-runtime.js")>()),
-  createBundleLspToolRuntime: async () => {
+  createBundleLspToolRuntime: async (params: Parameters<typeof createBundleLspToolRuntime>[0]) => {
     const current = fixture();
     if (current.mode === "preparation-failure") {
       throw new Error("fixture LSP setup failed");
+    }
+    if (
+      current.mode === "lsp-caller-abort" ||
+      current.mode === "lsp-parent-abort" ||
+      current.mode === "lsp-ready"
+    ) {
+      current.entered.resolve();
+      await racePromiseWithAbortSignal(current.finish.promise, params.abortSignal);
     }
     const connection = openTool(current, "lsp");
     return {
@@ -357,12 +371,18 @@ describe("delegate compaction resource retirement", () => {
     "provider-tail",
     "cleanup-tail",
     "preparation-failure",
+    "lsp-caller-abort",
+    "lsp-parent-abort",
+    "lsp-ready",
     "before_compaction",
     "after_compaction",
     "raw",
   ])(
     "keeps actual work owned through %s",
     async (mode) => {
+      const lspCancelled = mode === "lsp-caller-abort" || mode === "lsp-parent-abort";
+      const pendingLsp = lspCancelled || mode === "lsp-ready";
+      const preparationFailed = mode === "preparation-failure" || lspCancelled;
       await withOpenClawTestState(
         { label: "delegate-resources", layout: "split" },
         async (state) => {
@@ -543,20 +563,34 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                   if (
                     mode === "abort-before-commit" ||
                     mode === "abort-after-commit" ||
-                    mode === "automatic-after-commit"
+                    mode === "automatic-after-commit" ||
+                    mode === "lsp-caller-abort"
                   ) {
                     controller.abort(new Error("fixture caller cancelled compaction"));
                   }
+                  if (mode === "lsp-parent-abort") {
+                    parent.beginClose(new Error("fixture parent cancelled compaction"));
+                    expect(controller.signal.aborted).toBe(false);
+                  }
+                  if (mode === "lsp-ready") {
+                    current.finish.resolve();
+                  }
                 }
-                const result = await operation;
+                const result = pendingLsp
+                  ? await withTestTimeout(operation, 5_000, "LSP preparation did not settle")
+                  : await operation;
                 const cancelled =
                   mode === "abort-before-commit" ||
                   mode === "abort-after-commit" ||
                   mode === "automatic-after-commit" ||
                   mode === "timeout-after-commit";
-                expect(result.ok).toBe(!cancelled && mode !== "preparation-failure");
+                expect(result.ok).toBe(!cancelled && !preparationFailed);
                 expect(current.envRestored).toBe(true);
-                expect(current.disposals).toBe(mode === "preparation-failure" ? 0 : 1);
+                expect(current.disposals).toBe(preparationFailed ? 0 : 1);
+                if (lspCancelled) {
+                  expect(current.session).toBeUndefined();
+                  expect(current.tools).toHaveLength(1);
+                }
                 if (current.context) {
                   expect(() => current.context?.isIdle()).toThrow();
                 }
@@ -566,7 +600,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                   assistant(model, summary).usage,
                 );
                 expect(recordUsage.mock.calls.length).toBe(usageCount);
-                const committed = mode !== "abort-before-commit" && mode !== "preparation-failure";
+                const committed = mode !== "abort-before-commit" && !preparationFailed;
                 expect(
                   SessionManager.open(target, state.workspaceDir)
                     .getBranch()
@@ -574,7 +608,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                 ).toBe(committed ? 1 : 0);
                 expect(recordCompaction.mock.calls.length).toBe(committed ? 1 : 0);
                 const source = expectDefined(current.source, "selected managed source");
-                if (held) {
+                if (held && !pendingLsp) {
                   expect(source.database.isOpen).toBe(true);
                   expect(current.tools.length).toBe(mode === "preparation-failure" ? 1 : 2);
                   if (mode !== "cleanup-tail") {
@@ -592,6 +626,12 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                   await Promise.all(current.pending);
                   await drained;
                   expect(current.lateReads).toBeGreaterThan(0);
+                } else if (pendingLsp) {
+                  await withTestTimeout(
+                    parent.drain(),
+                    5_000,
+                    "LSP preparation cleanup did not settle",
+                  );
                 } else {
                   await parent.drain();
                 }

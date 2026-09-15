@@ -72,6 +72,21 @@ Announce context is normalized to a stable internal event block:
 | Result content | Latest visible assistant text from the child                                                             |
 | Follow-up      | Instruction describing when to reply vs stay silent                                                      |
 
+The result is the child's complete visible final answer for the completed run.
+OpenClaw preserves prompt-data escaping and stable order when it delivers several
+results together. It does not shorten an answer to fit the former announce
+projection limits. The bounded lifecycle snapshot remains separate from the
+complete answer sent to the parent.
+
+For nested work, descendant findings help the child form its answer. The child's
+own final answer is what travels onward to its parent. If the child sends its
+final answer through the message tool and then returns `NO_REPLY`, that final
+answer remains authoritative.
+
+Completion delivery can read an existing registered archive when child cleanup
+finishes before the parent resumes. This does not add a post-cleanup retrieval
+feature.
+
 Terminal failed runs report failure status without replaying captured
 reply text. Tool/toolResult output is not promoted into child result text.
 

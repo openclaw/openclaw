@@ -185,7 +185,8 @@ function sanitizeProfile(profile: Profiler.Profile, packageRoot: string | null) 
   }
   assertProfile(visited.size === nodes.length);
   assertProfile(profile.samples.every((id) => ids.has(id)));
-  assertProfile(profile.timeDeltas.every((delta) => Number.isFinite(delta) && delta >= 0));
+  // V8 deoptimization samples can arrive out of timestamp order; preserve their signed deltas.
+  assertProfile(profile.timeDeltas.every((delta) => Number.isFinite(delta)));
   const result = {
     requestedDurationMs: DURATION_MS,
     actualDurationMs: (profile.endTime - profile.startTime) / 1_000,

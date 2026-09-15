@@ -123,10 +123,14 @@ export function createCodexAttemptLifecycleController(
     state.pendingTerminalDynamicToolRelease = value;
     scheduleTerminalDynamicToolReleaseCheck();
   };
-  const emitLifecycleStart = () => {
+  const emitLifecycleStart = (model: { provider: string; model: string }) => {
     void emitCodexAppServerEvent(params, {
       stream: "lifecycle",
       data: { phase: "start", startedAt: attemptStartedAt },
+    });
+    void emitCodexAppServerEvent(params, {
+      stream: "lifecycle",
+      data: { phase: "model", ...model },
     });
     state.lifecycleStarted = true;
   };

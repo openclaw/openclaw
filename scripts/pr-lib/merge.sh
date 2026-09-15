@@ -1,7 +1,7 @@
 is_mainline_drift_critical_path_for_merge() {
   local path="$1"
   case "$path" in
-    package.json|pnpm-lock.yaml|pnpm-workspace.yaml|.npmrc|.oxlintrc.json|.oxfmtrc.json|tsconfig.json|tsconfig.*.json|vitest.config.ts|vitest.*.config.ts|scripts/*|.github/workflows/*)
+    package.json|pnpm-lock.yaml|pnpm-workspace.yaml|.npmrc|.oxlintrc.json|.oxfmtrc.json|tsconfig.json|tsconfig.*.json|test/tsconfig/*|vitest.config.ts|vitest.*.config.ts|scripts/*|.github/workflows/*)
       return 0
       ;;
   esac
@@ -130,6 +130,7 @@ mainline_drift_requires_sync() (
   export LC_ALL=C
   local mainline_base="$1"
   local prepared_head_sha="$2"
+  local comparison_head_sha="${3:-$PR_MAIN_SHA}"
 
   if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "${mainline_base}^{commit}" 2>/dev/null; then
     echo "Mainline drift relevance: unable to read mainline base $mainline_base locally." >&2
@@ -151,7 +152,7 @@ mainline_drift_requires_sync() (
   # Compare only mainline commits since the prepared lineage base. The remote
   # GraphQL commit has a different parent but its verified tree shares this
   # lineage, so its PR files must not look like incoming mainline drift.
-  git diff --name-only "${mainline_base}..${PR_MAIN_SHA}" | sed '/^$/d' | sort -u > "$delta_file" || return 2
+  git diff --name-only "${mainline_base}..${comparison_head_sha}" | sed '/^$/d' | sort -u > "$delta_file" || return 2
   git diff --name-only "${mainline_base}..${prepared_head_sha}" | sed '/^$/d' | sort -u > "$prepared_files_file" || return 2
   comm -12 "$delta_file" "$prepared_files_file" > "$overlap_file" || return 2
   : > "$critical_file" || return 2
@@ -182,7 +183,7 @@ mainline_drift_requires_sync() (
   if [ "$overlap_count" -gt 0 ] || [ "$critical_count" -gt 0 ]; then
     print_file_list_with_limit "Mainline files overlapping prepared files" "$overlap_file" || return 2
     print_file_list_with_limit "Mainline files touching merge-critical infrastructure" "$critical_file" || return 2
-    echo "Mainline drift relevance: sync required before merge." || return 2
+    echo "Mainline drift relevance: relevant input changes found." || return 2
     return 0
   fi
 

@@ -67,7 +67,7 @@ import {
 } from "../session-utils.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
+import { readPreparedServerMethodModelCatalogs } from "./optional-model-catalog.js";
 import { createVisibleActiveSessionRunProjector } from "./session-active-runs.js";
 import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import { createSessionPlacementBatchProjector } from "./session-placement-read-projection.js";
@@ -236,18 +236,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         // another agent; resolve each configured agent's completed snapshot
         // (read-only, never starts discovery) so row projections stay
         // owner-scoped while cache reuse stays fenced per agent.
-        const catalogByAgent = new Map<
-          string,
-          Awaited<ReturnType<typeof readPreparedServerMethodModelCatalog>>
-        >();
         const agentIds = p.agentId ? [normalizeAgentId(p.agentId)] : listAgentIds(cfg);
-        for (const agentId of agentIds) {
-          catalogByAgent.set(
-            agentId,
-            await readPreparedServerMethodModelCatalog(context, { agentId }),
-          );
-        }
-        return catalogByAgent;
+        return readPreparedServerMethodModelCatalogs(context, agentIds);
       },
       {
         config: cfg,
@@ -262,9 +252,8 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             allowFullReload?: boolean;
             excludedKeys?: ReadonlySet<string>;
             loaded?: ReturnType<typeof loadCombinedSessionStoreForGatewayCore> & {
-              modelCatalogByAgent: Map<
-                string,
-                Awaited<ReturnType<typeof readPreparedServerMethodModelCatalog>>
+              modelCatalogByAgent: Awaited<
+                ReturnType<typeof readPreparedServerMethodModelCatalogs>
               >;
             };
             rowRepairAttempted?: boolean;

@@ -643,15 +643,12 @@ function redactPreservedToolValue(
   value: unknown,
   seen = new WeakSet<object>(),
 ): unknown {
-  if (typeof value === "string") {
-    return redactSensitiveFieldValue(key, redactToolPayloadText(value));
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    const text = String(value);
+    const redacted = redactSensitiveFieldValue(key, redactToolPayloadText(text));
+    return redacted === text ? value : redacted;
   }
-  if (
-    value === null ||
-    value === undefined ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  ) {
+  if (value === null || value === undefined) {
     return value;
   }
   if (Array.isArray(value)) {

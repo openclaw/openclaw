@@ -17,6 +17,7 @@ import { prepareConfigWriteTopology } from "../../../config/io.write-topology.js
 import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
 import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import { inspectShippedPluginInstallConfigRecords } from "../../../config/plugin-install-config-migration.js";
+import { copyConfigResolutionFactsThroughRewrite } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import {
@@ -134,6 +135,8 @@ function planConfigRepair(
   if (isDeepStrictEqual(config, snapshot.sourceConfig)) {
     return null;
   }
+  // Migration rebuilds the source object; retain only facts whose values survived.
+  copyConfigResolutionFactsThroughRewrite(snapshot.sourceConfig, config);
   const runtimeConfig = withMetadata(config, (metadata) => {
     const validationConfig = omitDeferredPluginMigrationConfig(config, deferredPluginMigrations);
     const validated = pluginContracts
@@ -155,6 +158,7 @@ function planConfigRepair(
   if (!runtimeConfig) {
     return null;
   }
+  copyConfigResolutionFactsThroughRewrite(snapshot.sourceConfig, runtimeConfig);
   setDeferredPluginMigrationConfigFacts(config, deferredPluginMigrations);
   return {
     config,

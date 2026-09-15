@@ -8,7 +8,9 @@ import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/target
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthFlow } from "../flows/doctor-health.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -81,6 +83,47 @@ it("admits a supported legacy registry without weakening runtime target validati
   } finally {
     await maintenance?.release();
   }
+});
+
+it("fails repair when a configured agentDir database remains on an older schema", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentDir = state.statePath(".openclaw", "agents", "worker", "agent");
+    const config: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { worker: { agentDir } } },
+    };
+    await state.writeConfig(config);
+    mocks.config.mockReturnValue(config);
+    const databasePath = createLegacyDatabaseFixture({
+      agentId: "worker",
+      env: state.env,
+      eventsBySession: {},
+      path: path.join(agentDir, "openclaw-agent.sqlite"),
+      schemaVersion: 19,
+    });
+    unregisterOpenClawAgentDatabase({ agentId: "worker", env: state.env, path: databasePath });
+    mocks.runContributions.mockImplementation(async (ctx) => {
+      ctx.runtime.log("Migration refused; configured database left unchanged.");
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await runCommandWithRuntime(runtime, () =>
+      runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
+    );
+
+    expect(mocks.runContributions).toHaveBeenCalledOnce();
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    const errors = runtime.error.mock.calls.flat().join("\n");
+    expect(errors).toContain(databasePath);
+    expect(errors).toContain("uses schema version 19");
+    expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 19 });
+    } finally {
+      database.close();
+    }
+  });
 });
 
 it.each(["canonical", "custom-json", "shared-sqlite", "registered-shared-sqlite"] as const)(

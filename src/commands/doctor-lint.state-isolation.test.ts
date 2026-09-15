@@ -25,9 +25,10 @@ import { appendSkillProposalEvent } from "../skills/workshop/store-sqlite-event.
 import { importLegacySkillProposal } from "../skills/workshop/store.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -84,7 +85,8 @@ describe("doctor lint state isolation", () => {
     mocks.sqliteOpen.mockClear();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     restoreEnv(originalEnv);
   });
@@ -118,7 +120,7 @@ describe("doctor lint state isolation", () => {
           importLegacySkillProposal({ record, ownerAgentId: owner, store: { env: state.env } });
         }
         const databasePath = resolveOpenClawStateSqlitePath(state.env);
-        closeOpenClawStateDatabaseByPath(databasePath);
+        await closeOpenClawStateDatabaseByPathAsync(databasePath);
         const before = snapshotDoctorLintSqliteFamily(databasePath);
         const filesBefore = fs
           .readdirSync(state.stateDir, { recursive: true, encoding: "utf8" })
@@ -232,7 +234,7 @@ describe("doctor lint state isolation", () => {
             },
           );
           const databasePath = resolveOpenClawStateSqlitePath(state.env);
-          closeOpenClawStateDatabaseByPath(databasePath);
+          await closeOpenClawStateDatabaseByPathAsync(databasePath);
           const before = snapshotDoctorLintSqliteFamily(databasePath);
           const backupBefore = fs.readFileSync(backup, "utf8");
           await selectWorkshopCheckWithUnavailableSource(databasePath);
@@ -299,7 +301,7 @@ describe("doctor lint state isolation", () => {
         );
         const sourcePath = await state.writeText("identity/device-auth.json", "legacy-file-marker");
         const databasePath = resolveOpenClawStateSqlitePath(state.env);
-        closeOpenClawStateDatabaseByPath(databasePath);
+        await closeOpenClawStateDatabaseByPathAsync(databasePath);
         const before = snapshotDoctorLintSqliteFamily(databasePath);
         const actual = await vi.importActual<
           typeof import("../flows/doctor-health-contributions.js")
@@ -788,7 +790,7 @@ describe("doctor lint state isolation", () => {
       expires_in: 3600,
     });
     const databasePath = resolveOpenClawStateSqlitePath(process.env);
-    closeOpenClawStateDatabaseByPath(databasePath);
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
     const lock = new DatabaseSync(databasePath);
     lock.exec("BEGIN IMMEDIATE");
     const before = snapshotDoctorLintSqliteFamily(databasePath);
@@ -827,7 +829,7 @@ describe("doctor lint state isolation", () => {
       stdout.mockRestore();
       lock.exec("ROLLBACK");
       lock.close();
-      closeOpenClawStateDatabaseByPath(databasePath);
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
       fs.rmSync(rootDir, { recursive: true, force: true });
     }
   });

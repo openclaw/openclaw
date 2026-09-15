@@ -43,6 +43,12 @@ const mocks = vi.hoisted(() => {
     >(() => {
       throw new Error("unexpected full registry hydration");
     }),
+    getSubagentRunsSnapshotForSessions: vi.fn<
+      (
+        runs: Map<string, SubagentRunRecord>,
+        keys: readonly string[],
+      ) => Map<string, SubagentRunRecord>
+    >(() => new Map()),
   };
 });
 
@@ -56,6 +62,7 @@ vi.mock("./subagent-registry-state.js", () => ({
   getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController: mocks.getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead: mocks.getSubagentRunsSnapshotForRead,
+  getSubagentRunsSnapshotForSessions: mocks.getSubagentRunsSnapshotForSessions,
 }));
 
 function createRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
@@ -83,6 +90,7 @@ describe("subagent registry scoped reads", () => {
     mocks.getSubagentSessionListRunsSnapshotForRead.mockReset().mockReturnValue(new Map());
     mocks.getSubagentRunsSnapshotForChildSession.mockReset().mockReturnValue(new Map());
     mocks.getSubagentRunsSnapshotForController.mockReset().mockReturnValue(new Map());
+    mocks.getSubagentRunsSnapshotForSessions.mockReset().mockReturnValue(new Map());
     mocks.getSubagentRunsSnapshotForRead.mockReset().mockImplementation(() => {
       throw new Error("unexpected full registry hydration");
     });
@@ -192,6 +200,27 @@ describe("subagent registry scoped reads", () => {
     expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
   });
 
+  it.each(["delivered", "intentional_non_delivery", "permanent_failure", "ambiguous"] as const)(
+    "reads %s settlement and descendant counts without hydrating unrelated payloads",
+    (disposition) => {
+      const root = "agent:main:root";
+      const run = createRun({
+        requesterSessionKey: root,
+        requesterAgentId: "main",
+        execution: { status: "terminal", endedAt: 100 },
+        delivery: { status: "pending", disposition },
+      });
+      mocks.getSubagentRunsSnapshotForSessions.mockReturnValue(new Map([[run.runId, run]]));
+      expect(mod.countActiveDescendantRuns(root, "main")).toBe(0);
+      expect(mod.countPendingDescendantRuns(root)).toBe(1);
+      expect(mod.hasDescendantRunAwaitingSettle(root, undefined, "main")).toBe(
+        disposition === "ambiguous",
+      );
+      expect(mod.hasDescendantRunAwaitingSettle(root, run.runId, "main")).toBe(false);
+      expect(mocks.getSubagentRunsSnapshotForRead).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps every bound read equivalent to its documented snapshot scope", () => {
     const now = Date.now();
     const root = "agent:main:root";
@@ -285,6 +314,7 @@ describe("subagent registry scoped reads", () => {
       [...mocks.liveRuns.values()].filter((run) => run.childSessionKey === childSessionKey),
     );
     mocks.getSubagentRunsSnapshotForRead.mockReturnValue(snapshot);
+    mocks.getSubagentRunsSnapshotForSessions.mockReturnValue(snapshot);
     mocks.getSubagentRunsSnapshotForChildSession.mockReturnValue(childSnapshot);
     mocks.getSubagentRunsSnapshotForController.mockReturnValue(controllerSnapshot);
     mocks.getSubagentSessionListRunsSnapshotForRead.mockReturnValue(snapshot);

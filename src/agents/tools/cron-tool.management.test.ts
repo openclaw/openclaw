@@ -160,35 +160,42 @@ describe("Control UI admin automation management tool", () => {
     });
   });
 
-  it.each([
-    { kind: "command", argv: ["printf", "synthetic-proof"] },
-    { kind: "script", script: "return { output: 'synthetic-proof' };" },
-    { kind: "agentTurn", message: "Synthetic reminder" },
-  ])("inherits the stored $kind kind for a timeout-only update", async (currentPayload) => {
-    await withAdminTool(
-      "unknown",
-      async ({ tool, calls, resolveCreator }) => {
-        await tool.execute("timeout-update", {
-          action: "update",
-          jobId: "telegram-created-job",
-          job: { payload: { timeoutSeconds: 30 } },
-        });
-        expect(calls).toEqual([
-          { method: "cron.get", params: { id: "telegram-created-job" } },
-          {
-            method: "cron.update",
-            params: {
-              id: "telegram-created-job",
-              expectedConfigRevision: "sha256:stored-job",
-              patch: { payload: { kind: currentPayload.kind, timeoutSeconds: 30 } },
+  it.each(
+    [
+      { kind: "command", argv: ["printf", "synthetic-proof"] },
+      { kind: "script", script: "return { output: 'synthetic-proof' };" },
+      { kind: "agentTurn", message: "Synthetic reminder" },
+    ].flatMap((payload) =>
+      [30, null].map((timeoutSeconds) => ({ currentPayload: payload, timeoutSeconds })),
+    ),
+  )(
+    "inherits the stored $currentPayload.kind kind for a timeout-only update ($timeoutSeconds)",
+    async ({ currentPayload, timeoutSeconds }) => {
+      await withAdminTool(
+        "unknown",
+        async ({ tool, calls, resolveCreator }) => {
+          await tool.execute("timeout-update", {
+            action: "update",
+            jobId: "telegram-created-job",
+            job: { payload: { timeoutSeconds } },
+          });
+          expect(calls).toEqual([
+            { method: "cron.get", params: { id: "telegram-created-job" } },
+            {
+              method: "cron.update",
+              params: {
+                id: "telegram-created-job",
+                expectedConfigRevision: "sha256:stored-job",
+                patch: { payload: { kind: currentPayload.kind, timeoutSeconds } },
+              },
             },
-          },
-        ]);
-        expect(resolveCreator).not.toHaveBeenCalled();
-      },
-      currentPayload,
-    );
-  });
+          ]);
+          expect(resolveCreator).not.toHaveBeenCalled();
+        },
+        currentPayload,
+      );
+    },
+  );
 
   it("advertises only the five admitted management actions and their inputs remotely", async () => {
     await withAdminTool("unknown", async ({ tool }) => {

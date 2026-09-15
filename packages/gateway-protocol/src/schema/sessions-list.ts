@@ -38,6 +38,14 @@ export const SessionsListParamsSchema = closedObject({
   /** Include the durable Activity recap and its canonical transcript freshness. */
   includeActivitySummary: Type.Optional(Type.Boolean()),
   label: Type.Optional(SessionLabelString),
+  /** Exact project registry association stored on the session, not its repository workspace ID. */
+  projectId: Type.Optional(NonEmptyString),
+  /** Exact stored task cwd, falling back to the stored spawned workspace; never resolves paths. */
+  workspaceDir: Type.Optional(NonEmptyString),
+  /** Exact custom sidebar category; an empty string selects ungrouped sessions. */
+  group: Type.Optional(Type.String()),
+  /** Filter by the canonical root-session pin state. */
+  pinned: Type.Optional(Type.Boolean()),
   /** Limit rows to sessions with an explicitly stored Control UI face preference. */
   boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
   /** Limit rows by whether a persisted session dashboard exists. */
@@ -50,6 +58,17 @@ export const SessionsListParamsSchema = closedObject({
   ownerFirst: Type.Optional(Type.Boolean()),
   /** Limit rows to sessions owned by or previously prompted by the authenticated viewer. */
   involvingMe: Type.Optional(Type.Boolean()),
+  /** Qualified human-profile relationship, independent of id-only actor filters. */
+  profileRelation: Type.Optional(
+    closedObject({
+      profileId: NonEmptyString,
+      relationship: Type.Union([
+        Type.Literal("owned"),
+        Type.Literal("created"),
+        Type.Literal("involving"),
+      ]),
+    }),
+  ),
   /** Profile association filter, applied to visible retained identities before pagination. */
   involvingProfileId: Type.Optional(NonEmptyString),
   /** Include a bounded people facet over visible matching sessions before the profile filter. */

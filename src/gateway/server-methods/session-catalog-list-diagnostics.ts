@@ -77,6 +77,13 @@ export function startSessionCatalogListDiagnostics(
             ...(providerStartedAt === undefined || timing.settledAt === undefined
               ? {}
               : { providerElapsedMs: Math.round(timing.settledAt - providerStartedAt) }),
+            ...(timing.stepCount === undefined ? {} : { stepCount: timing.stepCount }),
+            ...(timing.admittedStepMs === undefined
+              ? {}
+              : { admittedStepMs: Math.round(timing.admittedStepMs) }),
+            ...(timing.continuationWaitMs === undefined
+              ? {}
+              : { continuationWaitMs: Math.round(timing.continuationWaitMs) }),
             ...(timing.settledAt === undefined
               ? {}
               : { completionDelayMs: Math.round(finishedAt - timing.settledAt) }),

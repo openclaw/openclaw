@@ -24,6 +24,7 @@ import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../cancellation-policy.js";
 import { createServiceChildRelayAdapter } from "../service-child-relay-host.js";
 import type {
   ProcessAdapterConstruction,
+  ProcessAdapterStartup,
   SpawnProcessAdapter,
   SpawnSecretInput,
 } from "../types.js";
@@ -110,9 +111,11 @@ type ChildAdapterInput = ProcessAdapterConstruction & {
     | { argv?: never; anchoredShellCommand: string }
   );
 
-export async function createChildAdapter(params: ChildAdapterInput): Promise<WorkerChildAdapter> {
+export async function createChildAdapter(
+  params: ChildAdapterInput,
+): Promise<ProcessAdapterStartup<WorkerChildAdapter>> {
   if (params.anchoredShellCommand !== undefined) {
-    return await createServiceChildRelayAdapter({
+    const adapter = await createServiceChildRelayAdapter({
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
       command: process.platform === "win32" ? params.anchoredShellCommand : "/bin/sh",
@@ -126,6 +129,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
       onSpawnCleanup: params.onSpawnCleanup,
       stderrDestination: params.stderrDestination,
     });
+    return { adapter, ready: Promise.resolve() };
   }
 
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
@@ -153,7 +157,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     params.ownedWorker === undefined &&
     (params.ownProcessTree === true || process.env.OPENCLAW_SERVICE_MARKER?.trim())
   ) {
-    return await createServiceChildRelayAdapter({
+    const adapter = await createServiceChildRelayAdapter({
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
       command: preparedSpawn.command,
@@ -169,6 +173,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
       onSpawnCleanup: params.onSpawnCleanup,
       stderrDestination: params.stderrDestination,
     });
+    return { adapter, ready: Promise.resolve() };
   }
 
   // A detached POSIX child is still a descendant in the service cgroup/job, but
@@ -550,33 +555,6 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     events.clear();
   };
 
-  params.onSpawnCleanup?.(cleanup.promise);
-  try {
-    // Construction may outlive admission; publish cleanup before any private input.
-    assertCurrent();
-    if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {
-      throw new Error("worker lifecycle IPC channel was not created");
-    }
-    if (params.input !== undefined) {
-      childStdin?.write(params.input);
-      stdin?.end();
-    } else if (stdinMode === "pipe-closed") {
-      stdin?.end();
-    }
-    if (params.secretInput) {
-      assertCurrent();
-      await secretDelivery?.deliverTo(child, { abortSignal: params.abortSignal });
-    }
-  } catch (error) {
-    kill("SIGKILL");
-    try {
-      await cleanup.promise;
-    } finally {
-      dispose();
-    }
-    throw error;
-  }
-
   const closeStartGate = params.ownedWorker ? disconnectWorkerIpc : undefined;
 
   let startGateOpened = false;
@@ -606,7 +584,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
       }
     : undefined;
 
-  return {
+  const adapter: WorkerChildAdapter = {
     pid: child.pid ?? undefined,
     stdin,
     oomScoreWrapperSelected: preparedSpawn.wrapped,
@@ -621,4 +599,35 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     closeStartGate,
     openStartGate,
   };
+  params.onSpawnCleanup?.(cleanup.promise);
+  const ready = (async () => {
+    try {
+      // Construction may outlive admission; publish cleanup before any private input.
+      assertCurrent();
+      if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {
+        throw new Error("worker lifecycle IPC channel was not created");
+      }
+      if (params.input !== undefined) {
+        childStdin?.write(params.input);
+        stdin?.end();
+      } else if (stdinMode === "pipe-closed") {
+        stdin?.end();
+      }
+      if (params.secretInput) {
+        assertCurrent();
+        // deliverTo transfers its pipe synchronously; readiness retains the writer.
+        await secretDelivery?.deliverTo(child, { abortSignal: params.abortSignal });
+      }
+    } catch (error) {
+      kill("SIGKILL");
+      try {
+        await cleanup.promise;
+      } finally {
+        dispose();
+      }
+      throw error;
+    }
+  })();
+  void ready.catch(() => {});
+  return { adapter, ready };
 }

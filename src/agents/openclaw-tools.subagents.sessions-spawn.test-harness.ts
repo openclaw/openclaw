@@ -382,7 +382,9 @@ vi.mock("../config/config.js", () => ({
   resolveGatewayPort: () => 18789,
 }));
 
-vi.mock("../config/sessions.js", () => ({
+vi.mock("../config/sessions.js", async () => ({
+  isPerAgentSessionStoreConfig: (await import("../config/sessions/session-store-config.js"))
+    .isPerAgentSessionStoreConfig,
   isConfiguredSessionStoreAgentId: (
     cfg: { agents?: { list?: Array<{ id?: string }> } },
     agentId: string,

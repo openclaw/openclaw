@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createChildAdapter } from "./child.js";
-import { createStubChild } from "./child.test-support.js";
+import { createStubChild, readyChildAdapter } from "./child.test-support.js";
+
+const startChildAdapter = readyChildAdapter(createChildAdapter);
 
 const { spawnWithFallback } = vi.hoisted(() => ({ spawnWithFallback: vi.fn() }));
 vi.mock("../../spawn-utils.js", () => ({ spawnWithFallback }));
@@ -14,7 +16,7 @@ afterEach(() => vi.unstubAllEnvs());
 it("reports actual root exit synchronously while output remains open", async () => {
   const stub = createStubChild();
   spawnWithFallback.mockResolvedValue({ child: stub.child, usedFallback: false });
-  const adapter = await createChildAdapter({ argv: ["synthetic-child"], stdinMode: "pipe-open" });
+  const adapter = await startChildAdapter({ argv: ["synthetic-child"], stdinMode: "pipe-open" });
   const onExit = vi.fn();
   adapter.onExit(onExit);
   stub.emitExit(1);
@@ -36,7 +38,7 @@ it.each(["process", "stdin", "stdout", "stderr"] as const)(
   async (source) => {
     const stub = createStubChild();
     spawnWithFallback.mockResolvedValue({ child: stub.child, usedFallback: false });
-    const adapter = await createChildAdapter({ argv: ["synthetic-child"], stdinMode: "pipe-open" });
+    const adapter = await startChildAdapter({ argv: ["synthetic-child"], stdinMode: "pipe-open" });
     const emitter = source === "process" ? stub.child : stub.child[source]!;
     const early = new Error("startup transport failure");
     emitter.emit("error", early);

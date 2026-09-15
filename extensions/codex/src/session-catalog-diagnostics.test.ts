@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import * as diagnosticRuntime from "openclaw/plugin-sdk/diagnostic-runtime";
@@ -159,6 +160,83 @@ async function fixture() {
 }
 
 describe("registered Codex catalog diagnostics", () => {
+  it("retains the first step's full context and finishes one logical observation at close", async () => {
+    const f = await fixture();
+    const managed = await f.thread("openclaw");
+    const ownerScope = new AsyncLocalStorage<string>();
+    const sourceOwners: Array<string | undefined> = [];
+    commandRpcMocks.codexControlRequest.mockImplementation(async (_config, method, params) => {
+      expect(method).toBe("thread/list");
+      sourceOwners.push(ownerScope.getStore());
+      clock += 1_100;
+      return params.cursor
+        ? { data: [idleThread({ id: "visible", source: "cli" })] }
+        : { data: [managed], nextCursor: "next" };
+    });
+    const original = { traceId: "1".repeat(32), spanId: "1".repeat(16) };
+    const unrelated = { traceId: "2".repeat(32), spanId: "2".repeat(16) };
+    const createOperation = f.provider.createListOperation;
+    if (!createOperation) {
+      throw new Error("Codex list operation is unavailable");
+    }
+    const operation = ownerScope.run("factory", () =>
+      runWithDiagnosticTraceContext(unrelated, () =>
+        createOperation({
+          agentId: "main",
+          hostIds: [CODEX_LOCAL_SESSION_HOST_ID],
+          limitPerHost: 1,
+        }),
+      ),
+    );
+    try {
+      clock += 5_000;
+      expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+      expect(await emitted(LIST)).toEqual([]);
+      await expect(
+        ownerScope.run("original", () =>
+          runWithDiagnosticTraceContext(original, () => operation.next()),
+        ),
+      ).resolves.toEqual({ done: false });
+      const firstPage = (await emitted(PAGE))[0];
+      expect(firstPage?.trace).toMatchObject(original);
+      expect(await emitted(LIST)).toEqual([]);
+
+      clock += 700;
+      await expect(
+        ownerScope.run("unrelated", () =>
+          runWithDiagnosticTraceContext(unrelated, () => operation.next()),
+        ),
+      ).resolves.toMatchObject({ done: true, hosts: [{ sessions: [{ threadId: "visible" }] }] });
+      expect(sourceOwners).toEqual(["original", "original"]);
+      expect(await emitted(LIST)).toEqual([]);
+      ownerScope.run("unrelated", () =>
+        runWithDiagnosticTraceContext(unrelated, () => operation.close()),
+      );
+      const lists = await emitted(LIST);
+      expect(lists).toHaveLength(1);
+      expect(lists[0]?.trace).toMatchObject(original);
+      expect(fields(lists[0])).toMatchObject({
+        outcome: "resolved",
+        elapsedMs: 2_900,
+        controlPageCalls: 2,
+        controlWaitSumMs: 2_200,
+      });
+      const pages = await emitted(PAGE);
+      expect(pages).toHaveLength(2);
+      expect(pages.map((record) => fields(record).listOperationId)).toEqual([
+        fields(lists[0]).operationId,
+        fields(lists[0]).operationId,
+      ]);
+      operation.close();
+      await expect(operation.next()).rejects.toThrow();
+      expect(await emitted(LIST)).toHaveLength(1);
+      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledTimes(2);
+    } finally {
+      operation.close();
+      ownerScope.disable();
+    }
+  });
+
   it("links four cold callers to one producer and three waited joins without logging session data", async () => {
     const f = await fixture();
     const thread = await f.thread("codex");
@@ -488,8 +566,9 @@ describe("registered Codex catalog diagnostics", () => {
     }
   });
 
-  it("retires successful pagination observations and freezes the terminal failure without changing the error host", async () => {
+  it("sums repeated control phases and retires each call before late callbacks or page completion", async () => {
     const f = await fixture();
+    const thread = await f.thread("codex");
     let previous: CodexControlRequestObservation | undefined;
     commandRpcMocks.codexControlRequest.mockImplementation(
       async (
@@ -502,21 +581,46 @@ describe("registered Codex catalog diagnostics", () => {
         if (!observation) {
           throw new Error("expected the active control observation");
         }
-        clock += 1_100;
         if (!previous) {
+          clock += 50;
+          observation.phase("prepare");
+          for (let attempt = 0; attempt < 2; attempt++) {
+            clock += 25.25;
+            observation.phase("acquire-client");
+            clock += 100;
+            observation.phase("prepare");
+            clock += 25.25;
+            observation.phase("client-request");
+            clock += 300;
+            observation.phase("release-client");
+            clock += 50;
+            if (attempt === 0) {
+              observation.phase("prepare");
+            }
+          }
           previous = observation;
-          return { data: [], nextCursor: "next" };
+          return { data: [thread], nextCursor: "next" };
         }
         expect(observation).not.toBe(previous);
-        previous.failed({ phase: "release-client", category: "other" });
+        clock += 50;
+        observation.phase("prepare");
+        clock += 50;
+        observation.phase("acquire-client");
+        clock += 200;
         observation.phase("client-request");
+        clock += 600;
+        observation.phase("release-client");
+        clock += 100;
         observation.failed({ phase: "client-request", category: "rpc-method-unavailable" });
+        clock += 1_000;
+        previous.phase("prepare");
+        previous.failed({ phase: "release-client", category: "other" });
         observation.phase("release-client");
         observation.failed({ phase: "release-client", category: "deadline-observed" });
         throw new Error(privateText);
       },
     );
-    const hosts = await f.list("unmatched");
+    const hosts = await f.list(privateText);
     expect(hosts[0]).toMatchObject({
       connected: false,
       sessions: [],
@@ -530,9 +634,20 @@ describe("registered Codex catalog diagnostics", () => {
     expect(fields(pages[0])).toMatchObject({
       outcome: "rejected",
       controlRequestCalls: 2,
+      inclusiveControlRequestWaitMs: 3_051,
+      controlLoadMs: 100,
+      controlPrepareMs: 151,
+      controlAcquireClientMs: 400,
+      controlClientRequestMs: 1_200,
+      controlReleaseClientMs: 200,
+      postResponseMs: 0,
+      provenanceReadCalls: 1,
+      provenanceMs: 0,
       controlFailurePhase: "client-request",
       controlFailureCategory: "rpc-method-unavailable",
     });
+    expect(Object.keys(fields(pages[0])).length).toBeLessThanOrEqual(28);
+    expect(Buffer.byteLength(JSON.stringify(fields(pages[0])))).toBeLessThanOrEqual(2_048);
     expect(JSON.stringify({ hosts, records })).not.toContain(privateText);
   });
 

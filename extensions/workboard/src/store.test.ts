@@ -3088,13 +3088,18 @@ describe("WorkboardStore", () => {
     expect(blocked.metadata?.notifications?.[0]?.message.length).toBeLessThanOrEqual(240);
   });
 
-  it("heals oversized persisted notifications and keeps dispatching sibling cards", async () => {
+  it("heals oversized notifications during timeout recovery without rewriting ready siblings", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-notification-"));
     const dbPath = path.join(dir, "workboard.sqlite");
     const stores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
     try {
       const store = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
-      const poisoned = await store.create({ title: "Oversized notification", status: "ready" });
+      const poisoned = await store.create({
+        title: "Oversized notification",
+        status: "running",
+        startedAt: 1,
+        maxRuntimeSeconds: 1,
+      });
       const sibling = await store.create({ title: "Unaffected sibling", status: "ready" });
       const oversized = `${"x".repeat(238)}🦞${" tail".repeat(60)}`;
       const rawDb = new DatabaseSync(dbPath);
@@ -3113,8 +3118,8 @@ describe("WorkboardStore", () => {
 
       const repaired = await store.get(poisoned.id);
       expect(repaired?.metadata?.notifications?.[0]?.message).toBe(`${"x".repeat(238)}…`);
-      expect(repaired?.metadata?.automation?.dispatchCount).toBe(1);
-      expect((await store.get(sibling.id))?.metadata?.automation?.dispatchCount).toBe(1);
+      expect(repaired?.status).toBe("blocked");
+      await expect(store.get(sibling.id)).resolves.toEqual(sibling);
 
       const verifyDb = new DatabaseSync(dbPath, { readOnly: true });
       try {
@@ -3138,7 +3143,6 @@ describe("WorkboardStore", () => {
       vi.setSystemTime(1_000);
       const store = createWorkboardSqliteTestStore();
       const ready = await store.create({ title: "Ready", status: "ready" });
-      const readyUpdatedAt = ready.updatedAt;
       const expired = await store.create({ title: "Expired", status: "running" });
       await store.claim(expired.id, { ownerId: "main", token: "token-1", ttlSeconds: 1 });
       const timed = await store.create({
@@ -3177,11 +3181,7 @@ describe("WorkboardStore", () => {
       expect(createdRunningTimed.startedAt).toBe(1_000);
       expect(result.count).toBe(4);
       const dispatchedReady = await store.get(ready.id);
-      expect(dispatchedReady?.updatedAt).toBeGreaterThan(readyUpdatedAt);
-      expect(dispatchedReady).toMatchObject({
-        metadata: { automation: { dispatchCount: 1, lastDispatchAt: 600_000 } },
-        events: expect.arrayContaining([expect.objectContaining({ kind: "dispatch" })]),
-      });
+      expect(dispatchedReady).toEqual(ready);
       const blockedExpired = await store.get(expired.id);
       expect(blockedExpired).toMatchObject({ status: "blocked" });
       expect(blockedExpired?.metadata?.claim).toBeUndefined();

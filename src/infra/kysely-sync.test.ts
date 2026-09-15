@@ -4,6 +4,7 @@ import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { sql, type Generated } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { registerNodeSqliteKyselyQueryErrorHandler } from "./kysely-sync-cache-state.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -823,7 +824,8 @@ function runRetentionScenario(options: {
     process.stdout.write(JSON.stringify(await runScenario()), () => process.exit(0));
   `;
   const result = spawnSync(
-    process.execPath,
+    // These scenarios lock Node's native statement-to-database retention contract.
+    resolveTestNodeExecPath(),
     [
       "--disable-warning=ExperimentalWarning",
       "--expose-gc",

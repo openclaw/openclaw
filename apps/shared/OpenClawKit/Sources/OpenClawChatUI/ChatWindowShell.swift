@@ -14,6 +14,11 @@ public struct OpenClawChatWindowShell: View {
 
     @State private var viewModel: OpenClawChatViewModel
     @Environment(\.colorScheme) private var colorScheme
+    /// Keep absent keys available to the app's legacy trace-preference migration.
+    @AppStorage(OpenClawChatWindowShell.assistantReasoningDefaultsKey)
+    private var storedShowsReasoning: Bool?
+    @AppStorage(OpenClawChatWindowShell.assistantToolActivityDefaultsKey)
+    private var storedShowsToolActivity: Bool?
     @State private var sessionQuery = ""
     @State private var isConfirmingClearHistory = false
     @State private var isPresentingSessions = false
@@ -413,27 +418,21 @@ public struct OpenClawChatWindowShell: View {
 
             Toggle(isOn: Binding(
                 get: { self.displayOptions.contains(.reasoning) },
-                set: {
-                    UserDefaults.standard.set(
-                        $0,
-                        forKey: Self.assistantReasoningDefaultsKey)
-                })) {
-                    chatWindowActionLabel(
-                        "Show Reasoning",
-                        systemImage: "brain.head.profile")
-                }
+                set: { self.storedShowsReasoning = $0 }))
+            {
+                chatWindowActionLabel(
+                    "Show Reasoning",
+                    systemImage: "brain.head.profile")
+            }
 
             Toggle(isOn: Binding(
                 get: { self.displayOptions.contains(.toolActivity) },
-                set: {
-                    UserDefaults.standard.set(
-                        $0,
-                        forKey: Self.assistantToolActivityDefaultsKey)
-                })) {
-                    chatWindowActionLabel(
-                        "Show Tool Activity",
-                        systemImage: "hammer")
-                }
+                set: { self.storedShowsToolActivity = $0 }))
+            {
+                chatWindowActionLabel(
+                    "Show Tool Activity",
+                    systemImage: "hammer")
+            }
 
             Divider()
 

@@ -545,6 +545,7 @@ function buildPackageDistEntriesFromExports(packageDir: string): Record<string, 
 function buildLlmCoreDistEntries(): Record<string, string> {
   return {
     index: "packages/llm-core/src/index.ts",
+    "model-contracts/anthropic": "packages/llm-core/src/model-contracts/anthropic.ts",
     types: "packages/llm-core/src/types.ts",
     "utils/diagnostics": "packages/llm-core/src/utils/diagnostics.ts",
     "utils/event-stream": "packages/llm-core/src/utils/event-stream.ts",

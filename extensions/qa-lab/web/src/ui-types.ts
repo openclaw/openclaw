@@ -307,7 +307,7 @@ export type UiState = {
   capturePinnedLaneIds: string[];
   selectedCaptureSessionIds: string[];
   selectedCaptureEventKey: string | null;
-  selectedEvidenceEntryId: string | null;
+  selectedEvidenceEntryKey: string | null;
   selectedConversationKey: string | null;
   selectedThreadId: string | null;
   selectedScenarioId: string | null;

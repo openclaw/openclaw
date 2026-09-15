@@ -240,7 +240,13 @@ describe("Doctor canonical session SQLite targets", () => {
       const configuredAgentDatabaseTargets = resolveConfiguredAgentDatabaseTargets(store.cfg, {
         env: store.env,
       });
-      expect(configuredAgentDatabaseTargets).toEqual([{ agentId: "main", path: store.sqlitePath }]);
+      expect(configuredAgentDatabaseTargets).toEqual([
+        { agentId: "main", path: store.sqlitePath },
+        {
+          agentId: "qa",
+          path: path.join(store.stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite"),
+        },
+      ]);
       const migrated = await migrateLegacyMediaPersistence({
         configuredAgentDatabaseTargets,
         env: store.env,

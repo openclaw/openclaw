@@ -12,7 +12,7 @@ import {
 import { killSessionSubagentRuns } from "../registry/subagent-control-kill.js";
 import { useSubagentControlFixture } from "../registry/subagent-control.test-support.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { markSubagentRunPausedAfterYield } from "../registry/subagent-registry-run-manager.js";
+import { markSubagentRunPausedAfterYield } from "../registry/subagent-registry-run-pause.js";
 import { persistSubagentRunsToDiskOrThrow } from "../registry/subagent-registry-state.js";
 import {
   adoptPausedSubagentRunForFollowUp,

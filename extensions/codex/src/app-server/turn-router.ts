@@ -30,6 +30,7 @@ type CodexThreadRequestHandler = (
   request: CodexAppServerServerRequest,
   scope: CodexThreadRouteScope,
   signal: AbortSignal,
+  setExecutionTimeoutMs?: (timeoutMs: number) => void,
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;
 type CodexThreadNotificationHandler = (
   notification: CodexServerNotification,
@@ -138,7 +139,9 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
 
   constructor(client: CodexAppServerClient) {
     client.addNotificationHandler((notification) => this.routeNotification(notification));
-    client.addRequestHandler((request, signal) => this.routeRequest(request, signal));
+    client.addRequestHandler((request, signal, setExecutionTimeoutMs) =>
+      this.routeRequest(request, signal, setExecutionTimeoutMs),
+    );
     client.addCloseHandler((closedClient) => {
       this.dispose(closedClient.getCloseError());
     });
@@ -461,6 +464,7 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
   private async routeRequest(
     request: CodexAppServerServerRequest,
     signal: AbortSignal = new AbortController().signal,
+    setExecutionTimeoutMs?: (timeoutMs: number) => void,
   ): Promise<JsonValue | undefined> {
     if (this.closeError || signal.aborted) {
       return undefined;
@@ -514,6 +518,12 @@ class ClientTurnRouter implements CodexAppServerTurnRouter {
           ...(scope.turnId ? { turnId: scope.turnId } : {}),
         },
         requestSignal,
+        setExecutionTimeoutMs &&
+          ((timeoutMs) => {
+            if (!requestSignal.aborted) {
+              setExecutionTimeoutMs(timeoutMs);
+            }
+          }),
       );
       return requestSignal.aborted ? undefined : result;
     } catch (error) {

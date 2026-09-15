@@ -271,6 +271,7 @@ suite.define(() => {
       await page.waitForTimeout(500);
 
       await refresh.click();
+      await expect.poll(() => refresh.isEnabled()).toBe(true);
       await expect.poll(() => alert.count()).toBe(0);
       expect(await runningOrder()).toEqual(expectedRunning);
       expect(await finishedOrder()).toEqual(expectedFinished);

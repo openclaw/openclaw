@@ -166,9 +166,9 @@ const DEFAULT_REDACT_PREFILTER_RE = new RegExp(
   "iu",
 );
 
-// Whole decoded fields also admit prefixes whose boundaries differ under Unicode case folding.
+// Whole-context rules admit prefixes whose boundaries differ under Unicode case folding.
 // Keep the shared text probe unchanged: its chunked matching has separate boundary semantics.
-const DECODED_REDACT_EXTRA_TRIGGERS_RE =
+const FULL_CONTEXT_REDACT_EXTRA_TRIGGERS_RE =
   /JWT|SG\.|Bearer\s+|am_|sk_|(?<!\d)\d{6,}:[A-Za-z0-9_-]{20,}/i;
 
 type RedactOptions = {
@@ -622,17 +622,16 @@ type SecretCaptureSelection = {
 };
 
 function selectSecretCapture(match: string, groups: string[]): SecretCaptureSelection {
-  const tokens = groups
-    .map((value, index) => ({ index, value }))
-    .filter(({ value }) => typeof value === "string" && value.length > 0);
-  const selected = (tokens.length > 1 ? tokens[tokens.length - 1] : tokens[0]) ?? {
-    index: -1,
-    value: match,
-  };
-  return {
-    ...selected,
-    captureCount: tokens.length,
-  };
+  const selected = { index: -1, value: match, captureCount: 0 };
+  for (let index = 0; index < groups.length; index++) {
+    const value = groups[index];
+    if (typeof value === "string" && value.length > 0) {
+      selected.index = index;
+      selected.value = value;
+      selected.captureCount++;
+    }
+  }
+  return selected;
 }
 
 function getIndexedCaptureStart(
@@ -679,15 +678,15 @@ function getSecretCaptureStart(
     matchOffset,
     selected.index,
   );
+  if (indexedTokenStart !== null) {
+    return indexedTokenStart;
+  }
   const preferFirstCapture =
     pattern instanceof RegExp &&
     selected.captureCount === 1 &&
     selected.index >= 0 &&
     hasBackreferenceToGroup(pattern, selected.index + 1);
-  return (
-    indexedTokenStart ??
-    (preferFirstCapture ? match.indexOf(selected.value) : match.lastIndexOf(selected.value))
-  );
+  return preferFirstCapture ? match.indexOf(selected.value) : match.lastIndexOf(selected.value);
 }
 
 function getRedactionEdit(
@@ -810,6 +809,10 @@ export function redactText(
 
 function couldMatchDefaultRedactPatterns(text: string): boolean {
   return DEFAULT_REDACT_PREFILTER_RE.test(text) || AWS_SECRET_ACCESS_KEY_MATCHER.couldMatch(text);
+}
+
+function couldMatchDefaultFullContextPatterns(text: string): boolean {
+  return couldMatchDefaultRedactPatterns(text) || FULL_CONTEXT_REDACT_EXTRA_TRIGGERS_RE.test(text);
 }
 
 function markPatternMatchRedaction(
@@ -1325,10 +1328,10 @@ function getTextRecordEdits(
 
 function getLegacyFieldRecordEdits(
   field: RedactionField,
-  original: string,
+  value: string,
   beforeConversion = false,
 ): RedactionEdit[] {
-  const { key, value, path, objectPath } = field;
+  const { key, value: original, path, objectPath } = field;
   if (field.isKey || !field.origin.structured || !field.string) {
     return [];
   }
@@ -1457,10 +1460,7 @@ function prepareFileToJsonReceivers(
           );
         }
       }
-      return applyRedactionEdits(
-        current,
-        getLegacyFieldRecordEdits({ ...field, value: current }, value, true),
-      );
+      return applyRedactionEdits(current, getLegacyFieldRecordEdits(field, current, true));
     }
     if (value === null || typeof value !== "object") {
       return decode &&
@@ -1599,7 +1599,18 @@ export function redactLogRecordForTransport(
       redactJsonRecord(
         serialized,
         origins,
-        [decodedPatterns, [...preparationPatterns, ...resolved.patterns]],
+        [
+          [{ patterns: decodedPatterns }],
+          [
+            { patterns: preparationPatterns },
+            {
+              patterns: resolved.patterns,
+              ...(resolved.patterns === defaultResolvedPatterns
+                ? { couldMatch: couldMatchDefaultFullContextPatterns }
+                : {}),
+            },
+          ],
+        ],
         (match, pattern, project) => getRedactionEdit(match, pattern, undefined, project),
         options.format === "console" ? () => [] : getLegacyFieldRecordEdits,
         (field) => getFieldRecordEdits(field, resolved.mode),
@@ -1611,8 +1622,7 @@ export function redactLogRecordForTransport(
               field.origin.primitiveMask ||
               isPublicShareIdPath(field.path)) ||
           (decodedPatterns === defaultResolvedPatterns &&
-            !couldMatchDefaultRedactPatterns(currentValue) &&
-            !DECODED_REDACT_EXTRA_TRIGGERS_RE.test(currentValue)),
+            !couldMatchDefaultFullContextPatterns(currentValue)),
         message,
       ),
     );
@@ -1643,7 +1653,7 @@ export function redactSensitiveLines(
   return redactJsonRecord(
     lines.join("\n"),
     { value: { structured: false, primitiveMask: false }, children: new Map() },
-    [[], [...preparationPatterns, ...resolved.patterns]],
+    [[], [{ patterns: [...preparationPatterns, ...resolved.patterns] }]],
     (match, pattern, project) => getRedactionEdit(match, pattern, undefined, project),
     () => [],
     () => [],

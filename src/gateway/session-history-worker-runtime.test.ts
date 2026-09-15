@@ -11,7 +11,10 @@ import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
 
 const runWorker = vi.hoisted(() => vi.fn());
 vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
-  runSessionHistoryWorkerRequest: runWorker,
+  withSessionHistoryWorkerDatabase: (
+    _options: unknown,
+    operation: (owner: { generation: number; run: typeof runWorker }) => unknown,
+  ) => operation({ generation: 1, run: runWorker }),
 }));
 vi.mock("../config/sessions/session-cold-storage-read.js", () => ({
   readRestoredSessionTranscript: async (_scope: unknown, read: () => unknown) => read(),

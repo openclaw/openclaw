@@ -511,8 +511,8 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             progress.publish(catalog, instances);
           };
           try {
-            const hosts = await progress.runProvider(onHost, (lifetime) =>
-              listSessionCatalogProvider(provider, {
+            const hosts = await progress.runProvider(onHost, (lifetime) => {
+              const providerParams = {
                 agentId: resolvedAgent.agentId,
                 allowProcessHomeFallback: allowHomeFallback,
                 search,
@@ -522,8 +522,9 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
                 sessionEntries: requestEntries?.sessionEntries,
                 listNodes,
                 ...lifetime,
-              }),
-            );
+              };
+              return listSessionCatalogProvider(provider, providerParams, progress.assertCurrent);
+            });
             for (const host of hosts) {
               requestEntries?.captureHostInstances(host, instances);
             }

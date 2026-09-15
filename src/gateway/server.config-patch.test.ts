@@ -838,7 +838,6 @@ describe("gateway config methods", () => {
       });
     type Receipt = { config: Record<string, unknown>; hash: string };
     const pending: Array<ReturnType<typeof rpcReq<Receipt>>> = [];
-    const started = performance.now();
     try {
       const first = rpcReq<Receipt>(
         requireClient(),
@@ -903,10 +902,12 @@ describe("gateway config methods", () => {
         setImmediate(resolve);
       });
       expect(competingWriterStarted).toBe(false);
+      // Exclude the deliberate pause and external-editor fixture IO from completion latency.
+      const completionStarted = performance.now();
       releaseCanonicalRead.resolve();
       const [firstResult, secondResult] = await Promise.all([first, second]);
-      const elapsedMs = performance.now() - started;
-      expect(elapsedMs).toBeLessThan(2_000);
+      const completionMs = performance.now() - completionStarted;
+      expect(completionMs).toBeLessThan(2_000);
       expect(firstResult.ok, firstResult.error?.message).toBe(true);
       expect(secondResult.ok, secondResult.error?.message).toBe(true);
       expect(competingWriterStarted).toBe(true);

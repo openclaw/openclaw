@@ -288,11 +288,17 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "fallbacks" | "toolsAllow" | "thinking">> & {
+} & Partial<
+  Omit<
+    CronAgentTurnPayloadFields,
+    "model" | "fallbacks" | "toolsAllow" | "thinking" | "timeoutSeconds"
+  >
+> & {
     model?: string | null;
     fallbacks?: string[] | null;
     toolsAllow?: string[] | null;
     thinking?: string | null;
+    timeoutSeconds?: number | null;
   };
 
 type CronCommandPayloadFields = {
@@ -312,7 +318,9 @@ type CronCommandPayload = {
 
 type CronCommandPayloadPatch = {
   kind: "command";
-} & Partial<CronCommandPayloadFields>;
+} & Partial<Omit<CronCommandPayloadFields, "timeoutSeconds">> & {
+    timeoutSeconds?: number | null;
+  };
 
 type CronScriptPayloadFields = {
   script: string;
@@ -326,7 +334,9 @@ type CronScriptPayload = {
 
 type CronScriptPayloadPatch = {
   kind: "script";
-} & Partial<CronScriptPayloadFields>;
+} & Partial<Omit<CronScriptPayloadFields, "timeoutSeconds">> & {
+    timeoutSeconds?: number | null;
+  };
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 // scheduleActivatedAtMs fences catch-up to slots belonging to the active schedule;
 // edits must not invent missed work. Without activation, every computed slot is real.

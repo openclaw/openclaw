@@ -40,6 +40,7 @@ describe("Git backup command agent selection", () => {
       commit: "backup-commit",
       noChanges: false,
       pushed: false,
+      warnings: [],
       repositoryPath: "/tmp/repository",
     });
     mocks.getRuntimeConfig.mockReset().mockReturnValue({

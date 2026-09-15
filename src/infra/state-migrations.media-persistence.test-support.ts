@@ -38,11 +38,12 @@ export function createLegacyDatabaseFixture(params: {
   agentId?: string;
   env: NodeJS.ProcessEnv;
   eventsBySession: Record<string, FixtureEvent[]>;
+  path?: string;
   schemaVersion?: number;
 }): string {
   const agentId = params.agentId ?? "main";
   const schemaVersion = params.schemaVersion ?? PREVIOUS_VERSION;
-  const opened = openOpenClawAgentDatabase({ agentId, env: params.env });
+  const opened = openOpenClawAgentDatabase({ agentId, env: params.env, path: params.path });
   const databasePath = opened.path;
   closeOpenClawAgentDatabasesForTest();
   const { DatabaseSync } = requireNodeSqlite();

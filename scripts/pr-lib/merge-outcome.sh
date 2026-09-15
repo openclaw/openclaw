@@ -8,9 +8,8 @@ merge_outcome_stop() {
 }
 
 merge_outcome_repo_identity() {
-  # gh returns the repository's REST database id as a JSON number while PR ids are
-  # GraphQL node strings. Accept either scalar so a current gh cannot fail admission
-  # closed; nameWithOwner and the url suffix still pin which repository this is.
+  # Historical outcomes contain node IDs and CLI adapters' numeric database IDs.
+  # Remote initialization binds either shape to the authoritative repository.
   jq -ce '
     . as $repo | select((.id | (type == "string" and length > 0) or type == "number") and
       (.nameWithOwner | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
@@ -19,16 +18,38 @@ merge_outcome_repo_identity() {
 }
 
 merge_outcome_init() {
-  local pr="$1" identity
+  local pr="$1" locator authority identities
   is_canonical_pr_number "$pr" || return 1
   MERGE_OUTCOME_REF="refs/openclaw/pr-merge-outcomes/$pr"
-  identity=$(gh_plain repo view --json id,nameWithOwner,url) || return 1
-  MERGE_REPO=$(printf '%s\n' "$identity" | merge_outcome_repo_identity) || { merge_outcome_stop "invalid repository identity"; return 1; }
-  MERGE_REPO_URL=$(printf '%s\n' "$MERGE_REPO" | jq -r .url)
+  locator=$(gh_plain repo view --json nameWithOwner,url) || return 1
+  locator=$(printf '%s\n' "$locator" | jq -ce '
+    . as $repo | select(
+      (.nameWithOwner | test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
+      (.url | test("^https://[A-Za-z0-9.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") and endswith("/" + $repo.nameWithOwner))) |
+    {nameWithOwner,url}
+  ') || { merge_outcome_stop "invalid repository locator"; return 1; }
+  MERGE_REPO_URL=$(printf '%s\n' "$locator" | jq -r .url)
   MERGE_REPO_HOST="${MERGE_REPO_URL#https://}"
   MERGE_REPO_HOST="${MERGE_REPO_HOST%%/*}"
-  MERGE_REPO_NAME=$(printf '%s\n' "$MERGE_REPO" | jq -r .nameWithOwner)
-  merge_outcome_load_local "$pr" "$MERGE_REPO"
+  MERGE_REPO_NAME=$(printf '%s\n' "$locator" | jq -r .nameWithOwner)
+  authority=$(gh_plain api --hostname "$MERGE_REPO_HOST" "repos/$MERGE_REPO_NAME" \
+    -H 'Cache-Control: max-age=0') || return 1
+  identities=$(printf '%s\n' "$authority" | jq -ce --argjson locator "$locator" '
+    select((.id | type == "number" and . > 0 and floor == .) and
+      (.node_id | type == "string" and length > 0) and
+      .full_name == $locator.nameWithOwner and .html_url == $locator.url) |
+    [{id:.node_id,nameWithOwner:.full_name,url:.html_url},
+     {id:.id,nameWithOwner:.full_name,url:.html_url}]
+  ') || { merge_outcome_stop "invalid authoritative repository identity"; return 1; }
+  merge_outcome_load_local "$pr" || return 1
+  if [ -n "$MERGE_OUTCOME_OID" ]; then
+    # Keep the historical object unchanged across recovery's exact provenance check.
+    MERGE_REPO=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -ce --argjson identities "$identities" '
+      .repo | select(. == $identities[0] or . == $identities[1])
+    ') || { merge_outcome_stop "retained repository identity does not match authoritative repository"; return 1; }
+  else
+    MERGE_REPO=$(printf '%s\n' "$identities" | jq -c '.[0]') || return 1
+  fi
 }
 
 # Cleanup validates retained proof locally (Git 2.45+ prevents lazy fetch). Admission also
@@ -141,9 +162,8 @@ merge_outcome_read_remote() {
   printf '%s\n' "$response" | jq -ce --argjson repo "$MERGE_REPO" --argjson pr "$1" '
     def oid: type == "string" and test("^[0-9a-f]{40}$");
     select(.errors == null) | .data.repository |
-    # gh reports the repository id as its REST database id while GraphQL reports the node
-    # id, so the two sources never compare equal on identity alone. Match whichever
-    # representation gh supplied; url and nameWithOwner still pin the repository exactly.
+    # Initialization binds the retained typed ID to the authoritative pair. Recheck
+    # that identity along with the exact name and URL on every remote observation.
     select(.url == $repo.url and .nameWithOwner == $repo.nameWithOwner and
       ($repo.id == .id or $repo.id == .databaseId) and (.ref.target.oid | oid)) |
     {main:.ref.target.oid, pr:.pullRequest} |

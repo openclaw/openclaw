@@ -892,6 +892,7 @@ private struct MacChatSurface: View {
                 !AppStateStore.shared.talkEnabled &&
                     !self.voiceNoteRecorder.ownsPendingChatAttachment
             })
+            .defaultAppStorage(AppDefaults.standard)
             .onAppear { self.audioInputCatalog.start() }
             .onDisappear { self.audioInputCatalog.stop() }
     }
@@ -1096,6 +1097,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             attachmentOwnerIsActive: { voiceNoteRecorder.ownsPendingChatAttachment },
             transcriptCache: transcriptCache,
             outbox: outbox,
+            modelPickerStore: ChatModelPickerStore(defaults: AppDefaults.standard),
             initialThinkingLevel: Self.persistedThinkingLevel(),
             initialVerboseLevel: Self.persistedVerboseLevel(),
             onSessionChanged: { key in

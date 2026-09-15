@@ -16,9 +16,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import type { ModelsListResult } from "../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { asFiniteNumber } from "../packages/normalization-core/src/number-coercion.ts";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
+import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import {
   startGatewayBrowserProbe,
@@ -120,6 +122,16 @@ type MainProfileArtifacts = {
 };
 
 type BenchmarkRun = {
+  agentCoverage?: {
+    configuredAgentIds: string[];
+    activeTurnAgentIds: string[];
+    beforeLoad: Array<{
+      agentId: string;
+      models: ModelsListResult;
+      sessions: SessionsListResult[];
+    }>;
+    completedTurns: Array<{ agentId: string; count: number }>;
+  };
   browser?: {
     newPageReadyMs: number;
     initialSessionReadyMs: number | null;
@@ -148,7 +160,7 @@ type BenchmarkRun = {
     closeEvent: GatewayChildExit | undefined;
   };
   loadWindow?: { startMonotonicMicros: number; endMonotonicMicros: number };
-  history: TimedProbe[];
+  history: Array<TimedProbe & { sessionKey?: string }>;
   memory: { after: GatewayMemorySample; before: GatewayMemorySample; peakRssMb: number };
   messageSubscriptions: TimedProbe[];
   messageSubscriptionsDuringLoad: TimedProbe[];
@@ -168,6 +180,7 @@ type BenchmarkRun = {
 };
 
 type CliOptions = {
+  agentCount: number;
   browserHistoryMessages: number;
   browserSessionClicks: number;
   cadenceMs: number;
@@ -209,6 +222,7 @@ const DEFAULT_RUNS = 1;
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_WARMUP = 0;
 const MOCK_RESPONSE_CHUNK_DELAY_MS = 1_000;
+const MAX_AGENT_COUNT = 128;
 const MAX_CONCURRENCY = 64;
 const MAX_TURNS_PER_SESSION = 100;
 const MAX_PLUGIN_COUNT = 100;
@@ -236,6 +250,7 @@ const BOOLEAN_FLAGS = new Set([
   "--workspace-fanout",
 ]);
 const VALUE_FLAGS = new Set([
+  "--agent-count",
   "--browser-history-messages",
   "--browser-session-clicks",
   "--cadence-ms",
@@ -293,6 +308,12 @@ function parseBoundedNonNegativeInt(
 function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
   validateCliArgs(argv, { booleanFlags: BOOLEAN_FLAGS, valueFlags: VALUE_FLAGS });
   const options = {
+    agentCount: parseBoundedPositiveInt(
+      parseFlagValue(argv, "--agent-count"),
+      1,
+      "--agent-count",
+      MAX_AGENT_COUNT,
+    ),
     browserHistoryMessages: parseBoundedPositiveInt(
       parseFlagValue(argv, "--browser-history-messages"),
       80,
@@ -438,6 +459,9 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       "--load-cpu-prof-dir and --heap-prof-dir require separate benchmark runs",
     );
   }
+  if (options.agentCount > Math.max(options.sessionCount, options.concurrency)) {
+    throw new CliArgumentError("--agent-count must not exceed the total session count");
+  }
   const historyMessageCount =
     Math.max(options.sessionCount, options.concurrency) * options.historyMessages +
     (options.browserSessionClicks > 0
@@ -466,6 +490,7 @@ Usage:
   node scripts/bench-gateway-concurrency.ts [options]
 
 Options:
+  --agent-count <n> Configured agents sharing the fixed session inventory (default: 1, max: ${MAX_AGENT_COUNT})
   --browser-history-messages <n> Messages per browser click target, independent of inventory history (default: 80, max: 500)
   --browser-session-clicks <n> Click n existing sessions and revisit one during load (default: 0, max: 20; requires built UI and Chromium)
   --concurrency <n>  Concurrent synthetic sessions (default: ${DEFAULT_CONCURRENCY})
@@ -765,6 +790,7 @@ function buildConfig(
   concurrency: number,
   pluginCount: number,
   browserSessionClicks: number,
+  agentIds: string[],
 ): string {
   const controlUiRoot = path.join(root, "control-ui");
   mkdirSync(controlUiRoot, { recursive: true });
@@ -801,7 +827,15 @@ function buildConfig(
   };
   const pluginFixtures =
     pluginCount > 0 ? writePluginFixtures(root, { count: pluginCount }) : undefined;
-  return writeGatewayBenchConfig(root, config, { pluginFixtures });
+  const agentList =
+    agentIds.length > 1
+      ? agentIds.map((id, index) => {
+          const workspace = path.join(root, `workspace-${id}`);
+          mkdirSync(workspace, { recursive: true });
+          return { id, default: index === 0, workspace };
+        })
+      : undefined;
+  return writeGatewayBenchConfig(root, config, { agentList, pluginFixtures });
 }
 
 async function readGatewayProtocolVersion(entry: string): Promise<number> {
@@ -1163,6 +1197,7 @@ async function runProbeRounds(params: {
 }
 
 async function runGatewaySample(options: {
+  agentCount: number;
   browserHistoryMessages: number;
   browserSessionClicks: number;
   cadenceMs: number;
@@ -1194,6 +1229,9 @@ async function runGatewaySample(options: {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-gateway-concurrency-"));
   const [port, mockPort] = await Promise.all([getFreePort(), getFreePort()]);
   const runStartedAt = performance.now();
+  const agentIds = Array.from({ length: options.agentCount }, (_, index) =>
+    index === 0 ? "main" : `bench-agent-${index + 1}`,
+  );
   const timelinePath = path.join(root, "diagnostics-timeline.jsonl");
   const requestLogPath = path.join(root, "mock-provider-requests.jsonl");
   const heapProfilePath = options.heapProfDir
@@ -1233,6 +1271,7 @@ async function runGatewaySample(options: {
         options.concurrency,
         options.pluginCount,
         options.browserSessionClicks,
+        agentIds,
       );
       mockProvider = spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
         cwd: process.cwd(),
@@ -1340,6 +1379,7 @@ async function runGatewaySample(options: {
       client.setDeadlineAt(setupDeadlineAt);
       const sessionCount = Math.max(options.concurrency, options.sessionCount);
       const prepareSessions =
+        options.agentCount > 1 ||
         options.browserSessionClicks > 0 ||
         options.workspaceFanout ||
         options.sessionCount > 0 ||
@@ -1347,9 +1387,12 @@ async function runGatewaySample(options: {
         options.historyMessages > 0 ||
         options.sessionUpdates > 0 ||
         options.subscribers > 0;
-      const sessionKeys = Array.from(
+      const sessionAgents = Array.from(
         { length: sessionCount },
-        (_, index) => `agent:main:gateway-concurrency-${index + 1}`,
+        (_, index) => agentIds[index % agentIds.length]!,
+      );
+      const sessionKeys = sessionAgents.map(
+        (agentId, index) => `agent:${agentId}:gateway-concurrency-${index + 1}`,
       );
       const sessionSeedStartedAt = performance.now();
       if (prepareSessions) {
@@ -1371,7 +1414,7 @@ async function runGatewaySample(options: {
               }
               await rpc("sessions.create", {
                 key: sessionKey,
-                agentId: "main",
+                agentId: sessionAgents[index],
                 ...(workspaceDir ? { cwd: workspaceDir } : {}),
               });
               for (
@@ -1439,6 +1482,83 @@ async function runGatewaySample(options: {
       // Normal inventory maintenance can archive older fixture sessions while seeding.
       // Active turns and observers use the newest sessions; history still spans the inventory.
       const turnSessionKeys = sessionKeys.slice(-options.concurrency);
+      const turnAgentIds = sessionAgents.slice(-options.concurrency);
+      const agentCoverage: BenchmarkRun["agentCoverage"] =
+        options.agentCount > 1
+          ? {
+              configuredAgentIds: agentIds,
+              activeTurnAgentIds: [...new Set(turnAgentIds)],
+              beforeLoad: [],
+              completedTurns: [],
+            }
+          : undefined;
+      if (agentCoverage) {
+        for (const agentId of agentIds) {
+          // Require published runtime facts before measuring the configured roster.
+          const models = await rpc<ModelsListResult>("models.list", {
+            agentId,
+            view: "configured",
+            refresh: false,
+          });
+          if (
+            !models.models.some(
+              (model) => model.provider === "openai" && model.id === "gpt-5.6-luna",
+            )
+          ) {
+            throw new Error(`Configured benchmark model is not published for ${agentId}`);
+          }
+          const storePath = path.join(
+            root,
+            "state",
+            "agents",
+            agentId,
+            "agent",
+            "openclaw-agent.sqlite",
+          );
+          const sessions: SessionsListResult[] = [];
+          let offset = 0;
+          for (;;) {
+            const page = await rpc<SessionsListResult>("sessions.list", {
+              agentId,
+              archived: "all",
+              limit: 1_000,
+              offset,
+            });
+            if (page.path !== storePath || page.count !== page.sessions.length) {
+              throw new Error(`Benchmark session store or page mismatch for ${agentId}`);
+            }
+            sessions.push(page);
+            if (!page.hasMore) {
+              break;
+            }
+            if (
+              !Number.isSafeInteger(page.nextOffset) ||
+              page.nextOffset == null ||
+              page.nextOffset <= offset ||
+              page.nextOffset > sessionCount + browserTargets.length
+            ) {
+              throw new Error(`Benchmark session pagination did not advance for ${agentId}`);
+            }
+            offset = page.nextOffset;
+          }
+          const expectedKeys = sessionKeys.filter((_, index) => sessionAgents[index] === agentId);
+          const observedRows = sessions.flatMap((page) =>
+            page.sessions.filter((row) => row.key.includes(":gateway-concurrency-")),
+          );
+          const observedKeys = new Set(observedRows.map((row) => row.key));
+          if (
+            observedRows.length !== expectedKeys.length ||
+            observedKeys.size !== expectedKeys.length ||
+            observedRows.some((row) => row.agentId !== agentId) ||
+            expectedKeys.some((key) => !observedKeys.has(key))
+          ) {
+            throw new Error(
+              `Benchmark session inventory or distinct store mismatch for ${agentId}`,
+            );
+          }
+          agentCoverage.beforeLoad.push({ agentId, models, sessions });
+        }
+      }
       const messageSubscriptions: TimedProbe[] = [];
       for (let index = 0; index < options.subscribers; index += 1) {
         const subscriber = await connectGateway(port, setupDeadlineAt, protocolVersion, false);
@@ -1507,7 +1627,7 @@ async function runGatewaySample(options: {
       }
       const controlPlane: BenchmarkRun["controlPlane"] = [];
       const controlUi: ControlUiProbe[] = [];
-      const history: TimedProbe[] = [];
+      const history: BenchmarkRun["history"] = [];
       const messageSubscriptionsDuringLoad: TimedProbe[] = [];
       const readyz: ReadyProbe[] = [];
       const sessionsList: TimedProbe[] = [];
@@ -1650,14 +1770,18 @@ async function runGatewaySample(options: {
             stopped: () => probesStopped,
             runRound: async () => {
               const probes = await Promise.all(
-                Array.from({ length: options.historyBurst }, (_, index) =>
-                  timeRpcProbe(
+                Array.from({ length: options.historyBurst }, (_, index) => {
+                  const sessionKey = sessionKeys[(offset + index) % sessionKeys.length]!;
+                  const probe = timeRpcProbe(
                     historyClient.request,
                     "chat.history",
-                    { sessionKey: sessionKeys[(offset + index) % sessionKeys.length] },
+                    { sessionKey },
                     runStartedAt,
-                  ),
-                ),
+                  );
+                  return agentCoverage
+                    ? probe.then((sample) => ({ ...sample, sessionKey }))
+                    : probe;
+                }),
               );
               history.push(...probes);
               offset += options.historyBurst;
@@ -1731,7 +1855,17 @@ async function runGatewaySample(options: {
         ? readFileSync(requestLogPath, "utf8").split(/\r?\n/u).filter(Boolean).length
         : 0;
 
+      if (agentCoverage) {
+        agentCoverage.completedTurns = agentIds.map((agentId) => ({
+          agentId,
+          count: sessionTurnCounts.reduce(
+            (total, count, index) => total + (turnAgentIds[index] === agentId ? count : 0),
+            0,
+          ),
+        }));
+      }
       result = {
+        ...(agentCoverage ? { agentCoverage } : {}),
         ...(browserProbe && browserInventory
           ? {
               browser: {
@@ -2064,6 +2198,7 @@ async function main(): Promise<void> {
   const options = parseOptions(argv);
   const runs = await runBenchmarkSamples({ onProgress: console.error, options });
   const payload = {
+    agentCount: options.agentCount,
     browserHistoryMessages: options.browserHistoryMessages,
     browserSessionClicks: options.browserSessionClicks,
     cadenceMs: options.cadenceMs,

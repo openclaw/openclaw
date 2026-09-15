@@ -15,8 +15,6 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
 
-const MAX_CHILD_RESULT_CHARS = 6_000;
-const CHILD_RESULT_TRUNCATION_NOTICE = "\n[child result truncated]";
 const MAX_STATUS_LABEL_CHARS = 500;
 const STATUS_LABEL_TRUNCATION_MARKER = "…[truncated]";
 
@@ -102,16 +100,23 @@ describe("agent internal events", () => {
     expect(mediaUrls).toEqual([reference, normalized]);
   });
 
-  it("bounds protected and plain child-result projections after escaping", () => {
-    const fullResult = `${"<".repeat(MAX_CHILD_RESULT_CHARS)}-unbounded-tail`;
+  it("preserves complete child results in parent context and retained transcript projections", () => {
+    const fullResult = `${"<🚀>".repeat(2_000)}-required-tail`;
     const event = taskCompletionEvent(fullResult);
-    const protectedResult = extractChildResult(formatAgentInternalEventsForPrompt([event]));
+    const protectedPrompt = formatAgentInternalEventsForPrompt([event]);
+    const protectedResult = extractChildResult(protectedPrompt);
     const plainResult = extractChildResult(resolveAcpPromptBody("", [event]));
+    const transcriptResult = extractChildResult(
+      resolveInternalEventTranscriptBody(protectedPrompt, [event]),
+    );
+    const data = buildAgentInternalEventContext([event]).find(
+      (fragment) => fragment.kind === "conversation-data",
+    );
 
+    expect(protectedResult).toBe(`${"&lt;🚀&gt;".repeat(2_000)}-required-tail`);
     expect(protectedResult).toBe(plainResult);
-    expect(protectedResult.length).toBeLessThanOrEqual(MAX_CHILD_RESULT_CHARS);
-    expect(protectedResult.endsWith(CHILD_RESULT_TRUNCATION_NOTICE)).toBe(true);
-    expect(protectedResult).not.toContain("unbounded-tail");
+    expect(transcriptResult).toBe(protectedResult);
+    expect(data?.text).toContain(fullResult);
     expect(event.result).toBe(fullResult);
   });
 

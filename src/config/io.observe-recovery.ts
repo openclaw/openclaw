@@ -24,7 +24,7 @@ import {
   readConfigHealthEntry,
 } from "./io.observe-state.js";
 import { resolveConfigReadRecoveryContext } from "./io.observe-suspicious.js";
-import { hashConfigRaw } from "./io.read-helpers.js";
+import { hashConfigRaw, resolveGatewayMode } from "./io.read-helpers.js";
 import type {
   ConfigRecoveryCandidate,
   ConfigRecoveryCandidatePreparation,
@@ -374,7 +374,9 @@ function* planSuspiciousConfigRead(
     return null;
   }
   const backupParse = parseBackupConfigRaw(deps, backupRaw);
-  if (!backupParse) {
+  // Reject ineligible backup bytes before migration and validation; a stale healthy
+  // fingerprint cannot make them recoverable.
+  if (!backupParse || !resolveGatewayMode(backupParse.parsed)) {
     return null;
   }
   const backupCandidate = { raw: backupRaw, parsed: backupParse.parsed };
@@ -387,16 +389,12 @@ function* planSuspiciousConfigRead(
     return null;
   }
   const preparedCandidate = prepared.candidate;
-  // Eligibility must describe the approved backup bytes, never an older healthy config.
   const backupStat = (yield createConfigRecoveryStatEffect(deps, backupPath)) as fs.Stats | null;
   const backup = createConfigHealthFingerprint({
     raw: backupRaw,
     parsed: backupParse.parsed,
     stat: backupStat,
   });
-  if (!backup.gatewayMode) {
-    return null;
-  }
   const currentObservation: ConfigRecoveryEffect<boolean> = {
     sync: () => true,
     async: (health) => health.isCurrent(),

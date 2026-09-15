@@ -603,17 +603,6 @@ export function isIncognitoOpenClawAgentDatabase(database: OpenClawAgentDatabase
   return cache.incognito.has(database);
 }
 
-/** List process-held agent databases without opening or inspecting fixture state. */
-export function listOpenClawAgentDatabasesForTest(): Array<{ agentId: string; path: string }> {
-  return [...cache.databases.values()]
-    .filter((database) => database.db.isOpen)
-    .map((database) => ({ agentId: database.agentId, path: database.path }))
-    .toSorted(
-      (left, right) =>
-        left.agentId.localeCompare(right.agentId) || left.path.localeCompare(right.path),
-    );
-}
-
 /** Close and unregister one unambiguous transient agent database by filesystem identity. */
 export function disposeOpenClawAgentDatabaseByPath(
   pathname: string,

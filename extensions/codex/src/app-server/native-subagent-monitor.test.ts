@@ -457,6 +457,72 @@ describe("CodexNativeSubagentMonitor", () => {
   describe("native completion delivery ownership", () => {
     registerCodexEventProjectorTestLifecycle();
 
+    it.each(
+      (["completed", "errored", "shutdown"] as const).flatMap((childStatus) =>
+        (["wait-first", "terminal-first"] as const).map((order) => ({ childStatus, order })),
+      ),
+    )(
+      "does not repeat a $childStatus child result returned by native wait ($order)",
+      async ({ order, childStatus }) => {
+        const client = createClient();
+        const runtime = createRuntime();
+        const monitor = new CodexNativeSubagentMonitor(client as never, runtime);
+        const parent = registerParent(monitor);
+        parent.bindTurn("parent-turn");
+        await notifyChildStarted(client);
+        const terminal = () =>
+          client.notify(
+            childStatus === "shutdown"
+              ? nativeCompletionNotification({ statusLabel: "shutdown", result: "child result" })
+              : childTurnCompletedNotification({
+                  status: childStatus === "completed" ? "completed" : "failed",
+                  ...(childStatus === "errored" ? { error: "child result" } : {}),
+                  items: [
+                    {
+                      type: "agentMessage",
+                      id: "final",
+                      phase: "final_answer",
+                      text: "child result",
+                    },
+                  ],
+                }),
+          );
+        if (order === "terminal-first") {
+          await terminal();
+        }
+        await client.notify({
+          method: "item/completed",
+          params: {
+            threadId: "parent-thread",
+            turnId: "parent-turn",
+            item: {
+              type: "collabAgentToolCall",
+              id: "wait-call",
+              tool: "wait",
+              status: childStatus === "errored" ? "failed" : "completed",
+              senderThreadId: "parent-thread",
+              receiverThreadIds: ["child-thread"],
+              agentsStates: { "child-thread": { status: childStatus, message: "child result" } },
+            },
+          },
+        });
+        if (order === "wait-first") {
+          await terminal();
+        }
+        parent.unregister();
+        await vi.waitFor(() => {
+          expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+            expect.objectContaining({
+              runId: "codex-thread:child-thread",
+              deliveryStatus: "delivered",
+            }),
+          );
+        });
+        expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+        monitor.dispose();
+      },
+    );
+
     function deliveredNativeCompletion(): CodexServerNotification {
       return {
         method: "rawResponseItem/completed",

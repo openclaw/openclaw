@@ -4934,8 +4934,8 @@ jobs:
             swift_test_width=$(( logical_cpu < 12 ? logical_cpu : 12 ))
             echo "[macos-swift] Swift Testing parallelization width: $swift_test_width"
             swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")
-            node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip AppStateIsolationTests
-            node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter AppStateIsolationTests
+            node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"
+            node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter "AppStateIsolationTests|ProfileChatPreferencesTests"
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets predate the resource-owner script and its tests.
             # Their original suite still runs only on this disposable macOS worker.
@@ -4945,6 +4945,32 @@ jobs:
             echo "Current CI targets must provide scripts/test-macos-native.mts." >&2
             exit 1
           fi
+
+      - name: Upload default-profile chat menu captures
+        if: ${{ always() && steps.swift-test.outputs.menu-default-artifact-path != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-chat-menu-captures-default
+          path: |
+            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/*-window.png
+            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/*-menu-*.png
+            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/*-capture-status.json
+            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/capture-export.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload named-profile chat menu captures
+        if: ${{ always() && steps.swift-test.outputs.menu-named-artifact-path != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-chat-menu-captures-named
+          path: |
+            ${{ steps.swift-test.outputs.menu-named-artifact-path }}/*-window.png
+            ${{ steps.swift-test.outputs.menu-named-artifact-path }}/*-menu-*.png
+            ${{ steps.swift-test.outputs.menu-named-artifact-path }}/*-capture-status.json
+            ${{ steps.swift-test.outputs.menu-named-artifact-path }}/capture-export.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Render isolated macOS health fixtures
         id: health-render

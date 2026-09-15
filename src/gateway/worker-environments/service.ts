@@ -10,10 +10,7 @@ import { createWorkerEnvironmentBuildPreparation } from "./build-preparation.js"
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerCredentialBroker } from "./credential-broker.js";
 import { createWorkerEnvironmentAccess } from "./environment-access.js";
-import {
-  registerWorkerInferenceSessionDrain,
-  type WorkerInferenceSessionDrain,
-} from "./inference-control-internal.js";
+import { registerWorkerInferenceSessionDrain } from "./inference-control-internal.js";
 import type { WorkerInferenceStore } from "./inference-store.js";
 import { createWorkerInferenceManager, type WorkerInferenceExecutor } from "./inference.js";
 import type { WorkerLiveEventReceiver } from "./live-events.js";
@@ -139,9 +136,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     getConfig: options.getConfig,
     ...(options.inferenceStore ? { store: options.inferenceStore } : {}),
   });
-  const inferenceWithDrain = inference as typeof inference & {
-    beginSessionDrain(sessionId: string): WorkerInferenceSessionDrain;
-  };
   let reconcileInFlight: Promise<void> | undefined;
   let interval: ReturnType<typeof setInterval> | undefined;
   let unsubscribeSessionIdentityMutation: (() => void) | undefined;
@@ -741,9 +735,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     start,
     stop,
   };
-  registerWorkerInferenceSessionDrain(service, (sessionId) =>
-    inferenceWithDrain.beginSessionDrain(sessionId),
-  );
+  registerWorkerInferenceSessionDrain(service, inference.beginSessionDrain);
   return service;
 }
 

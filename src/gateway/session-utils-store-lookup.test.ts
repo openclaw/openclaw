@@ -121,33 +121,59 @@ describe("global session lookup ownership", () => {
     });
   });
 
-  it.each([
+  it.each<{
+    agentId: string;
+    clone: false | undefined;
+    createsDatabase: boolean;
+    unreadableRegistry?: true;
+  }>([
     { agentId: "main", clone: undefined, createsDatabase: true },
     { agentId: "main", clone: false, createsDatabase: false },
     { agentId: "retired", clone: undefined, createsDatabase: false },
-  ])("preserves scalar database admission for $agentId (clone: $clone)", async (scenario) => {
-    await withStateDirEnv("gateway-scalar-store-admission-", async ({ stateDir }) => {
-      const cfg: OpenClawConfig = {
-        agents: { ownership: "explicit", entries: { main: {} } },
-        session: { store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json") },
-      };
-      const key = `agent:${scenario.agentId}:dashboard:new-session`;
-      const target = resolveGatewaySessionStoreTarget({
-        cfg,
-        key,
-        clone: scenario.clone,
+    { agentId: "main", clone: false, createsDatabase: false, unreadableRegistry: true },
+    { agentId: "retired", clone: false, createsDatabase: false, unreadableRegistry: true },
+  ])(
+    "preserves scalar database admission for $agentId (clone: $clone, unreadable registry: $unreadableRegistry)",
+    async (scenario) => {
+      await withStateDirEnv("gateway-scalar-store-admission-", async ({ stateDir }) => {
+        const cfg: OpenClawConfig = {
+          agents: { ownership: "explicit", entries: { main: {} } },
+          session: {
+            store: path.join(
+              stateDir,
+              "agents",
+              scenario.unreadableRegistry ? scenario.agentId : "{agentId}",
+              "sessions",
+              "sessions.json",
+            ),
+          },
+        };
+        const key = `agent:${scenario.agentId}:dashboard:new-session`;
+        if (scenario.unreadableRegistry) {
+          mkdirSync(path.join(stateDir, "state", "openclaw.sqlite"), { recursive: true });
+        }
+        const resolve = () =>
+          resolveGatewaySessionStoreTarget({
+            cfg,
+            key,
+            clone: scenario.clone,
+          });
+        if (scenario.unreadableRegistry) {
+          expect(resolve).toThrow();
+        } else {
+          expect(resolve()).toEqual({
+            agentId: scenario.agentId,
+            canonicalKey: key,
+            storeKeys: [key],
+            storePath: path.join(stateDir, "agents", scenario.agentId, "sessions", "sessions.json"),
+          });
+        }
+        expect(existsSync(resolveOpenClawAgentSqlitePath({ agentId: scenario.agentId }))).toBe(
+          scenario.createsDatabase,
+        );
       });
-      expect(target).toEqual({
-        agentId: scenario.agentId,
-        canonicalKey: key,
-        storeKeys: [key],
-        storePath: path.join(stateDir, "agents", scenario.agentId, "sessions", "sessions.json"),
-      });
-      expect(existsSync(resolveOpenClawAgentSqlitePath({ agentId: scenario.agentId }))).toBe(
-        scenario.createsDatabase,
-      );
-    });
-  });
+    },
+  );
 
   it("keeps a child-relative parent distinct from qualified parent owners", async () => {
     await withGlobalSessions("main", async (cfg) => {

@@ -359,6 +359,8 @@ export function buildGatewaySessionRow(params: {
     swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
+    workspaceDir: entry?.spawnedCwd ?? entry?.spawnedWorkspaceDir,
+    projectId: entry?.projectId,
     permissionMode: entry?.permissionMode,
     permissionModePending: isSessionPermissionChangePending(entry?.sessionId),
     ...(entry?.permissionMode !== undefined && entry.sessionRoot !== undefined

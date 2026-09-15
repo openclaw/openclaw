@@ -10,37 +10,17 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 
 const SOURCE_SHA = "a".repeat(40);
 const VERSION = "2026.8.1-beta.1";
 const BASELINE_VERSION = "2026.7.1";
 const SCRIPT = "scripts/e2e/lib/prepublish-plugin-registry.sh";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function resolveWorkflowBash(): string {
-  // Ubuntu uses Bash 5; Apple's Bash 3 does not honor errexit for failed [[ ]] guards.
-  for (const dir of (process.env.PATH ?? "").split(delimiter).filter(Boolean)) {
-    const candidate = resolve(dir, "bash");
-    if (!existsSync(candidate)) {
-      continue;
-    }
-    const result = spawnSync(
-      candidate,
-      ["--noprofile", "--norc", "-c", 'test "${BASH_VERSINFO[0]}" -ge 5'],
-      { stdio: "ignore", timeout: 1_000 },
-    );
-    if (result.status === 0) {
-      return candidate;
-    }
-  }
-  throw new Error(
-    "Native npm 12 workflow tests require Bash 5+. Install Bash 5+ and put it on PATH.",
-  );
-}
 
 function sha256(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");

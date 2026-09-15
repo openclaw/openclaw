@@ -30,7 +30,6 @@ import {
   registerMcpLoopbackClientGrantRevocationListener,
   revokeMcpLoopbackClientGrantsForRuntime,
 } from "./mcp-grant-store.js";
-import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
   markMcpLoopbackRequestClassified,
@@ -50,7 +49,6 @@ import {
   resolveMcpRequestContext,
   validateMcpLoopbackRequest,
 } from "./mcp-http.request.js";
-import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 
 // Loopback MCP server exposes gateway-scoped tools to local MCP clients over a
 // bearer-token HTTP endpoint bound to 127.0.0.1. Only one active server/runtime
@@ -131,6 +129,11 @@ function logMcpLoopbackTraffic(step: string, details: Record<string, unknown>): 
 
 /** Starts a new MCP loopback HTTP server and registers its bearer tokens. */
 async function startMcpLoopbackServer(port = 0): Promise<() => Promise<void>> {
+  // Shutdown preloads this module even when no MCP listener is needed.
+  const [{ handleMcpJsonRpc }, { McpLoopbackToolCache }] = await Promise.all([
+    import("./mcp-http.handlers.js"),
+    import("./mcp-http.runtime.js"),
+  ]);
   const ownerToken = crypto.randomBytes(32).toString("hex");
   const nonOwnerToken = crypto.randomBytes(32).toString("hex");
   const toolCache = new McpLoopbackToolCache();

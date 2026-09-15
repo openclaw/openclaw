@@ -471,7 +471,8 @@ export async function prepareGatewayKernelState(params: {
     isTerminalEnabled: terminalLaunchPolicy.isEnabled,
     gatewayTls,
     getResolvedAuth,
-    hooksConfig: () => runtimeStateRef.current?.hooksConfig ?? initialHooksConfig,
+    hooksConfig: () =>
+      runtimeStateRef.current === null ? initialHooksConfig : runtimeStateRef.current.hooksConfig,
     getHookClientIpConfig: () =>
       runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
     pluginRegistry: pluginRuntime.registry,

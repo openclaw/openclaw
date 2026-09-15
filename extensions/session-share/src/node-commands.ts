@@ -80,7 +80,7 @@ export function createSessionShareNodeCommands(
         });
         const offset = sessionCatalogPaging.decodeCursor(params.cursor);
         const search = params.searchTerm?.toLowerCase();
-        const sessions: SessionCatalogSession[] = [];
+        const sessions = [];
         for (const { agentId, sessionKey, storePath, entry } of sharedEntries(api)) {
           const name = readSessionTranscriptCatalogTitle({ agentId, sessionKey, storePath, entry });
           if (
@@ -90,45 +90,53 @@ export function createSessionShareNodeCommands(
           ) {
             continue;
           }
-          const archived = entry.archivedAt !== undefined;
-          const cwd =
-            entry.execCwd ??
-            entry.spawnedCwd ??
-            entry.spawnedWorkspaceDir ??
-            entry.worktree?.canonicalWorkspaceDir ??
-            entry.worktree?.repoRoot;
           sessions.push({
             threadId: sessionKey,
             name,
-            color: entry.color,
-            cwd: cwd ? redactToolPayloadText(cwd).slice(0, 6000) : undefined,
-            status: archived ? "archived" : "idle",
-            createdAt: entry.createdAt,
-            updatedAt: entry.updatedAt,
+            entry,
             recencyAt: Math.max(
               entry.updatedAt,
               entry.lastInteractionAt ?? 0,
               entry.lastActivityAt ?? 0,
             ),
-            gitBranch: entry.worktree?.branch
-              ? redactToolPayloadText(entry.worktree.branch).slice(0, 6000)
-              : undefined,
-            archived,
-            canContinue: false,
-            canArchive: false,
-            canOpenTerminal: false,
-            createdActor: projectSessionCatalogSourceActor({
-              ...source,
-              actor: entry.createdActor,
-            }),
           });
         }
         sessions.sort(
           (left, right) =>
-            (right.recencyAt ?? 0) - (left.recencyAt ?? 0) ||
-            left.threadId.localeCompare(right.threadId),
+            right.recencyAt - left.recencyAt || left.threadId.localeCompare(right.threadId),
         );
-        const page = sessions.slice(offset, offset + params.limit);
+        const page = sessions
+          .slice(offset, offset + params.limit)
+          .map(({ threadId, name, entry, recencyAt }): SessionCatalogSession => {
+            const archived = entry.archivedAt !== undefined;
+            const cwd =
+              entry.execCwd ??
+              entry.spawnedCwd ??
+              entry.spawnedWorkspaceDir ??
+              entry.worktree?.canonicalWorkspaceDir ??
+              entry.worktree?.repoRoot;
+            return {
+              threadId,
+              name,
+              color: entry.color,
+              cwd: cwd ? redactToolPayloadText(cwd).slice(0, 6000) : undefined,
+              status: archived ? "archived" : "idle",
+              createdAt: entry.createdAt,
+              updatedAt: entry.updatedAt,
+              recencyAt,
+              gitBranch: entry.worktree?.branch
+                ? redactToolPayloadText(entry.worktree.branch).slice(0, 6000)
+                : undefined,
+              archived,
+              canContinue: false,
+              canArchive: false,
+              canOpenTerminal: false,
+              createdActor: projectSessionCatalogSourceActor({
+                ...source,
+                actor: entry.createdActor,
+              }),
+            };
+          });
         return JSON.stringify({
           sessions: page,
           ...(offset + page.length < sessions.length

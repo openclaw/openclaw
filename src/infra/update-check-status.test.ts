@@ -660,6 +660,7 @@ describe("checkUpdateStatus", () => {
         root,
         includeRegistry: false,
         fetchGit: false,
+        timeoutMs: 1000,
         resolveRegistryChannel,
       });
 

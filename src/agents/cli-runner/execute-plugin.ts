@@ -426,9 +426,11 @@ export async function executePluginOwnedProcess(params: {
   onActiveLoopbackAskUserDeadlineChange?: (listener: () => void) => () => void;
   onNoOutputTimeout?: (error: FailoverError) => void;
   onInterrupted?: (reason: CliTerminalInterruption["reason"]) => boolean;
-  liveSession?: {
+  mcpCapture?: {
     captureKey?: string;
-    beginCapture: (captureKey: string | undefined) => void;
+    beginCapture: (captureKey: string | undefined, assertCurrent: () => void) => void;
+  };
+  liveSession?: {
     requiredGeneration?: string;
   };
 }): Promise<RunExit> {
@@ -445,7 +447,12 @@ export async function executePluginOwnedProcess(params: {
     ? AbortSignal.any([controller.signal, run.abortSignal])
     : controller.signal;
   const assertCurrent = createCliRunCurrentAssertion(run, signal);
+  const assertRunCurrent = createCliRunCurrentAssertion(run);
   const termination: { reason: TerminationReason } = { reason: "exit" };
+  // Normal cleanup closes native callbacks; MCP results retain their admitted
+  // caller through the capture drain. Cancellation and timeouts still close both.
+  const assertCaptureCurrent = () =>
+    (termination.reason === "exit" ? assertRunCurrent : assertCurrent)();
   const outstanding = {
     approvals: 0,
     background: 0,
@@ -568,9 +575,14 @@ export async function executePluginOwnedProcess(params: {
         argv0: params.executionArgv0,
         env: params.env,
         ...params.liveSession,
+        captureKey: params.mcpCapture?.captureKey,
+        beginCapture: (captureKey) =>
+          params.mcpCapture?.beginCapture(captureKey, assertCaptureCurrent),
         abortSignal: signal,
         claimResources: params.context.preparedBackend.claimLiveSessionResources,
       });
+    } else {
+      params.mcpCapture?.beginCapture(params.mcpCapture.captureKey, assertCaptureCurrent);
     }
     assertCurrent();
     const execution = params.execute({

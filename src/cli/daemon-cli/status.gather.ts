@@ -27,6 +27,7 @@ import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
   readGatewaySecretInputValue,
 } from "../../gateway/secret-input-paths.js";
+import { readGatewayLastShutdown } from "../../infra/gateway-boot-lifecycle.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import { inspectPortConnections } from "../../infra/ports-inspect.js";
@@ -315,6 +316,18 @@ async function gatherDaemonStatusImpl(
     isDefaultInstallIdentity(process.env) &&
     !isGatewayExternallySupervised(process.env);
   const targetServiceCommand = useNativeServiceTargetContext ? command : null;
+  if (opts.deep && !trimToUndefined(opts.rpc.url)) {
+    const { preflightOpenClawDatabaseSchemas, OpenClawDatabaseSchemaPreflightError } =
+      await import("../../state/openclaw-database-preflight.js");
+    // Diagnose a refused database before config and lifecycle readers try to open it.
+    const schemas = await preflightOpenClawDatabaseSchemas({
+      env: { ...process.env, ...targetServiceCommand?.environment },
+      scope: "state",
+    });
+    if (schemas.incompatible.length > 0) {
+      throw new OpenClawDatabaseSchemaPreflightError(schemas.incompatible);
+    }
+  }
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;
   const configAudit: ServiceConfigAudit = await loadServiceAuditModule().then(
     ({ auditGatewayServiceConfig }) =>
@@ -344,6 +357,17 @@ async function gatherDaemonStatusImpl(
   const hasUrlOverride = Boolean(probeUrlOverride);
   const serviceTargetsProbe = useNativeServiceTargetContext && !hasUrlOverride;
   const shouldInspectLocalGateway = !hasUrlOverride;
+  const lastShutdown =
+    opts.deep && shouldInspectLocalGateway ? readGatewayLastShutdown(mergedDaemonEnv) : undefined;
+  let duelingScopesWarning: string | null = null;
+  if (opts.deep && serviceTargetsProbe && process.platform === "linux") {
+    const { findSystemdGatewayInstallation, formatDuelingScopesWarning } =
+      await import("../../daemon/systemd-scope.js");
+    const installation = await findSystemdGatewayInstallation(serviceEnv).catch(() => null);
+    duelingScopesWarning = installation
+      ? formatDuelingScopesWarning(installation, daemonPort)
+      : null;
+  }
   const windowsFirewall =
     opts.deep === true && shouldInspectLocalGateway
       ? await inspectWindowsGatewayFirewall({
@@ -604,6 +628,8 @@ async function gatherDaemonStatusImpl(
     },
     gateway: {
       ...gateway,
+      ...(lastShutdown ? { lastShutdown } : {}),
+      ...(duelingScopesWarning ? { duelingScopesWarning } : {}),
       ...(windowsFirewall?.applies ? { windowsFirewall } : {}),
       ...(opts.probe
         ? {

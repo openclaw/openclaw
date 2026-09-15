@@ -5,6 +5,7 @@ import { listAgentIds } from "../agents/agent-scope.js";
 import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   isConfiguredSessionStoreAgentId,
+  isPerAgentSessionStoreConfig,
   resolveAgentMainSessionKey,
   resolveExistingAgentSessionStoreTargetsSync,
   resolveSessionStorePathCore,
@@ -115,6 +116,7 @@ function resolveGatewaySessionStoreCandidates(
   cfg: OpenClawConfig,
   agentId: string,
   cache?: GatewaySessionStoreDiscoveryCache,
+  excludeConfiguredFallback = false,
 ): GatewaySessionStoreDiscovery {
   const cached = cache?.get(agentId);
   if (cached) {
@@ -126,7 +128,13 @@ function resolveGatewaySessionStoreCandidates(
     storePath: resolveSessionStorePathCore(storeConfig, { agentId }),
   };
   const discovery = {
-    existing: resolveExistingAgentSessionStoreTargetsSync(cfg, agentId),
+    existing: resolveExistingAgentSessionStoreTargetsSync(cfg, agentId, {
+      // Cached discovery also serves existing-only deleted-main lookups.
+      excludeStorePath:
+        !cache && excludeConfiguredFallback && !isPerAgentSessionStoreConfig(storeConfig)
+          ? fallback.storePath
+          : undefined,
+    }),
     fallback,
   };
   cache?.set(agentId, discovery);
@@ -172,13 +180,14 @@ function prepareGatewaySessionStoreLookup(
   params: GatewaySessionStoreLookupParams & { canonicalKey: string; agentId: string },
 ): GatewaySessionStorePlan<GatewaySessionStoreLookup> {
   const scanTargets = buildGatewaySessionStoreScanTargets(params);
+  const configured = isConfiguredSessionStoreAgentId(params.cfg, params.agentId);
   const discovery = resolveGatewaySessionStoreCandidates(
     params.cfg,
     params.agentId,
     params.targetDiscoveryCache,
+    configured,
   );
   const { existing, fallback } = discovery;
-  const configured = isConfiguredSessionStoreAgentId(params.cfg, params.agentId);
   const candidates = configured
     ? [fallback, ...existing.filter((target) => target.storePath !== fallback.storePath)]
     : existing;

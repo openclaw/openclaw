@@ -162,6 +162,78 @@ describe("CodexAppServerTurnRouter", () => {
     expect(requestHandler).not.toHaveBeenCalled();
   });
 
+  it("keeps execution budgets with the matching thread owner", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createHarness();
+    const router = getCodexAppServerTurnRouter(harness.client);
+    const signals = new Map<string, AbortSignal>();
+    for (const [threadId, timeoutMs] of [
+      ["long", 900_000],
+      ["short", 60_000],
+    ] as const) {
+      const route = router.reserveThread({
+        threadId,
+        onRequest: (_request, scope, signal, setExecutionTimeoutMs) => {
+          signals.set(scope.threadId, signal);
+          setExecutionTimeoutMs?.(timeoutMs);
+          return new Promise<never>(() => {});
+        },
+      });
+      route.armTurn();
+      await route.bindTurn(`turn-${threadId}`);
+      harness.send({
+        id: threadId,
+        method: "item/tool/call",
+        params: { threadId, turnId: `turn-${threadId}`, tool: "node_exec" },
+      });
+    }
+
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(signals.get("short")?.aborted).toBe(true);
+    expect(signals.get("long")?.aborted).toBe(false);
+    expect(harness.writes.map((line) => JSON.parse(line))).toMatchObject([
+      { id: "short", result: { success: false } },
+    ]);
+
+    await vi.advanceTimersByTimeAsync(840_000);
+    expect(signals.get("long")?.aborted).toBe(true);
+    expect(harness.writes.map((line) => JSON.parse(line))).toMatchObject([
+      { id: "short", result: { success: false } },
+      { id: "long", result: { success: false } },
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not extend an aborted route's request with a late owner budget", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createHarness();
+    let setExecutionTimeoutMs: ((timeoutMs: number) => void) | undefined;
+    const route = getCodexAppServerTurnRouter(harness.client).reserveThread({
+      threadId: "released",
+      onRequest: (_request, _scope, _signal, setTimeoutMs) => {
+        setExecutionTimeoutMs = setTimeoutMs;
+        return new Promise<never>(() => {});
+      },
+    });
+    harness.send({
+      id: "released",
+      method: "item/tool/call",
+      params: { threadId: "released", tool: "node_exec" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(setExecutionTimeoutMs).toBeTypeOf("function");
+    route.release();
+    setExecutionTimeoutMs?.(900_000);
+
+    await vi.advanceTimersByTimeAsync(CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
+    expect(harness.writes.map((line) => JSON.parse(line))).toMatchObject([
+      { id: "released", result: { success: false } },
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("routes concurrent traffic to the exact thread and turn", async () => {
     const harness = createHarness();
     const router = getCodexAppServerTurnRouter(harness.client);

@@ -244,6 +244,8 @@ describe("gateway concurrency benchmark script", () => {
   it("parses benchmark controls without booting a gateway", () => {
     expect(
       testing.parseOptions([
+        "--agent-count",
+        "12",
         "--concurrency",
         "12",
         "--turns-per-session",
@@ -296,6 +298,7 @@ describe("gateway concurrency benchmark script", () => {
         "--json",
       ]),
     ).toMatchObject({
+      agentCount: 12,
       cadenceMs: 50,
       concurrency: 12,
       cpuProfDir: "/tmp/gateway-cpu-profiles",
@@ -329,6 +332,16 @@ describe("gateway concurrency benchmark script", () => {
       "--concurrency must be at most 64",
     );
     expect(testing.parseOptions([]).turnsPerSession).toBe(1);
+    expect(testing.parseOptions([]).agentCount).toBe(1);
+    expect(
+      testing.parseOptions(["--agent-count", "128", "--session-count", "1000"]).agentCount,
+    ).toBe(128);
+    for (const value of ["0", "1.5", "129"]) {
+      expect(() => testing.parseOptions(["--agent-count", value])).toThrow("--agent-count");
+    }
+    expect(() => testing.parseOptions(["--agent-count", "9"])).toThrow(
+      "--agent-count must not exceed the total session count",
+    );
     expect(
       testing.parseOptions(["--load-cpu-prof-dir", "/tmp/gateway-load-cpu-profiles"])
         .loadCpuProfDir,
@@ -786,8 +799,23 @@ describe("gateway concurrency benchmark script", () => {
         const values = [1_000, 9_000];
         return () => values.shift() ?? 9_000;
       })(),
-      options: testing.parseOptions(["--runs", "1", "--warmup", "1", "--timeout-ms", "5000"]),
-      runSample: async ({ deadlineAt }) => {
+      options: testing.parseOptions([
+        "--runs",
+        "1",
+        "--warmup",
+        "1",
+        "--timeout-ms",
+        "5000",
+        "--agent-count",
+        "8",
+      ]),
+      runSample: async ({ deadlineAt, agentCount, concurrency, sessionCount, turnsPerSession }) => {
+        expect({ agentCount, concurrency, sessionCount, turnsPerSession }).toEqual({
+          agentCount: 8,
+          concurrency: 8,
+          sessionCount: 0,
+          turnsPerSession: 1,
+        });
         deadlines.push(deadlineAt);
         return sample;
       },

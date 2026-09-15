@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
+import { listLegacySessionTranscriptFiles } from "../config/sessions/legacy-store-inspection.js";
 import { collectSessionStateIdsForEntry } from "../config/sessions/session-accessor.sqlite-references.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -128,17 +129,12 @@ export async function discoverLegacyHistoricalTranscripts(params: {
       record.transcriptPath ? [canonicalMigrationFilePath(record.transcriptPath)] : [],
     ),
   );
-  if (fs.existsSync(directory)) {
-    for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
-      const filename = path.join(directory, item.name);
-      if (
-        item.isFile() &&
-        isPrimarySessionTranscriptFileName(item.name) &&
-        !referenced.has(canonicalMigrationFilePath(filename)) &&
-        !params.referencedPaths?.has(canonicalMigrationFilePath(filename))
-      ) {
-        sources.set(filename, { path: filename, originalPath: filename });
-      }
+  for (const filename of listLegacySessionTranscriptFiles(directory)) {
+    if (
+      !referenced.has(canonicalMigrationFilePath(filename)) &&
+      !params.referencedPaths?.has(canonicalMigrationFilePath(filename))
+    ) {
+      sources.set(filename, { path: filename, originalPath: filename });
     }
   }
   const archivedReferences = new Set(

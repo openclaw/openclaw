@@ -96,6 +96,10 @@ function runCloseout(options: {
     isCrossRepository: options.fork ?? false,
   };
   writeFileSync(join(repo, "metadata.json"), JSON.stringify(metadata));
+  writeFileSync(
+    join(repo, ".local/gates-hosted-checks.json"),
+    JSON.stringify({ headSha: metadata.headRefOid }),
+  );
   const bin = join(dir, "bin");
   mkdirSync(bin);
   writeFileSync(

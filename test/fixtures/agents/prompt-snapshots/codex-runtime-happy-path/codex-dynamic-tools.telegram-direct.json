@@ -673,8 +673,16 @@
                       "type": "string"
                     },
                     "timeoutSeconds": {
-                      "minimum": 0,
-                      "type": "number"
+                      "anyOf": [
+                        {
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Timeout seconds; null restores the default on update (omission preserves it)"
                     },
                     "toolBudget": {
                       "description": "Maximum script tool calls",
@@ -1139,12 +1147,15 @@
       },
       {
         "deferLoading": true,
-        "description": "List visible sessions and sidebar groups; filter kind/label/agentId/search/activity/archive. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. Use before history/send target selection.",
+        "description": "List visible session metadata and groups; filter ownerId/creatorId, projectId/workspaceDir, group/pinned, kind/agent/activity/archive. relationship=owned|created|involving selects the authenticated requesting user's sessions, not the agent's owner. Metadata-only by default. limit defaults to 100; larger requests stay valid but limitApplied never exceeds 200. count is this page, not an inventory total. Continue with nextOffset and identical filters while hasMore; truncationReason names a scan/byte budget. Pages are live: deduplicate by agentId/key/sessionId or restart for a fresh inventory. archived=all includes active and archived rows. Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. enrichmentOmitted means previews exceeded the byte budget; read history separately. Use before history/send target selection.",
         "inputSchema": {
           "properties": {
             "activeMinutes": {
               "minimum": 1,
               "type": "integer"
+            },
+            "activeOnly": {
+              "type": "boolean"
             },
             "agentId": {
               "maxLength": 64,
@@ -1152,7 +1163,25 @@
               "type": "string"
             },
             "archived": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "const": "all",
+                  "type": "string"
+                }
+              ]
+            },
+            "creatorId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "excludeSubagents": {
               "type": "boolean"
+            },
+            "group": {
+              "type": "string"
             },
             "includeDerivedTitles": {
               "type": "boolean"
@@ -1179,7 +1208,32 @@
               "minimum": 0,
               "type": "integer"
             },
+            "offset": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "ownerId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "pinned": {
+              "type": "boolean"
+            },
+            "projectId": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "relationship": {
+              "description": "Relation to the authenticated requesting user; unavailable without a trusted user identity.",
+              "enum": ["owned", "created", "involving"],
+              "type": "string"
+            },
             "search": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "workspaceDir": {
               "minLength": 1,
               "type": "string"
             }

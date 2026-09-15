@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
+import {
+  projectQaEvidenceScenarioOutcomes,
+  validateQaEvidenceSummaryJson,
+} from "./evidence-summary.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import {
   runQaTestFileScenarios,
@@ -84,10 +87,7 @@ describe("qa test file scenario runner", () => {
         "--reporter=verbose",
         "--reporter=json",
         `--outputFile.json=${path.join(
-          repoRoot,
-          ".artifacts",
-          "qa-e2e",
-          "scenario-playwright",
+          path.dirname(result.results[0]!.logPath),
           "scenario-playwright.vitest-report.json",
         )}`,
         "--testNamePattern",
@@ -98,7 +98,7 @@ describe("qa test file scenario runner", () => {
     const evidence = validateQaEvidenceSummaryJson(
       JSON.parse(await fs.readFile(result.evidencePath, "utf8")),
     );
-    expect(evidence.schemaVersion).toBe(2);
+    expect(evidence.schemaVersion).toBe(3);
     expect(evidence.entries).toHaveLength(1);
     expect(evidence.entries[0]).toMatchObject({
       test: {
@@ -133,7 +133,7 @@ describe("qa test file scenario runner", () => {
         artifacts: [
           {
             kind: "log",
-            path: ".artifacts/qa-e2e/scenario-playwright/scenario-playwright.log",
+            path: `<repo-root>/${path.relative(repoRoot, result.results[0]!.logPath).split(path.sep).join("/")}`,
             source: "playwright",
           },
         ],
@@ -195,10 +195,7 @@ describe("qa test file scenario runner", () => {
         "--reporter=verbose",
         "--reporter=json",
         `--outputFile.json=${path.join(
-          repoRoot,
-          ".artifacts",
-          "qa-e2e",
-          "scenario-vitest",
+          path.dirname(result.results[0]!.logPath),
           "scenario-vitest.vitest-report.json",
         )}`,
       ],
@@ -230,7 +227,7 @@ describe("qa test file scenario runner", () => {
         artifacts: [
           {
             kind: "log",
-            path: ".artifacts/qa-e2e/scenario-vitest/scenario-vitest.log",
+            path: `<repo-root>/${path.relative(repoRoot, result.results[0]!.logPath).split(path.sep).join("/")}`,
             source: "vitest",
           },
         ],
@@ -435,7 +432,7 @@ describe("qa test file scenario runner", () => {
         executionKind === "playwright"
           ? "ui/src/e2e/chat-flow.e2e.test.ts"
           : "extensions/qa-lab/src/coverage-report.test.ts";
-      const reportPath = path.join(outputDir, `scenario-${executionKind}.vitest-report.json`);
+      const reportName = `scenario-${executionKind}.vitest-report.json`;
       let writeReport = true;
       const runParams = {
         repoRoot,
@@ -452,16 +449,70 @@ describe("qa test file scenario runner", () => {
 
       const firstRun = await runQaTestFileScenarios(runParams);
       expect(firstRun.results[0]).toMatchObject({ status: "pass" });
-      await fs.access(reportPath);
+      const reportPath = path.join(path.dirname(firstRun.results[0]!.logPath), reportName);
+      const firstBytes = await fs.readFile(reportPath);
 
       writeReport = false;
       const secondRun = await runQaTestFileScenarios(runParams);
+      const secondReportPath = path.join(path.dirname(secondRun.results[0]!.logPath), reportName);
+      expect(secondReportPath).not.toBe(reportPath);
       expect(secondRun.results[0]).toMatchObject({
-        failureMessage: `Vitest exited successfully without writing a valid JSON test report at ${reportPath}.`,
+        failureMessage: `Vitest exited successfully without writing a valid JSON test report at ${secondReportPath}.`,
         status: "fail",
       });
       expect(secondRun.evidence.entries[0]?.result.status).toBe("fail");
-      await expect(fs.access(reportPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(secondReportPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(reportPath)).toEqual(firstBytes);
+    },
+  );
+
+  it.each(["full", "slim"] as const)(
+    "preserves duplicate native instances and their independent artifacts in %s mode",
+    async (evidenceMode) => {
+      const repoRoot = await makeTempRepo("qa-native-duplicate-instances-");
+      const scenario = makeTestFileScenario(
+        "vitest",
+        "extensions/qa-lab/src/coverage-report.test.ts",
+      );
+      const commands: QaScenarioCommandExecution[] = [];
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir: path.join(repoRoot, "out"),
+        ...QA_TEST_RUNNER_DEFAULTS,
+        evidenceMode,
+        scenarios: [scenario, scenario],
+        runCommand: async (command) => {
+          commands.push(command);
+          await writeNativeVitestReport(command, { passed: 1 });
+          return {
+            exitCode: commands.length === 1 ? 0 : 7,
+            stdout: `observation ${commands.length}\n`,
+            stderr: "",
+          };
+        },
+      });
+      expect(result.results.map(({ status }) => status)).toEqual(["pass", "fail"]);
+      expect(new Set(result.results.map(({ logPath }) => logPath)).size).toBe(2);
+      expect(result.evidence.entries.map(({ test }) => test.id)).toEqual([
+        scenario.id,
+        scenario.id,
+      ]);
+      expect(
+        projectQaEvidenceScenarioOutcomes(result.evidence).map(({ status }) => status),
+      ).toEqual(["pass", "fail"]);
+      for (const [index, observation] of result.results.entries()) {
+        expect(await fs.readFile(observation.logPath, "utf8")).toContain(
+          `observation ${index + 1}`,
+        );
+        expect(observation.evidenceOccurrenceId).toBe(
+          projectQaEvidenceScenarioOutcomes(result.evidence)[index]!.occurrenceId,
+        );
+      }
+      if (evidenceMode === "slim") {
+        expect(result.evidence.entries.every(({ execution }) => execution === undefined)).toBe(
+          true,
+        );
+      }
     },
   );
 

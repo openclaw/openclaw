@@ -284,7 +284,9 @@ export async function appendExpectedSessionTranscriptTurn(
         if (initialEntry || next !== appendedEntry) {
           const identityKeys = collectSessionEntryLookupKeys(transactionDb, resolved.sessionKey);
           const previousIdentity = readSessionIdentitySnapshot(transactionDb, identityKeys);
-          writeSessionEntry(transactionDb, resolved.sessionKey, next);
+          writeSessionEntry(transactionDb, resolved.sessionKey, next, {
+            canonicalPreviousEntry: previousIdentity.get(resolved.sessionKey) ?? null,
+          });
           const currentIdentity = readSessionIdentitySnapshot(transactionDb, identityKeys);
           publishIdentity = prepareSessionIdentityPublication(
             transactionDb,

@@ -36,6 +36,8 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   catalogMode?: "direct-only";
   /** Gateway client capabilities required before this tool can be assembled. */
   requiredClientCaps?: string[];
+  /** Tool-owned execution and transport wait budget, before any harness completion grace. */
+  getExecutionTimeoutMs?: (args: unknown) => number | undefined;
   prepareBeforeToolCallParams?: (
     params: unknown,
     ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },
@@ -60,6 +62,7 @@ export type AnyAgentTool = Omit<AgentTool, "execute"> &
     catalogMode?: "direct-only";
     /** Gateway client capabilities required before this tool can be assembled. */
     requiredClientCaps?: string[];
+    getExecutionTimeoutMs?: AgentToolWithMeta<TSchema, unknown>["getExecutionTimeoutMs"];
     prepareBeforeToolCallParams?: AgentToolWithMeta<
       TSchema,
       unknown

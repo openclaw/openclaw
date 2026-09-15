@@ -20,6 +20,7 @@ type SubagentAnnounceDeliveryFailureReason =
   | "generated_media_missing"
   | "message_tool_delivery_missing"
   | "requester_abandoned"
+  | "requester_turn_pending"
   | "source_owner_changed"
   | "steer_dropped"
   | "visible_reply_missing";
@@ -147,6 +148,7 @@ export async function runSubagentAnnounceDispatch(params: {
   if (
     !allowSteerFallback ||
     primaryDirect.delivered ||
+    primaryDirect.reason === "requester_turn_pending" ||
     primaryDirect.disposition === "session_queued" ||
     primaryDirect.disposition === "intentional_non_delivery" ||
     primaryDirect.disposition === "ambiguous" ||

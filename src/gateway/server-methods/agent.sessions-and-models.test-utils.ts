@@ -12,7 +12,10 @@ import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
+  markRequesterTurnYielded,
+  registerSubagentRun,
   resetSubagentRegistryForTests,
+  settleRequesterAfterSessionSpawns,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import {
@@ -29,6 +32,7 @@ import {
   markTaskTerminalById,
   reloadTaskRegistryFromStore,
 } from "../../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-support.js";
 import { setDetachedTaskLifecycleRuntime } from "../../tasks/task-runtime.test-helpers.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
@@ -547,6 +551,180 @@ describe("gateway agent handler", () => {
       });
     },
   );
+
+  it("keeps one task when a completed child wakes its requester before the yielded lifecycle ends", async () => {
+    await withTestDir({ prefix: "openclaw-gateway-yield-settlement-race-" }, async (root) => {
+      useTestStateDir(root);
+      // Adoption commits the registry and its canonical task together in SQLite.
+      resetTaskRegistryForTests({ persist: false });
+      resetSubagentRegistryForTests({ persist: false });
+      const requesterSessionKey = "agent:main:main";
+      const childSessionKey = "agent:main:subagent:settlement-orchestrator";
+      const workerSessionKey = "agent:main:subagent:settlement-worker";
+      const previousRunId = "orchestrator-yielding";
+      const nextRunId = "orchestrator-settle-continuation";
+      const workerRunId = "settled-worker";
+      const result = "The completed worker result has been checked.";
+      const completion = createDeferred<AgentWaitResult>();
+      const previousWait = createDeferred<AgentWaitResult>();
+      const announce = vi.fn<SubagentRegistryDeps["runSubagentAnnounceFlow"]>(
+        async () => "delivered",
+      );
+      let lifecycleHandler: Parameters<SubagentRegistryDeps["onAgentEvent"]>[0] | undefined;
+      let continuedAtDispatch: ReturnType<typeof getSubagentRunByChildSessionKey> | undefined;
+      const context = makeContext();
+      const wakeRespond = vi.fn();
+      const wake = vi.fn<SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"]>(
+        async (params) => {
+          if (params.requesterSessionKey !== childSessionKey) {
+            return false;
+          }
+          // The transport crosses the real agent admission boundary before the
+          // predecessor's lifecycle end is delivered, as in the production race.
+          await invokeAgent(
+            {
+              message: "The worker finished; verify and return its result.",
+              sessionKey: childSessionKey,
+              idempotencyKey: nextRunId,
+              inputProvenance: {
+                kind: "inter_session",
+                sourceSessionKey: workerSessionKey,
+                sourceTool: "subagent_settle",
+              },
+            },
+            { context, reqId: nextRunId, client: backendGatewayClient(), respond: wakeRespond },
+          );
+          return true;
+        },
+      );
+      applyGatewaySubagentRegistryTestDeps({
+        callGateway: (async ({ params }: { params?: { runId?: string } }) =>
+          await (params?.runId === previousRunId
+            ? previousWait.promise
+            : completion.promise)) as SubagentRegistryDeps["callGateway"],
+        runSubagentAnnounceFlow: announce,
+        maybeWakeRequesterAfterAllChildrenSettled: wake,
+        onAgentEvent: (handler) => {
+          lifecycleHandler = handler;
+          return () => {};
+        },
+      });
+      registerSubagentRun({
+        runId: previousRunId,
+        childSessionKey,
+        requesterSessionKey,
+        requesterAgentId: "main",
+        requesterDisplayKey: requesterSessionKey,
+        task: "Collect and verify the worker's result",
+        cleanup: "keep",
+        expectsCompletionMessage: true,
+      });
+      const originalTask = requireValue(findTaskByRunId(previousRunId), "original requester task");
+      addSubagentRunForTests({
+        runId: workerRunId,
+        childSessionKey: workerSessionKey,
+        requesterSessionKey: childSessionKey,
+        requesterAgentId: "main",
+        requesterTurnRunId: previousRunId,
+        requesterDisplayKey: childSessionKey,
+        task: "Produce the worker result",
+        startedAt: Date.now() - 10,
+        endedAt: Date.now(),
+        outcome: { status: "ok" },
+        expectsCompletionMessage: true,
+        completion: {
+          required: true,
+          resultText: "Worker result is ready.",
+          capturedAt: Date.now(),
+        },
+        delivery: { status: "delivered" },
+        cleanupCompletedAt: Date.now(),
+      });
+      mockSpawnedChildSessionEntry(childSessionKey);
+      mocks.agentCommand.mockImplementation(async () => {
+        continuedAtDispatch = structuredClone(getSubagentRunByChildSessionKey(childSessionKey));
+        completion.resolve({
+          status: "ok",
+          startedAt: Date.now(),
+          endedAt: Date.now(),
+          terminalReply: { disposition: "visible", text: result },
+        });
+        return { payloads: [{ text: result }], meta: { durationMs: 1 } };
+      });
+      expectRecordFields(getSubagentRunByChildSessionKey(childSessionKey)?.execution, {
+        status: "running",
+        endedAt: undefined,
+      });
+      expect(
+        markRequesterTurnYielded({
+          requesterSessionKey: childSessionKey,
+          requesterAgentId: "main",
+          requesterTurnRunId: previousRunId,
+        }),
+      ).toBe(1);
+      expect(
+        settleRequesterAfterSessionSpawns({
+          requesterSessionKey: childSessionKey,
+          requesterAgentId: "main",
+          requesterTurnRunId: previousRunId,
+          requesterYielded: true,
+          acceptedSessionSpawns: [
+            {
+              runId: workerRunId,
+              childSessionKey: workerSessionKey,
+              expectsCompletionMessage: true,
+            },
+          ],
+        }),
+      ).toBe(true);
+      await waitForAssertion(() => {
+        expect(wake).toHaveBeenCalled();
+        expect(wakeRespond.mock.calls.find(([ok]) => ok === false)).toBeUndefined();
+        expectRecordFields(context.dedupe.get(`agent:${nextRunId}`)?.payload, { status: "ok" });
+      });
+      expectRecordFields(continuedAtDispatch, {
+        runId: nextRunId,
+        taskRunId: previousRunId,
+        requesterSessionKey,
+        pauseReason: undefined,
+      });
+      await waitForAssertion(() => {
+        expectRecordFields(findTaskByRunId(previousRunId), {
+          taskId: originalTask.taskId,
+          status: "succeeded",
+          deliveryStatus: "delivered",
+        });
+      });
+      expect(findTaskByRunId(nextRunId)).toBeUndefined();
+      requireValue(
+        lifecycleHandler,
+        "registry lifecycle listener",
+      )({
+        runId: previousRunId,
+        sessionKey: childSessionKey,
+        seq: 1,
+        ts: Date.now(),
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: Date.now(), yielded: true },
+      });
+      await Promise.resolve();
+      expectRecordFields(findTaskByRunId(previousRunId), {
+        taskId: originalTask.taskId,
+        status: "succeeded",
+      });
+      expect(
+        listSubagentRunsForRequester(requesterSessionKey).map((entry) => entry.runId),
+      ).not.toContain(previousRunId);
+      expect(announce).toHaveBeenCalledTimes(1);
+      expect(announce).toHaveBeenCalledWith(
+        expect.objectContaining({
+          childRunId: nextRunId,
+          requesterSessionKey,
+          roundOneReply: result,
+        }),
+      );
+    });
+  });
 
   it("registers normally when a follow-up to a paused session names its own requester", async () => {
     await withTestDir(

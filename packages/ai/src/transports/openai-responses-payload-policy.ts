@@ -24,7 +24,7 @@ type OpenAIResponsesPayloadModel = {
 
 type OpenAIResponsesPayloadPolicyOptions = {
   extraParams?: Record<string, unknown>;
-  storeMode?: "provider-policy" | "disable" | "preserve";
+  storeMode?: "provider-policy" | "transport-default" | "disable" | "preserve";
   enablePromptCacheStripping?: boolean;
   enableServerCompaction?: boolean;
 };
@@ -40,6 +40,7 @@ type OpenAIResponsesEndpointClass =
 type OpenAIResponsesPayloadPolicy = {
   allowsServiceTier: boolean;
   compactThreshold: number | undefined;
+  explicitContinuationOptIn: boolean;
   explicitStore: boolean | undefined;
   shouldStripDisabledReasoningPayload: boolean;
   shouldStripInputStatus: boolean;
@@ -52,6 +53,7 @@ type OpenAIResponsesPayloadPolicy = {
 type OpenAIResponsesPayloadCapabilities = {
   allowsOpenAIServiceTier: boolean;
   allowsResponsesStore: boolean;
+  explicitContinuationOptIn: boolean;
   shouldStripResponsesPromptCache: boolean;
   supportsResponsesStoreField: boolean;
   usesKnownNativeOpenAIRoute: boolean;
@@ -111,7 +113,11 @@ function isOpenAIResponsesApi(api: string | undefined): boolean {
 
 function readCompatPayloadBoolean(
   compat: unknown,
-  key: "supportsInstructions" | "supportsPromptCacheKey" | "supportsStore",
+  key:
+    | "supportsInstructions"
+    | "supportsPromptCacheKey"
+    | "supportsResponsesContinuation"
+    | "supportsStore",
 ): boolean | undefined {
   if (!compat || typeof compat !== "object") {
     return undefined;
@@ -154,6 +160,14 @@ function resolveOpenAIResponsesPayloadCapabilities(
         : isResponsesApi && usesExplicitProxyLikeEndpoint;
   const supportsResponsesStoreField =
     readCompatPayloadBoolean(model.compat, "supportsStore") !== false && isResponsesApi;
+  // Explicit model capability enables stored HTTP continuation on compatible routes.
+  // Azure and ChatGPT transport contracts stay excluded by API/provider identity.
+  const explicitContinuationOptIn =
+    (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
+    supportsResponsesStoreField &&
+    provider !== "azure-openai" &&
+    provider !== "azure-openai-responses" &&
+    readCompatPayloadBoolean(model.compat, "supportsResponsesContinuation") === true;
 
   return {
     allowsOpenAIServiceTier:
@@ -173,6 +187,7 @@ function resolveOpenAIResponsesPayloadCapabilities(
       provider !== undefined &&
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       usesKnownNativeOpenAIEndpoint,
+    explicitContinuationOptIn,
     shouldStripResponsesPromptCache,
     supportsResponsesStoreField,
     usesKnownNativeOpenAIRoute,
@@ -271,14 +286,18 @@ export function resolveOpenAIResponsesPayloadPolicy(
 ): OpenAIResponsesPayloadPolicy {
   const capabilities = resolveOpenAIResponsesPayloadCapabilities(model);
   const storeMode = options.storeMode ?? "provider-policy";
+  // Public policy callers retain a strict no-store choice through disable.
+  // Transport defaults stay stateless unless the model explicitly opts in.
+  // Native provider wrappers enable storage separately through provider-policy.
   const explicitStore =
     storeMode === "preserve"
       ? undefined
-      : storeMode === "disable"
+      : storeMode === "disable" ||
+          (storeMode === "transport-default" && !capabilities.explicitContinuationOptIn)
         ? capabilities.supportsResponsesStoreField
           ? false
           : undefined
-        : capabilities.allowsResponsesStore
+        : capabilities.allowsResponsesStore || capabilities.explicitContinuationOptIn
           ? true
           : undefined;
   const isResponsesApi = isOpenAIResponsesApi(normalizeOptionalLowercaseString(model.api));
@@ -292,24 +311,16 @@ export function resolveOpenAIResponsesPayloadPolicy(
     model,
     options.extraParams,
   );
-  // Defaults on only for the two routes actually confirmed to honor
-  // `instructions` (see usesVerifiedInstructionsEndpoint above: native
-  // OpenAI, and xAI's main route by direct test). Every other route --
-  // including bundled-but-unverified named classes and arbitrary
-  // custom/local proxies -- defaults off: HTTP continuation is unreachable
-  // there anyway (openai-responses-websocket.ts requires the exact native
-  // OpenAI base URL), so there is nothing to gain from `instructions` and
-  // real risk of an unconfirmed route silently dropping the field along
-  // with the system prompt. `compat.supportsInstructions` always overrides
-  // the default in either direction -- explicit `false` opts a verified
-  // route out (confirmed necessary for xAI's compact endpoint specifically);
-  // explicit `true` opts any other route in once confirmed.
+  // Verified native OpenAI/xAI routes default instructions on; compat overrides.
+  // Other endpoints could silently drop this field and the system prompt.
+  // Stored-continuation support does not prove instructions support.
   const instructionsCompat = readCompatPayloadBoolean(model.compat, "supportsInstructions");
   const usesInstructionsField = instructionsCompat ?? capabilities.usesVerifiedInstructionsEndpoint;
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
     compactThreshold: serverCompactionPlan.threshold,
+    explicitContinuationOptIn: capabilities.explicitContinuationOptIn,
     explicitStore,
     shouldStripDisabledReasoningPayload,
     shouldStripInputStatus,

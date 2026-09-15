@@ -5,10 +5,26 @@
 }
 
 .chat-position-rail {
+  /* Centered previews need clearance at both ends of a capped rail. */
+  --chat-position-rail-clearance: 60px;
+  --chat-position-rail-height: min(
+    45vh,
+    calc(var(--chat-position-rail-count) * 12px),
+    calc(var(--chat-position-rail-viewport-height) - 2 * var(--chat-position-rail-clearance))
+  );
+  /* Reserve a full row at the 360px transcript visibility threshold below. */
+  --chat-position-rail-top: min(
+    calc((var(--chat-position-rail-viewport-height) - var(--chat-position-rail-height)) / 2),
+    calc(
+      360px + var(--chat-thread-padding-top) + var(--chat-thread-padding-bottom) -
+        var(--chat-transcript-composer-underlap, 0px) - var(--chat-position-rail-clearance) - 12px
+    )
+  );
+
   position: sticky;
   z-index: 4;
-  /* Container units exclude padding; include both insets to center in the scrollport. */
-  top: calc(50cqh + (var(--chat-thread-padding-bottom) - var(--chat-thread-padding-top)) / 2);
+  /* Sticky insets start inside the scrollport's top padding. */
+  top: calc(var(--chat-position-rail-top) - var(--chat-thread-padding-top));
   width: 0;
   height: 0;
 }
@@ -18,7 +34,7 @@
   top: 0;
   left: 10px;
   width: 44px;
-  transform: translateY(-50%);
+  height: var(--chat-position-rail-height);
 }
 
 /* Keep every message at 12px spacing. Long rails scroll within 45vh instead
@@ -27,10 +43,31 @@
   --chat-position-fade-top: 0px;
   --chat-position-fade-bottom: 0px;
 
+  --chat-position-marks-height: min(
+    var(--chat-position-rail-height),
+    max(
+      0px,
+      calc(
+        100cqh + var(--chat-thread-padding-top) + var(--chat-thread-padding-bottom) -
+          var(--chat-transcript-composer-underlap, 0px) - var(--chat-position-rail-top) -
+          var(--chat-position-rail-clearance)
+      )
+    )
+  );
+
   position: relative;
   display: grid;
   grid-auto-rows: 12px;
-  max-height: min(45vh, calc(100cqh - 32px));
+  /* Only the marks shrink; the track keeps its stable top as the composer grows. */
+  max-height: var(--chat-position-marks-height);
+  /* Keep the browser from clamping scrollTop when the composer collapses. */
+  padding-bottom: max(
+    0px,
+    calc(
+      var(--chat-position-scroll-top, 0px) + var(--chat-position-marks-height) -
+        var(--chat-position-rail-count) * 12px
+    )
+  );
   overflow: hidden auto;
   overscroll-behavior: contain;
   scroll-padding-block: 60px;
@@ -42,11 +79,11 @@
 }
 
 .chat-position-rail__marks[data-overflow-top] {
-  --chat-position-fade-top: 60px;
+  --chat-position-fade-top: min(60px, 25%);
 }
 
 .chat-position-rail__marks[data-overflow-bottom] {
-  --chat-position-fade-bottom: 60px;
+  --chat-position-fade-bottom: min(60px, 25%);
 }
 
 .chat-position-rail__marks[data-overflow-top],

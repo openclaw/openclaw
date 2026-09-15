@@ -10,6 +10,8 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
+  # GHSA-jqcg-44mw-7w3h trust-subnet fix; remove after 2026-09-22 06:13 UTC.
+  - "proxy-addr@2.0.8"
   # Smartquotes denial-of-service fix; remove after 2026-09-18 04:04 UTC.
   - "markdown-it@15.0.2"
   # Reviewed Discord local-provider contract; remove after 2026-09-21.
@@ -73,6 +75,7 @@ overrides:
   "mailparser@3.9.20>nodemailer": 10.0.8
   minimatch: 10.2.6
   path-to-regexp: 8.4.2
+  proxy-addr: 2.0.8
   qs: 6.16.0
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
   typebox: 1.3.27

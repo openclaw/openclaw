@@ -145,6 +145,10 @@ foreground parent already receives completion messages, so OpenClaw does not
 send another continuation for a result it has consumed. Explicit OpenClaw or ACP
 delegation continues to use `sessions_spawn`.
 
+For native Codex V1 agents, a completed `wait` result also records delivery to
+the foreground parent. OpenClaw does not start another continuation for that
+same child result after the parent replies.
+
 ## Requirements
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in

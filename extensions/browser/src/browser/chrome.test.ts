@@ -1,7 +1,7 @@
 // Browser tests cover chrome plugin behavior.
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
-import { createServer } from "node:http";
+import http, { createServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
@@ -885,15 +885,47 @@ describe("browser chrome helpers", () => {
       },
       run: async (baseUrl) => {
         const browserWsUrl = `${baseUrl.replace("http://", "ws://")}/devtools/browser/replacement`;
+        const endpoint = new URL(browserWsUrl);
+        const timeoutMs = 10;
         vi.stubGlobal(
           "fetch",
           vi.fn(async () => jsonResponse({ webSocketDebuggerUrl: browserWsUrl })),
         );
 
-        await stopChromeWithProc(proc, 10);
+        // Node's HTTP socket deadline is native; give this fixture's real upgrade
+        // the same clock as the CDP command without racing the host scheduler.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const request = http.request;
+        let pendingRequest: ReturnType<typeof http.request> | undefined;
+        let clearRequestTimeout: (() => void) | undefined;
+        const requestTimer = vi.spyOn(http, "request").mockImplementation((...args) => {
+          const pending = request(...args);
+          if (pending.getHeader("host") !== endpoint.host || pending.path !== endpoint.pathname) {
+            return pending;
+          }
+          pendingRequest = pending;
+          pending.once("socket", (socket) => {
+            socket.setTimeout(0);
+            const timer = setTimeout(() => pending.emit("timeout"), timeoutMs);
+            const clear = () => clearTimeout(timer);
+            clearRequestTimeout = clear;
+            pending.once("upgrade", clear);
+            pending.once("error", clear);
+            pending.once("close", clear);
+          });
+          return pending;
+        });
+        try {
+          await stopChromeWithProc(proc, timeoutMs);
 
-        expect(methods).toEqual(["SystemInfo.getProcessInfo"]);
-        expect(proc.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+          expect(methods).toEqual(["SystemInfo.getProcessInfo"]);
+          expect(proc.kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+        } finally {
+          clearRequestTimeout?.();
+          pendingRequest?.destroy();
+          requestTimer.mockRestore();
+          vi.useRealTimers();
+        }
       },
     });
   });

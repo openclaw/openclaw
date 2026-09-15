@@ -60,6 +60,96 @@ afterEach(async () => {
 });
 
 describe("worker task pool", () => {
+  it("rotates after active settlement and native exit while preserving queued order and deadlines", async () => {
+    const pool = createPool();
+    const counters = new Int32Array(new SharedArrayBuffer(8));
+    const active = pool.run({ label: "active", counters: counters.buffer, wait: true }, {});
+    await expect.poll(() => Atomics.load(counters, 0)).toBe(1);
+    const oldWorker = workers.at(-1)!;
+    const order: string[] = [];
+    const next = pool.run(() => {
+      expect(oldWorker.threadId).toBe(-1);
+      order.push("next");
+      return { label: "next" };
+    }, {});
+    const expiring = pool.run({ label: "expired" }, { timeoutMs: 20 });
+    const expiry = expect(expiring).rejects.toThrow("timed out");
+    const rotation = pool.rotate();
+    expect(pool.rotate()).toBe(rotation);
+    const last = pool.run(() => {
+      order.push("last");
+      return { label: "last" };
+    }, {});
+    await expiry;
+    expect(order).toEqual([]);
+    Atomics.store(counters, 1, 1);
+    Atomics.notify(counters, 1);
+    const first = await active;
+    await rotation;
+    const results = await Promise.all([next, last]);
+    expect(first.label).toBe("active");
+    expect(results.map((result) => result.label)).toEqual(["next", "last"]);
+    expect(results[0].threadId).not.toBe(first.threadId);
+    expect(results[1].threadId).toBe(results[0].threadId);
+    expect(order).toEqual(["next", "last"]);
+  });
+
+  it("never feeds canceled asynchronous preparation to a worker after rotation", async () => {
+    const pool = createPool();
+    const entered = createDeferredCore();
+    const prepared = createDeferredCore();
+    const controller = new AbortController();
+    const active = pool.run(
+      async () => {
+        entered.resolve();
+        await prepared.promise;
+        return { label: "canceled" };
+      },
+      { signal: controller.signal },
+    );
+    await entered.promise;
+    const rotation = pool.rotate();
+    controller.abort(new Error("canceled preparation"));
+    await expect(active).rejects.toThrow("canceled preparation");
+    await rotation;
+    await expect(pool.run({ label: "next" }, {})).resolves.toMatchObject({ label: "next" });
+    prepared.resolve();
+    await expect(pool.run({ label: "last" }, {})).resolves.toMatchObject({ label: "last" });
+  });
+
+  it("retains a failed retirement for retry without dispatching its queued successor", async () => {
+    const pool = createPool();
+    await pool.run({ label: "old" }, {});
+    const oldWorker = workers.at(-1)!;
+    const terminate = vi
+      .spyOn(oldWorker, "terminate")
+      .mockRejectedValueOnce(new Error("exit uncertain"));
+    await expect(pool.rotate()).rejects.toThrow("exit uncertain");
+    let dispatched = false;
+    const next = pool.run(() => {
+      dispatched = true;
+      expect(oldWorker.threadId).toBe(-1);
+      return { label: "next" };
+    }, {});
+    expect(dispatched).toBe(false);
+    await pool.rotate();
+    await expect(next).resolves.toMatchObject({ label: "next" });
+    expect(terminate).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps terminal close terminal when it interrupts a graceful rotation", async () => {
+    const pool = createPool();
+    const counters = new Int32Array(new SharedArrayBuffer(8));
+    const active = pool.run({ label: "active", counters: counters.buffer, wait: true }, {});
+    await expect.poll(() => Atomics.load(counters, 0)).toBe(1);
+    const rotation = pool.rotate();
+    const queued = pool.run({ label: "queued" }, {});
+    const activeFailure = expect(active).rejects.toThrow("pool closed");
+    const queuedFailure = expect(queued).rejects.toThrow("pool closed");
+    await Promise.all([pool.close(), rotation, activeFailure, queuedFailure]);
+    await expect(pool.run({ label: "later" }, {})).rejects.toThrow("pool closed");
+  });
+
   it.each(["factory", "options", "constructor"] as const)(
     "joins cancellation during worker %s preparation before removing scratch",
     async (phase) => {

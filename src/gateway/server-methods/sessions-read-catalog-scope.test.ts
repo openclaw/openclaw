@@ -21,7 +21,10 @@ import {
   createPreparedGatewayModelCatalog,
   readPreparedGatewayModelCatalogMetadata,
 } from "../server-model-catalog-view.js";
-import { readPreparedGatewayModelCatalog } from "../server-model-catalog.js";
+import {
+  readPreparedGatewayModelCatalog,
+  readPreparedGatewayModelCatalogBatch,
+} from "../server-model-catalog.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "../session-utils.types.js";
 import { agentsHandlers } from "./agents.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -158,14 +161,20 @@ function publishedCatalogContext(
   config: OpenClawConfig,
   owners: ReadonlyMap<string, PreparedModelRuntimeSnapshot>,
 ): GatewayRequestContext {
-  vi.spyOn(preparedRuntime, "getPreparedModelRuntimeSnapshot").mockImplementation((input) =>
-    input.agentId ? owners.get(input.agentId) : undefined,
-  );
-  return {
+  vi.spyOn(preparedRuntime, "getPreparedModelRuntimeSnapshot").mockImplementation((input) => {
+    const owner = input.agentId ? owners.get(input.agentId) : undefined;
+    return owner?.agentDir === input.agentDir ? owner : undefined;
+  });
+  const context: GatewayRequestContext = {
     ...requestContext(config),
     readPreparedGatewayModelCatalog: (options) =>
-      readPreparedGatewayModelCatalog({ ...options, getConfig: () => config }),
+      readPreparedGatewayModelCatalog({ ...options, getConfig: () => context.getRuntimeConfig() }),
+    readPreparedGatewayModelCatalogBatch: (agentIds) =>
+      readPreparedGatewayModelCatalogBatch(agentIds, {
+        getConfig: () => context.getRuntimeConfig(),
+      }),
   };
+  return context;
 }
 
 beforeEach(() => {
@@ -304,12 +313,18 @@ describe("sessions.list catalog scoping", () => {
       const mainRegistry = thinkingRegistry("dynamic-router", () => profile("ultra"));
       const workRegistry = thinkingRegistry("dynamic-router", () => profile("low"));
       const completed: { catalog?: ModelCatalogSnapshot } = {};
+      let failMainCatalogRead = false;
       const mainOwner = preparedOwner({
         config,
         agentId: "main",
         entries,
         pluginRegistry: mainRegistry,
-        readFullModelCatalog: () => completed.catalog,
+        readFullModelCatalog: () => {
+          if (failMainCatalogRead) {
+            throw new Error("main catalog owner replaced");
+          }
+          return completed.catalog;
+        },
       });
       const owners = new Map([
         ["main", mainOwner],
@@ -362,6 +377,14 @@ describe("sessions.list catalog scoping", () => {
         "low",
       ]);
 
+      failMainCatalogRead = true;
+      const partial = await listSessions(request);
+      expect(partial.sessions.find((row) => row.agentId === "work")?.thinkingOptions).toEqual([
+        "off",
+        "low",
+      ]);
+      failMainCatalogRead = false;
+
       completed.catalog = { entries: [{ ...entries[0]!, reasoning: false }], routeVariants: [] };
       const promoted = await listSessions(request);
       expect(promoted).not.toBe(replaced);
@@ -369,6 +392,45 @@ describe("sessions.list catalog scoping", () => {
         "off",
       ]);
       expect(mainOwner.loadFullModelCatalog).not.toHaveBeenCalled();
+
+      const workAgentDir = `${resolveAgentDir(config, "work")}-replacement`;
+      config.agents!.list = [
+        { id: "main", default: true },
+        { id: "work", agentDir: workAgentDir },
+      ];
+      owners.set("work", {
+        ...preparedOwner({ config, agentId: "work", entries, pluginRegistry: mainRegistry }),
+        agentDir: workAgentDir,
+      });
+      const changedRoster = await listSessions(request);
+      expect(changedRoster.sessions.find((row) => row.agentId === "work")?.thinkingOptions).toEqual(
+        ["off", "ultra"],
+      );
+
+      const nextConfig: OpenClawConfig = {
+        ...config,
+        agents: {
+          ...config.agents,
+          list: [
+            { id: "main", default: true },
+            { id: "work", agentDir: `${workAgentDir}-next` },
+          ],
+        },
+      };
+      context.getRuntimeConfig = () => nextConfig;
+      owners.set("work", {
+        ...preparedOwner({
+          config: nextConfig,
+          agentId: "work",
+          entries,
+          pluginRegistry: workRegistry,
+        }),
+        agentDir: `${workAgentDir}-next`,
+      });
+      const changedConfig = await listSessions(request);
+      expect(changedConfig.sessions.find((row) => row.agentId === "work")?.thinkingOptions).toEqual(
+        ["off", "low"],
+      );
     });
   });
 

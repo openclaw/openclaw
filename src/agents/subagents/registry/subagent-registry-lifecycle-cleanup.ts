@@ -171,6 +171,7 @@ export function suspendPendingFinalDelivery(
     taskId: params.resolveSubagentTask(args.entry).task?.taskId ?? "",
     reason: args.error ?? getDeliveryLastError(args.entry) ?? args.reason,
     suspendedReason: args.reason,
+    lastDropReason: args.entry.delivery?.lastDropReason,
   });
   if (!committed) {
     throw new Error(`subagent completion owner changed before suspension: ${args.runId}`);

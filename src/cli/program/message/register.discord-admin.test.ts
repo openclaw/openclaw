@@ -28,7 +28,7 @@ const cases: AdminCase[] = [
     command: "member info",
     action: "member-info",
     required: { userId: "user-1" },
-    optional: { guildId: "guild-1" },
+    optional: { guildId: "guild-1", channelId: "channel-1" },
   },
   {
     command: "voice status",
@@ -84,7 +84,7 @@ function setup() {
     .configureOutput({ writeErr() {}, writeOut() {} });
   const runMessageAction = vi.fn(async () => {});
   registerMessageDiscordAdminCommands(command, {
-    ...createMessageCliHelpers("discord"),
+    ...createMessageCliHelpers("discord|matrix|msteams|slack"),
     runMessageAction,
   });
   return { command, runMessageAction };
@@ -160,14 +160,18 @@ describe("Discord-admin message registration", () => {
     },
   );
 
-  it("keeps guild optional for member info", async () => {
-    const { command, runMessageAction } = setup();
-    await command.parseAsync(["member", "info", "--user-id", "user-1"], { from: "user" });
-    expect(runMessageAction).toHaveBeenCalledExactlyOnceWith("member-info", {
-      json: false,
-      dryRun: false,
-      verbose: false,
-      userId: "user-1",
-    });
-  });
+  it.each([undefined, "discord", "slack"])(
+    "keeps guild and conversation optional for member info on %s",
+    async (channel) => {
+      const { command, runMessageAction } = setup();
+      const options = { userId: "user-1", ...(channel ? { channel } : {}) };
+      await command.parseAsync(["member", "info", ...argumentsFor(options)], { from: "user" });
+      expect(runMessageAction).toHaveBeenCalledExactlyOnceWith("member-info", {
+        json: false,
+        dryRun: false,
+        verbose: false,
+        ...options,
+      });
+    },
+  );
 });

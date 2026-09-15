@@ -11,6 +11,7 @@ import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-proc
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
 import { buildCliRespawnPlan } from "../entry.respawn.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
@@ -24,6 +25,8 @@ import {
 import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
 import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-runtime.js";
 import { startManagedServiceUpdateHandoff } from "./update-managed-service-handoff.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 
 export function triageRuntimeNodeOptions(): string {
   // Prepared JavaScript does not need a source loader in every fixing descendant.
@@ -72,7 +75,7 @@ export async function createTriageBoundary(
   await fs.mkdir(path.join(root, "members"));
   const groups = path.join(root, "groups");
   await fs.mkdir(groups);
-  const parent = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
+  const parent = spawn(testNodeExecPath, ["-e", "process.stdin.resume()"], {
     stdio: ["pipe", "ignore", "ignore"],
   });
   const parentExit = new Promise((resolve) => {
@@ -96,7 +99,7 @@ const event = (kind, data = {}) => fs.appendFileSync(${JSON.stringify(events)}, 
   // HOME does not fence macOS's gui/UID namespace if a service mock misses.
   await fs.writeFile(
     path.join(bin, "launchctl"),
-    `#!${process.execPath}\n` +
+    `#!${testNodeExecPath}\n` +
       common +
       "event('unexpected-native', {command:'launchctl'}); process.exitCode=97;\n",
     { mode: 0o700 },
@@ -138,7 +141,7 @@ fs.readFileSync = function(file, ...args) {
   );
   await fs.writeFile(
     path.join(bin, "systemctl"),
-    `#!${process.execPath}\n` +
+    `#!${testNodeExecPath}\n` +
       common +
       `
 const args = process.argv.slice(2);
@@ -185,7 +188,7 @@ if (action === 'show') {
   );
   await fs.writeFile(
     path.join(bin, "systemd-run"),
-    `#!${process.execPath}\n` +
+    `#!${testNodeExecPath}\n` +
       common +
       `
 const args=process.argv.slice(2), index=args.findIndex(x=>!x.startsWith('--'));
@@ -287,7 +290,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     NODE_OPTIONS: [triageRuntimeNodeOptions(), `--require ${preload}`].filter(Boolean).join(" "),
   };
   const commandArgv = [
-    process.execPath,
+    testNodeExecPath,
     mode === "startup" ? candidate : updater,
     mode === "startup" ? "triage" : "update",
   ];
@@ -347,7 +350,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     await fs.rm(root, { recursive: true, force: true });
     throw error;
   }
-  const helper = spawn(process.execPath, [helperFile, paramsFile], {
+  const helper = spawn(testNodeExecPath, [helperFile, paramsFile], {
     env,
     detached: true,
     stdio: ["pipe", "pipe", "pipe"],
@@ -441,7 +444,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
     replay: async () => {
       // Replay a stale claim with prepared code, not a missing-module failure after cleanup.
       stageManagedHandoffRuntime(root);
-      const child = spawn(process.execPath, [helperFile, paramsFile], {
+      const child = spawn(testNodeExecPath, [helperFile, paramsFile], {
         env,
         stdio: ["ignore", "pipe", "pipe"],
       });

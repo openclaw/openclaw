@@ -6,6 +6,8 @@ import { randomUUID } from "node:crypto";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage, toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { addSafeTimeoutDelayGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parse as parseSemver } from "semver";
@@ -196,6 +198,7 @@ export function isCodexAppServerConnectionClosedError(error: unknown): boolean {
 type CodexServerRequestHandler = (
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
   signal?: AbortSignal,
+  setExecutionTimeoutMs?: (timeoutMs: number) => void,
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;
 
 /** Notification handler registered on a Codex app-server client. */
@@ -1011,44 +1014,67 @@ export class CodexAppServerClient {
     if (request.method !== "item/tool/call") {
       return await this.runServerRequestHandlersWithoutTimeout(request, controller.signal);
     }
-    const timeoutMs = resolveDynamicToolServerRequestTimeoutMs(
+    let timeoutMs = resolveDynamicToolServerRequestTimeoutMs(
       readCodexDynamicToolCallParams(request.params),
     );
-    const timeoutResponse = timeoutServerRequestResponse(timeoutMs);
-
+    const deadline = createDeferred<JsonValue>();
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    let executionTimeoutResolved = false;
+    const armTimeout = () => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        embeddedAgentLog.warn("codex app-server server request timed out", {
+          id: request.id,
+          method: request.method,
+          timeoutMs,
+        });
+        controller.abort(new Error("codex app-server server request timed out"));
+        deadline.resolve(timeoutServerRequestResponse(timeoutMs));
+      }, timeoutMs);
+      timeout.unref?.();
+    };
+    const setExecutionTimeoutMs = (executionTimeoutMs: number) => {
+      if (
+        settled ||
+        controller.signal.aborted ||
+        executionTimeoutResolved ||
+        !Number.isFinite(executionTimeoutMs) ||
+        executionTimeoutMs <= 0
+      ) {
+        return;
+      }
+      // The admitted owner sets one execution budget; later progress cannot reset it.
+      executionTimeoutResolved = true;
+      timeoutMs = addSafeTimeoutDelayGraceMs(executionTimeoutMs, 30_000);
+      armTimeout();
+    };
+    armTimeout();
     try {
       return await Promise.race([
-        this.runServerRequestHandlersWithoutTimeout(request, controller.signal),
-        new Promise<JsonValue>((resolve) => {
-          timeout = setTimeout(() => {
-            embeddedAgentLog.warn("codex app-server server request timed out", {
-              id: request.id,
-              method: request.method,
-              timeoutMs,
-            });
-            controller.abort(new Error("codex app-server server request timed out"));
-            resolve(timeoutResponse);
-          }, timeoutMs);
-          timeout.unref?.();
-        }),
+        this.runServerRequestHandlersWithoutTimeout(
+          request,
+          controller.signal,
+          setExecutionTimeoutMs,
+        ),
+        deadline.promise,
       ]);
     } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
+      settled = true;
+      clearTimeout(timeout);
     }
   }
 
   private async runServerRequestHandlersWithoutTimeout(
     request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
     signal: AbortSignal,
+    setExecutionTimeoutMs?: (timeoutMs: number) => void,
   ): Promise<JsonValue | undefined> {
     for (const handler of this.requestHandlers) {
       if (signal.aborted) {
         return undefined;
       }
-      const result = await handler(request, signal);
+      const result = await handler(request, signal, setExecutionTimeoutMs);
       if (result !== undefined) {
         return result;
       }

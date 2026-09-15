@@ -224,6 +224,21 @@ export function createSessionRowProvenance() {
       return current;
     }
     const currentMetadata = metadata(current, agentId);
+    if (current === offered && observationsByRow.has(current)) {
+      // Self-projection can admit event writers without changing any row values.
+      let fields: Map<string, FieldObservation> | undefined;
+      for (const [field, observation] of currentMetadata.fields) {
+        const merged = mergeSessionFieldObservations(observation, observation).observation;
+        if (merged !== observation) {
+          fields ??= new Map(currentMetadata.fields);
+          fields.set(field, merged);
+        }
+      }
+      if (fields) {
+        observationsByRow.set(current, { ...currentMetadata, fields });
+      }
+      return current;
+    }
     const offeredMetadata = metadata(offered, agentId);
     const offeredReadIsNewer =
       offeredMetadata.read.source.revision > currentMetadata.read.source.revision;

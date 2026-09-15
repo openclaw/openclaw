@@ -14,6 +14,8 @@ import type {
   SessionStateDeletePlan,
   TranscriptArchivePublishPlan,
   TranscriptArchivePublishResult,
+  TranscriptArchiveReadPlan,
+  TranscriptArchiveReadResult,
   TranscriptArchiveWorkerPlan,
   TranscriptArchiveWorkerResult,
 } from "./session-accessor.sqlite-archive-types.js";
@@ -208,6 +210,24 @@ export function runSqliteTranscriptArchivePublishWorker(
     expectedMessageType: "published",
     workerData: { operation: "publish", type: "sqlite-transcript-archive-v2", plans },
   });
+}
+
+export async function runSqliteTranscriptArchiveReadWorker(
+  plans: readonly TranscriptArchiveReadPlan[],
+): Promise<TranscriptArchiveReadResult[]> {
+  const scoped = runScopedSqliteArchiveOperation(
+    { operation: "read-final", plans },
+    createSqliteTranscriptArchiveWorker,
+    runExclusiveSqliteTranscriptArchiveWorker,
+  );
+  if (!scoped) {
+    throw new Error("SQLite archive reads require their captured database scope");
+  }
+  const result = await scoped;
+  if (result.type !== "final-read") {
+    throw new Error("SQLite archive Worker returned another operation's result");
+  }
+  return result.results;
 }
 
 function validateEmptyTranscriptArchivePlan(plan: TranscriptArchiveWorkerPlan): void {

@@ -136,12 +136,12 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           .poll(() =>
             settings.locator('[data-provider-id="broken"] .model-providers__head').textContent(),
           )
-          .toContain("Failed");
+          .toContain("Models unavailable");
         expect(
           await settings
             .locator('[data-provider-id="healthy"] .model-providers__head')
             .textContent(),
-        ).not.toContain("Failed");
+        ).not.toContain("Models unavailable");
         expect(await trigger.getAttribute("aria-expanded")).toBe("true");
         await expect
           .poll(() => picker.locator('[role="option"][data-value="healthy/retired"]').count())
@@ -204,7 +204,7 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await settings
             .locator('[data-provider-id="broken"] .model-providers__head')
             .textContent(),
-        ).not.toContain("Failed");
+        ).not.toContain("Models unavailable");
         expect(await utility.textContent()).toContain("Auto · Healthy recovered");
       } finally {
         await capture("settled");

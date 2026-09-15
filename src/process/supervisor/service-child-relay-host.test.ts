@@ -314,7 +314,10 @@ it.each(["linux", "win32"] as const)(
 
 it("refreshes the supervisor deadline from text-only Windows Job output", async () => {
   const { adapter, emit, completeRoot, close } = await createRelay("win32");
-  vi.spyOn(childAdapter, "createChildAdapter").mockResolvedValue(adapter);
+  vi.spyOn(childAdapter, "createChildAdapter").mockResolvedValue({
+    adapter,
+    ready: Promise.resolve(),
+  });
   const nowSpy = vi.spyOn(performance, "now").mockReturnValue(10_000);
   const supervisor = createProcessSupervisor();
   const run = await supervisor.spawn({

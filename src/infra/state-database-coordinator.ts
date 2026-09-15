@@ -1,12 +1,9 @@
 // Coordinates Gateway presence and shared-state lifecycle operations outside removable state.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { MessagePort } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { sha256HexPrefixCore } from "./crypto-digest.js";
 import {
   createSqliteLifecycleAggregateError,
   ensurePrivateSqliteCoordinatorDirectory,
@@ -23,6 +20,12 @@ import {
   createCoordinatorDelegate,
   acquireDelegatedLifecycleCoordinator,
 } from "./state-database-coordinator-delegate.js";
+import {
+  resolveLifecycleCoordinatorBase,
+  buildLifecycleCoordinatorPath,
+  resolveLifecycleCoordinatorPath,
+  type CoordinatorFamily,
+} from "./state-database-coordinator-paths.js";
 
 type HeldCoordinator = {
   coordinator: SqliteCoordinatorLease;
@@ -61,7 +64,6 @@ const {
   >(),
 }));
 
-type CoordinatorFamily = "gateway-lifecycle" | "state-lifecycle" | "state-handles";
 type CoordinatorOptions = {
   databasePath: string;
   coordinatorPath?: string;
@@ -134,52 +136,6 @@ export function withStateDatabaseCoordinatorRuntimeDirectory<T>(
   const captured =
     typeof runtime === "string" ? { directory: runtime, keepAlive: false } : { ...runtime };
   return coordinatorRuntimeDirectories.run(captured, operation);
-}
-
-function resolveCoordinatorIdentityPath(pathname: string): string {
-  const normalized = path.resolve(pathname);
-  try {
-    // Live paths need one native lookup, not JavaScript realpath's per-component probes.
-    const resolved = path.resolve(realpathSync.native(normalized));
-    // Windows native realpath corrects casing; the shipped lock hash preserves input casing.
-    if (process.platform !== "win32" || resolved === normalized) {
-      return resolved;
-    }
-  } catch {
-    // Missing paths and failed lookups retain the existing ancestor resolution.
-  }
-  return resolvePathViaExistingAncestorSync(normalized);
-}
-
-function resolveLifecycleCoordinatorBase(params: {
-  databasePath: string;
-  runtimeDirectory: string;
-  uid: number | undefined;
-}) {
-  const canonicalDatabasePath = resolveCoordinatorIdentityPath(params.databasePath);
-  const canonicalRuntimeDirectory = resolveCoordinatorIdentityPath(params.runtimeDirectory);
-  // The predecessor state-local coordinator shipped only in v2026.8.1-beta.2.
-  // Keep one current stable runtime path; beta-only peers are not upgrade-compatible.
-  const suffix =
-    params.uid === undefined ? "openclaw-state-locks" : `openclaw-state-locks-${params.uid}`;
-  return {
-    directory: path.join(canonicalRuntimeDirectory, suffix),
-    databaseHash: sha256HexPrefixCore(canonicalDatabasePath, 8),
-  };
-}
-
-function buildLifecycleCoordinatorPath(
-  family: CoordinatorFamily,
-  base: ReturnType<typeof resolveLifecycleCoordinatorBase>,
-): string {
-  return path.join(base.directory, `${family}.${base.databaseHash}.lock.sqlite`);
-}
-
-function resolveLifecycleCoordinatorPath(
-  family: CoordinatorFamily,
-  params: Parameters<typeof resolveLifecycleCoordinatorBase>[0],
-): string {
-  return buildLifecycleCoordinatorPath(family, resolveLifecycleCoordinatorBase(params));
 }
 
 export function resolveStateDatabaseCoordinatorPath(params: {
@@ -343,8 +299,18 @@ export function tryAcquireGatewayLifecycleCleanupCoordinator(
   return tryAcquireExclusiveSqliteCoordinator(pathname, { busyTimeoutMs: 0 });
 }
 
+/** True only while this process retains the native Gateway-role coordinator. */
+export function hasGatewayLifecycleCoordinator(
+  params: Pick<CoordinatorOptions, "databasePath" | "runtimeDirectory" | "uid">,
+): boolean {
+  return (heldCoordinators.get(resolveGatewaySchemaFencePath(params))?.gatewayOwners ?? 0) > 0;
+}
+
 /** The broker owns this pin until backend close acknowledges or worker exit joins. */
 export function tryCreateGatewaySchemaFenceDelegate(params: GatewaySchemaFenceDelegateParams) {
+  if (heldCoordinators.size === 0) {
+    return undefined;
+  }
   const coordinatorPath = resolveGatewaySchemaFencePath(params);
   const owner = heldCoordinators.get(coordinatorPath);
   if (!owner || owner.gatewayOwners === 0) {
@@ -413,6 +379,9 @@ export async function attachGatewaySchemaFenceDelegate(
 export function tryCreateStateLifecycleDelegate(
   params: Pick<GatewaySchemaFenceDelegateParams, "databasePath" | "actorId">,
 ) {
+  if (heldCoordinators.size === 0) {
+    return undefined;
+  }
   const coordinatorPath = resolveStateDatabaseCoordinatorPath({
     databasePath: params.databasePath,
     runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),

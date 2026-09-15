@@ -4,6 +4,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { isStateDatabaseReadAdmissionInvalidatedError as retainedReadAdmissionInvalidated } from "../state/openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -145,6 +147,60 @@ describe("config health-state warnings", () => {
     expect(readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastKnownGood?.hash).toBe(
       hashConfigRaw(raw),
     );
+  });
+
+  it("keeps a valid config snapshot when health observation admission retires", async () => {
+    const deps = createHealthDeps();
+    const configPath = path.join(deps.env.HOME, "openclaw.json");
+    fs.writeFileSync(configPath, JSON.stringify({ gateway: { mode: "local" } }));
+    patchConfigHealthEntryToStore(deps, configPath, {
+      lastObservedSuspiciousSignature: "seed",
+    });
+    const seeded = readConfigHealthStateFromStore(deps);
+    {
+      using retained = captureConfigHealthStateStore(deps, configPath);
+      expect(await retained.read()).not.toBeNull();
+    }
+    vi.resetModules();
+    const [freshConfig, freshHealth, freshLifecycle, freshReadHelpers] = await Promise.all([
+      import("./io.js"),
+      import("./io.health-state.js"),
+      import("../state/openclaw-state-db-async-lifecycle.js"),
+      import("./io.read-helpers.js"),
+    ]);
+    expect(freshLifecycle.isStateDatabaseReadAdmissionInvalidatedError).not.toBe(
+      retainedReadAdmissionInvalidated,
+    );
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const options = {
+      ...deps,
+      configPath,
+      env: { ...deps.env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+    };
+    const normalized = freshReadHelpers.normalizeConfigIoDeps(options);
+    const realStat = normalized.fs.promises.stat.bind(normalized.fs.promises);
+    const stat = vi.spyOn(normalized.fs.promises, "stat").mockImplementation(async (...args) => {
+      if (path.resolve(String(args[0])) === configPath) {
+        entered.resolve();
+        await release.promise;
+      }
+      return realStat(...args);
+    });
+    const pending = freshConfig
+      .createConfigIO({ ...options, fs: normalized.fs })
+      .readConfigFileSnapshot();
+    try {
+      await entered.promise;
+      await closeOpenClawStateDatabaseAsync();
+      release.resolve();
+      expect((await pending).valid).toBe(true);
+      expect(freshHealth.readConfigHealthStateFromStore(deps)).toEqual(seeded);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending]);
+      stat.mockRestore();
+    }
   });
 
   it.each(["sync", "async"] as const)(

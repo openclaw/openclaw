@@ -33,7 +33,12 @@ import {
   resolveEmptyWorktreeSourceRoot,
 } from "./empty-source.js";
 import { WorktreeRepositoryError } from "./errors.js";
-import { lockState, lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
+import {
+  createWorktreeLockPrefilter,
+  lockState,
+  lockWorktreeForProcess,
+  unlockWorktree,
+} from "./git-lock.js";
 import {
   commandError,
   listGitWorktrees,
@@ -1382,6 +1387,7 @@ export class ManagedWorktreeService {
 
   async gc(params: ManagedWorktreeGcParams = {}): Promise<ManagedWorktreeGcResult> {
     const now = this.now();
+    const isLocked = createWorktreeLockPrefilter();
     let removed: string[] = [];
     const records = listRegistryWorktrees(this.env);
     for (const record of records) {
@@ -1400,7 +1406,7 @@ export class ManagedWorktreeService {
           expiresWhenIdle &&
           (retiredOwner || now - record.lastActiveAt > IDLE_GC_MS)
         ) {
-          if (await this.isProtectedFromAutoRemoval(record, params.shouldProtectOwner)) {
+          if (await this.isProtectedFromAutoRemoval(record, isLocked, params.shouldProtectOwner)) {
             continue;
           }
           await this.remove({
@@ -1428,7 +1434,7 @@ export class ManagedWorktreeService {
     } catch (error) {
       log.warn(`worktree template cleanup deferred: ${String(error)}`);
     }
-    removed = removed.concat(await this.enforceCleanupLimits(params));
+    removed = removed.concat(await this.enforceCleanupLimits(params, isLocked));
     const orphansDeleted = await this.reconcileOrphans(records);
     let snapshotsPruned = 0;
     for (const record of listRegistryWorktrees(this.env)) {
@@ -1490,12 +1496,9 @@ export class ManagedWorktreeService {
     return { removed, orphansDeleted, snapshotsPruned };
   }
 
-  /**
-   * Shared auto-removal guard: owners, leases, nested repositories, and live or
-   * foreign Git locks veto removal; a dead lock is cleared.
-   */
   private async isProtectedFromAutoRemoval(
     record: ManagedWorktreeRecord,
+    isLocked: ReturnType<typeof createWorktreeLockPrefilter>,
     shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean,
   ): Promise<boolean> {
     if (
@@ -1518,12 +1521,8 @@ export class ManagedWorktreeService {
     if (provisioned.retainedReason !== undefined) {
       return true;
     }
-    const state = await lockState(record);
-    if (state.kind === "live" || state.kind === "foreign") {
+    if (await isLocked(record)) {
       return true;
-    }
-    if (state.kind === "dead") {
-      await requireGit(record.repoRoot, ["worktree", "unlock", record.path]);
     }
     const nested = await runGitWorkerOperation({
       type: "worktree.cleanup-inspection",
@@ -1540,7 +1539,10 @@ export class ManagedWorktreeService {
    * Manual worktrees count toward the totals but are never limit-evicted, so a
    * limit can stay exceeded when only protected worktrees remain.
    */
-  private async enforceCleanupLimits(params: ManagedWorktreeGcParams): Promise<string[]> {
+  private async enforceCleanupLimits(
+    params: ManagedWorktreeGcParams,
+    isLocked: ReturnType<typeof createWorktreeLockPrefilter>,
+  ): Promise<string[]> {
     const limits = params.limits ?? resolveWorktreeCleanupLimits();
     if (limits.maxCount === undefined && limits.maxTotalSizeBytes === undefined) {
       return [];
@@ -1606,7 +1608,7 @@ export class ManagedWorktreeService {
         continue;
       }
       try {
-        if (await this.isProtectedFromAutoRemoval(record, params.shouldProtectOwner)) {
+        if (await this.isProtectedFromAutoRemoval(record, isLocked, params.shouldProtectOwner)) {
           continue;
         }
         await this.remove({

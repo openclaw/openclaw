@@ -10,15 +10,19 @@ import {
   replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptDisplayDelta } from "../../config/sessions/session-accessor.sqlite-history-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { readChatHistoryDelta } from "./chat-history-delta.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 
 const tempDirs = createTempDirTracker();
-afterEach(() => {
+afterEach(async () => {
   for (const directory of tempDirs.dirs) {
+    await closeOpenClawAgentDatabasesAsync(directory);
     closeOpenClawAgentDatabasesForTest(directory);
   }
   tempDirs.cleanup();

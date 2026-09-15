@@ -14,6 +14,43 @@ function prepareDiagnosticReport(reason: string) {
 }
 
 describe("update report diagnostic command boundary", () => {
+  it.each(["", " private-customer-text"])(
+    "keeps handoff diagnostics closed to arbitrary suffixes (%s)",
+    async (suffix) => {
+      const message = "managed update ownership transfer failed";
+      const report = await prepareUpdateFailureReport(
+        {
+          attemptId: "handoff-diagnostic",
+          result: {
+            status: "error",
+            mode: "npm",
+            durationMs: 0,
+            reason: "managed-service-handoff-failed",
+            steps: [
+              {
+                name: "requested",
+                command: "",
+                cwd: "",
+                durationMs: 0,
+                exitCode: null,
+                failureFacts: [
+                  {
+                    check: "managed-service",
+                    code: "managed-service-handoff-failed",
+                    message: message + suffix,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        context,
+      );
+      expect(report.body.includes(message)).toBe(suffix === "");
+      expect(report.body).not.toContain("private-customer-text");
+    },
+  );
+
   it.each(["startupz", "readyz"])(
     "preserves the %s readiness probe failure identifier",
     async (check) => {

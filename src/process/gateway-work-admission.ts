@@ -9,7 +9,11 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type GatewaySuspendAdmissionPhase = GatewaySuspension["phase"];
 
-type AdmissionCloseReason = "restart-signal fence" | "restart drain" | "suspend phase";
+export type GatewayShutdownTrigger = "SIGTERM" | "SIGINT" | "SIGUSR1" | "hosted Gateway stop";
+export type GatewayDrainReason =
+  | "restart"
+  | `${"stop" | "restart"} (${GatewayShutdownTrigger}${"" | `: ${string}`})`;
+type AdmissionCloseReason = "restart-signal fence" | GatewayDrainReason | "suspend phase";
 type AdmissionReopenReason = "restart-signal fence" | "suspend phase";
 
 export class GatewayDrainingError extends Error {
@@ -286,7 +290,7 @@ export function isGatewayRestartDrainError(error: unknown): error is GatewayDrai
 }
 
 /** Restart drain is one-way until the in-process restart resets runtime state. */
-export function markGatewayRestartDraining(): void {
+export function markGatewayRestartDraining(reason: GatewayDrainReason = "restart"): void {
   if (GATEWAY_WORK_ADMISSION_STATE.restartDraining) {
     return;
   }
@@ -299,7 +303,7 @@ export function markGatewayRestartDraining(): void {
     new GatewayDrainingError("gateway is draining for restart"),
   );
   resolveSuspendOpenWaiters();
-  logAdmissionClosed("restart drain");
+  logAdmissionClosed(reason);
   if (GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting") {
     // A restart supersedes a reversible suspension. The coordinator callback
     // drops its timer/token without reopening the scheduler being shut down.

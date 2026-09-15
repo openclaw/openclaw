@@ -55,6 +55,7 @@ import {
   assertOpenClawStateDatabaseForMaintenance,
   clearOpenClawStateDatabaseOpenFailure,
   closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   detectOpenClawStateDatabaseSchemaMigrations,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -3203,6 +3204,9 @@ describe("openclaw state database", () => {
           },
         ] satisfies CronStoredJob[];
         await saveCronStore(storePath, { version: 1, jobs });
+        await closeOpenClawStateDatabaseByPathAsync(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+        );
         closeOpenClawStateDatabaseForTest();
 
         const { DatabaseSync } = requireNodeSqlite();
@@ -3382,6 +3386,9 @@ describe("openclaw state database", () => {
             },
           ],
         });
+        await closeOpenClawStateDatabaseByPathAsync(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir }),
+        );
         closeOpenClawStateDatabaseForTest();
         const { DatabaseSync } = requireNodeSqlite();
         const db = new DatabaseSync(
@@ -5345,21 +5352,40 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const databasePath = materializeCurrentStateDatabase(stateDir);
 
-    const { DatabaseSync } = requireNodeSqlite();
+    const { DatabaseSync, StatementSync } = requireNodeSqlite();
     const drifted = new DatabaseSync(databasePath);
     drifted.exec("DROP TABLE apns_registration_tombstones;");
+    const schemaBefore = hashSqliteSchema(drifted);
     drifted.close();
 
     expect(() => openOpenClawStateDatabase(options)).toThrow(
       /missing table apns_registration_tombstones/iu,
     );
-    expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+    const refusal = {
       changes: [],
-      warnings: [expect.stringContaining("missing table apns_registration_tombstones")],
-    });
+      warnings: [
+        `Failed migrating shared state database schema at ${databasePath}: Error: SQLite schema is incomplete or noncanonical for ${databasePath}: missing table apns_registration_tombstones; run openclaw doctor --fix to repair it.`,
+      ],
+    };
+    // Warm canonical schema contracts before measuring a repeated Doctor refusal.
+    expect(repairOpenClawStateDatabaseSchema(options)).toEqual(refusal);
+    const get = vi.spyOn(StatementSync.prototype, "get");
+    const all = vi.spyOn(StatementSync.prototype, "all");
+    const iterate = vi.spyOn(StatementSync.prototype, "iterate");
+    try {
+      expect(repairOpenClawStateDatabaseSchema(options)).toEqual(refusal);
+      const reads = get.mock.calls.length + all.mock.calls.length + iterate.mock.calls.length;
+      expect.soft(reads).toBeGreaterThan(0);
+      expect.soft(reads).toBeLessThanOrEqual(850);
+    } finally {
+      get.mockRestore();
+      all.mockRestore();
+      iterate.mockRestore();
+    }
 
     const after = new DatabaseSync(databasePath, { readOnly: true });
     try {
+      expect(hashSqliteSchema(after)).toBe(schemaBefore);
       expect(
         after
           .prepare(

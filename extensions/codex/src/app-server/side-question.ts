@@ -570,6 +570,7 @@ export async function runCodexAppServerSideQuestion(
       request: CodexAppServerServerRequest,
       _scope: CodexThreadRouteScope,
       requestSignal: AbortSignal,
+      setExecutionTimeoutMs?: (timeoutMs: number) => void,
     ) => {
       const signal = AbortSignal.any([requestSignal, runAbortController.signal]);
       if (signal.aborted) {
@@ -626,7 +627,9 @@ export async function runCodexAppServerSideQuestion(
       const timeoutMs = resolveDynamicToolCallTimeoutMs({
         call,
         config: params.cfg,
+        toolBridge,
       });
+      setExecutionTimeoutMs?.(timeoutMs);
       const toolStartedAt = Date.now();
       const diagnosticContext = {
         call,

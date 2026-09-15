@@ -77,6 +77,7 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
     adapterFactories: params.input?.adapterFactories,
     adapterOptions: params.input?.adapterOptions,
     channelId: params.input?.channelId,
+    evidenceMode: params.input?.evidenceMode,
     repoRoot: params.repoRoot,
     sutOpenClawCommand: params.input?.sutOpenClawCommand,
     mutateConfig: params.input?.mutateConfig,

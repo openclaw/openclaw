@@ -267,6 +267,15 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (service.restartHandoff) {
     defaultRuntime.log(infoText(formatGatewayRestartHandoffDiagnostic(service.restartHandoff)));
   }
+  if (status.gateway?.lastShutdown) {
+    const { reason, completedAtMs } = status.gateway.lastShutdown;
+    defaultRuntime.log(
+      `${label("Last shutdown:")} ${infoText(sanitizeTerminalText(reason ?? "unknown"))} at ${new Date(completedAtMs).toISOString()}`,
+    );
+  }
+  if (status.gateway?.duelingScopesWarning) {
+    defaultRuntime.error(warnText(sanitizeTerminalText(status.gateway.duelingScopesWarning)));
+  }
 
   if (
     rpc &&

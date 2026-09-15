@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -74,7 +76,31 @@ describe("typed Goal operation persistence", () => {
   });
 
   it("commits the literal objective, exact intent identity, lifecycle and receipt together", async () => {
-    const turn = await admit();
+    const skillsSnapshot = { prompt: "p".repeat(64 * 1024), skills: [] };
+    await upsertSessionEntryCore(scope(), { ...loadSessionEntry(scope())!, skillsSnapshot });
+    const identityMutation = vi.fn();
+    const unsubscribe = onSessionIdentityMutation(identityMutation);
+    const reads = trackSqliteStatementExecutions(database().db, ["sessionNodeSelects"], (sql) =>
+      /^select\b/i.test(sql) && /\bfrom\s+"session_nodes"/i.test(sql) ? "sessionNodeSelects" : null,
+    );
+    let turn: Awaited<ReturnType<typeof admit>>;
+    try {
+      turn = await admit();
+      // Bound session-node reads on the writable connection, including header validation.
+      expect.soft(reads.counts.sessionNodeSelects).toBeLessThanOrEqual(11);
+      expect.soft(reads.rowCounts.sessionNodeSelects).toBeGreaterThan(0);
+      expect
+        .soft(reads.textBytes.sessionNodeSelects)
+        .toBeGreaterThan(Buffer.byteLength(skillsSnapshot.prompt));
+      expect
+        .soft(reads.textBytes.sessionNodeSelects)
+        .toBeLessThan(8.5 * Buffer.byteLength(skillsSnapshot.prompt));
+      expect(identityMutation).not.toHaveBeenCalled();
+    } finally {
+      reads.restore();
+      unsubscribe();
+    }
+    expect(turn.sessionEntry?.skillsSnapshot).toEqual(skillsSnapshot);
     const receipt = turn.sessionTurnMutationResult?.result;
     expect(receipt).toMatchObject({
       status: "started",
@@ -86,6 +112,7 @@ describe("typed Goal operation persistence", () => {
       status: "running",
       lastRunId: "run-1",
       goal: receipt?.goal,
+      skillsSnapshot,
     });
     expect(turn.messages[0]?.message).toMatchObject({
       content: startOperation().objective,

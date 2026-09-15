@@ -508,7 +508,42 @@ export async function loadChatRoute(
   }
   const resolution = localRow
     ? ({ kind: "unique", session: localRow } as const)
-    : await resolveShortSessionReference(context, target, signal);
+    : await resolveShortSessionReference(context, target, routeLocation, signal);
+  if (resolution.kind === "prepared") {
+    const canonicalLocationReady = resolution.resolution
+      .then((resolved) => {
+        if (
+          !resolution.isCurrent() ||
+          resolved.kind !== "unique" ||
+          resolved.session.key !== resolution.session.key ||
+          (resolved.session.agentId ?? resolveAgentIdFromSessionKey(resolved.session.key)) !==
+            resolution.session.agentId
+        ) {
+          return null;
+        }
+        const canonical = resolvedSessionRouteData({
+          context,
+          isResolutionSourceCurrent: resolution.isCurrent,
+          location: routeLocation,
+          face,
+          row: resolved.session,
+          preferenceDerived: false,
+          shortId: target.shortId,
+        });
+        return canonical?.canonicalLocation ?? null;
+      })
+      .catch(() => null);
+    return {
+      kind: "session",
+      sessionKey: resolution.session.key,
+      agentId: resolution.session.agentId,
+      face,
+      routeLoadingSkeleton: true,
+      ...(target.shortId.length > 8 ? { shortId: target.shortId } : {}),
+      canonicalLocationReady,
+      canonicalLocationSource: routeLocation,
+    };
+  }
   if (resolution.kind === "not-found") {
     // A mechanically composed literal, notably a full UUID, can match the short grammar.
     // Only after the authoritative short lookup misses may its exact decoded key win.

@@ -102,7 +102,8 @@ function isPluginData(value: unknown, seen?: Set<object>): boolean {
   ) {
     return false;
   }
-  let nested: object[] | undefined;
+  let firstChild: object | undefined;
+  let moreChildren: object[] | undefined;
   // A callable or accessor already requires a view. Check direct members before
   // walking large data graphs attached to tool metadata and execution contexts.
   for (const key of Reflect.ownKeys(value)) {
@@ -111,18 +112,25 @@ function isPluginData(value: unknown, seen?: Set<object>): boolean {
       return false;
     }
     if (descriptor.value && typeof descriptor.value === "object") {
-      (nested ??= []).push(descriptor.value);
+      if (firstChild === undefined) {
+        firstChild = descriptor.value;
+      } else {
+        (moreChildren ??= []).push(descriptor.value);
+      }
     }
   }
-  if (!nested && native !== Map && native !== Set) {
+  if (!firstChild && native !== Map && native !== Set) {
     // Repeated leaves in an existing graph still share its completed classification.
     seen?.add(value);
     return true;
   }
   const visited = seen ?? new Set<object>();
   visited.add(value);
-  if (nested) {
-    for (const child of nested) {
+  if (firstChild && !isPluginData(firstChild, visited)) {
+    return false;
+  }
+  if (moreChildren) {
+    for (const child of moreChildren) {
       if (!isPluginData(child, visited)) {
         return false;
       }

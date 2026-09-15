@@ -2,14 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
+import {
+  isLegacySessionRecordOwnedByTarget,
+  readLegacySessionStoreEntries,
+  shouldFilterLegacySessionRecordsByTarget,
+} from "../config/sessions/legacy-store-inspection.js";
 import { importSqliteSessionRowsBatch } from "../config/sessions/session-accessor.sqlite-import.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import {
@@ -19,10 +20,7 @@ import {
   resolveSessionStoreTargets,
   type SessionStoreTarget as ResolvedSessionStoreTarget,
 } from "../config/sessions/targets.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.js";
-import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import {
   DeferredPluginMigrationConflictError,
   readDeferredPluginMigrations,
@@ -40,11 +38,7 @@ import { prepareLegacyAcpMigrationSource } from "../infra/legacy-acp-migration-s
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { normalizeLegacySessionEntryDelivery as normalizeSessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
-import {
-  LEGACY_IMPLICIT_AGENT_ID,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import {
   readMigrationArtifactIdentity,
@@ -871,10 +865,17 @@ async function inspectOrMigrateTarget(params: {
   }
   if (params.mode === "import") {
     const deferredPluginIds = params.deferredPluginIds ?? [];
+    // Zero-row validation may certify an existing canonical store, but must never
+    // create a database solely for an unused shared-index owner.
+    const verifiedImport =
+      validationPassed &&
+      (retainedImport !== undefined ||
+        records.length > 0 ||
+        fs.existsSync(resolveTargetSqlitePath(params.target, params.env)));
     let retainedImportVerified = retainedImport !== undefined;
     let verifiedSources = retainedImport?.sources;
     const indexIdentity = params.expectedIndexIdentity;
-    if (!retainedImport && indexIdentity && validationPassed && report.issues.length === 0) {
+    if (!retainedImport && indexIdentity && verifiedImport && report.issues.length === 0) {
       try {
         const sources = new Map<string, MigrationArtifactIdentity>([
           [path.resolve(params.target.storePath), indexIdentity],
@@ -907,7 +908,7 @@ async function inspectOrMigrateTarget(params: {
         });
       }
     }
-    if (deferredPluginIds.length > 0 && validationPassed && report.issues.length === 0) {
+    if (deferredPluginIds.length > 0 && verifiedImport && report.issues.length === 0) {
       if (!retainedImport) {
         if (!verifiedSources) {
           throw new Error("Deferred plugin session import has no verified source index.");
@@ -1069,125 +1070,18 @@ function readLegacySessionRecords(
   issues: DoctorSessionSqliteIssue[],
   options: { allowMissingStore?: boolean; sourcePath?: string } = {},
 ): LegacySessionRecord[] {
-  // Open a file descriptor first, then stat and read through it to eliminate
-  // the TOCTOU race where a file can change between size validation and read.
-  // Use O_NONBLOCK so a path substituted with a FIFO cannot block waiting for
-  // a writer; fstat on the descriptor then rejects non-regular files.
-  const openFlags =
-    process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
-  let fd: number;
-  try {
-    fd = fs.openSync(options.sourcePath ?? target.storePath, openFlags);
-  } catch (err) {
-    const nodeErr = err as NodeJS.ErrnoException;
-    if (options.allowMissingStore === true && nodeErr.code === "ENOENT") {
-      try {
-        const parentStat = fs.statSync(path.dirname(target.storePath));
-        if (!parentStat.isDirectory()) {
-          issues.push({
-            code: "store_unreadable",
-            message: `${target.storePath}: parent path is not a directory`,
-          });
-        }
-      } catch (parentErr) {
-        if ((parentErr as NodeJS.ErrnoException).code !== "ENOENT") {
-          issues.push({
-            code: "store_unreadable",
-            message: `${target.storePath}: ${String(parentErr)}`,
-          });
-        }
-      }
-      return [];
-    }
-    issues.push({
-      code: "store_unreadable",
-      message: `${target.storePath}: ${String(err)}`,
+  const records: LegacySessionRecord[] = [];
+  for (const { entry, sessionKey } of readLegacySessionStoreEntries(target, issues, options)
+    .entries) {
+    const transcript = resolveLegacyTranscriptPaths(target, entry);
+    records.push({
+      // Import repairs file-era fields before canonical SQLite readers can see them.
+      entry: migrateLegacySessionCreator(normalizeSessionEntryDelivery(entry)),
+      sessionKey,
+      ...transcript,
     });
-    return [];
   }
-
-  try {
-    let parsed: unknown;
-    try {
-      const storeStat = fs.fstatSync(fd);
-      if (!storeStat.isFile()) {
-        issues.push({
-          code: "store_unreadable",
-          message: `${target.storePath}: not a regular file`,
-        });
-        return [];
-      }
-      // Fail closed if the pinned file grows past the size validated above.
-      const raw = readFileDescriptorBoundedSync(fd, storeStat.size).toString("utf-8");
-      parsed = JSON.parse(raw);
-    } catch (err) {
-      issues.push({
-        code: "store_unreadable",
-        message: `${target.storePath}: ${String(err)}`,
-      });
-      return [];
-    }
-    if (!isRecord(parsed)) {
-      issues.push({
-        code: "store_not_object",
-        message: `${target.storePath} does not contain an object session store.`,
-      });
-      return [];
-    }
-    const records: LegacySessionRecord[] = [];
-    for (const [sessionKey, value] of Object.entries(parsed)) {
-      if (!isSessionEntry(value)) {
-        issues.push({
-          code: "entry_invalid",
-          message: "Session entry is missing a valid sessionId.",
-          sessionKey,
-        });
-        continue;
-      }
-      const transcript = resolveLegacyTranscriptPaths(target, value);
-      records.push({
-        // Import is the migration boundary: repair legacy delivery/route shapes
-        // here because the SQLite runtime read path assumes canonical entries.
-        entry: migrateLegacySessionCreator(normalizeSessionEntryDelivery(value)),
-        sessionKey,
-        ...transcript,
-      });
-    }
-    return records;
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-function isLegacySessionRecordOwnedByTarget(
-  cfg: OpenClawConfig,
-  target: SessionStoreTarget,
-  sessionKey: string,
-): boolean {
-  if (target.sqlitePath) {
-    const parsed = parseAgentSessionKey(sessionKey);
-    const ownerAgentId =
-      parsed?.agentId ??
-      cfg.agents?.defaults?.sessionStore?.agentId?.trim() ??
-      tryResolveLegacyCompatibilityAgentId(cfg);
-    return ownerAgentId
-      ? normalizeAgentId(ownerAgentId) === normalizeAgentId(target.agentId)
-      : false;
-  }
-  const ownerAgentId = resolveStoredSessionOwnerAgentId({
-    cfg,
-    agentId: target.agentId,
-    sessionKey,
-  });
-  return ownerAgentId
-    ? ownerAgentId === target.agentId
-    : target.agentId === tryResolveDefaultAgentId(cfg);
-}
-
-function shouldFilterLegacySessionRecordsByTarget(target: SessionStoreTarget): boolean {
-  // Filtering depends on whether the authored store path encodes an owner,
-  // not on the configured/default owner selected for its SQLite target.
-  return !resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).agentId;
+  return records;
 }
 
 function countLegacyTranscript(
@@ -2038,10 +1932,6 @@ function createMigrationTargetInput(target: SessionStoreTarget): SessionSqliteMi
     sqlitePath: canonicalMigrationFilePath(resolveTargetSqlitePath(target)),
     storePath: canonicalMigrationFilePath(target.storePath),
   };
-}
-
-function isSessionEntry(value: unknown): value is SessionEntry {
-  return isRecord(value) && typeof value.sessionId === "string" && value.sessionId.trim() !== "";
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -12,6 +12,8 @@ import type { ChannelMessageActionContext } from "../src/channels/plugins/types.
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { DiscordActionConfig, DiscordConfig, OpenClawConfig } from "../src/config/types.js";
 import { runMessageAction } from "../src/infra/outbound/message-action-runner.js";
+import { resolveAndApplyOutboundReplyToId } from "../src/infra/outbound/message-action-threading.js";
+import { isDeliveredCurrentSourceReply } from "../src/infra/outbound/source-reply-mirror.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import type { PluginRuntime } from "../src/plugins/runtime/types.js";
@@ -22,6 +24,8 @@ const current = "100000000000000002";
 const sibling = "100000000000000003";
 const userId = "100000000000000004";
 const botId = "100000000000000005";
+const dmId = "100000000000000007";
+const messageId = "100000000000000010";
 const role = { id: guildId, name: "@everyone", permissions: "1024" };
 const member = { user: { id: userId, username: "member" }, roles: [guildId] };
 const channels = [current, sibling].map((id) => ({
@@ -161,6 +165,10 @@ async function createFixture() {
     [`/guilds/${guildId}/voice-states/${userId}`, { body: voice }],
     [`/guilds/${guildId}/scheduled-events`, { body: events }],
     [`/channels/${sibling}/messages`, { body: [] }],
+    [`/channels/${dmId}`, { body: { id: dmId, type: 1 } }],
+    ["/users/@me/channels", { body: { id: dmId } }],
+    [`/channels/${dmId}/messages/${messageId}/reactions/%E2%9C%85/@me`, { body: {}, status: 204 }],
+    [`/channels/${dmId}/messages`, { body: { id: "100000000000000011", channel_id: dmId } }],
   ]);
   const requests: Array<{ method: string; path: string }> = [];
   const transport = { onRequest: undefined as (() => void) | undefined };
@@ -204,12 +212,35 @@ async function createFixture() {
     conversationReadOrigin: "delegated",
     toolContext: { currentChannelProvider: "discord", currentChannelId: current },
   };
+  const dmContext: ChannelMessageActionContext = {
+    ...context,
+    action: "react",
+    requesterSenderId: userId,
+    senderIsOwner: false,
+    params: { messageId, emoji: "✅" },
+    toolContext: {
+      ...discordPlugin.threading?.buildToolContext?.({
+        cfg,
+        accountId: "default",
+        context: {
+          From: `discord:${userId}`,
+          To: `user:${userId}`,
+          NativeChannelId: dmId,
+          ChatType: "direct",
+          CurrentMessageId: messageId,
+        },
+      }),
+      currentChannelProvider: "discord",
+      replyToMode: "all",
+    },
+  };
   return {
     discord,
     cfg,
     record,
     plugin,
     context,
+    dmContext,
     routes,
     requests,
     transport,
@@ -242,6 +273,93 @@ describe("registered Discord metadata reads", () => {
     resetPluginRuntimeStateForTest();
     clearRuntimeConfigSnapshot();
   });
+
+  it.each([dmId, `channel:${dmId}`, `user:${userId}`])(
+    "reacts in the current DM through its registered adapter (%s)",
+    async (target) => {
+      const result = await dispatchChannelMessageAction({
+        ...fixture.dmContext,
+        params: { ...fixture.dmContext.params, target, to: target },
+      });
+
+      expect(result?.details).toEqual({ ok: true, added: "✅" });
+      expect(fixture.requests.filter(({ method }) => method === "PUT")).toEqual([
+        { method: "PUT", path: `/channels/${dmId}/messages/${messageId}/reactions/%E2%9C%85/@me` },
+      ]);
+    },
+  );
+
+  it.each([
+    `channel:100000000000000008`,
+    `user:100000000000000009`,
+    `channel:${current}`,
+    `channel:100000000000000012`,
+    `channel:${userId}`,
+    `user:${dmId}`,
+  ])("rejects another DM, guild, thread, user or namespace before I/O (%s)", async (target) => {
+    await expect(
+      dispatchChannelMessageAction({
+        ...fixture.dmContext,
+        params: { ...fixture.dmContext.params, target, to: target },
+      }),
+    ).rejects.toThrow("exact current conversation");
+    expect(fixture.requests).toEqual([]);
+  });
+
+  it.each(["account", "provider"])("retains current DM %s restrictions", async (mismatch) => {
+    await expect(
+      dispatchChannelMessageAction({
+        ...fixture.dmContext,
+        params: { ...fixture.dmContext.params, target: `channel:${dmId}`, to: `channel:${dmId}` },
+        ...(mismatch === "account"
+          ? { requesterAccountId: "other" }
+          : {
+              toolContext: {
+                ...fixture.dmContext.toolContext,
+                currentChannelProvider: "slack",
+              },
+            }),
+      }),
+    ).rejects.toThrow("exact current conversation");
+    expect(fixture.requests).toEqual([]);
+  });
+
+  it.each([dmId, `channel:${dmId}`, `user:${userId}`])(
+    "preserves implicit replies and delivery tracking for the current DM (%s)",
+    async (target) => {
+      const params = { target, to: target, message: "Reply in the current DM" };
+      const reply = resolveAndApplyOutboundReplyToId(params, {
+        channel: "discord",
+        toolContext: fixture.dmContext.toolContext,
+        matchesToolContextTarget: fixture.plugin.threading?.matchesToolContextTarget,
+      });
+      expect(reply).toMatchObject({ replyToId: messageId, source: "implicit" });
+      const result = await dispatchChannelMessageAction({
+        ...fixture.dmContext,
+        action: "send",
+        params,
+        reply,
+      });
+
+      expect(result?.details).toMatchObject({ ok: true, result: { channelId: dmId } });
+      expect(fixture.requests.filter(({ path }) => path === `/channels/${dmId}/messages`)).toEqual([
+        { method: "POST", path: `/channels/${dmId}/messages` },
+      ]);
+      expect(
+        isDeliveredCurrentSourceReply({
+          action: "send",
+          channel: "discord",
+          cfg: fixture.cfg,
+          actionParams: params,
+          deliveredPayload: result?.details,
+          accountId: "default",
+          currentAccountId: "default",
+          sessionKey: `agent:main:discord:direct:${userId}`,
+          toolContext: fixture.dmContext.toolContext,
+        }),
+      ).toBe(true);
+    },
+  );
 
   it.each(metadataReads)(
     "advertises and executes $action through the registered provider",

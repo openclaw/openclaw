@@ -22,6 +22,7 @@ import { runGitWorkerOperation, type GitWorkerOperationOptions } from "./git-wor
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const supportsRawPathBytes = process.platform === "linux";
 
 afterEach(async () => {
   await drainGlobalSingletonLifecycleState();
@@ -207,7 +208,7 @@ describe("Git operation host lifecycle", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(!supportsRawPathBytes)(
     "inspects ignored raw-byte directories without following symlinks",
     async () => {
       const root = tempDirs.make("openclaw-ignored-directory-bytes-");
@@ -249,7 +250,7 @@ describe("Git operation host lifecycle", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each(["cleanup-inspection", "snapshot"] as const)(
+  it.skipIf(!supportsRawPathBytes).each(["cleanup-inspection", "snapshot"] as const)(
     "resolves unknown dirent types in ignored raw-byte directories during %s",
     async (maintenance) => {
       const root = tempDirs.make("openclaw-unknown-dirent-");

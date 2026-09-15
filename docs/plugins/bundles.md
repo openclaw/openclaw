@@ -124,8 +124,8 @@ them:
   defaults.
 - Only supported stdio-backed LSP servers are runnable; unsupported
   transports still show up in `openclaw plugins inspect <id>`.
-- Canceling a turn also cancels pending LSP startup, stops additional servers
-  from starting, and cleans up servers already acquired by that turn.
+- Canceling a turn or compaction cancels pending LSP startup, stops additional
+  servers from starting, and cleans up servers already acquired by that operation.
 
 ### Detected but not executed
 

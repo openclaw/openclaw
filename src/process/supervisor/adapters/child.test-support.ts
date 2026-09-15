@@ -103,3 +103,12 @@ export async function createWindowsNpmShim(params: {
   await writeFile(path.join(binDir, `${params.command}.cmd`), `${shimHead}${shimCommand}`, "utf8");
   return { binDir, entrypoint };
 }
+type ChildAdapterFactory = typeof import("./child.js").createChildAdapter;
+
+export function readyChildAdapter(create: ChildAdapterFactory) {
+  return async (params: Parameters<ChildAdapterFactory>[0]) => {
+    const { adapter, ready } = await create(params);
+    await ready;
+    return adapter;
+  };
+}

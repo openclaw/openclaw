@@ -32,12 +32,6 @@ import {
 const PASSWORD_READ_TIMEOUT_MS = 20_000;
 const APP_LAUNCH_TIMEOUT_MS = 30_000;
 
-const REMOTE_DESKTOP_READY_SCRIPT = String.raw`set -eu
-printf '%s\n' '${WORKER_TUNNEL_READY_MARKER}'
-trap 'exit 0' HUP INT TERM
-while :; do sleep 3600; done
-`;
-
 type DesktopAcquireRequest = {
   environmentId: string;
   ownerEpoch: number;
@@ -126,6 +120,13 @@ export function createWorkerDesktopTunnels(deps: {
           "-a",
           "-x",
           "-T",
+          "-N",
+          "-n",
+          "-o",
+          "PermitLocalCommand=yes",
+          "-o",
+          // OpenSSH runs this after the pinned connection and local forward are ready.
+          `LocalCommand=printf '${WORKER_TUNNEL_READY_MARKER}\\n'`,
           "-o",
           "ServerAliveInterval=15",
           "-o",
@@ -138,10 +139,8 @@ export function createWorkerDesktopTunnels(deps: {
           String(prepared.port),
           "--",
           prepared.sshTarget,
-          workerSshRemoteCommand(["sh", "-s"]),
         ],
         workerSshCommandOptions({
-          input: REMOTE_DESKTOP_READY_SCRIPT,
           timeoutMs: Number.MAX_SAFE_INTEGER,
         }),
       );

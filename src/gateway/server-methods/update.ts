@@ -61,7 +61,6 @@ import {
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { summarizeUpdateStepFailure } from "../../infra/update-run-record.js";
 import { renderUpdateRunNotice } from "../../infra/update-run-report.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { runGatewayUpdate, runGatewayUpdatePreflight } from "../../infra/update-runner.js";
@@ -79,7 +78,7 @@ import { resolveUpdateRunNoticeTarget } from "../update-run-notice-target.js";
 import { wakeUpdateRunWatcher } from "../update-run-watcher.js";
 import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { resolveGatewayUpdateAdmission } from "./update-admission.js";
+import { recordHandoffFailure, resolveGatewayUpdateAdmission } from "./update-admission.js";
 import { updateReportHandler } from "./update-report.js";
 import { updateStatusHandlers } from "./update-status.js";
 import { assertValidParams } from "./validation.js";
@@ -476,7 +475,11 @@ export const updateHandlers: GatewayRequestHandlers = {
             context?.logGateway?.warn(
               `update.run managed-service handoff failed ${formatControlPlaneActor(actor)} error=${formatErrorMessage(err)}`,
             );
-            result = refusedUpdate("error", "managed-service-handoff-failed");
+            result = recordHandoffFailure(
+              runId,
+              err,
+              refusedUpdate("error", "managed-service-handoff-failed"),
+            );
           }
         } else {
           const beforeVersion = await readPackageVersion(installRoot);
@@ -592,17 +595,12 @@ export const updateHandlers: GatewayRequestHandlers = {
       },
     );
     for (const step of result.steps) {
-      const completed =
-        step.exitCode === 0 ||
-        step.advisory ||
-        (step.exitCode === null && result.status !== "error");
-      recordUpdateRunStep(runId, {
-        step: step.name,
-        status: completed ? "completed" : "failed",
-        ...(!completed ? { detail: summarizeUpdateStepFailure(step) } : {}),
-      });
-      for (const warning of updateRunStepsFromResultStep(step).slice(1)) {
-        recordUpdateRunStep(runId, warning);
+      for (const entry of updateRunStepsFromResultStep(step)) {
+        if (entry.step === step.name && step.exitCode === null && result.status !== "error") {
+          entry.status = "completed";
+          delete entry.detail;
+        }
+        recordUpdateRunStep(runId, entry);
       }
     }
     // A managed orchestrator or the replacement Gateway owns terminal success;
@@ -655,8 +653,12 @@ export const updateHandlers: GatewayRequestHandlers = {
           throw new Error("managed update ownership transfer failed");
         }
       } catch (error) {
-        await cancelManagedServiceUpdateHandoff(managedHandoffOwner);
-        result = { ...result, status: "error", reason: "managed-service-handoff-failed" };
+        try {
+          // Cancellation settles the helper's ledger; persist its cause first.
+          result = recordHandoffFailure(runId, error, result);
+        } finally {
+          await cancelManagedServiceUpdateHandoff(managedHandoffOwner);
+        }
         handoff = null;
         outcomeRun = finishUpdateRun(runId, { status: "failed", reason: result.reason });
         context?.logGateway?.warn(

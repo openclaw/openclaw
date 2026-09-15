@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 
@@ -245,6 +246,120 @@ export function readPostCoreSnapshot(artifactRoot) {
   return { childExitCode: snapshot.childExitCode, result: postCoreResult(snapshot.result) };
 }
 
+// The published updater discards unknown IPC fields and deletes the file after
+// its child exits. Observe the child's existing receipt without changing its lifetime.
+function readDoctorResult() {
+  try {
+    const resultPath = process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+    if (!resultPath || !path.isAbsolute(resultPath)) {
+      return undefined;
+    }
+    const directory = path.dirname(resultPath);
+    const uid = process.getuid?.();
+    const fallback = path.join(tmpdir(), uid === undefined ? "openclaw" : `openclaw-${uid}`);
+    if (
+      ![...(process.platform === "win32" ? [] : ["/tmp/openclaw"]), fallback].includes(directory) ||
+      !/^openclaw-update-doctor-\d+-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/iu.test(
+        path.basename(resultPath),
+      )
+    ) {
+      return undefined;
+    }
+    // Mirror only the temp owner's read boundary, never its mkdir/chmod behavior.
+    const stat = fs.lstatSync(directory);
+    if (
+      !stat.isDirectory() ||
+      stat.isSymbolicLink() ||
+      (uid !== undefined && (stat.uid !== uid || (stat.mode & 0o022) !== 0))
+    ) {
+      return undefined;
+    }
+    return doctorResult(JSON.parse(readOwned(directory, path.basename(resultPath), "Doctor IPC")));
+  } catch {
+    return undefined;
+  }
+}
+
+function doctorResult(value, sanitize = (text) => text) {
+  if (
+    !["ok", "error", "advisory"].includes(value?.status) ||
+    !Array.isArray(value.failureFacts ?? []) ||
+    (value.failureFacts?.length ?? 0) > 5
+  ) {
+    throw new Error();
+  }
+  return {
+    status: value.status,
+    failureFacts: (value.failureFacts ?? []).map((fact) => {
+      for (const [key, limit] of [
+        ["check", 128],
+        ["code", 80],
+        ["message", 200],
+      ]) {
+        if (key === "message" && fact?.[key] === undefined) {
+          continue;
+        }
+        if (typeof fact?.[key] !== "string" || !fact[key].trim() || fact[key].length > limit) {
+          throw new Error();
+        }
+      }
+      return textFields(fact, ["check", "code", "message"], sanitize);
+    }),
+  };
+}
+
+function doctorObservation({ started, exited }, sanitize = (text) => text) {
+  if (
+    started?.role !== "doctor" ||
+    started.event !== "started" ||
+    exited?.role !== "doctor" ||
+    exited.event !== "exited" ||
+    !Number.isSafeInteger(started.pid) ||
+    started.pid <= 0 ||
+    !Number.isSafeInteger(started.parentPid) ||
+    started.parentPid <= 0 ||
+    typeof started.packageVersion !== "string" ||
+    !/^\d{4}\.\d{1,2}\.\d{1,3}(?:-(?:\d+|(?:alpha|beta)\.\d+))?$/.test(started.packageVersion) ||
+    ["pid", "parentPid", "packageVersion"].some((key) => started[key] !== exited[key]) ||
+    !Number.isInteger(exited.exitCode) ||
+    exited.exitCode < 0 ||
+    exited.exitCode > 255
+  ) {
+    throw new Error();
+  }
+  return {
+    pid: started.pid,
+    parentPid: started.parentPid,
+    packageVersion: started.packageVersion,
+    exitCode: exited.exitCode,
+    ...doctorResult(exited.doctorResult, sanitize),
+  };
+}
+
+function readDoctorResults(root) {
+  const pairs = [];
+  for (const name of boundedList(fs.readdirSync(ownedPath(root, "diagnostics")))) {
+    const match = /^process-(\d+)-exited\.json$/.exec(name);
+    if (!match) {
+      continue;
+    }
+    const exited = JSON.parse(readOwned(root, `diagnostics/${name}`, "Doctor exit"));
+    if (exited?.doctorResult === undefined) {
+      continue;
+    }
+    const started = JSON.parse(
+      readOwned(root, `diagnostics/process-${match[1]}-started.json`, "Doctor start"),
+    );
+    const pair = { started, exited };
+    doctorObservation(pair);
+    if (started.pid !== Number(match[1])) {
+      throw new Error();
+    }
+    pairs.push(pair);
+  }
+  return pairs;
+}
+
 function armUpgradeProcessCapture() {
   const command = process.argv[2];
   const artifactRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
@@ -292,12 +407,13 @@ function armUpgradeProcessCapture() {
     );
     process.once("exit", (exitCode) => {
       try {
+        const result = identity.role === "doctor" ? readDoctorResult() : undefined;
         writeReport(
           artifactRoot,
           destination,
           `process-${process.pid}-exited.json`,
-          { ...identity, event: "exited", exitCode },
-          1024,
+          { ...identity, event: "exited", exitCode, ...(result ? { doctorResult: result } : {}) },
+          outputLimit,
         );
       } catch {
         // Missing exit evidence stays unknown; never alter the observed process.
@@ -646,6 +762,12 @@ async function capture(artifactRoot, phase, exitStatus, signal = "", observation
   } catch {
     omissions["post-core"] = reasons[3];
   }
+  report.doctorResults = [];
+  try {
+    report.doctorResults = readDoctorResults(observationRoot || artifactRoot);
+  } catch {
+    // Missing, interrupted, or mismatched observations remain unknown.
+  }
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   if (stateRoot && configPath) {
     const config = readOwned(stateRoot, path.relative(stateRoot, configPath), "config");
@@ -910,6 +1032,17 @@ export function publishDiagnostics(
     report.config.sha256 = snapshot.config.sha256;
   }
   report.postCore = publishedPostCore(snapshot.postCore, sanitize);
+  report.doctorResults = { availability: "unknown", observations: [] };
+  try {
+    const observations = boundedList(snapshot.doctorResults).map((pair) =>
+      doctorObservation(pair, sanitize),
+    );
+    if (observations.length > 0) {
+      report.doctorResults = { availability: "captured", observations };
+    }
+  } catch {
+    // Do not promote a partial or unbound receipt into a reported Doctor outcome.
+  }
   report.pluginIdentity = {
     availability: "unknown",
     evidence: "persisted index + current bytes; not observed loaded modules",

@@ -354,6 +354,26 @@ describe("provider selection registration coverage", () => {
     },
   );
 
+  it.each(["setup", "activation"] as const)(
+    "reuses a complete active registry after a partial request with %s metadata",
+    (declaration) => {
+      const proof = fixture(declaration);
+      const partial = proof.load("setup");
+      const complete = proof.load("full");
+      setActivePluginRegistry(complete, "complete-active");
+      expect(partial.providers.map(({ provider }) => provider.label)).toEqual(["Other"]);
+      withPluginRuntimeRegistryScope(partial, () => {
+        expect(
+          resolveLoadedProviderPluginsForHooks(proof.query)?.map((provider) => provider.label),
+        ).toEqual(["Helper", "Other"]);
+        expect(
+          resolveProviderPluginsForHooks(proof.query).map((provider) => provider.label),
+        ).toEqual(["Helper", "Other"]);
+      });
+      expect(proof.registrations()).toBe("registered");
+    },
+  );
+
   it.each(["setup", "full"] as const)(
     "keeps a non-provider activation helper's %s registration pass distinct",
     (intent) => {

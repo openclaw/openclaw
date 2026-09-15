@@ -742,28 +742,32 @@ describe("node worker supervisor", () => {
       let childExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
       const createAdapter = childAdapter.createChildAdapter;
       vi.spyOn(childAdapter, "createChildAdapter").mockImplementationOnce(async (options) => {
-        const adapter = await createAdapter(options);
+        const { adapter, ready } = await createAdapter(options);
+        await ready;
         const exited = adapter.wait();
         return {
-          ...adapter,
-          // Reach the closed real pipe before its exit can settle the launch journal.
-          openStartGate: async () => {
-            await adapter.openStartGate?.();
-            childExit = await exited;
-            if (operation === "cancel") {
-              controller.abort(new Error("cancel during startup"));
-            } else if (operation === "close") {
-              closing = supervisor.close();
-            }
-          },
-          wait: async () => {
-            const exit = await exited;
-            await observationReleased.promise;
-            return exit;
-          },
-          kill: (signal) => {
-            adapter.kill(signal);
-            observationReleased.resolve();
+          ready,
+          adapter: {
+            ...adapter,
+            // Reach the closed real pipe before its exit can settle the launch journal.
+            openStartGate: async () => {
+              await adapter.openStartGate?.();
+              childExit = await exited;
+              if (operation === "cancel") {
+                controller.abort(new Error("cancel during startup"));
+              } else if (operation === "close") {
+                closing = supervisor.close();
+              }
+            },
+            wait: async () => {
+              const exit = await exited;
+              await observationReleased.promise;
+              return exit;
+            },
+            kill: (signal) => {
+              adapter.kill(signal);
+              observationReleased.resolve();
+            },
           },
         };
       });

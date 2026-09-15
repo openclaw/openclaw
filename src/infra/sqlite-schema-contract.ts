@@ -273,15 +273,32 @@ export function assertSqliteSchemaTablesPresent(
   options: { allowedMissingTables?: readonly string[] } = {},
 ): void {
   const allowedMissingTables = new Set(options.allowedMissingTables ?? []);
-  const missingTables = getCanonicalSqliteTableNames(schemaSql)
-    .filter((tableName) => !allowedMissingTables.has(tableName))
-    .filter(
-      (tableName) =>
-        !database
-          .prepare("SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name = ? LIMIT 1")
-          .get(tableName),
-    )
-    .map((tableName) => `missing table ${tableName}`);
+  const requiredTables = getCanonicalSqliteTableNames(schemaSql).filter(
+    (tableName) => !allowedMissingTables.has(tableName),
+  );
+  const missingTables: string[] = [];
+  // Bound name parameters without limiting the schema; ordinals never come from catalog rows.
+  const batchSize = 500;
+  for (let offset = 0; offset < requiredTables.length; offset += batchSize) {
+    const tables = requiredTables.slice(offset, offset + batchSize);
+    const expected = tables.map((_table, ordinal) => `(${ordinal}, ?)`).join(", ");
+    const present = database
+      .prepare(
+        `WITH expected(ordinal, name) AS (VALUES ${expected})
+         SELECT ordinal FROM expected
+         WHERE EXISTS (
+           SELECT 1 FROM main.sqlite_schema
+           WHERE type = 'table' AND name = expected.name LIMIT 1
+         )`,
+      )
+      .all(...tables);
+    const presentOrdinals = new Set(present.map((row) => row.ordinal));
+    for (const [ordinal, tableName] of tables.entries()) {
+      if (!presentOrdinals.has(ordinal)) {
+        missingTables.push(`missing table ${tableName}`);
+      }
+    }
+  }
   if (missingTables.length > 0) {
     throwSqliteSchemaMismatches(databaseLabel, missingTables);
   }
@@ -320,9 +337,14 @@ export function collectSqliteNamedIndexContract(
   database: DatabaseSync,
   indexName: string,
 ): SqliteIndexContract | undefined {
+  // Authorize the original catalog columns even when the index is absent.
   const row = database
-    .prepare("SELECT name, sql, tbl_name FROM main.sqlite_schema WHERE type = 'index' AND name = ?")
-    .get(indexName) as SqliteSchemaRow | undefined;
+    .prepare(`
+      SELECT tbl_name FROM (
+        SELECT name, sql, tbl_name FROM main.sqlite_schema WHERE type = 'index' AND name = ?
+      )
+    `)
+    .get(indexName);
   if (!row || typeof row.tbl_name !== "string") {
     return undefined;
   }
@@ -378,22 +400,16 @@ function buildSqliteSchemaContract(schemaSql: string): SqliteSchemaContract {
     const rows = database
       .prepare(
         `
-          SELECT name
+          SELECT name, sql
           FROM sqlite_schema
           WHERE type = 'table'
             AND name NOT LIKE 'sqlite_%'
           ORDER BY name
         `,
       )
-      .all() as Array<{ name: string }>;
+      .all() as SqliteSchemaRow[];
     return new Map(
-      rows.map((row) => {
-        const contract = collectSqliteTableContract(database, row.name);
-        if (!contract) {
-          throw new Error(`Could not collect generated SQLite schema table ${row.name}.`);
-        }
-        return [row.name, contract];
-      }),
+      rows.map((row) => [row.name, collectSqliteTableContractFromRow(database, row.name, row)]),
     );
   } finally {
     database.close();
@@ -434,7 +450,14 @@ function collectSqliteTableContract(
   if (!table) {
     return undefined;
   }
+  return collectSqliteTableContractFromRow(database, tableName, table);
+}
 
+function collectSqliteTableContractFromRow(
+  database: DatabaseSync,
+  tableName: string,
+  table: SqliteSchemaRow,
+): SqliteTableContract {
   const quotedTable = quoteSqliteIdentifier(tableName);
   const tableList = (
     database.prepare(`PRAGMA table_list(${quotedTable})`).all() as SqliteTableListRow[]

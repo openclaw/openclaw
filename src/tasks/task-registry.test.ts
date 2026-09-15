@@ -5808,20 +5808,21 @@ describe("task-registry", () => {
 
   it.each([
     {
-      name: "cancels harness-owned tasks without routing through OpenClaw subagent sessions",
+      name: "refuses harness-owned cancellation without changing the task record",
       taskKind: "external-harness",
       sourceId: "harness:child",
       task: "Harness-owned child",
-      cancellable: true,
+      reason:
+        "This subagent is controlled by its native harness. Use the parent session's native collaboration tools to stop it.",
     },
     {
       name: "does not cancel childless subagent tasks without a harness task kind",
       taskKind: undefined,
       sourceId: "openclaw-subagent:child",
       task: "Childless OpenClaw row",
-      cancellable: false,
+      reason: "Task has no cancellable child session.",
     },
-  ])("$name", async ({ taskKind, sourceId, task: taskName, cancellable }) => {
+  ])("$name", async ({ taskKind, sourceId, task: taskName, reason }) => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryForTests({ persist: false });
       const task = createTaskFixture("subagent", {
@@ -5833,24 +5834,8 @@ describe("task-registry", () => {
       });
       const result = await cancelTask(task.taskId);
 
-      if (!cancellable) {
-        expect(result).toEqual({
-          found: true,
-          cancelled: false,
-          reason: "Task has no cancellable child session.",
-          task,
-        });
-      } else {
-        expectRecordFields(result, { found: true, cancelled: true });
-        expectRecordFields(result.task, {
-          taskId: task.taskId,
-          status: "cancelled",
-          endedAt: expect.any(Number),
-          lastEventAt: expect.any(Number),
-          cleanupAfter: expect.any(Number),
-          error: "Cancelled by operator.",
-        });
-      }
+      expect(result).toEqual({ found: true, cancelled: false, reason, task });
+      expect(getTaskById(task.taskId)).toEqual(task);
       expect(hoisted.killSubagentRunAdminMock).not.toHaveBeenCalled();
     });
   });

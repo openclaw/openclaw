@@ -39,6 +39,10 @@ Hover the row or focus it with the keyboard for a tooltip explaining the exact
 status. Reduced motion keeps the claw still. Tasks without a display title keep
 the generic **Subagent** label. Select a row to open its details.
 
+The sidebar keeps unread child failures visible on their ancestors. These warnings
+name the child session that failed, even when its parent has finished or continues
+working. Open the child session to inspect and acknowledge its failure.
+
 Choose **New agent** in the sidebar or Agents home to open the custodian chat.
 It recommends a chief of staff, researcher, writer, reviewer, or a small team
 with all four. Reply with a choice, or describe custom work and a name. Role

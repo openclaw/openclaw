@@ -748,6 +748,8 @@ def resolve_app_store_connect_app(app_identifier:, app_id:)
   $app
 end
 ${selector}
+${functionDefinition(readFastfile(), "resolve_ci_testflight_build!")}
+${functionDefinition(readFastfile(), "ci_testflight_build_group_ids")}
 ${verifier}
 build = Build.new("build-id", "2026.9.20", "1", "IOS")
 $groups = [
@@ -825,6 +827,8 @@ def resolve_app_store_connect_app(app_identifier:, app_id:)
   $fresh_app
 end
 ${selector}
+${functionDefinition(readFastfile(), "resolve_ci_testflight_build!")}
+${functionDefinition(readFastfile(), "ci_testflight_build_group_ids")}
 ${verifier}
 
 def run_case(label, post_groups:, app_builds:)

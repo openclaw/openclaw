@@ -185,6 +185,23 @@ describe("session-share node commands", () => {
   it("publishes selected root sessions while denying grouped subagents, with stable paging and search", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const fixture = commandFixture();
+      const profile = syncGitHubIdentity({
+        identity: { accountId: 4242, login: "source-person", name: "Source Person" },
+        authenticationAlias: { kind: "github-login", login: "source-person" },
+      });
+      const createdActor = { type: "human", source: "profile", id: profile.id } as const;
+      const publishedActor = {
+        type: "human",
+        id: "4242",
+        label: "Source Person",
+        identity: {
+          type: "remote",
+          pluginId: "session-share",
+          domain: "openclaw",
+          idKind: "github-account",
+          id: "4242",
+        },
+      };
       // Keep the tied fixture fresh: subsequent writes prune ancient unarchived sessions.
       const recency = Date.now();
       for (const [key, patch] of [
@@ -196,13 +213,25 @@ describe("session-share node commands", () => {
             updatedAt: recency,
             color: "blue",
             createdVia: "operator",
+            createdActor,
+            createdAt: recency - 100,
+            execCwd: "/work/alpha",
+            spawnedCwd: "/work/ignored",
             parentSessionKey: "agent:main:parent",
             spawnDepth: 0,
           },
         ],
         [
           "agent:main:beta",
-          { label: "Beta", category: "Team", updatedAt: recency, archivedAt: recency - 1 },
+          {
+            label: "Beta",
+            category: "Team",
+            updatedAt: recency,
+            archivedAt: recency - 1,
+            createdActor,
+            createdAt: recency - 90,
+            worktree: { id: "beta-worktree", repoRoot: "/work/beta", branch: "b".repeat(6010) },
+          },
         ],
         ["agent:main:private", { label: "Private", category: "Other", updatedAt: recency + 1 }],
         [
@@ -248,33 +277,55 @@ describe("session-share node commands", () => {
       for (const key of ["subagent:key-only", "dashboard:spawn-owned", "acp:resumed-child"]) {
         await expect.soft(fixture.read(`agent:main:${key}`)).rejects.toThrow("not shared");
       }
+      const identityReads = vi.spyOn(githubIdentities, "selectStoredGitHubIdentities");
       const first = await fixture.list({ limit: 1 });
       expect(first.sessions).toEqual([
-        expect.objectContaining({
+        {
           threadId: "agent:main:alpha",
           name: "Alpha",
           color: "blue",
+          cwd: "/work/alpha",
           status: "idle",
+          createdAt: recency - 100,
+          updatedAt: recency,
+          recencyAt: recency,
+          archived: false,
           canContinue: false,
           canArchive: false,
           canOpenTerminal: false,
-        }),
+          createdActor: publishedActor,
+        },
       ]);
+      expect.soft(identityReads).toHaveBeenCalledTimes(1);
       expect(first.nextCursor).toBeDefined();
+      identityReads.mockClear();
       const older = await fixture.list({ limit: 1, cursor: first.nextCursor });
       expect(older.sessions).toEqual([
-        expect.objectContaining({
+        {
           threadId: "agent:main:beta",
+          name: "Beta",
+          cwd: "/work/beta",
+          createdAt: recency - 90,
+          updatedAt: recency,
+          recencyAt: recency,
+          gitBranch: "b".repeat(6000),
           archived: true,
           status: "archived",
-        }),
+          canContinue: false,
+          canArchive: false,
+          canOpenTerminal: false,
+          createdActor: publishedActor,
+        },
       ]);
+      expect.soft(identityReads).toHaveBeenCalledTimes(1);
       expect(older.nextCursor).toBeDefined();
+      identityReads.mockClear();
       const roots = await fixture.list({ cursor: older.nextCursor });
       expect(roots.sessions.map((session) => session.threadId)).toEqual([
         "agent:main:cron:job:run:root",
         "agent:main:main",
       ]);
+      expect.soft(identityReads).not.toHaveBeenCalled();
       expect(roots.nextCursor).toBeUndefined();
       expect(
         (await fixture.list({ searchTerm: "ALPHA" })).sessions.map((session) => session.threadId),

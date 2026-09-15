@@ -153,7 +153,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         return await executeLocalTurn({ claim, placements: options.placements, runLocal });
       }
       const hasPendingWorkspaceResultToSettle = (sessionId: string, runId: string) =>
-        options.placements.listPendingWorkspaceResults().some(
+        options.placements.listPendingWorkspaceResults(sessionId).some(
           (pending) =>
             pending.sessionId === sessionId &&
             // A restarted run has no live claim, even when it reuses the retained run ID.
@@ -395,7 +395,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               !handedOff &&
               options.placements.validateTurnClaim(turnClaim) &&
               !options.placements
-                .listPendingWorkspaceResults()
+                .listPendingWorkspaceResults(placement.sessionId)
                 .some((pending) => pending.sessionId === placement.sessionId);
             if (canRecoverBuild) {
               // This claim never launched work. Release it so runtime refresh does not
@@ -449,7 +449,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             }
           }
           const pendingWorkspaceResult = options.placements
-            .listPendingWorkspaceResults()
+            .listPendingWorkspaceResults(turnClaim.sessionId)
             .find(
               (pending) =>
                 pending.sessionId === turnClaim.sessionId &&

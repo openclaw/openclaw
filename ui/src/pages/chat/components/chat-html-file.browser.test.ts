@@ -82,6 +82,7 @@ async function mount(
 
 afterEach(() => {
   document.body.replaceChildren();
+  localStorage.removeItem("openclaw.control.fileView.wrap.v1");
   for (const file of opened.splice(0)) {
     setFileDraft(file, null);
   }
@@ -95,23 +96,29 @@ describe.runIf(browserMode)("HTML file presentation", () => {
   });
 
   it("opens rendered HTML before loading CodeMirror, then retains editor and undo through draft preview", async () => {
+    localStorage.removeItem("openclaw.control.fileView.wrap.v1");
     const { panel, file, request } = await mount();
     expect(request.mock.lastCall?.[1]?.html).toBe(source);
     expect(panel.querySelector(".cm-editor")).toBeNull();
     expect(panel.querySelector("h1")).toBeNull();
+    expect(panel.querySelector(".sidebar-file-view__wrap")).toBeNull();
     await userEvent.click(button(panel, "Edit file"));
     await expect
       .poll(() => panel.querySelector('.cm-content[contenteditable="true"]'))
       .not.toBeNull();
     const editor = panel.querySelector(".cm-editor");
     const input = panel.querySelector<HTMLElement>(".cm-content")!;
+    await userEvent.click(button(panel, "Enable word wrap"));
+    expect(button(panel, "Disable word wrap").getAttribute("aria-pressed")).toBe("true");
     await userEvent.fill(input, "<h1>Unsaved draft</h1>");
     expect(readFileDraft(file)?.content).toBe("<h1>Unsaved draft</h1>");
     await userEvent.click(button(panel, "Preview"));
     await expect.poll(() => request.mock.lastCall?.[1]?.html).toBe("<h1>Unsaved draft</h1>");
     expect(panel.querySelector(".cm-editor")).toBe(editor);
     expect(input.checkVisibility()).toBe(false);
+    expect(panel.querySelector(".sidebar-file-view__wrap")).toBeNull();
     await userEvent.click(button(panel, "Source"));
+    expect(button(panel, "Disable word wrap").getAttribute("aria-pressed")).toBe("true");
     expect(panel.querySelector(".cm-editor")).toBe(editor);
     expect(input.textContent).toContain("Unsaved draft");
     expect(button(panel, "Save").disabled).toBe(false);

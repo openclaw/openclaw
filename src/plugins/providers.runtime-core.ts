@@ -165,16 +165,11 @@ export function createProviderRegistryResolver(dependencies: {
             ])
           : undefined,
       declaredProviderOwners,
-      providerRegistrationPluginIds: new Set(
-        (manifestRegistry?.plugins ?? [])
-          .filter(
-            (plugin) => plugin.providers.length > 0 || (plugin.setup?.providers?.length ?? 0) > 0,
-          )
-          .map((plugin) => plugin.id),
-      ),
-      runtimeRegistrationPluginIds: new Set(
-        providerOwners.flatMap((owner) => owner.runtimePluginIds),
-      ),
+      providerOwners,
+      // SAFETY: Candidate validation fills the manifest memo before reading it.
+      providerRegistrationPluginIds: undefined as Set<string> | undefined,
+      // SAFETY: Candidate validation fills the runtime-owner memo before reading it.
+      runtimeRegistrationPluginIds: undefined as Set<string> | undefined,
       unownedProviderRefs: manifestRegistry
         ? providerOwners
             .filter((owner) => owner.ownerPluginIds.length === 0)
@@ -363,6 +358,18 @@ export function createProviderRegistryResolver(dependencies: {
       return undefined;
     }
     if (lookup) {
+      // Retained generations own their registrations. Ordinary candidates share
+      // completeness preparation across request-to-active fallback on the selection.
+      selection.providerRegistrationPluginIds ??= new Set(
+        (selection.manifestRegistry?.plugins ?? [])
+          .filter(
+            (plugin) => plugin.providers.length > 0 || (plugin.setup?.providers?.length ?? 0) > 0,
+          )
+          .map((plugin) => plugin.id),
+      );
+      selection.runtimeRegistrationPluginIds ??= new Set(
+        selection.providerOwners.flatMap((owner) => owner.runtimePluginIds),
+      );
       const providerOwners = new Set(registry.providers.map((entry) => entry.pluginId));
       // Manifest-preseeded record.providerIds cannot prove registration. Rows do;
       // activation-only helpers instead need a successful capability-enabled pass.

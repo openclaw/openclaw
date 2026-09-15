@@ -227,7 +227,9 @@ nodes or samples. Code locations inside the OpenClaw package use `openclaw:` pat
 Node builtin locations use `node:` paths. External paths, eval labels, and other
 unrecognized names are redacted. Bounded code-symbol names at recognized locations
 are retained; their syntax does not prove that a computed name is public. Review
-the profile before sharing it. Graph edges and sample order remain intact.
+the profile before sharing it. Graph edges and sample order remain intact. V8 can
+emit samples out of timestamp order, so signed time deltas are preserved for profile
+viewers to reconstruct timestamps and order samples.
 
 Sampling can outlast the requested interval when the event loop is blocked. The
 response limit does not bound V8's internal allocation during that delay. Profile

@@ -11,7 +11,17 @@ import {
   sidebarSessionAttentionPriority,
   type SidebarKnownSessionAttention,
   type SidebarRecentSession,
+  type SidebarSessionAttention,
 } from "./app-sidebar-session-types.ts";
+
+function attributeChildAttention(
+  attention: SidebarSessionAttention,
+  childLabel: string,
+): SidebarSessionAttention {
+  return attention.kind === "error" && attention.childLabel === undefined
+    ? { ...attention, childLabel }
+    : attention;
+}
 
 /**
  * Pure projection of flat session rows into the sidebar's parent/child tree.
@@ -94,7 +104,7 @@ export function projectSessionTree(params: {
       ...new Map(
         [
           ...children.flatMap((child) => [
-            child.ownAttention ?? child.attention,
+            attributeChildAttention(child.ownAttention ?? child.attention, child.label),
             ...(child.childAttention ?? []),
           ]),
           ...knownSessionAttention
@@ -139,7 +149,7 @@ export function projectSessionTree(params: {
         sidebarSessionAttentionPriority(child.attention) >
           sidebarSessionAttentionPriority(attention)
       ) {
-        attention = child.attention;
+        attention = attributeChildAttention(child.attention, child.label);
       }
       containsActiveDescendant ||=
         child.active || child.visuallyActive || child.containsActiveDescendant;

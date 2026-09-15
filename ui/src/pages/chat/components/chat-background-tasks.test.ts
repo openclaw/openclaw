@@ -880,7 +880,7 @@ describe("running-tasks status row", () => {
     });
 
     const elapsed = container.querySelector<HTMLElement & { startMs: number | null }>(
-      "openclaw-elapsed-time",
+      ".chat-tasks-status__time openclaw-elapsed-time",
     );
     expect(elapsed?.startMs).toBe(4_000);
     expect(
@@ -897,7 +897,7 @@ describe("running-tasks status row", () => {
 
     const row = container.querySelector(".chat-tasks-status");
     expect(row).not.toBeNull();
-    expect(row?.querySelector("openclaw-elapsed-time")).not.toBeNull();
+    expect(row?.querySelector(".chat-tasks-status__time openclaw-elapsed-time")).not.toBeNull();
     const liveStatus = row?.querySelector('[role="status"]');
     expect(liveStatus?.textContent?.trim()).toBe("1 running task");
     expect(liveStatus?.querySelector("openclaw-elapsed-time")).toBeNull();

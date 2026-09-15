@@ -373,6 +373,7 @@ export async function buildPreparedCompactionRuntime(
       ? await createBundleLspToolRuntime({
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
+          abortSignal: params.abortSignal,
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
             ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),

@@ -698,3 +698,23 @@ export function upsertTaskDeliveryStateInDatabase(
 ): void {
   replaceTaskDeliveryStateRow(db, bindTaskDeliveryState(state));
 }
+
+/** Retained task rows own their sessions even when their payload/status cannot be decoded. */
+export function hasTaskSessionOwnerInDatabase(db: DatabaseSync, sessionKey: string): boolean {
+  return (
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db)
+        .selectFrom("task_runs")
+        .select("task_id")
+        .where((eb) =>
+          eb.or([
+            eb("child_session_key", "=", sessionKey),
+            eb("requester_session_key", "=", sessionKey),
+            eb("owner_key", "=", sessionKey),
+          ]),
+        )
+        .limit(1),
+    ).rows.length > 0
+  );
+}

@@ -22,7 +22,7 @@ export async function createOwnedStdioProcess(params: {
 }): Promise<OwnedStdioProcess> {
   let startupCleanup: Promise<boolean> | undefined;
   try {
-    return await createChildAdapter({
+    const { adapter, ready } = await createChildAdapter({
       ...params,
       ownProcessTree: true,
       stdinMode: "pipe-open",
@@ -33,6 +33,8 @@ export async function createOwnedStdioProcess(params: {
         );
       },
     });
+    await ready;
+    return adapter;
   } catch (error) {
     if (
       startupCleanup &&

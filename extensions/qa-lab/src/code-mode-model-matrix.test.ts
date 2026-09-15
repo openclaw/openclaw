@@ -1,4 +1,5 @@
 // Code Mode model matrix tests cover repeatable small-model acceptance evidence.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +17,7 @@ import {
   type CodeModeMatrixCellResult,
   type CodeModeMatrixTask,
 } from "../../../scripts/code-mode-model-matrix.ts";
+import { getEffectiveQaEvidenceEntries, projectQaEvidenceScenarioOutcomes } from "../api.js";
 
 const extendedTasks = [
   "large-result-reduction",
@@ -581,8 +583,42 @@ describe("Code Mode model matrix extended fixtures", () => {
       const evidence = validateQaEvidenceSummaryJson(
         JSON.parse(await readArtifact("qa-evidence.json")),
       );
+      expect(evidence.schemaVersion).toBe(3);
+      if (evidence.schemaVersion !== 3) {
+        throw new Error("expected invocation-owned evidence");
+      }
       expect(evidence.entries).toHaveLength(rows.length);
+      const outcomes = projectQaEvidenceScenarioOutcomes(evidence);
+      expect(outcomes.map((outcome) => outcome.scenarioId)).toEqual(rows.map((row) => row.id));
+      expect(outcomes.map((outcome) => outcome.status)).toEqual(
+        rows.map(() => (failureCategory ? "fail" : "pass")),
+      );
+      expect(getEffectiveQaEvidenceEntries(evidence)).toEqual(evidence.entries);
+      for (const occurrence of evidence.occurrences) {
+        expect(occurrence.retryOf).toBeNull();
+        expect(occurrence.launch).toMatchObject({
+          source: { ref: "fixture-source", integrity: "git:fixture-source" },
+          runtime: process.versions.bun
+            ? { id: "bun", version: process.versions.bun }
+            : { id: "node", version: process.version },
+          package: null,
+          protocol: null,
+          accountRef: null,
+          proofClass: null,
+        });
+        for (const receipt of occurrence.receipts) {
+          expect(receipt.phase).toBe("prepared");
+          const bytes = await fs.readFile(path.join(result.outputDir, receipt.artifact.path));
+          expect(createHash("sha256").update(bytes).digest("hex")).toBe(receipt.artifact.sha256);
+          expect(JSON.parse(bytes.toString()).result.evidenceOccurrenceId).toBe(occurrence.id);
+        }
+      }
       evidence.entries.forEach((entry, index) => {
+        expect(entry.binding).toEqual({
+          occurrenceId: rows[index]!.evidenceOccurrenceId,
+          assertionId: null,
+          receiptId: null,
+        });
         expect(entry.result).toMatchObject({
           status: failureCategory ? "fail" : "pass",
           timing: { wallMs: Math.max(1, rows[index]!.elapsedMs) },
@@ -628,6 +664,19 @@ describe("Code Mode model matrix extended fixtures", () => {
       JSON.parse(await fs.readFile(path.join(result.outputDir, "qa-evidence.json"), "utf8")),
     );
     expect(evidence.entries).toEqual([]);
+    expect(evidence.schemaVersion).toBe(3);
+    if (evidence.schemaVersion !== 3) {
+      throw new Error("expected scheduled evidence");
+    }
+    expect(evidence.occurrences).toHaveLength(3);
+    expect(evidence.occurrences.map((occurrence) => occurrence.scenario)).toEqual(
+      manifest.cells.map(() => ({ kind: "instance", resultOccurrenceId: null })),
+    );
+    expect(projectQaEvidenceScenarioOutcomes(evidence).map((outcome) => outcome.status)).toEqual([
+      null,
+      null,
+      null,
+    ]);
     await expect(fs.access(path.join(result.outputDir, "results.jsonl"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -840,6 +889,14 @@ describe("Code Mode model matrix artifacts", () => {
           readGitSha: async () => "abc123",
           runCell: async ({ cell, gitSha }) => {
             calls += 1;
+            const before = validateQaEvidenceSummaryJson(
+              JSON.parse(
+                await fs.readFile(path.join(repoRoot, "artifacts", "qa-evidence.json"), "utf8"),
+              ),
+            );
+            expect(
+              projectQaEvidenceScenarioOutcomes(before).map((outcome) => outcome.status),
+            ).toEqual(calls === 1 ? [null, null] : ["fail", null]);
             if (cell.repetition === 1) {
               throw new Error("fixture exploded");
             }
@@ -917,6 +974,18 @@ describe("Code Mode model matrix artifacts", () => {
       const evidence = validateQaEvidenceSummaryJson(
         JSON.parse(await fs.readFile(path.join(repoRoot, "artifacts", "qa-evidence.json"), "utf8")),
       );
+      expect(evidence.schemaVersion).toBe(3);
+      if (evidence.schemaVersion !== 3) {
+        throw new Error("expected independently scheduled cells");
+      }
+      expect(evidence.occurrences).toHaveLength(4);
+      expect(new Set(evidence.occurrences.map((occurrence) => occurrence.id)).size).toBe(4);
+      expect(evidence.occurrences.every((occurrence) => occurrence.retryOf === null)).toBe(true);
+      expect(projectQaEvidenceScenarioOutcomes(evidence).map((outcome) => outcome.status)).toEqual([
+        "fail",
+        "pass",
+      ]);
+      expect(getEffectiveQaEvidenceEntries(evidence)).toHaveLength(2);
       expect(evidence.entries).toHaveLength(2);
       expect(evidence.entries[0]).toMatchObject({
         test: {
@@ -932,6 +1001,11 @@ describe("Code Mode model matrix artifacts", () => {
             { kind: "manifest", path: "manifest.json" },
             { kind: "summary", path: "summary.json" },
             { kind: "results", path: "results.jsonl" },
+            {
+              kind: "matrix-observation",
+              path: `observations/${evidence.entries[0]!.binding.occurrenceId}.json`,
+              source: "code-mode-model-matrix",
+            },
           ],
         },
         result: {

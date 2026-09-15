@@ -22,6 +22,7 @@ const sessionAccessorMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
+  findTranscriptEvent: vi.fn(async () => undefined),
   ...sessionAccessorMocks,
   loadSessionEntryReadOnly: sessionAccessorMocks.loadSessionEntry,
 }));

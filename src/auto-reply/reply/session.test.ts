@@ -1421,43 +1421,50 @@ describe("initSessionState RawBody", () => {
   });
 
   it.each([
-    { name: "newline", command: "/steer\n", resets: true },
-    { name: "tab", command: "/steer\t", resets: true },
-    { name: "non-boundary suffix", command: "/steering ", resets: false },
-  ])("matches configured reset trigger boundaries with $name", async ({ command, resets }) => {
-    const root = await makeCaseDir("openclaw-configured-reset-boundary-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:telegram:dm:reset-boundary";
-    const sessionId = "existing-reset-boundary-session";
-    await writeSessionStoreFast(storePath, {
-      [sessionKey]: { sessionId, updatedAt: Date.now(), systemSent: true },
-    });
-    const previous = expectDefined(loadSessionEntry({ storePath, sessionKey }), "seeded session");
-    const payload = "new task\nkeep this complete instruction";
-    const body = `${command}${payload}`;
+    { name: "newline", trigger: "/steer", command: "/steer\n", resets: true },
+    { name: "tab", trigger: "/steer", command: "/steer\t", resets: true },
+    { name: "non-boundary suffix", trigger: "/steer", command: "/steering ", resets: false },
+    { name: "configured alias", trigger: "/tell", command: "/tell\n", resets: true },
+    { name: "unconfigured alias", trigger: "/steer", command: "/tell ", resets: false },
+    { name: "unconfigured canonical command", trigger: "/tell", command: "/steer ", resets: false },
+    { name: "no-argument alias with payload", trigger: "/id", command: "/id ", resets: true },
+  ])(
+    "matches configured reset trigger boundaries with $name",
+    async ({ trigger, command, resets }) => {
+      const root = await makeCaseDir("openclaw-configured-reset-boundary-");
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:telegram:dm:reset-boundary";
+      const sessionId = "existing-reset-boundary-session";
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: { sessionId, updatedAt: Date.now(), systemSent: true },
+      });
+      const previous = expectDefined(loadSessionEntry({ storePath, sessionKey }), "seeded session");
+      const payload = "new task\nkeep this complete instruction";
+      const body = `${command}${payload}`;
 
-    const result = await initSessionState({
-      ctx: {
-        RawBody: body,
-        ChatType: "direct",
-        SessionKey: sessionKey,
-      },
-      cfg: { session: { store: storePath, resetTriggers: ["/steer"] } },
-      commandAuthorized: true,
-    });
+      const result = await initSessionState({
+        ctx: {
+          RawBody: body,
+          ChatType: "direct",
+          SessionKey: sessionKey,
+        },
+        cfg: { session: { store: storePath, resetTriggers: [trigger] } },
+        commandAuthorized: true,
+      });
 
-    expect(result.resetTriggered).toBe(resets);
-    expect(result.isNewSession).toBe(resets);
-    expect(result.sessionId).toBe(sessionId);
-    if (resets) {
-      expect(result.sessionEntry.lifecycleRevision).not.toBe(previous.lifecycleRevision);
-      expect(result.bodyStripped).toBe(payload);
-    } else {
-      expect(result.sessionEntry.lifecycleRevision).toBe(previous.lifecycleRevision);
-      expect(result.bodyStripped).toBeUndefined();
-    }
-    expect(result.sessionCtx.agentText).toBe(resets ? payload : body);
-  });
+      expect(result.resetTriggered).toBe(resets);
+      expect(result.isNewSession).toBe(resets);
+      expect(result.sessionId).toBe(sessionId);
+      if (resets) {
+        expect(result.sessionEntry.lifecycleRevision).not.toBe(previous.lifecycleRevision);
+        expect(result.bodyStripped).toBe(payload);
+      } else {
+        expect(result.sessionEntry.lifecycleRevision).toBe(previous.lifecycleRevision);
+        expect(result.bodyStripped).toBeUndefined();
+      }
+      expect(result.sessionCtx.agentText).toBe(resets ? payload : body);
+    },
+  );
 
   it.each(["@openclaw /new", "@openclaw/new"])(
     "preserves bracketed multiline payloads after group mention form %s",

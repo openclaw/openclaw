@@ -465,20 +465,6 @@ function isIMessageRpcSendTimeout(error: unknown): boolean {
   return /imsg rpc timeout \(send\)/i.test(message);
 }
 
-async function runIMessageCliJson(
-  cliPath: string,
-  dbPath: string | undefined,
-  args: readonly string[],
-  timeoutMs?: number,
-): Promise<Record<string, unknown>> {
-  return await runIMessageCliJsonCommand({
-    args,
-    cliPath,
-    dbPath,
-    timeoutMs,
-  });
-}
-
 function resultService(value: unknown): Exclude<IMessageService, "auto"> | undefined {
   const normalized = stringValue(value)?.toLowerCase();
   return normalized === "imessage" || normalized === "sms" ? normalized : undefined;
@@ -859,7 +845,7 @@ export async function sendMessageIMessage(
   let effectiveReplyToId = resolvedReplyToId;
   const runCliJson =
     opts.runCliJson ??
-    ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, timeoutMs));
+    ((args: readonly string[]) => runIMessageCliJsonCommand({ args, cliPath, dbPath, timeoutMs }));
   const requestOwnedRpc = async (method: string, rpcParams: Record<string, unknown>) => {
     const rpcClient = opts.createClient
       ? await opts.createClient({ cliPath, dbPath, remoteHost })
@@ -977,14 +963,6 @@ export async function sendMessageIMessage(
       ? await opts.createClient({ cliPath, dbPath, remoteHost })
       : await createIMessageRpcClient({ cliPath, dbPath, remoteHost }));
   const shouldClose = !opts.client;
-  let closedClient = false;
-  const stopOwnedClient = async () => {
-    if (!shouldClose || closedClient) {
-      return;
-    }
-    closedClient = true;
-    await client.stop();
-  };
   const requestSuccessfulSend = async (sendParams: Record<string, unknown>) => {
     const request = async (nativeParams: Record<string, unknown>) =>
       await requestIMessageRpcSend(client, "send", nativeParams, timeoutMs);
@@ -1156,7 +1134,9 @@ export async function sendMessageIMessage(
     forgetPersistedIMessageEchoKey(pendingEchoKey);
     throw error;
   } finally {
-    await stopOwnedClient();
+    if (shouldClose) {
+      await client.stop();
+    }
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

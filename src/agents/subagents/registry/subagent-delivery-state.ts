@@ -148,6 +148,17 @@ export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">):
   return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
 }
 
+/** A finished requester without its required message receipt must not execute again implicitly. */
+export function isCompletedRequesterDeliveryBlocked(
+  entry: Pick<SubagentRunRecord, "delivery">,
+): boolean {
+  return (
+    isDeliverySuspended(entry) &&
+    entry.delivery?.suspendedReason === "permanent_failure" &&
+    entry.delivery.lastDropReason === "message_tool_delivery_missing"
+  );
+}
+
 /** Returns true when required delivery still owns the row after its child session is gone. */
 export function hasRetainedRequiredCompletionDelivery(
   entry: Pick<

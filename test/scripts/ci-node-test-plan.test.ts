@@ -241,6 +241,27 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   // Read-only cases share this baseline; inventory and timing mutations build fresh plans.
   let defaultShards: ReturnType<typeof createNodeTestShards>;
 
+  // Only unchanged committed inputs share snapshots; every caller receives its own graph.
+  const committedCompactPlans = new Map<string, CompactNodeTestShard[]>();
+  function getCommittedCompactPlan(
+    compactMode: "push" | "pull-request",
+    runnerBackend?: string,
+  ): CompactNodeTestShard[] {
+    const key = JSON.stringify([compactMode, runnerBackend]);
+    let snapshot = committedCompactPlans.get(key);
+    if (!snapshot) {
+      snapshot = structuredClone(
+        createNodeTestShardBundles({
+          includeReleaseOnlyPluginShards: false,
+          compactMode,
+          ...(runnerBackend === undefined ? {} : { runnerBackend }),
+        }),
+      );
+      committedCompactPlans.set(key, snapshot);
+    }
+    return structuredClone(snapshot);
+  }
+
   beforeAll(() => {
     defaultShards = createNodeTestShards();
   });
@@ -1192,34 +1213,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
   it("preserves coverage and execution policies with committed compact measurements", () => {
     const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
-    const compact = createNodeTestShardBundles({
-      includeReleaseOnlyPluginShards: false,
-      compactMode: "push",
-    });
-    const pullRequestCompact = createNodeTestShardBundles({
-      includeReleaseOnlyPluginShards: false,
-      compactMode: "pull-request",
-    });
-    const githubCompact = createNodeTestShardBundles({
-      includeReleaseOnlyPluginShards: false,
-      compactMode: "push",
-      runnerBackend: "github",
-    });
-    const githubPullRequestCompact = createNodeTestShardBundles({
-      includeReleaseOnlyPluginShards: false,
-      compactMode: "pull-request",
-      runnerBackend: "github",
-    });
-    const hybridCompact = createNodeTestShardBundles({
-      includeReleaseOnlyPluginShards: false,
-      compactMode: "push",
-      runnerBackend: "hybrid",
-    });
-    const hybridPullRequestCompact = createNodeTestShardBundles({
-      includeReleaseOnlyPluginShards: false,
-      compactMode: "pull-request",
-      runnerBackend: "hybrid",
-    });
+    const compact = getCommittedCompactPlan("push");
+    const pullRequestCompact = getCommittedCompactPlan("pull-request");
+    const githubCompact = getCommittedCompactPlan("push", "github");
+    const githubPullRequestCompact = getCommittedCompactPlan("pull-request", "github");
+    const hybridCompact = getCommittedCompactPlan("push", "hybrid");
+    const hybridPullRequestCompact = getCommittedCompactPlan("pull-request", "hybrid");
     const placementTimings = vi
       .spyOn(testTimings, "readRuntimePlacementTimings")
       .mockReturnValue([]);
@@ -2024,11 +2023,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(new Set(commandFiles).size).toBe(commandFiles.length);
 
     for (const compactMode of ["push", "pull-request"] as const) {
-      const plan = createNodeTestShardBundles({
-        compactMode,
-        includeReleaseOnlyPluginShards: false,
-        runnerBackend: "blacksmith",
-      });
+      const plan = getCommittedCompactPlan(compactMode, "blacksmith");
       const jobs = ownerNames.map((name) =>
         plan.findIndex((shard) => shard.groups.some((group) => group.shard_name === name)),
       );
@@ -2183,11 +2178,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   it.each(["blacksmith", "github", "hybrid"])(
     "runs timing budgets once through their support owner in %s hosted plans",
     (runnerBackend) => {
-      const groups = createNodeTestShardBundles({
-        compactMode: "pull-request",
-        includeReleaseOnlyPluginShards: false,
-        runnerBackend,
-      }).flatMap((job) => job.groups);
+      const groups = getCommittedCompactPlan("pull-request", runnerBackend).flatMap(
+        (job) => job.groups,
+      );
       const owners = groups.filter((group) =>
         group.configs.includes("test/vitest/vitest.ui-timing.config.ts"),
       );
@@ -2339,11 +2332,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       shard.includePatterns?.includes(compilerFixture),
     )!;
     for (const runnerBackend of ["blacksmith", "hybrid", "github"]) {
-      const jobs = createNodeTestShardBundles({
-        compactMode: "pull-request",
-        runnerBackend,
-        includeReleaseOnlyPluginShards: false,
-      });
+      const jobs = getCommittedCompactPlan("pull-request", runnerBackend);
       const owner = jobs.find((job) =>
         job.groups.some((group) => group.includePatterns?.includes(compilerFixture)),
       );
@@ -3097,11 +3086,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const server = createGatewayServerVitestConfig({});
     const methods = createGatewayMethodsVitestConfig({});
     expect(worker.test?.pool).toBe("forks");
-    expect(worker.test?.isolate).toBe(false);
+    expect(core.test?.isolate).toBe(true);
+    for (const shared of [worker, server, methods]) {
+      expect(shared.test?.isolate).toBe(false);
+    }
     for (const previous of [core, server, methods]) {
       expect(worker.test?.runner).toBe(previous.test?.runner);
       expect(worker.test?.setupFiles).toEqual(previous.test?.setupFiles);
-      expect(worker.test?.isolate).toBe(previous.test?.isolate);
     }
     expect(listMatchedTestFiles(worker)).toEqual(gatewayDatabaseWorkerTestFiles);
     const former = new Set([core, server, methods].flatMap(listMatchedTestFiles));
@@ -3698,7 +3689,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const beforeAdmission = createNodeTestShardBundles(options);
       const afterAdmission = createNodeTestShardBundles(changedOptions);
       observations.mockRestore();
-      const before = createNodeTestShardBundles(options);
+      const before = getCommittedCompactPlan(options.compactMode, runnerBackend);
       const after = createNodeTestShardBundles(changedOptions);
       const groups = after.flatMap((shard) => shard.groups);
       expect(groups.filter((group) => group.shard_name === "agentic-plugins")).toEqual([

@@ -70,14 +70,6 @@ export function withCommittedOpenClawAgentDatabaseReadOnly<T>(
       return opened;
     }
     const reader = opened.database;
-    // A pathname replacement during open keeps the old one-shot read contract.
-    if (!matchesWriter(reader, writer)) {
-      try {
-        return readOpenClawAgentDatabaseReadOnly(reader, operation, behavior);
-      } finally {
-        reader.close();
-      }
-    }
     let unregisterDispose = () => {};
     const close = () => {
       if (reader.db.isOpen) {
@@ -89,13 +81,19 @@ export function withCommittedOpenClawAgentDatabaseReadOnly<T>(
       unregisterDispose();
     };
     try {
+      // A pathname replacement during open keeps the old one-shot read contract.
+      if (!matchesWriter(reader, writer)) {
+        return readOpenClawAgentDatabaseReadOnly(reader, operation, behavior);
+      }
       enableNodeSqliteKyselyStatementCache(reader.db);
       unregisterDispose = registerNodeSqliteDisposeCallback(writer.db, close);
-      companion = { reader, active: false, close };
-      companions.set(writer.db, companion);
-    } catch (error) {
-      close();
-      throw error;
+      const next = { reader, active: false, close };
+      companions.set(writer.db, next);
+      companion = next;
+    } finally {
+      if (!companion) {
+        close();
+      }
     }
   }
   const owned = companion;

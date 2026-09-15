@@ -335,6 +335,40 @@ describe("logs cli", () => {
     },
   );
 
+  it.each([
+    { context: { plugin: "calendar" }, label: "calendar" },
+    { context: { plugin: "calendar", module: "delivery" }, label: "delivery" },
+    { context: { plugin: "calendar", module: "delivery", subsystem: "gateway" }, label: "gateway" },
+  ])("retains $label log identity in text and JSON", async ({ context, label }) => {
+    const raw = JSON.stringify({
+      message: "sent",
+      _meta: { name: JSON.stringify(context), logLevelName: "INFO" },
+    });
+    callGatewayFromCli.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      lines: [raw, "raw control"],
+    });
+    const writes = captureStdoutWrites();
+    await runLogsCli(["logs", "--plain", "--no-color"]);
+    expect(writes.join("")).toContain(`info ${label} sent\n`);
+    expect(writes.join("")).toContain("raw control\n");
+    writes.length = 0;
+    callGatewayFromCli.mockResolvedValueOnce({
+      file: "/tmp/openclaw.log",
+      lines: [raw, "raw control"],
+    });
+    await runLogsCli(["logs", "--json"]);
+    const records = writes
+      .join("")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records).toContainEqual(
+      expect.objectContaining({ type: "log", ...context, message: "sent", raw }),
+    );
+    expect(records).toContainEqual({ type: "raw", raw: "raw control" });
+  });
+
   it("warns when the output pipe closes", async () => {
     callGatewayFromCli.mockResolvedValueOnce({
       file: "/tmp/openclaw.log",

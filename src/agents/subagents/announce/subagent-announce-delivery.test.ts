@@ -4197,8 +4197,42 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       path: "direct",
       reason: "message_tool_delivery_missing",
       error: "completion agent did not use the message tool for message-tool-only delivery",
+      disposition: "permanent_failure",
     });
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(result.phases?.map((phase) => phase.phase)).toEqual(["direct-primary"]);
   });
+
+  it.each(["accepted", "in_flight", "yielded"] as const)(
+    "does not replay a still-owned %s completion handoff",
+    async (state) => {
+      const callGateway = createGatewayMock(
+        state === "yielded"
+          ? { status: "ok", result: { payloads: [], meta: { yielded: true } } }
+          : { status: state },
+      );
+      const result = await deliverSlackChannelAnnouncement({
+        callGateway,
+        directIdempotencyKey: `announce-pending-message-tool-${state}`,
+        sourceTool: "subagent_announce",
+        runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+        internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+      });
+      expectRecordFields(
+        result,
+        state === "yielded"
+          ? {
+              delivered: false,
+              reason: "completion_handoff_pending",
+              disposition: "session_queued",
+            }
+          : { delivered: true, path: "direct" },
+      );
+      expect(result.phases?.map((phase) => phase.phase)).toEqual(["direct-primary"]);
+      expect(callGateway).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     {

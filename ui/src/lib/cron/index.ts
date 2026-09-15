@@ -1049,7 +1049,9 @@ function buildCronPayload(form: CronFormState, source: CronPayload | null, isUpd
     ...(thinking !== undefined ? { thinking } : {}),
     ...(timeoutRaw && Number.isFinite(timeoutSeconds) && timeoutSeconds >= 0
       ? { timeoutSeconds }
-      : {}),
+      : isUpdate && original?.timeoutSeconds !== undefined
+        ? { timeoutSeconds: null }
+        : {}),
     ...(lightContext !== undefined ? { lightContext } : {}),
     ...restrictions,
     ...(cloned?.fallbacks ? { fallbacks: [...cloned.fallbacks] } : {}),

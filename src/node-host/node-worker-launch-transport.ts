@@ -25,7 +25,7 @@ import {
 } from "./node-worker-output.js";
 import type { NodeWorkerLaunchInput } from "./node-worker-supervisor-contract.js";
 
-export type NodeWorkerChildAdapter = Awaited<ReturnType<typeof createChildAdapter>>;
+export type NodeWorkerChildAdapter = Awaited<ReturnType<typeof createChildAdapter>>["adapter"];
 
 type NodeWorkerLaunchTransportOptions = {
   bundleRoot: string;
@@ -59,29 +59,28 @@ export async function prepareNodeWorkerLaunchTransport(
     gatewayNamespace: options.input.gatewayNamespace,
   });
   if (!options.containerEngine) {
-    return {
-      kind: "started",
-      adapter: await createChildAdapter({
-        argv: [process.execPath, entry, "--internal-worker-ipc", "--internal-worker-session"],
-        env: options.workerEnv,
-        exactEnv: true,
-        ownedWorker: true,
-        onWorkerMessage: (message) => {
-          const diagnostic = parseNodeWorkerConnectionFailureMessage(message);
-          if (!diagnostic) {
-            return;
-          }
-          options.connectionFailure.errorText = diagnostic.cause
-            ? sanitizeNodeWorkerDiagnostic(
-                diagnostic.cause,
-                "node worker gateway connection failed",
-                options.scrubber.scrub,
-              )
-            : undefined;
-        },
-        stdinMode: "pipe-open",
-      }),
-    };
+    const { adapter, ready } = await createChildAdapter({
+      argv: [process.execPath, entry, "--internal-worker-ipc", "--internal-worker-session"],
+      env: options.workerEnv,
+      exactEnv: true,
+      ownedWorker: true,
+      onWorkerMessage: (message) => {
+        const diagnostic = parseNodeWorkerConnectionFailureMessage(message);
+        if (!diagnostic) {
+          return;
+        }
+        options.connectionFailure.errorText = diagnostic.cause
+          ? sanitizeNodeWorkerDiagnostic(
+              diagnostic.cause,
+              "node worker gateway connection failed",
+              options.scrubber.scrub,
+            )
+          : undefined;
+      },
+      stdinMode: "pipe-open",
+    });
+    await ready;
+    return { kind: "started", adapter };
   }
 
   const endpoint = options.descriptor.connectionEndpoint;
@@ -122,12 +121,13 @@ export async function prepareNodeWorkerLaunchTransport(
       }
       return { kind: "terminal", receipt: claimed };
     }
-    const adapter = await createChildAdapter({
+    const { adapter, ready } = await createChildAdapter({
       argv: buildNodeWorkerContainerStartArgv(options.containerEngine, container.containerId),
       env: options.containerEngine.env ?? options.engineEnv,
       exactEnv: true,
       stdinMode: "pipe-open",
     });
+    await ready;
     return { kind: "started", adapter, container };
   } catch (error) {
     if (container) {

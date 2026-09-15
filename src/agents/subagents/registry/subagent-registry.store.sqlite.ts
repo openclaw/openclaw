@@ -565,11 +565,22 @@ export function loadSubagentSessionListRunsFromSqlite(
   return runs;
 }
 
-/** Select identities and their compact metadata from the same persisted read snapshot. */
-export function loadSubagentSessionListRunsForSessionsFromSqlite(
+export function loadSubagentRunsForSessionsFromSqlite(
   sessionKeys: readonly string[],
   inMemoryRuns: Iterable<SubagentRunReadRecord>,
-): { sessionKeys: Set<string>; runs: Map<string, SubagentRunReadRecord> } {
+  projection: "full",
+): { sessionKeys: Set<string>; runs: Map<string, SubagentRunRecord>; complete: boolean };
+export function loadSubagentRunsForSessionsFromSqlite(
+  sessionKeys: readonly string[],
+  inMemoryRuns: Iterable<SubagentRunReadRecord>,
+  projection: "session-list",
+): { sessionKeys: Set<string>; runs: Map<string, SubagentRunReadRecord>; complete: boolean };
+/** Select identities and their records from the same persisted read snapshot. */
+export function loadSubagentRunsForSessionsFromSqlite(
+  sessionKeys: readonly string[],
+  inMemoryRuns: Iterable<SubagentRunReadRecord>,
+  projection: "full" | "session-list",
+): { sessionKeys: Set<string>; runs: Map<string, SubagentRunReadRecord>; complete: boolean } {
   const database = openOpenClawStateDatabase();
   const { db } = database;
   return runSqliteDeferredTransactionSync(db, () => {
@@ -583,7 +594,10 @@ export function loadSubagentSessionListRunsForSessionsFromSqlite(
       sessionKeys,
       identities.map((row) => ({
         childSessionKey: row.child_session_key,
-        requesterSessionKey: row.requester_session_key.trim(),
+        requesterSessionKey:
+          projection === "session-list"
+            ? row.requester_session_key.trim()
+            : row.requester_session_key,
       })),
       inMemoryRuns,
     );
@@ -598,13 +612,28 @@ export function loadSubagentSessionListRunsForSessionsFromSqlite(
       .filter((row) => selectedRunIds.has(row.run_id.trim()))
       .map((row) => row.run_id);
     const runs = new Map<string, SubagentRunReadRecord>();
-    for (const row of runIds.length ? readSubagentSessionListRows({ runIds }, database) : []) {
-      const entry = rowToSubagentRunReadRecord(row);
-      if (entry) {
-        runs.set(entry.runId, entry);
+    const complete = projection === "full" && runIds.length === identities.length;
+    if (runIds.length) {
+      if (projection === "full") {
+        for (const row of readSubagentRegistryRows(
+          complete ? undefined : { kind: "runs", runIds },
+          database,
+        )) {
+          const entry = rowToSubagentRunRecord(row);
+          if (entry) {
+            runs.set(entry.runId, entry);
+          }
+        }
+      } else {
+        for (const row of readSubagentSessionListRows({ runIds }, database)) {
+          const entry = rowToSubagentRunReadRecord(row);
+          if (entry) {
+            runs.set(entry.runId, entry);
+          }
+        }
       }
     }
-    return { sessionKeys: selected, runs };
+    return { sessionKeys: selected, runs, complete };
   });
 }
 
@@ -635,4 +664,27 @@ export function saveSubagentRegistryChangesToSqlite(
     }
   }
   writeSubagentRunValues(values, deleteRunIds);
+}
+
+/** Mutation ownership cannot discard undecodable retained rows as presentation readers do. */
+export function hasSubagentSessionOwnerInDatabase(
+  database: Pick<OpenClawStateDatabase, "db">,
+  sessionKey: string,
+): boolean {
+  return (
+    executeSqliteQuerySync(
+      database.db,
+      getNodeSqliteKysely<SubagentRegistryDatabase>(database.db)
+        .selectFrom("subagent_runs")
+        .select("run_id")
+        .where((eb) =>
+          eb.or([
+            eb("child_session_key", "=", sessionKey),
+            eb("requester_session_key", "=", sessionKey),
+            eb("controller_session_key", "=", sessionKey),
+          ]),
+        )
+        .limit(1),
+    ).rows.length > 0
+  );
 }

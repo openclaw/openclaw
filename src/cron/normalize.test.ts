@@ -10,6 +10,8 @@ import {
   TrimmedNonEmptyStringFieldSchema,
 } from "./delivery-field-schemas.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
+import { mergeCronPayload } from "./service/payload-merge.js";
+import type { CronPayload } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -764,5 +766,39 @@ describe("on-exit schedule normalization", () => {
     expect(normalized).not.toBeNull();
     expect(child(normalized, "schedule")).not.toHaveProperty("command");
     expect(child(normalized, "schedule")).not.toHaveProperty("cwd");
+  });
+});
+
+describe("cron timeout update lifecycle", () => {
+  const payloads = [
+    { kind: "agentTurn", message: "Synthetic reminder" },
+    { kind: "command", argv: ["printf", "synthetic-proof"] },
+    { kind: "script", script: "return { output: 'synthetic-proof' };" },
+  ] satisfies CronPayload[];
+
+  it.each(payloads)("sets, preserves, and clears a $kind timeout", (payload) => {
+    const existing = { ...payload, timeoutSeconds: 30 };
+    for (const timeout of [{}, { timeoutSeconds: 15 }, { timeoutSeconds: null }]) {
+      const patch = normalizeCronJobPatch({ payload: { kind: payload.kind, ...timeout } });
+      expect(patch?.payload).toEqual({ kind: payload.kind, ...timeout });
+      expect(validateCronUpdateParams({ id: "timeout-job", patch })).toBe(true);
+      if (!patch?.payload) {
+        throw new Error("expected normalized payload patch");
+      }
+      expect(mergeCronPayload(existing, patch.payload)).toEqual(
+        timeout.timeoutSeconds === null ? payload : { ...existing, ...timeout },
+      );
+    }
+  });
+
+  it.each(payloads)("omits a cleared timeout when replacing the payload with $kind", (payload) => {
+    const patch = normalizeCronJobPatch({ payload: { ...payload, timeoutSeconds: null } });
+    expect(patch?.payload).toEqual({ ...payload, timeoutSeconds: null });
+    if (!patch?.payload) {
+      throw new Error("expected normalized payload patch");
+    }
+    expect(mergeCronPayload({ kind: "systemEvent", text: "before" }, patch.payload)).toEqual(
+      payload,
+    );
   });
 });

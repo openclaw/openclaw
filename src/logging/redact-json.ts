@@ -361,12 +361,17 @@ function projectedStringEnd(
     : token.currentValue.length;
 }
 
+type RedactionPatternGroup = {
+  patterns: ResolvedRedactPattern[];
+  couldMatch?: (input: string) => boolean;
+};
+
 export function redactJsonRecord(
   input: string,
   origins: RedactionOrigins,
-  patternPhases: readonly [ResolvedRedactPattern[], ResolvedRedactPattern[]],
+  patternPhases: readonly [readonly RedactionPatternGroup[], readonly RedactionPatternGroup[]],
   getEdit: RedactionEditSelector,
-  legacyFieldEdits: (field: RedactionField, original: string) => RedactionEdit[],
+  legacyFieldEdits: (field: RedactionField, currentValue: string) => RedactionEdit[],
   fieldEdits: (field: RedactionField) => RedactionEdit[],
   prepEdits: (field: RedactionField) => RedactionEdit[],
   skipDecodedPatterns: (field: RedactionField, currentValue: string) => boolean,
@@ -444,128 +449,135 @@ export function redactJsonRecord(
     );
     return commitPatternEdits(messageToken);
   };
-  for (const [phase, patterns] of patternPhases.entries()) {
+  for (const [phase, groups] of patternPhases.entries()) {
     const changed = new Set<ScalarToken>();
-    for (const pattern of patterns) {
-      let pending: Set<ScalarToken> | undefined;
-      const add = (token: ScalarToken, edit: RedactionEdit) => {
-        (token.pending ??= []).push(edit);
-        (pending ??= new Set()).add(token);
-      };
-      if (phase === 0) {
-        for (const token of decodedTokens) {
-          for (const edit of getPatternRedactionEdits(token.currentValue, pattern, getEdit)) {
-            add(token, edit);
-          }
-        }
-      } else {
-        for (const match of iterateRedactMatches(current, pattern)) {
-          let capture: { start: number; end: number } | undefined;
-          getEdit(match, pattern, (start, end) => {
-            capture = { start, end };
-            return undefined;
-          });
-          if (!capture || capture.end < capture.start) {
-            continue;
-          }
-          // Batch rules need token coordinates only after a serialized match exists.
-          if (batch && tokens.length === 0) {
-            tokens = readBatchTokens(input, origins, batch.preserveLines);
-          }
-          for (
-            let index = firstIntersectingToken(tokens, capture.start);
-            index < tokens.length;
-            index += 1
-          ) {
-            const token = expectDefined(tokens[index], "serialized capture token");
-            if (token.currentStart >= capture.end) {
-              break;
-            }
-            const unquoted = token.raw || token.deferEncoding;
-            const padding = unquoted ? 0 : 1;
-            const captureInsideToken =
-              capture.start >= token.currentStart + padding &&
-              capture.end <= token.currentEnd - padding;
-            if (batch && token.isKey && !captureInsideToken) {
-              continue;
-            }
-            const value = token.currentValue;
-            if (!token.raw && !token.string && token.edits.length === 0) {
-              add(token, { start: 0, end: value.length, replacement: "***" });
-              continue;
-            }
-            let startPosition = Math.max(capture.start, token.currentStart + padding);
-            let start = unquoted
-              ? startPosition - token.currentStart
-              : currentDecodedBoundary(input, token, startPosition, replacementBoundaries);
-            let endPosition = Math.min(capture.end, token.currentEnd - padding);
-            let end = unquoted
-              ? endPosition - token.currentStart
-              : currentDecodedBoundary(input, token, endPosition, replacementBoundaries);
-            if (start === undefined || end === undefined) {
-              while (start === undefined) {
-                start = currentDecodedBoundary(
-                  input,
-                  token,
-                  --startPosition,
-                  replacementBoundaries,
-                );
-              }
-              while (end === undefined) {
-                end = currentDecodedBoundary(input, token, ++endPosition, replacementBoundaries);
-              }
-              const maskEnd =
-                token === messageToken && message
-                  ? projectedStringEnd(input, tokens, message, token, start, end)
-                  : value.length;
-              add(token, { start, end: maskEnd, replacement: "***" });
-              continue;
-            }
-            if (end < start || (batch && end === start)) {
-              continue;
-            }
-            const { start: captureStart, end: captureEnd } = capture;
-            const edit = getEdit(match, pattern, () => ({
-              start,
-              end,
-              value: current.slice(
-                Math.max(captureStart, token.currentStart + padding),
-                Math.min(captureEnd, token.currentEnd - padding),
-              ),
-            }));
-            if (!edit) {
-              continue;
-            }
-            let replacement = "***";
-            if (captureInsideToken) {
-              try {
-                replacement = unquoted ? edit.replacement : JSON.parse(`"${edit.replacement}"`);
-              } catch {
-                // A legacy hint can cut an escape; its selected span still receives a full mask.
-              }
-            }
-            add(token, { ...edit, replacement });
-          }
-        }
-      }
-      if (!pending) {
+    const pending = new Set<ScalarToken>();
+    const add = (token: ScalarToken, edit: RedactionEdit) => {
+      (token.pending ??= []).push(edit);
+      pending.add(token);
+    };
+    for (const group of groups) {
+      // Earlier serialized rules can change the boundaries inspected by the next group.
+      if (group.couldMatch && !group.couldMatch(current)) {
         continue;
       }
-      for (const token of pending) {
-        if (!commitPatternEdits(token)) {
-          pending.delete(token);
-        } else if (phase === 0) {
-          changed.add(token);
+      for (const pattern of group.patterns) {
+        if (phase === 0) {
+          for (const token of decodedTokens) {
+            for (const edit of getPatternRedactionEdits(token.currentValue, pattern, getEdit)) {
+              add(token, edit);
+            }
+          }
+        } else {
+          for (const match of iterateRedactMatches(current, pattern)) {
+            let capture: { start: number; end: number } | undefined;
+            getEdit(match, pattern, (start, end) => {
+              capture = { start, end };
+              return undefined;
+            });
+            if (!capture || capture.end < capture.start) {
+              continue;
+            }
+            // Batch rules need token coordinates only after a serialized match exists.
+            if (batch && tokens.length === 0) {
+              tokens = readBatchTokens(input, origins, batch.preserveLines);
+            }
+            for (
+              let index = firstIntersectingToken(tokens, capture.start);
+              index < tokens.length;
+              index += 1
+            ) {
+              const token = expectDefined(tokens[index], "serialized capture token");
+              if (token.currentStart >= capture.end) {
+                break;
+              }
+              const unquoted = token.raw || token.deferEncoding;
+              const padding = unquoted ? 0 : 1;
+              const captureInsideToken =
+                capture.start >= token.currentStart + padding &&
+                capture.end <= token.currentEnd - padding;
+              if (batch && token.isKey && !captureInsideToken) {
+                continue;
+              }
+              const value = token.currentValue;
+              if (!token.raw && !token.string && token.edits.length === 0) {
+                add(token, { start: 0, end: value.length, replacement: "***" });
+                continue;
+              }
+              let startPosition = Math.max(capture.start, token.currentStart + padding);
+              let start = unquoted
+                ? startPosition - token.currentStart
+                : currentDecodedBoundary(input, token, startPosition, replacementBoundaries);
+              let endPosition = Math.min(capture.end, token.currentEnd - padding);
+              let end = unquoted
+                ? endPosition - token.currentStart
+                : currentDecodedBoundary(input, token, endPosition, replacementBoundaries);
+              if (start === undefined || end === undefined) {
+                while (start === undefined) {
+                  start = currentDecodedBoundary(
+                    input,
+                    token,
+                    --startPosition,
+                    replacementBoundaries,
+                  );
+                }
+                while (end === undefined) {
+                  end = currentDecodedBoundary(input, token, ++endPosition, replacementBoundaries);
+                }
+                const maskEnd =
+                  token === messageToken && message
+                    ? projectedStringEnd(input, tokens, message, token, start, end)
+                    : value.length;
+                add(token, { start, end: maskEnd, replacement: "***" });
+                continue;
+              }
+              if (end < start || (batch && end === start)) {
+                continue;
+              }
+              const { start: captureStart, end: captureEnd } = capture;
+              const edit = getEdit(match, pattern, () => ({
+                start,
+                end,
+                value: current.slice(
+                  Math.max(captureStart, token.currentStart + padding),
+                  Math.min(captureEnd, token.currentEnd - padding),
+                ),
+              }));
+              if (!edit) {
+                continue;
+              }
+              let replacement = "***";
+              if (captureInsideToken) {
+                try {
+                  replacement = unquoted ? edit.replacement : JSON.parse(`"${edit.replacement}"`);
+                } catch {
+                  // A legacy hint can cut an escape; its selected span still receives a full mask.
+                }
+              }
+              add(token, { ...edit, replacement });
+            }
+          }
         }
-      }
-      // Decoded rules read current field values; serialized rules need each rebuilt record.
-      if (phase !== 0 && pending.size > 0) {
-        current = updateCurrentRecord(input, current, tokens, pending);
+        if (pending.size === 0) {
+          continue;
+        }
+        for (const token of pending) {
+          if (!commitPatternEdits(token)) {
+            pending.delete(token);
+          } else if (phase === 0) {
+            changed.add(token);
+          }
+        }
+        // Decoded rules read current field values; serialized rules need each rebuilt record.
+        if (phase !== 0 && pending.size > 0) {
+          current = updateCurrentRecord(input, current, tokens, pending);
+        }
+        pending.clear();
       }
     }
     for (const token of tokens) {
       if (phase === 0) {
-        token.pending = legacyFieldEdits({ ...token, value: token.currentValue }, token.value);
+        token.pending = legacyFieldEdits(token, token.currentValue);
         if (commitPatternEdits(token)) {
           changed.add(token);
         }

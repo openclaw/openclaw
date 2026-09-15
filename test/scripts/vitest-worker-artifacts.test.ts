@@ -166,7 +166,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
         import path from 'node:path';
         export async function build(options) {
           const result = await compile(options);
-          fs.appendFileSync(path.join(options.outDir,'infra/runtime-process-entrypoints.js'),'altered after compile');
+          fs.appendFileSync(path.join(options.outDir,options.unbundle?'src/infra/runtime-process-entrypoints.js':'infra/runtime-process-entrypoints.js'),'altered after compile');
           fs.writeFileSync(${JSON.stringify(altered)},'compiler returned');
           return result;
         }

@@ -697,13 +697,12 @@ export async function prepareModelsListResult(
       models: readCatalog()
         .filter(matchesProvider)
         .map((entry) => {
-          const evaluation = evaluations.get(resolveModelCatalogIdentityKey(entry));
+          const key = resolveModelCatalogIdentityKey(entry);
+          const evaluation = evaluations.get(key);
           if (!evaluation) {
             throw new Error("Model catalog publication omitted prepared auth evaluation");
           }
-          const runtimeChoices = runtimeChoiceReaders.get(
-            resolveModelCatalogIdentityKey(entry),
-          )?.();
+          const runtimeChoices = runtimeChoiceReaders.get(key)?.();
           const projected = projectPublic(entry, evaluation);
           if (runtimeChoices?.length) {
             projected.runtimeChoices = runtimeChoices;

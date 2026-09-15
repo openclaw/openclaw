@@ -528,16 +528,23 @@ fullAccessSuite.define(() => {
               expect(loggingLevel(savedConfig)).toBe("info");
               const configSnapshot = await gateway.call("config.get", {});
               expect(isRecord(configSnapshot) && loggingLevel(configSnapshot.config)).toBe("info");
-              await page
+              const workSummary = page
                 .locator(".chat-work-group > .chat-activity-group__summary")
-                .first()
-                .click();
+                .first();
+              await workSummary.waitFor();
+              if ((await workSummary.getAttribute("aria-expanded")) !== "true") {
+                await workSummary.click();
+              }
               const toolSummaries = page.locator(".chat-tool-msg-summary");
               await toolSummaries.first().waitFor();
               for (const summary of await toolSummaries.all()) {
-                await summary.click();
+                if ((await summary.getAttribute("aria-expanded")) !== "true") {
+                  await summary.click();
+                }
               }
-              const appliedResult = page.getByText(/Updated logging\.level/u).first();
+              const appliedResult = page.locator(".chat-tool-msg-body", {
+                hasText: /Updated logging\.level/u,
+              });
               await appliedResult.waitFor();
               await appliedResult.scrollIntoViewIfNeeded();
               expect(await page.locator(".chat-inline-approval [data-approval-id]").count()).toBe(

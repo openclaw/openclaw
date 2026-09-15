@@ -91,8 +91,12 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const lifecycleEvents = onRunAgentEvent.mock.calls
       .map(([event]) => event)
       .filter((event) => event.stream === "lifecycle");
-    expect(lifecycleEvents.map((event) => event.data.phase)).toEqual(["start", "finishing"]);
-    expect(lifecycleEvents[1]?.data.error).toBe(error);
+    expect(lifecycleEvents.map((event) => event.data.phase)).toEqual([
+      "start",
+      "model",
+      "finishing",
+    ]);
+    expect(lifecycleEvents.at(-1)?.data.error).toBe(error);
   });
 
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {

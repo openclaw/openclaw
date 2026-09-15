@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   parsePackageOpenClawSchemaVersions,
@@ -126,7 +128,7 @@ export async function withGitTargetInspectionRoot<T>(
 }
 
 type GitTargetSchemaMetadata =
-  | { status: "ok"; schemaVersions?: OpenClawSchemaVersions }
+  | { status: "ok"; version?: string; schemaVersions?: OpenClawSchemaVersions }
   | { status: "unreadable"; reason: string };
 
 export async function readGitTargetSchemaVersions(params: {
@@ -151,8 +153,14 @@ export async function readGitTargetSchemaVersions(params: {
     };
   }
   try {
-    const schemaVersions = parsePackageOpenClawSchemaVersions(JSON.parse(result.stdout) as unknown);
-    return { status: "ok", ...(schemaVersions ? { schemaVersions } : {}) };
+    const manifest: unknown = JSON.parse(result.stdout);
+    const schemaVersions = parsePackageOpenClawSchemaVersions(manifest);
+    const version = normalizeNullableString(asNullableRecord(manifest)?.version);
+    return {
+      status: "ok",
+      ...(version ? { version } : {}),
+      ...(schemaVersions ? { schemaVersions } : {}),
+    };
   } catch (error) {
     return { status: "unreadable", reason: `target package.json unparseable: ${String(error)}` };
   }
@@ -169,13 +177,18 @@ export async function prepareGitMutation(params: {
   allowGatewayActivation?: boolean;
 }> {
   const target = await readGitTargetSchemaVersions(params);
-  const preparation = await params.beforeGitMutation?.(
-    target.status === "ok"
-      ? target.schemaVersions
-        ? { schemaVersions: target.schemaVersions }
-        : {}
-      : { metadataUnreadable: target.reason },
-  );
+  const sha = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(params.revision)
+    ? params.revision.toLowerCase()
+    : undefined;
+  const preparation = await params.beforeGitMutation?.({
+    ...(sha ? { sha } : {}),
+    ...(target.status === "ok"
+      ? {
+          ...(target.version ? { version: target.version } : {}),
+          ...(target.schemaVersions ? { schemaVersions: target.schemaVersions } : {}),
+        }
+      : { metadataUnreadable: target.reason }),
+  });
   return preparation ?? {};
 }
 

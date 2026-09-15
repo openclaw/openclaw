@@ -357,7 +357,9 @@ async function archiveSessionColdBatch(options: ColdBatchOptions): Promise<ColdB
 
 export async function restoreSessionColdTranscript(
   scope: SessionTranscriptReadScope,
+  assertCurrent?: () => void,
 ): Promise<void> {
+  assertCurrent?.();
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const options = toDatabaseOptions(resolved);
   const storePath = resolveOpenClawAgentSqlitePath(options);
@@ -370,6 +372,7 @@ export async function restoreSessionColdTranscript(
     return;
   }
   await operations.enqueue(storePath, async () => {
+    assertCurrent?.();
     const opened = withOpenClawAgentDatabaseReadOnly(
       (database) => readSessionColdTranscript(database.db, resolved.sessionId),
       options,
@@ -377,12 +380,15 @@ export async function restoreSessionColdTranscript(
     if (!opened.found || !opened.value) {
       return;
     }
-    await runColdMutation({
-      kind: "cold-restore",
-      databaseOptions: workerDatabaseOptions(options),
-      sessionId: resolved.sessionId,
-      archive: opened.value,
-    });
+    await runColdMutation(
+      {
+        kind: "cold-restore",
+        databaseOptions: workerDatabaseOptions(options),
+        sessionId: resolved.sessionId,
+        archive: opened.value,
+      },
+      assertCurrent,
+    );
     // Keep viewed history hot without changing canonical transcript timestamps or bytes.
     const now = Date.now();
     for (const [id, until] of restoredUntil) {

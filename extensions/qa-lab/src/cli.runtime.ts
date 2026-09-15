@@ -693,6 +693,9 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   }
   // Capture before the suite runs so later taxonomy reads cannot rebind its evidence.
   const taxonomyIdentity = { ...scorecardReport.taxonomy.identity };
+  const proofRequirements = profileReport.proofRequirements
+    ? structuredClone(profileReport.proofRequirements)
+    : undefined;
   const evidenceMode = opts.evidenceMode ?? profileReport.evidenceMode;
   const membership = resolveQaRunProfileMembership(
     {
@@ -806,6 +809,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
   const profilePlan = qaProfileEvidencePlan.build({
     profile,
     taxonomyIdentity,
+    proofRequirements,
     membershipScenarios: taxonomyScenarios,
     selectedScenarios: scenarios,
     excludedScenarios: executionSelection.excludedScenarios,

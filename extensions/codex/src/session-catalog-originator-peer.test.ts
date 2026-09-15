@@ -13,7 +13,7 @@ import { createCodexTestBindingStore } from "./app-server/session-binding.test-h
 import { clearSharedCodexAppServerClientAndWait } from "./app-server/shared-client.js";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
 import { createCodexSessionCatalogControl } from "./session-catalog-control.js";
-import { listCodexSessionCatalog } from "./session-catalog-listing.js";
+import { listCodexSessionCatalog } from "./session-catalog-list-operation.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

@@ -8,6 +8,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import type { ForeignLaunchdJob } from "../../daemon/launchd-foreign-jobs.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
@@ -21,10 +22,16 @@ import {
   sendMinimalGatewayConnectChallenge,
   sendMinimalGatewayResponse,
 } from "../../gateway/minimal-gateway.test-helpers.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { PortListener, PortUsageStatus } from "../../infra/ports-types.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import { defaultRuntime } from "../../runtime.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import { OpenClawDatabaseSchemaPreflightError } from "../../state/openclaw-database-preflight.messages.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
 import { registerGatewayCli } from "../gateway-cli/register.js";
@@ -39,7 +46,12 @@ type PortConnections = Awaited<
 type GatewayStatusProbeOptions = Parameters<typeof import("./probe.js").probeGatewayStatus>[0];
 
 const readFile = fs.readFile.bind(fs);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let readFileSpy: ReturnType<typeof vi.spyOn>;
+
+const preflightOpenClawDatabaseSchemas = vi.fn<
+  typeof import("../../state/openclaw-database-preflight.js").preflightOpenClawDatabaseSchemas
+>(async () => ({ incompatible: [], indeterminate: [] }));
 
 const callGatewayStatusProbe = vi.fn<
   (opts: GatewayStatusProbeOptions) => Promise<{
@@ -132,6 +144,12 @@ const fetchNpmPackageTargetStatus = vi.fn(
 const readGatewayRestartHandoffSync = vi.fn<
   (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
 >(() => null);
+const readGatewayLastShutdown = vi.fn<
+  (_env?: NodeJS.ProcessEnv) => { reason: string | null; completedAtMs: number } | undefined
+>(() => undefined);
+const findSystemdGatewayInstallation = vi.fn<
+  typeof import("../../daemon/systemd-scope.js").findSystemdGatewayInstallation
+>(async () => ({ kind: "none" }));
 const inspectWindowsGatewayFirewall = vi.fn<(opts?: unknown) => Promise<unknown>>(async () => ({
   applies: false,
   severity: "info" as const,
@@ -265,6 +283,22 @@ vi.mock("../../daemon/diagnostics.js", () => ({
 
 vi.mock("../../daemon/inspect.js", () => ({
   findExtraGatewayServices: (env: unknown, opts?: unknown) => findExtraGatewayServices(env, opts),
+}));
+
+vi.mock("../../infra/gateway-boot-lifecycle.js", () => ({
+  readGatewayLastShutdown: (env?: NodeJS.ProcessEnv) => readGatewayLastShutdown(env),
+}));
+
+vi.mock("../../state/openclaw-database-preflight.js", () => ({
+  OpenClawDatabaseSchemaPreflightError,
+  preflightOpenClawDatabaseSchemas: (
+    options: Parameters<typeof preflightOpenClawDatabaseSchemas>[0],
+  ) => preflightOpenClawDatabaseSchemas(options),
+}));
+
+vi.mock("../../daemon/systemd-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-scope.js")>()),
+  findSystemdGatewayInstallation: (env: NodeJS.ProcessEnv) => findSystemdGatewayInstallation(env),
 }));
 
 vi.mock("../../daemon/launchd.js", async (importOriginal) => ({
@@ -514,6 +548,11 @@ describe("gatherDaemonStatus", () => {
     readLastGatewayErrorLine.mockReset();
     readLastGatewayErrorLine.mockResolvedValue(null);
     readGatewayRestartHandoffSync.mockClear();
+    readGatewayLastShutdown.mockReset().mockReturnValue(undefined);
+    preflightOpenClawDatabaseSchemas
+      .mockReset()
+      .mockResolvedValue({ incompatible: [], indeterminate: [] });
+    findSystemdGatewayInstallation.mockReset().mockResolvedValue({ kind: "none" });
     serviceIsLoaded.mockClear();
     serviceReadCommand.mockClear();
     serviceReadRuntime.mockClear();
@@ -1409,6 +1448,219 @@ describe("gatherDaemonStatus", () => {
     expect(status.service.restartHandoff?.restartKind).toBe("full-process");
     expect(status.service.restartHandoff?.supervisorMode).toBe("launchd");
   });
+
+  it.each([false, true])(
+    "prints the newer database refusal before loading deep status config (json=%s)",
+    async (json) => {
+      const stateDir = tempDirs.make("openclaw-status-newer-schema-");
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const databasePath = resolveOpenClawStateSqlitePath(env);
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      const { DatabaseSync } = requireNodeSqlite();
+      const database = new DatabaseSync(databasePath);
+      try {
+        database.exec(`
+          PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};
+          CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, app_version TEXT);
+          INSERT INTO schema_meta VALUES ('primary', '2026.9.4');
+        `);
+      } finally {
+        database.close();
+      }
+      const before = await fs.readFile(databasePath);
+      const originalPreflight = await vi.importActual<
+        typeof import("../../state/openclaw-database-preflight.js")
+      >("../../state/openclaw-database-preflight.js");
+      preflightOpenClawDatabaseSchemas.mockImplementation(
+        originalPreflight.preflightOpenClawDatabaseSchemas,
+      );
+      serviceReadCommand.mockResolvedValueOnce({
+        programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+        environment: env,
+      });
+      const program = new Command().enablePositionalOptions().exitOverride();
+      registerGatewayCli(program);
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
+        throw new Error("status-exit");
+      });
+      try {
+        await expect(
+          program
+            .parseAsync(
+              ["gateway", "status", "--deep", "--no-probe", ...(json ? ["--json"] : [])],
+              { from: "user" },
+            )
+            .then(() => undefined),
+        ).rejects.toThrow("status-exit");
+        const output = json
+          ? JSON.stringify(writeJson.mock.calls)
+          : error.mock.calls.flat().join("\n");
+        expect(output).toContain("Gateway refused startup");
+        expect(output).toContain(`schema ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+        expect(output).toContain(`this build supports ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+        expect(output).toContain("writer build 2026.9.4");
+        expect(output).toContain(`Refused by OpenClaw ${VERSION}`);
+        expect(output).toContain("pre-upgrade backup");
+        expect(exit).toHaveBeenCalledWith(1);
+        expect(createConfigIOCalls).not.toHaveBeenCalled();
+        expect(readGatewayLastShutdown).not.toHaveBeenCalled();
+        expect(await fs.readFile(databasePath)).toEqual(before);
+      } finally {
+        log.mockRestore();
+        error.mockRestore();
+        writeJson.mockRestore();
+        exit.mockRestore();
+      }
+    },
+  );
+
+  it("keeps readable shutdown history when a registered agent database has a newer schema", async () => {
+    const stateDir = tempDirs.make("openclaw-status-readable-schema-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const databasePath = resolveOpenClawStateSqlitePath(env);
+    const agentPath = path.join(stateDir, "agent.sqlite");
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec(`BEGIN; ${OPENCLAW_STATE_SCHEMA_SQL}
+        PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
+        INSERT INTO gateway_boot_lifecycle VALUES
+          ('prior-boot', 1, 1000, 2000, 'clean_stop', NULL, 'stop (SIGTERM)');
+      `);
+      database
+        .prepare("INSERT INTO agent_databases VALUES ('optional', ?, ?, 1, NULL)")
+        .run(agentPath, OPENCLAW_AGENT_SCHEMA_VERSION + 1);
+      database.exec("COMMIT");
+    } finally {
+      database.close();
+    }
+    const agent = new DatabaseSync(agentPath);
+    try {
+      agent.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+    } finally {
+      agent.close();
+    }
+    const originalPreflight = await vi.importActual<
+      typeof import("../../state/openclaw-database-preflight.js")
+    >("../../state/openclaw-database-preflight.js");
+    preflightOpenClawDatabaseSchemas.mockImplementation(
+      originalPreflight.preflightOpenClawDatabaseSchemas,
+    );
+    const originalLifecycle = await vi.importActual<
+      typeof import("../../infra/gateway-boot-lifecycle.js")
+    >("../../infra/gateway-boot-lifecycle.js");
+    readGatewayLastShutdown.mockImplementation(originalLifecycle.readGatewayLastShutdown);
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: env,
+    });
+
+    const status = await gatherStatus({ deep: true, probe: false });
+
+    expect(status.gateway?.lastShutdown).toEqual({
+      reason: "stop (SIGTERM)",
+      completedAtMs: 2000,
+    });
+  });
+
+  it("does not inspect local schema compatibility for an explicit remote status target", async () => {
+    preflightOpenClawDatabaseSchemas.mockRejectedValue(new Error("local state is unavailable"));
+    await gatherStatus({
+      deep: true,
+      probe: false,
+      rpc: { url: "wss://gateway.example" },
+    });
+    expect(preflightOpenClawDatabaseSchemas).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { deep: true, remote: false },
+    { deep: false, remote: false },
+    { deep: true, remote: true },
+  ])(
+    "reports the last shutdown only for deep local status ($deep, $remote)",
+    async ({ deep, remote }) => {
+      const lastShutdown = { reason: "stop (SIGTERM)", completedAtMs: 1_800_000_000_000 };
+      readGatewayLastShutdown.mockReturnValue(lastShutdown);
+
+      const status = await gatherStatus({
+        probe: false,
+        deep,
+        rpc: remote ? { url: "wss://gateway.example" } : {},
+      });
+
+      if (deep && !remote) {
+        expect(status.gateway).toMatchObject({ lastShutdown });
+        expect(readGatewayLastShutdown).toHaveBeenCalledWith(
+          expect.objectContaining({ OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon" }),
+        );
+        const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+        const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+        try {
+          printDaemonStatus(status, { json: false, deep });
+          expect(log.mock.calls.flat().join("\n")).toContain(
+            "Last shutdown: stop (SIGTERM) at 2027-01-15T08:00:00.000Z",
+          );
+        } finally {
+          log.mockRestore();
+          error.mockRestore();
+        }
+      } else {
+        expect(readGatewayLastShutdown).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([
+    { deep: true, rpc: {}, diagnose: true },
+    { deep: false, rpc: {}, diagnose: false },
+    { deep: true, rpc: { url: "wss://gateway.example" }, diagnose: false },
+    { deep: true, rpc: { localPortOverride: 19002 }, diagnose: false },
+  ])(
+    "reports dueling systemd diagnosis only for its native target ($deep, $rpc)",
+    async ({ deep, rpc, diagnose }) => {
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      findSystemdGatewayInstallation.mockResolvedValue({
+        kind: "dueling",
+        user: {
+          scope: "user",
+          unitName: "openclaw-gateway.service",
+          unitPath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+        },
+        system: {
+          scope: "system",
+          unitName: "openclaw-gateway.service",
+          unitPath: "/etc/systemd/system/openclaw-gateway.service",
+        },
+      });
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      try {
+        const status = await gatherStatus({ probe: false, deep, rpc });
+        printDaemonStatus(status, { json: false, deep });
+        if (diagnose) {
+          expect(error.mock.calls.flat().join("\n")).toContain(
+            "they will SIGTERM each other in a restart loop",
+          );
+          expect(error.mock.calls.flat().join("\n")).toContain(
+            "Run `openclaw doctor` interactively",
+          );
+        } else {
+          expect(findSystemdGatewayInstallation).not.toHaveBeenCalled();
+          expect(error.mock.calls.flat().join("\n")).not.toContain("they will SIGTERM each other");
+        }
+      } finally {
+        log.mockRestore();
+        error.mockRestore();
+        Object.defineProperty(process, "platform", platform);
+      }
+    },
+  );
 
   it.runIf(process.platform === "darwin")(
     "surfaces stale updater launchd jobs only during deep status",

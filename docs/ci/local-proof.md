@@ -72,6 +72,11 @@ and the settle period. Startup and early-exit failures still fail the check. Mis
 CPU samples from an otherwise valid window fail measurement; whole-run CPU is
 reported separately and never compared with the idle thresholds.
 
+The check joins the timed watch process and its output before taking the post-run
+snapshot or removing its private HOME. If cleanup cannot be confirmed, the check
+fails and retains that HOME for inspection; `watch.home.txt` in the output
+directory records its path.
+
 The native source gate covers catalog-owned macOS, iOS, and shared Apple source
 roots. Linux-runnable source extraction requires explicit typed localized formats
 (for example, `String(format: String(localized: "Expires in %lld minutes"), minutes)`

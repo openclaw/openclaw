@@ -16,10 +16,14 @@ import {
 } from "../config/sessions/session-cold-storage.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
+} from "../state/openclaw-state-db.js";
 import { restoreGitBackupDirectory } from "./git-backup-codec.js";
 import { createGitBackup } from "./git-backup.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
@@ -33,6 +37,8 @@ afterEach(async () => {
   for (const databasePath of databasePaths.splice(0)) {
     await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: databasePath });
   }
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabase();
   tempDirs.cleanup();

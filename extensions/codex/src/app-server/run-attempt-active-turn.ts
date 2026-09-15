@@ -221,7 +221,7 @@ export function activateCodexAttemptTurn(
     state.terminalTurnNotificationQueued = true;
     deadlines.beginSettlement(Date.now());
   }
-  emitLifecycleStart();
+  emitLifecycleStart({ provider: projectionParams.provider, model: projectionParams.modelId });
   const activeProjector = projectorRef.current;
   noteProgress("turn:start");
   const abortListener = () => {

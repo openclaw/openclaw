@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
+  finalizeTaskRecordByRunId,
   getTaskById,
   markTaskTerminalById,
   recordTaskProgressByRunId,
@@ -672,6 +673,43 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task?.id).toBe(task.taskId);
     expect(payload?.task?.status).toBe("running");
     expect(payload?.task?.error).toBeUndefined();
+  });
+
+  it("refuses native subagent cancellation and preserves the harness result", async () => {
+    const task = createTaskFixture("subagent", {
+      ...mainSessionTaskScope,
+      taskKind: "codex-native",
+      runId: "codex-thread:native-child",
+      task: "Native child task",
+      notifyPolicy: "silent",
+    });
+
+    const { calls, payload } = await runTaskHandler("tasks.cancel", { taskId: task.taskId });
+
+    expect(calls[0]?.[0]).toBe(true);
+    expect(payload).toMatchObject({
+      found: true,
+      cancelled: false,
+      reason:
+        "This subagent is controlled by its native harness. Use the parent session's native collaboration tools to stop it.",
+      task: { id: task.taskId, status: "running" },
+    });
+    reloadTaskRegistryFromStore();
+    expect(getTaskById(task.taskId)).toEqual(task);
+
+    finalizeTaskRecordByRunId({
+      runId: task.runId!,
+      runtime: "subagent",
+      sessionKey: task.ownerKey,
+      status: "succeeded",
+      endedAt: Date.now(),
+      terminalSummary: "Native child completed.",
+    });
+    const completed = await getTaskPayload(task.taskId);
+    expect(completed.payload?.task).toMatchObject({
+      status: "completed",
+      terminalSummary: "Native child completed.",
+    });
   });
 
   it.each([

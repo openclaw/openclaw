@@ -4,7 +4,7 @@ import { setSubagentAnnounceDeliveryDepsForTest } from "../../agents/subagents/a
 import { dispatchGatewayMethodInProcess } from "../../agents/subagents/announce/subagent-announce.runtime.js";
 import { useSubagentControlFixture } from "../../agents/subagents/registry/subagent-control.test-support.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
-import { markSubagentRunPausedAfterYield } from "../../agents/subagents/registry/subagent-registry-run-manager.js";
+import { markSubagentRunPausedAfterYield } from "../../agents/subagents/registry/subagent-registry-run-pause.js";
 import { persistSubagentRunsToDiskOrThrow } from "../../agents/subagents/registry/subagent-registry-state.js";
 import {
   markRequesterTurnYielded,

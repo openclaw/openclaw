@@ -1,8 +1,10 @@
-// Check Gateway Watch Regression tests cover check gateway watch regression script behavior.
-import { EventEmitter } from "node:events";
+import { ChildProcess, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
+import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendBoundedWatchLog,
@@ -15,7 +17,6 @@ import {
   runTimedWatch,
   shouldReportDuplicateDistRuntimeRegression,
   shouldRefreshBuildStampForRestoredArtifacts,
-  stopTimedWatchChild,
   updateWatchBuildDetection,
   WATCH_LOG_CAPTURE_MAX_CHARS,
   writeBuildAndRuntimePostBuildStamps,
@@ -24,9 +25,91 @@ import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
 } from "../../scripts/lib/local-build-metadata-paths.mts";
+import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: vi.fn(), spawnSync: vi.fn(actual.spawnSync) };
+});
+
+vi.mock("../../scripts/lib/managed-child-process.mts", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../scripts/lib/managed-child-process.mts")>();
+  return { ...actual, runManagedCommand: vi.fn(actual.runManagedCommand) };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  vi.mocked(spawn).mockReset();
+  vi.mocked(spawnSync).mockReset();
+  vi.mocked(runManagedCommand).mockReset();
+});
+
+function createWatchChildFixture(outputDir: string) {
+  const exitState: { code: number | null; signal: NodeJS.Signals | null } = {
+    code: null,
+    signal: null,
+  };
+  const child = Object.assign(new ChildProcess(), {
+    pid: 1234,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+  });
+  Object.defineProperties(child, {
+    exitCode: { get: () => exitState.code },
+    signalCode: { get: () => exitState.signal },
+  });
+  const close = () => {
+    if (
+      child.stdout.closed &&
+      child.stderr.closed &&
+      (child.exitCode !== null || child.signalCode !== null)
+    ) {
+      child.emit("close", child.exitCode, child.signalCode);
+    }
+  };
+  child.stdout.once("close", close);
+  child.stderr.once("close", close);
+  const finish = (code: number | null = 0, signal: NodeJS.Signals | null = null) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      return;
+    }
+    exitState.code = code;
+    exitState.signal = signal;
+    child.emit("exit", code, signal);
+    child.stdout.destroy();
+    child.stderr.destroy();
+  };
+  const onSignal = vi.fn((_signal: Parameters<typeof process.kill>[1]) => finish());
+  vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+    if (Math.abs(pid) !== 1234) {
+      throw new Error(`Unexpected fixture process target: ${pid}`);
+    }
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw Object.assign(new Error("fixture process exited"), { code: "ESRCH" });
+    }
+    if (signal !== 0) {
+      onSignal(signal);
+    }
+    return true;
+  });
+  const spawnChild = vi.mocked(spawn).mockImplementationOnce(() => {
+    fs.writeFileSync(path.join(outputDir, "watch.pid"), "1234\n");
+    fs.writeFileSync(
+      path.join(outputDir, "watch.time.log"),
+      "real 0.1\nuser 0\nsys 0\n__TIMING__ user=0 sys=0 elapsed=0.1\n",
+    );
+    queueMicrotask(() => child.stdout.write("[gateway] ready (0 plugins, 0.1s)\n"));
+    return child;
+  });
+  return { child, finish, onSignal, spawnChild };
+}
 
 describe("check-gateway-watch-regression", () => {
   it("accepts package-manager argument separators before script options", () => {
@@ -262,41 +345,53 @@ describe("check-gateway-watch-regression", () => {
     },
   ])("$name", async ({ ready, samples, idleCpuMs, lateError, failures }) => {
     const outputDir = tempDirs.make("openclaw-gateway-watch-measurement-");
-    const child = Object.assign(new EventEmitter(), {
-      stdout: new EventEmitter(),
-      stderr: new EventEmitter(),
-    });
+    const { child, finish, onSignal } = createWatchChildFixture(outputDir);
     const timing = { userSeconds: 45.91, sysSeconds: 7.52, elapsedSeconds: 33.22 };
     const readCpu = vi
       .fn((_pid: number): number | null => null)
       .mockReturnValueOnce(samples[0] ?? null)
       .mockReturnValueOnce(samples[1] ?? null);
     const sleep = vi.fn((_ms: number) => Promise.resolve());
-    const stopChild = vi.fn(async () => {
-      if (lateError) {
-        child.emit("error", new Error(lateError));
+    if (lateError) {
+      if (process.platform === "win32") {
+        vi.mocked(spawnSync).mockImplementationOnce(() => {
+          finish();
+          return {
+            pid: 1235,
+            status: 0,
+            signal: null,
+            output: [],
+            stdout: Buffer.alloc(0),
+            stderr: Buffer.alloc(0),
+          };
+        });
       }
-      return { code: 0, signal: null };
-    });
-    const options = parseArgs(["--skip-build"]);
+      onSignal.mockImplementationOnce(() => {
+        child.emit("error", new Error(lateError));
+        finish();
+      });
+    }
+    const options = {
+      ...parseArgs(["--skip-build"]),
+      sigkillGraceMs: 1,
+      sigkillExitGraceMs: 100,
+    };
     const result = await runTimedWatch(options, outputDir, {
       allocateLoopbackPort: async () => 19042,
-      spawn: () => {
-        fs.writeFileSync(path.join(outputDir, "watch.pid"), "1234\n");
-        fs.writeFileSync(path.join(outputDir, "watch.time.log"), "fixture timing\n");
-        return child;
-      },
       waitForGatewayReady: async () => ready,
       readProcessTreeCpuMs: readCpu,
       parseTimingFile: () => timing,
       sleep,
-      stopTimedWatchChild: stopChild,
     });
 
     expect(result.readyBeforeWindow).toBe(ready);
     expect(result.idleCpuMs).toBe(idleCpuMs);
     expect(result.timing).toEqual(timing);
-    expect(stopChild).toHaveBeenCalledOnce();
+    expect(child.exitCode).toBe(0);
+    expect(child.stdout.closed).toBe(true);
+    expect(child.stderr.closed).toBe(true);
+    const isolatedHomeDir = fs.readFileSync(path.join(outputDir, "watch.home.txt"), "utf8").trim();
+    expect(fs.existsSync(isolatedHomeDir)).toBe(false);
     expect(readCpu).toHaveBeenCalledTimes(ready ? 2 : 0);
     if (!ready) {
       expect(sleep).not.toHaveBeenCalled();
@@ -431,64 +526,218 @@ describe("check-gateway-watch-regression", () => {
     }
   });
 
-  it("bounds teardown when the watch process ignores termination signals", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      exitCode: number | null;
-      signalCode: NodeJS.Signals | null;
-      stderr: { destroy: ReturnType<typeof vi.fn> };
-      stdin: { destroy: ReturnType<typeof vi.fn> };
-      stdout: { destroy: ReturnType<typeof vi.fn> };
-      unref: ReturnType<typeof vi.fn>;
-    };
-    child.exitCode = null;
-    child.signalCode = null;
-    child.stderr = { destroy: vi.fn() };
-    child.stdin = { destroy: vi.fn() };
-    child.stdout = { destroy: vi.fn() };
-    child.unref = vi.fn();
-    const killProcess = vi.fn();
-
-    await expect(
-      stopTimedWatchChild(
-        child,
-        1234,
-        { sigkillExitGraceMs: 1, sigkillGraceMs: 1 },
-        { killProcess },
-      ),
-    ).resolves.toEqual({ code: null, signal: "SIGKILL" });
-
-    expect(killProcess).toHaveBeenNthCalledWith(1, 1234, "SIGTERM");
-    expect(killProcess).toHaveBeenNthCalledWith(2, 1234, "SIGKILL");
-    expect(child.stdin.destroy).toHaveBeenCalledOnce();
-    expect(child.stdout.destroy).toHaveBeenCalledOnce();
-    expect(child.stderr.destroy).toHaveBeenCalledOnce();
-    expect(child.unref).toHaveBeenCalledOnce();
-  });
-
-  it("removes the isolated watch home after spawn failures", async () => {
-    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-watch-output-"));
-    const child = new EventEmitter() as EventEmitter & {
-      stderr: EventEmitter;
-      stdout: EventEmitter;
-    };
-    child.stderr = new EventEmitter();
-    child.stdout = new EventEmitter();
-    const sleep = vi.fn(() => new Promise<never>(() => {}));
-    const stopChild = vi.fn(
-      () =>
-        new Promise<never>(() => {
-          // Spawn failures must win before cleanup waits for a child that never started.
-        }),
-    );
-    const waitForGatewayReady = vi.fn(async () => false);
-    const spawn = vi.fn(
-      (_command: string, _args: string[], _options: { env: NodeJS.ProcessEnv }) => {
-        process.nextTick(() => {
-          child.emit("error", new Error("spawn failed"));
+  it.skipIf(process.platform === "win32")(
+    "rejects unconfirmed cleanup and retains HOME after a valid idle measurement",
+    { timeout: 2_000 },
+    async () => {
+      const outputDir = tempDirs.make("openclaw-gateway-watch-unjoined-");
+      // Deliberately failed mock cleanup must not retain the worker's resource namespace.
+      const owner = createVitestResourceOwner(outputDir);
+      for (const variable of ["TMPDIR", "TMP", "TEMP"]) {
+        vi.stubEnv(variable, outputDir);
+      }
+      const { child, finish, onSignal } = createWatchChildFixture(outputDir);
+      onSignal.mockImplementation(() => {});
+      const readCpu = vi.fn(() => 50_000);
+      const completion = runTimedWatch(
+        {
+          readySettleMs: 0,
+          readyTimeoutMs: 500,
+          sigkillGraceMs: 1,
+          sigkillExitGraceMs: 25,
+          windowMs: 1,
+        },
+        outputDir,
+        {
+          allocateLoopbackPort: async () => 19042,
+          readProcessTreeCpuMs: readCpu,
+        },
+      );
+      // Rescue the fake child if a regression loses the owner's short cleanup bound.
+      const rescue = setTimeout(() => finish(), 1_000);
+      try {
+        await expect(completion).rejects.toMatchObject({
+          code: "EPROCESSGROUP_CLEANUP_FAILED",
+          processTreeState: "live",
         });
-        return child;
+
+        expect(readCpu).toHaveBeenCalledTimes(2);
+        expect(child.exitCode).toBeNull();
+        expect(child.signalCode).toBeNull();
+        const isolatedHomeDir = fs
+          .readFileSync(path.join(outputDir, "watch.home.txt"), "utf8")
+          .trim();
+        expect(fs.existsSync(isolatedHomeDir)).toBe(true);
+        expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+      } finally {
+        clearTimeout(rescue);
+        finish();
+        await completion.catch(() => {});
+      }
+    },
+  );
+
+  it("joins the watch command before propagating a measurement error", async () => {
+    const outputDir = tempDirs.make("openclaw-gateway-watch-measurement-error-");
+    const { child, finish } = createWatchChildFixture(outputDir);
+    const measurementError = new Error("fixture CPU probe failed");
+    const completion = runTimedWatch(
+      { ...parseArgs(["--skip-build"]), sigkillGraceMs: 1, sigkillExitGraceMs: 100 },
+      outputDir,
+      {
+        allocateLoopbackPort: async () => 19042,
+        waitForGatewayReady: async () => true,
+        sleep: () => Promise.resolve(),
+        readProcessTreeCpuMs: () => {
+          throw measurementError;
+        },
       },
     );
+    try {
+      await expect(completion).rejects.toBe(measurementError);
+      expect(child.exitCode).toBe(0);
+      expect(child.stdout.closed).toBe(true);
+      expect(child.stderr.closed).toBe(true);
+      const isolatedHomeDir = fs
+        .readFileSync(path.join(outputDir, "watch.home.txt"), "utf8")
+        .trim();
+      expect(fs.existsSync(isolatedHomeDir)).toBe(false);
+    } finally {
+      finish();
+      await completion.catch(() => {});
+    }
+  });
+
+  it.each([false, true])(
+    "joins readiness after managed failure without child exit (producer failure: %s)",
+    { timeout: 2_000 },
+    async (producerFails) => {
+      const outputDir = tempDirs.make("openclaw-gateway-watch-managed-failure-");
+      for (const variable of ["TMPDIR", "TMP", "TEMP"]) {
+        vi.stubEnv(variable, outputDir);
+      }
+      const { child, finish } = createWatchChildFixture(outputDir);
+      const cleanupError = Object.assign(new Error("fixture managed cleanup failed"), {
+        code: "EPROCESSGROUP_CLEANUP_FAILED",
+        processTreeState: "live",
+      });
+      const producerError = Object.assign(new Error("fixture readiness producer failed"), {
+        name: "AbortError",
+        code: "ABORT_ERR",
+      });
+      let startPhase!: () => void;
+      const phaseStarted = new Promise<void>((resolve) => {
+        startPhase = resolve;
+      });
+      vi.mocked(runManagedCommand).mockImplementationOnce(async ({ onReady }) => {
+        fs.writeFileSync(path.join(outputDir, "watch.pid"), "1234\n");
+        onReady?.(child);
+        await phaseStarted;
+        throw cleanupError;
+      });
+      const rescueController = new AbortController();
+      let phaseSignal: AbortSignal | undefined;
+      let waitSignal: AbortSignal | undefined;
+      let pendingWait: Promise<boolean> | undefined;
+      let waitSettled = false;
+      const completion = runTimedWatch(
+        {
+          readySettleMs: 0,
+          readyTimeoutMs: 30_000,
+          sigkillGraceMs: 1,
+          sigkillExitGraceMs: 25,
+          windowMs: 1,
+        },
+        outputDir,
+        {
+          allocateLoopbackPort: async () => 19042,
+          waitForGatewayReady: (_readText, timeoutMs, signal) => {
+            phaseSignal = signal;
+            waitSignal = signal
+              ? AbortSignal.any([signal, rescueController.signal])
+              : rescueController.signal;
+            startPhase();
+            pendingWait = (async () => {
+              try {
+                return await delay(timeoutMs, false, { signal: waitSignal });
+              } catch (error) {
+                if (producerFails && signal?.aborted) {
+                  throw producerError;
+                }
+                throw error;
+              } finally {
+                await delay(25);
+                waitSettled = true;
+              }
+            })();
+            return pendingWait;
+          },
+        },
+      );
+      const rescue = setTimeout(() => rescueController.abort(), 1_000);
+      try {
+        const error: unknown = await completion.catch((caughtError: unknown) => caughtError);
+        if (producerFails) {
+          expect(error).toBeInstanceOf(AggregateError);
+          if (error instanceof AggregateError) {
+            expect(error.errors).toHaveLength(2);
+            expect(error.errors).toContain(cleanupError);
+            expect(error.errors).toContain(producerError);
+          }
+        } else {
+          expect(error).toBe(cleanupError);
+        }
+        expect(phaseSignal?.aborted).toBe(true);
+        expect(waitSettled).toBe(true);
+        expect(child.exitCode).toBeNull();
+        expect(child.signalCode).toBeNull();
+        const isolatedHomeDir = fs
+          .readFileSync(path.join(outputDir, "watch.home.txt"), "utf8")
+          .trim();
+        expect(fs.existsSync(isolatedHomeDir)).toBe(true);
+      } finally {
+        clearTimeout(rescue);
+        rescueController.abort();
+        finish();
+        await completion.catch(() => {});
+        await pendingWait?.catch((error: unknown) => {
+          if (producerFails && error === producerError) {
+            return;
+          }
+          if (error instanceof Error && "cause" in error && error.cause === waitSignal?.reason) {
+            return;
+          }
+          throw error;
+        });
+      }
+    },
+  );
+
+  it("removes the isolated watch home after spawn failures", async () => {
+    const outputDir = tempDirs.make("openclaw-gateway-watch-output-");
+    const child = Object.assign(new ChildProcess(), {
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+    });
+    let sleepSettled = false;
+    const sleep = vi.fn(async (ms: number, signal: AbortSignal) => {
+      try {
+        await delay(ms, undefined, { signal });
+      } finally {
+        await delay(50);
+        sleepSettled = true;
+      }
+    });
+    const waitForGatewayReady = vi.fn(async () => false);
+    const spawnChild = vi.mocked(spawn).mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        child.emit("error", new Error("spawn failed"));
+        child.stdout.destroy();
+        child.stderr.destroy();
+        child.emit("close", -1, null);
+      });
+      return child;
+    });
 
     try {
       const result = await runTimedWatch(
@@ -501,9 +750,7 @@ describe("check-gateway-watch-regression", () => {
         outputDir,
         {
           allocateLoopbackPort: async () => 19042,
-          spawn,
           sleep,
-          stopTimedWatchChild: stopChild,
           waitForGatewayReady,
         },
       );
@@ -514,34 +761,109 @@ describe("check-gateway-watch-regression", () => {
       expect(result.spawnError).toBe("spawn failed");
       expect(fs.existsSync(isolatedHomeDir)).toBe(false);
       expect(fs.existsSync(path.join(outputDir, "watch.home.txt"))).toBe(true);
-      expect(spawn.mock.calls[0]?.[2]?.env?.OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS).toBe("0");
+      expect(spawnChild.mock.calls[0]?.[2]?.env?.OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS).toBe(
+        "0",
+      );
       expect(waitForGatewayReady).not.toHaveBeenCalled();
-      expect(stopChild).not.toHaveBeenCalled();
+      expect(sleepSettled).toBe(true);
     } finally {
-      fs.rmSync(outputDir, { recursive: true, force: true });
+      child.stdout.destroy();
+      child.stderr.destroy();
     }
   });
 
-  it("stops waiting for readiness when the watch process exits early", async () => {
-    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-watch-output-"));
-    const child = new EventEmitter() as EventEmitter & {
-      stderr: EventEmitter;
-      stdout: EventEmitter;
-    };
-    child.stderr = new EventEmitter();
-    child.stdout = new EventEmitter();
-    const sleep = vi.fn(() => new Promise<never>(() => {}));
-    const stopChild = vi.fn(async () => ({ code: null, signal: "SIGTERM" }));
-    const waitForGatewayReady = vi.fn(
-      () =>
-        new Promise<never>(() => {
-          // Child exit must win before readiness timeout.
-        }),
+  it("releases default readiness timers so an early-exit observer finishes naturally", () => {
+    const outputDir = tempDirs.make("openclaw-gateway-watch-readiness-exit-");
+    const result = spawnSync(
+      resolveTestNodeExecPath(),
+      [
+        "--import",
+        pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
+        "--input-type=module",
+        "-e",
+        `
+import assert from "node:assert/strict";
+import cp from "node:child_process";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { PassThrough } from "node:stream";
+const outputDir = ${JSON.stringify(outputDir)};
+const child = Object.assign(new cp.ChildProcess(), {
+  pid: 1234, stdout: new PassThrough(), stderr: new PassThrough(),
+});
+for (const output of [child.stdout, child.stderr]) {
+  output.once("close", () => {
+    if (child.stdout.closed && child.stderr.closed) child.emit("close", 1, null);
+  });
+}
+const originalSpawn = cp.spawn;
+cp.spawn = (command, args, options) => {
+  if (!options?.env?.OPENCLAW_WATCH_PID_FILE) return originalSpawn(command, args, options);
+  fs.writeFileSync(options.env.OPENCLAW_WATCH_PID_FILE, "1234\\n");
+  setTimeout(() => {
+    child.stderr.write("fixture watch exited before ready\\n");
+    child.exitCode = 1;
+    child.emit("exit", 1, null);
+    child.stdout.destroy();
+    child.stderr.destroy();
+  }, 20);
+  return child;
+};
+const originalKill = process.kill.bind(process);
+process.kill = (pid, signal) => {
+  if (Math.abs(pid) !== child.pid) return originalKill(pid, signal);
+  if (child.exitCode !== null) {
+    throw Object.assign(new Error("fixture child exited"), { code: "ESRCH" });
+  }
+  return true;
+};
+syncBuiltinESMExports();
+const { runTimedWatch } = await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/check-gateway-watch-regression.mts")).href)});
+const result = await runTimedWatch({
+  readySettleMs: 0, readyTimeoutMs: 30_000, sigkillGraceMs: 1,
+  sigkillExitGraceMs: 100, windowMs: 10_000,
+}, outputDir, { allocateLoopbackPort: async () => 19042 });
+assert.deepEqual(result.exit, { code: 1, signal: null });
+assert.equal(result.exitedBeforeReady, true);
+assert.equal(result.exitedBeforeStop, true);
+assert.equal(result.readyBeforeWindow, false);
+assert.equal(result.spawnError, null);
+console.log("readiness observer settled");
+`,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, TMPDIR: outputDir, TMP: outputDir, TEMP: outputDir },
+        timeout: 5_000,
+        killSignal: "SIGKILL",
+      },
     );
-    const spawn = vi.fn(() => {
-      process.nextTick(() => {
-        child.stderr.emit("data", "gateway startup failed\n");
-        child.emit("exit", 1, null);
+    expect(result.stdout, result.stderr).toContain("readiness observer settled");
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.signal).toBeNull();
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("stops waiting for readiness when the watch process exits early", async () => {
+    const outputDir = tempDirs.make("openclaw-gateway-watch-output-");
+    const { child, finish, onSignal, spawnChild } = createWatchChildFixture(outputDir);
+    let sleepSettled = false;
+    const sleep = vi.fn(async (ms: number, signal: AbortSignal) => {
+      try {
+        await delay(ms, undefined, { signal });
+      } finally {
+        await delay(50);
+        sleepSettled = true;
+      }
+    });
+    const waitForGatewayReady = vi.fn(
+      (_readText: () => string, timeoutMs: number, signal: AbortSignal) =>
+        delay(timeoutMs, false, { signal }),
+    );
+    spawnChild.mockReset().mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        child.stderr.write("gateway startup failed\n");
+        finish(1);
       });
       return child;
     });
@@ -557,9 +879,7 @@ describe("check-gateway-watch-regression", () => {
         outputDir,
         {
           allocateLoopbackPort: async () => 19042,
-          spawn,
           sleep,
-          stopTimedWatchChild: stopChild,
           waitForGatewayReady,
         },
       );
@@ -571,39 +891,33 @@ describe("check-gateway-watch-regression", () => {
       expect(result.spawnError).toBeNull();
       expect(fs.readFileSync(result.stderrPath, "utf8")).toContain("gateway startup failed");
       expect(waitForGatewayReady).not.toHaveBeenCalled();
-      expect(stopChild).not.toHaveBeenCalled();
+      expect(sleepSettled).toBe(true);
+      expect(onSignal).not.toHaveBeenCalled();
     } finally {
-      fs.rmSync(outputDir, { recursive: true, force: true });
+      child.stdout.destroy();
+      child.stderr.destroy();
     }
   });
 
   it.each([
-    { phase: "settle", readySettleMs: 10_000 },
+    { phase: "settle", readySettleMs: 250 },
     { phase: "idle", readySettleMs: 0 },
   ])(
     "records a ready gateway watch exit during the $phase window as unplanned",
     async ({ phase, readySettleMs }) => {
-      const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-watch-output-"));
-      const child = new EventEmitter() as EventEmitter & {
-        stderr: EventEmitter;
-        stdout: EventEmitter;
-      };
-      child.stderr = new EventEmitter();
-      child.stdout = new EventEmitter();
-      const stopChild = vi.fn(async () => ({ code: null, signal: "SIGTERM" }));
-      const sleep = vi.fn(
-        () =>
-          new Promise<never>(() => {
-            process.nextTick(() => {
-              child.emit("exit", 0, null);
-            });
-          }),
-      );
-      const readProcessTreeCpuMs = phase === "idle" ? vi.fn(() => 12) : undefined;
-      const spawn = vi.fn(() => {
-        fs.writeFileSync(path.join(outputDir, "watch.pid"), "1234\n", "utf8");
-        return child;
+      const outputDir = tempDirs.make("openclaw-gateway-watch-output-");
+      const { child, finish, onSignal } = createWatchChildFixture(outputDir);
+      let sleepSettled = false;
+      const sleep = vi.fn(async (ms: number, signal: AbortSignal) => {
+        queueMicrotask(() => finish());
+        try {
+          await delay(ms, undefined, { signal });
+        } finally {
+          await delay(50);
+          sleepSettled = true;
+        }
       });
+      const readProcessTreeCpuMs = phase === "idle" ? vi.fn(() => 12) : undefined;
 
       try {
         const result = await runTimedWatch(
@@ -611,15 +925,13 @@ describe("check-gateway-watch-regression", () => {
             readySettleMs,
             readyTimeoutMs: 30_000,
             sigkillGraceMs: 1,
-            windowMs: 10_000,
+            windowMs: 250,
           },
           outputDir,
           {
             allocateLoopbackPort: async () => 19042,
             ...(readProcessTreeCpuMs ? { readProcessTreeCpuMs } : {}),
-            spawn,
             sleep,
-            stopTimedWatchChild: stopChild,
             waitForGatewayReady: async () => true,
           },
         );
@@ -632,9 +944,11 @@ describe("check-gateway-watch-regression", () => {
         if (readProcessTreeCpuMs) {
           expect(readProcessTreeCpuMs).toHaveBeenCalledOnce();
         }
-        expect(stopChild).not.toHaveBeenCalled();
+        expect(onSignal).not.toHaveBeenCalled();
+        expect(sleepSettled).toBe(true);
       } finally {
-        fs.rmSync(outputDir, { recursive: true, force: true });
+        child.stdout.destroy();
+        child.stderr.destroy();
       }
     },
   );

@@ -27,7 +27,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: mocks.getSupervisor }));
 vi.mock("../process/supervisor/adapters/child.js", () => ({
-  createChildAdapter: mocks.createChildAdapter,
+  createChildAdapter: async (
+    ...args: Parameters<typeof import("../process/supervisor/adapters/child.js").createChildAdapter>
+  ) => ({
+    adapter: await mocks.createChildAdapter(...args),
+    ready: Promise.resolve(),
+  }),
 }));
 vi.mock("../infra/shell-env.js", () => ({
   getShellPathFromLoginShell: () => null,

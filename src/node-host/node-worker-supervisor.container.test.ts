@@ -540,12 +540,13 @@ describe("node worker supervisor container isolation", () => {
       if (phase === "before startup") {
         fs.writeFileSync(startMarker, "hold");
       }
-      const adapter = await createChildAdapter({
+      const { adapter, ready } = await createChildAdapter({
         argv: [fixture.containerEngine.command, "start", "--attach", "--interactive", container.id],
         env: fixture.containerEngine.env,
         exactEnv: true,
         stdinMode: "pipe-open",
       });
+      await ready;
       let exited = false;
       const completed = adapter.wait().finally(() => {
         exited = true;

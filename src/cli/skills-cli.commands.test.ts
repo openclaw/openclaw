@@ -8,6 +8,7 @@ import {
   type AgentSelectionContext,
 } from "../agents/agent-scope-config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
+import type { SkillStatusReport } from "../skills/discovery/status.js";
 import {
   expectObjectFields,
   mockCall,
@@ -41,7 +42,7 @@ const mocks = vi.hoisted(() => {
   const runtimeStdout: string[] = [];
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  const skillStatusReportFixture = {
+  const skillStatusReportFixture: SkillStatusReport = {
     workspaceDir: "/tmp/workspace",
     managedSkillsDir: "/tmp/workspace/skills",
     skills: [
@@ -58,7 +59,12 @@ const mocks = vi.hoisted(() => {
         always: false,
         disabled: false,
         blockedByAllowlist: false,
+        blockedByAgentFilter: false,
         eligible: true,
+        platformIncompatible: false,
+        modelVisible: true,
+        userInvocable: true,
+        commandVisible: true,
         primaryEnv: "CALENDAR_API_KEY",
         requirements: {
           bins: [],
@@ -1494,6 +1500,81 @@ describe("skills cli commands", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledOnce();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
+
+  it.each([
+    ["weather", "skills.entries.weather.apiKey"],
+    ["acme.weather", `'skills.entries["acme.weather"].apiKey'`],
+    ["weather[home]", `'skills.entries["weather[home]"].apiKey'`],
+    ["123", `'skills.entries["123"].apiKey'`],
+  ])("skills info prints a copyable API-key setup path for %s", async (skillKey, path) => {
+    vi.stubEnv("OPENCLAW_PROFILE", "");
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", "");
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      ...skillStatusReportFixture,
+      skills: skillStatusReportFixture.skills.map((skill) => ({
+        ...skill,
+        skillKey,
+        eligible: false,
+        modelVisible: false,
+        commandVisible: false,
+        missing: { ...skill.missing, env: ["CALENDAR_API_KEY"] },
+      })),
+    });
+
+    await runCommand(["skills", "info", "calendar"]);
+
+    expect(runtimeStdout).toHaveLength(1);
+    expect(runtimeStdout[0]).toContain(`Save via CLI: openclaw config set ${path} YOUR_KEY`);
+  });
+
+  it.each([true, false])(
+    "skills info renders one status per alternative group (satisfied: %s)",
+    async (satisfied) => {
+      const anyBins = ["node", "openclaw-definitely-missing-runtime"];
+      const os = ["linux", "darwin"];
+      const report: SkillStatusReport = {
+        ...skillStatusReportFixture,
+        skills: skillStatusReportFixture.skills.map((skill) => ({
+          ...skill,
+          eligible: false,
+          modelVisible: false,
+          commandVisible: false,
+          platformIncompatible: !satisfied,
+          requirements: {
+            bins: ["present-bin", "missing-bin"],
+            anyBins,
+            env: ["PRESENT_ENV", "MISSING_ENV"],
+            config: ["present.config", "missing.config"],
+            os,
+          },
+          missing: {
+            bins: ["missing-bin"],
+            anyBins: satisfied ? [] : anyBins,
+            env: ["MISSING_ENV"],
+            config: ["missing.config"],
+            os: satisfied ? [] : os,
+          },
+        })),
+      };
+      buildWorkspaceSkillStatusMock.mockReturnValue(report);
+
+      await runCommand(["skills", "info", "calendar"]);
+
+      const mark = satisfied ? "✓" : "✗";
+      expect(runtimeStdout).toHaveLength(1);
+      expect(runtimeStdout[0]).toContain(
+        `Any binaries: ${mark} (any of: node, openclaw-definitely-missing-runtime)`,
+      );
+      expect(runtimeStdout[0]).toContain(`OS: ${mark} (linux, darwin)`);
+      expect(runtimeStdout[0]).toContain("Binaries: ✓ present-bin, ✗ missing-bin");
+      expect(runtimeStdout[0]).toContain("Environment: ✓ PRESENT_ENV, ✗ MISSING_ENV");
+      expect(runtimeStdout[0]).toContain("Config: ✓ present.config, ✗ missing.config");
+
+      await runCommand(["skills", "info", "calendar", "--json"]);
+
+      expect(runtimeStdout[1]).toBe(JSON.stringify(report.skills[0], null, 2));
+    },
+  );
 
   it("keeps successful human skill info output at exit zero", async () => {
     await runCommand(["skills", "info", "calendar"]);

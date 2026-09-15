@@ -8,9 +8,21 @@ import { readUpdateRunStatus } from "../infra/update-run-status.js";
 
 type Formatter = (value: string) => string;
 
+function renderStatusReport(run: Parameters<typeof renderUpdateRunReport>[0]) {
+  const report = renderUpdateRunReport(run);
+  const message =
+    run.status === "failed"
+      ? run.steps
+          .filter((step) => step.status === "failed")
+          .flatMap((step) => step.failureFacts ?? [])
+          .find((fact) => fact.message)?.message
+      : undefined;
+  return { ...report, headline: message ? `${report.headline} ${message}` : report.headline };
+}
+
 function readReport(payload: RestartSentinelPayload) {
   const run = payload.stats?.runId ? getUpdateRun(payload.stats.runId) : undefined;
-  return renderUpdateRunReport(run ?? updateRunReportInputFromSentinel(payload));
+  return renderStatusReport(run ?? updateRunReportInputFromSentinel(payload));
 }
 
 export function formatUpdateRestartStatusValue(
@@ -38,7 +50,7 @@ export function buildStatusUpdateRows(
     ];
   }
   const run = history.activeRun ?? history.lastRun;
-  const rows = run ? [{ Item: "Update run", Value: renderUpdateRunReport(run).headline }] : [];
+  const rows = run ? [{ Item: "Update run", Value: renderStatusReport(run).headline }] : [];
   if (history.runReconciliationError) {
     rows.push({
       Item: "Update reconciliation",
