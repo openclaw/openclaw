@@ -128,6 +128,8 @@ class Tooltip extends OpenClawLitElement {
 
   @property({ type: Boolean }) describe = true;
 
+  @property({ type: Boolean, attribute: "auto-size" }) autoSize = false;
+
   @property({ type: Boolean }) disabled = false;
 
   /** Let a reveal-only trigger open on click instead of dismissing. */
@@ -337,6 +339,13 @@ class Tooltip extends OpenClawLitElement {
     void tooltip.updateComplete.then(() => {
       if (this.webAwesomeTooltip === tooltip && this.#triggerElement === trigger) {
         tooltip.anchor = trigger;
+        if (this.autoSize) {
+          tooltip.popup.setAttribute("auto-size", "vertical");
+        } else {
+          tooltip.popup.removeAttribute("auto-size");
+        }
+        tooltip.popup.autoSizePadding = this.autoSize ? 8 : 0;
+        tooltip.popup.shiftPadding = this.autoSize ? 8 : 0;
       }
     });
   }

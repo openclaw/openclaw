@@ -3127,26 +3127,82 @@ openclaw-chat-ci-details {
   z-index: 10000;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--space-3);
+  align-items: end;
+  gap: 8px;
   width: 380px;
+  padding: 8px 10px;
   overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--popover);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.chat-annotation-editor:has(textarea:focus) {
+  border-color: color-mix(in srgb, var(--border) 94%, var(--text-strong));
 }
 
 .chat-annotation-editor textarea {
+  display: block;
   min-width: 0;
   width: 100%;
+  min-height: 1lh;
+  max-height: 5lh;
+  margin-block: 3px;
+  padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  border: none;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
   color: inherit;
   font: inherit;
   resize: none;
 }
 
-.chat-annotation-editor__controls {
-  display: none;
+.chat-annotation-editor textarea::placeholder {
+  color: var(--muted);
 }
 
-.chat-annotation-editor--expanded {
-  width: 440px;
+.chat-annotation-editor .btn {
+  min-height: 28px;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.chat-annotation-editor .btn,
+.chat-annotation-editor .btn:hover {
+  border: 0;
+  box-shadow: none;
+}
+
+.chat-annotation-editor .btn:focus-visible {
+  outline: 1px solid var(--muted);
+  outline-offset: 2px;
+}
+
+.chat-annotation-editor .chat-annotation-editor__confirm {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 6px;
+  corner-shape: round;
+}
+
+.chat-annotation-editor__confirm svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-annotation-editor__controls {
+  display: none;
 }
 
 .chat-annotation-editor--expanded textarea,
@@ -3161,9 +3217,10 @@ openclaw-chat-ci-details {
 .chat-annotation-editor--expanded .chat-annotation-editor__controls {
   display: flex;
   justify-content: flex-end;
-  gap: var(--space-2);
+  gap: 6px;
 }
 
-.chat-annotation-editor__delete {
+.chat-annotation-editor .chat-annotation-editor__delete {
   margin-right: auto;
+  padding: 4px;
 }

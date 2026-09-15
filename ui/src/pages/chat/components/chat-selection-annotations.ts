@@ -23,7 +23,7 @@ export function renderChatSelectionAnnotations(props: ChatAttachmentControlsProp
   return comments.length
     ? renderCommentPreviewChip(
         comments.length,
-        html`<ol class="chat-comment-preview__list">
+        html`<ol class="chat-comment-preview__list" role="list">
           ${comments.map((attachment, index) =>
             renderCommentPreviewRow(
               attachment.selectionAnnotation!,
