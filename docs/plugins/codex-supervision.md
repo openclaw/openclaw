@@ -187,6 +187,14 @@ does not change a thread's native status to `offline`. Session rows use Codex
 statuses such as `idle`, `active`, `notLoaded`, or error. A failed host does not
 hide results from healthy hosts.
 
+Concurrent reads of the same local source page share one native request. After
+two consecutive source failures, local catalog refreshes back off for 5 seconds,
+doubling after each failed recovery attempt up to 60 seconds. One recovery probe
+runs per agent and source home; other pages return the previous source error
+without waiting for another timeout. Previously cached pages remain available.
+A successful probe or configuration reload resets backoff. Paired nodes retain
+their separate eight-second foreground response deadline.
+
 The sidebar hides the Codex group when it has no visible sessions, including
 when discovery fails. Normal discovery refreshes continue, so the group appears
 when sessions become available. A populated group remains visible when another

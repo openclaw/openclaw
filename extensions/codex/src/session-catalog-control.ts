@@ -43,6 +43,7 @@ import {
   isOpenClawManagedCodexThread,
   readCodexSessionMeta,
 } from "./session-catalog-provenance.js";
+import { CodexCatalogSourceBackoff } from "./session-catalog-source-backoff.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
@@ -442,6 +443,7 @@ export function createCodexSessionCatalogControl(params: {
     Map<string, CodexCatalogRequestOptions>
   >();
   const catalogPagesByConfig = new WeakMap<OpenClawConfig, CodexCatalogPageCache>();
+  const sourceBackoff = new CodexCatalogSourceBackoff(now);
   const resolveRequestOptions = (
     startOptions: CodexAppServerStartOptions,
     agentId: string | undefined,
@@ -632,6 +634,16 @@ export function createCodexSessionCatalogControl(params: {
           }
           return await waitForCodexCatalogPage(pending.page, pending.producerOperationId);
         }
+        const attempt = sourceBackoff.begin(runtimeConfig, agentId, source?.sourceHomeId);
+        if (!attempt.allowed) {
+          if (cached) {
+            if (listDiagnostics) {
+              listDiagnostics.fields.staleHits++;
+            }
+            return cached.value;
+          }
+          throw attempt.error;
+        }
         if (listDiagnostics) {
           if (cached) {
             listDiagnostics.fields.staleHits++;
@@ -647,6 +659,7 @@ export function createCodexSessionCatalogControl(params: {
           .listPage(pageParams, diagnostics ?? null)
           .then(
             (value) => {
+              attempt.resolved();
               cache.settled.delete(key);
               cache.settled.set(key, {
                 value,
@@ -656,6 +669,7 @@ export function createCodexSessionCatalogControl(params: {
               return value;
             },
             (error: unknown) => {
+              attempt.rejected(error);
               if (cached && cache.settled.get(key) === cached) {
                 cached.expiresAt = now();
               }
