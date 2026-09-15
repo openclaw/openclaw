@@ -6,6 +6,25 @@ import XCTest
 
 @MainActor
 final class TalkRealtimeConsultCancellationTests: XCTestCase {
+    func testConsultBudgetAllowsResearchPastTheOldFortyFiveSecondBoundary() {
+        XCTAssertEqual(TalkRealtimeWebRTCSession.toolResultTimeoutSeconds, 120)
+        XCTAssertGreaterThan(TalkRealtimeWebRTCSession.toolResultTimeoutSeconds, 45)
+    }
+
+    func testConsultFailureMessagesDistinguishTimeoutFromTransportFailure() {
+        let timeout = NSError(domain: "TalkRealtimeWebRTC", code: 12)
+        let transport = NSError(domain: NSURLErrorDomain, code: NSURLErrorNetworkConnectionLost)
+
+        XCTAssertEqual(
+            TalkRealtimeWebRTCSession.consultFailureMessage(from: timeout),
+            "OpenClaw consult reached its two-minute limit. Give a brief spoken fallback from the realtime " +
+                "conversation and ask the user to try again if they need OpenClaw-specific context.")
+        XCTAssertEqual(
+            TalkRealtimeWebRTCSession.consultFailureMessage(from: transport),
+            "OpenClaw consult failed before it completed. Tell the user OpenClaw is currently unavailable " +
+                "and ask them to try again.")
+    }
+
     func testHistoryFallbackWaitsForTheAcknowledgedRunInsteadOfANewerForeignReply() async throws {
         let completed = XCTestExpectation(description: "consult returned to listening")
         let requests = ConsultRequestCapture()
