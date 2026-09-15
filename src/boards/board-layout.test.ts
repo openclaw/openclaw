@@ -72,13 +72,19 @@ describe("board layout", () => {
     expect(widgetOrder(reordered, "two")).toEqual([]);
   });
 
-  it("rejects missing and self after anchors", () => {
+  it("rejects missing and self after anchors and names the valid anchors", () => {
     expect(() =>
       applyBoardOps(layout(), [{ kind: "widget_move", name: "alpha", after: "missing" }]),
     ).toThrow(BoardValidationError);
     expect(() =>
+      applyBoardOps(layout(), [{ kind: "widget_move", name: "alpha", after: "missing" }]),
+    ).toThrow("omit after to append, or anchor on: beta");
+    expect(() =>
       applyBoardOps(layout(), [{ kind: "widget_move", name: "alpha", after: "alpha" }]),
-    ).toThrow("after itself");
+    ).toThrow("after itself; omit after to append, or anchor on: beta");
+    expect(() =>
+      applyBoardOps(layout(), [{ kind: "widget_move", name: "gamma", after: "missing" }]),
+    ).toThrow("omit after to append; the tab has no other widgets");
   });
 
   it("clamps widget sizes to the grid bounds", () => {

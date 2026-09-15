@@ -154,14 +154,23 @@ function moveWidget(
     .toSorted(comparePosition);
   let targetPosition = targetWidgets.length;
   if (after !== undefined) {
+    // Models fill `after` with guesses ("start", the widget's own name); the
+    // error must name the real choices or the call dead-ends in a retry loop.
+    const anchorHint =
+      targetWidgets.length > 0
+        ? `omit after to append, or anchor on: ${targetWidgets.map((candidate) => candidate.name).join(", ")}`
+        : "omit after to append; the tab has no other widgets";
     if (after === widget.name) {
-      throw new BoardValidationError("invalid_operation", "widget cannot be placed after itself");
+      throw new BoardValidationError(
+        "invalid_operation",
+        `widget cannot be placed after itself; ${anchorHint}`,
+      );
     }
     const anchorIndex = targetWidgets.findIndex((candidate) => candidate.name === after);
     if (anchorIndex < 0) {
       throw new BoardValidationError(
         "not_found",
-        `board widget anchor not found on tab ${targetTabId}: ${after}`,
+        `board widget anchor not found on tab ${targetTabId}: ${after}; ${anchorHint}`,
       );
     }
     targetPosition = anchorIndex + 1;

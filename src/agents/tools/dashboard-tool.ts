@@ -58,7 +58,12 @@ const DashboardToolSchema = Type.Object(
     presentation: Type.Optional(
       Type.String({ enum: ["split", "expanded"], description: "Dashboard panel presentation" }),
     ),
-    position: Type.Optional(Type.Integer({ minimum: 0, description: "Zero-based position" })),
+    position: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        description: "Zero-based position for tab_create, tab_update, and widget_move",
+      }),
+    ),
     tabIds: Type.Optional(
       Type.Array(Type.String({ pattern: BOARD_TAB_ID_PATTERN }), {
         description: "Complete tab order",
@@ -70,7 +75,8 @@ const DashboardToolSchema = Type.Object(
     after: Type.Optional(
       Type.String({
         pattern: BOARD_WIDGET_NAME_PATTERN,
-        description: "Place after stable widget name",
+        description:
+          "Name of an existing widget on the tab to place this one after; omit to append at the end",
       }),
     ),
     sizeW: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
