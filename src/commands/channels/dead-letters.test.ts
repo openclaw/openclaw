@@ -8,6 +8,8 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { createTestRuntime } from "../test-runtime-config-helpers.js";
 import {
   channelsDeadLettersListCommand,
+  channelsDeadLettersDeleteCommand,
+  channelsDeadLettersPurgeCommand,
   channelsDeadLettersResubmitCommand,
 } from "./dead-letters.js";
 
@@ -135,6 +137,54 @@ describe("channel dead-letter commands", () => {
       };
       expect(output.accountId).toBe("default");
       expect(output.deadLetters).toEqual([expect.objectContaining({ id: "event-1" })]);
+    });
+  });
+
+  it("deletes only failed events with force", async () => {
+    await withTempState(async () => {
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "telegram",
+        accountId: "ops",
+      });
+      await queue.enqueue("event-1", { text: "discard" });
+      const claim = await queue.claim("event-1", { ownerId: "worker" });
+      if (!claim) {
+        throw new Error("Expected claim");
+      }
+      await queue.fail(claim, { reason: "bad", failedAt: 20 });
+      const runtime = createTestRuntime();
+      await channelsDeadLettersDeleteCommand(
+        "event-1",
+        { channel: "telegram", account: "ops", force: true },
+        runtime,
+      );
+      await expect(queue.listFailed?.({ limit: "all" })).resolves.toEqual([]);
+      await expect(queue.enqueue("event-1", { text: "replay" })).resolves.toMatchObject({
+        kind: "accepted",
+      });
+    });
+  });
+
+  it("purges snapshotted failed events", async () => {
+    await withTempState(async () => {
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "telegram",
+        accountId: "ops",
+      });
+      for (const id of ["event-1", "event-2"]) {
+        await queue.enqueue(id, { text: id });
+        const claim = await queue.claim(id, { ownerId: "worker" });
+        if (!claim) {
+          throw new Error("Expected claim");
+        }
+        await queue.fail(claim, { reason: "bad", failedAt: 20 });
+      }
+      const runtime = createTestRuntime();
+      await channelsDeadLettersPurgeCommand(
+        { channel: "telegram", account: "ops", force: true },
+        runtime,
+      );
+      await expect(queue.listFailed?.({ limit: "all" })).resolves.toEqual([]);
     });
   });
 });

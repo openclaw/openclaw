@@ -29,6 +29,8 @@ const channelsDeadLettersMocks = vi.hoisted(() => ({
   channelsDeadLettersResubmitCommand: vi.fn(
     async (_eventId: string, _options: { account?: string }, _runtime: unknown) => undefined,
   ),
+  channelsDeadLettersDeleteCommand: vi.fn(async () => undefined),
+  channelsDeadLettersPurgeCommand: vi.fn(async () => undefined),
 }));
 const channelsResolveCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
 const channelsCapabilitiesCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -114,7 +116,12 @@ describe("registerChannelsCli", () => {
 
     await registerChannelsCli(program);
 
-    expect(getChannelSubcommandNames(program, "dead-letters")).toEqual(["list", "resubmit"]);
+    expect(getChannelSubcommandNames(program, "dead-letters")).toEqual([
+      "list",
+      "resubmit",
+      "delete",
+      "purge",
+    ]);
   });
 
   it.each(
