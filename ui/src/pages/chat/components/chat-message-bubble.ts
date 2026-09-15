@@ -227,14 +227,6 @@ export function renderGroupedMessage(
     return renderWorkspaceConflictTranscriptMessage(workspaceConflict, messageKey, opts.entryId);
   }
   const diagnostic = readTranscriptRunError(message);
-  if (diagnostic) {
-    return html`<div
-      class="chat-bubble chat-bubble--run-error"
-      data-message-id=${opts.entryId ?? messageKey}
-    >
-      ${renderChatErrorCard(diagnostic)}
-    </div>`;
-  }
   const isToolShell = normalizedRole === "tool";
   const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
 
@@ -337,6 +329,7 @@ export function renderGroupedMessage(
       ));
   const bubbleClasses = [
     "chat-bubble",
+    diagnostic ? "chat-bubble--run-error" : "",
     transparentShell ? "chat-bubble--with-images" : "",
     onlyPreviewChips ? "chat-bubble--preview-chips-only" : "",
     hasUserFiles ? "chat-bubble--with-files" : "",
@@ -517,7 +510,12 @@ export function renderGroupedMessage(
       { ...prepared.media, text: bodyMarkdown ?? "" },
     );
   };
-  const renderMessageContent = () => (renderInOrder ? renderOrderedContent() : renderText());
+  const renderMessageContent = () =>
+    diagnostic
+      ? renderChatErrorCard(diagnostic)
+      : renderInOrder
+        ? renderOrderedContent()
+        : renderText();
   // Collapsed tool results must not load attachments or render hidden markdown.
   // Retained panes use opacity, so hidden transcripts must unmount video previews.
   const renderBody = () => html`
