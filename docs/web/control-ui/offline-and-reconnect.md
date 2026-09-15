@@ -126,7 +126,8 @@ Queued messages and drafts keep the conversation and agent selected when they we
 Switching agents, opening a split pane, or reloading does not move them to another destination.
 When split panes show the same conversation, returning to an older pane after visiting other
 conversations does not replace a newer saved draft. Text, selected recipients, Goal mode,
-and attachments follow the same draft revision.
+and attachments follow the same draft revision. Switching quickly between split panes keeps
+the last selected conversation active, including when narrowing the window.
 A literal `global` conversation keeps its captured agent; an agent's main conversation stays
 separate unless the Gateway is configured with global session scope.
 

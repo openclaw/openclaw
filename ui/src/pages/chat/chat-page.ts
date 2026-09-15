@@ -398,10 +398,6 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     }
     const data = this.data;
     const sameSession = data && areUiSessionKeysEquivalent(data.sessionKey, sessionKey);
-    if (sameSession && (data.face ?? "chat") === face && !data.draft && !data.focusComposer) {
-      this.syncRouteBindings();
-      return;
-    }
     const options = sessionNavigationTarget({
       context: this.context,
       face,
