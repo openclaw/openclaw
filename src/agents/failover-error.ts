@@ -44,12 +44,17 @@ export {
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
 const MISSING_TOOL_RESULT_REASON = "missing_tool_result";
 const MISSING_TOOL_RESULT_TEXT_RE = /native Codex tool\.call without a matching tool\.result/i;
+export const SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE =
+  "SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED";
 const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
   "GatewayDrainingError",
   "WorkerRunnerUnavailableError",
   "WorkerRunnerCapacityError",
   "WorkerWorkspaceReconciliationError",
   "ActiveTurnClaimError",
+]);
+const RUNTIME_COORDINATION_ERROR_CODES = new Set([
+  SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE,
 ]);
 
 // Failed owned cleanup stops replay even for frozen errors crossing bundled chunks.
@@ -378,8 +383,10 @@ function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
 }
 
 function hasRuntimeCoordinationFailure(err: unknown): boolean {
-  return collectErrorGraphCandidates(err, resolveNestedErrors).some((candidate) =>
-    RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)),
+  return collectErrorGraphCandidates(err, resolveNestedErrors).some(
+    (candidate) =>
+      RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)) ||
+      RUNTIME_COORDINATION_ERROR_CODES.has(readDirectErrorCode(candidate) ?? ""),
   );
 }
 

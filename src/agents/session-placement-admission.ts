@@ -15,6 +15,7 @@ import { resolveSessionLane } from "./embedded-agent-runner/lanes.js";
 import { resolveEmbeddedRunSessionLanePolicy } from "./embedded-agent-runner/run/lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
+import { SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE } from "./failover-error.js";
 import type { SandboxContext } from "./sandbox/types.js";
 import { beginForegroundSessionMaintenance } from "./session-maintenance/coordinator.js";
 import {
@@ -234,7 +235,11 @@ export async function withLocalSessionPlacementTurnSettlement(
           const assertSettlementCurrent = () => {
             // Queue reset closes this task even if its callback has not returned.
             if (!open || !isCommandLaneTaskMarkerCurrent(taskMarker)) {
-              throw createAbortError("session placement turn settlement is closed");
+              const error = createAbortError(
+                "session placement turn settlement is closed",
+              ) as Error & { code: typeof SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE };
+              error.code = SESSION_PLACEMENT_TURN_SETTLEMENT_CLOSED_ERROR_CODE;
+              throw error;
             }
             assertOwnerCurrent();
             assertClaimCurrent?.();
