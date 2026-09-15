@@ -203,6 +203,61 @@ describe("memory runtime handles", () => {
     expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { reusable: false, expectedPurpose: "cli" },
+    { reusable: true, expectedPurpose: "search" },
+  ] as const)(
+    "negotiates reusable search purpose without breaking legacy runtimes: $reusable",
+    async ({ reusable, expectedPurpose }) => {
+      const runtime = createRuntime();
+      const reusableSearch = vi.fn(async () => ({ manager: null, error: "no index" }));
+      if (reusable) {
+        Object.assign(runtime, { getReusableMemorySearchManager: reusableSearch });
+      }
+      const { registry } = createRegistry(runtime);
+      mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+
+      await getActiveMemorySearchManagerCore({
+        cfg: memoryConfig,
+        agentId: "main",
+        purpose: "search",
+      });
+
+      if (reusable) {
+        expect(reusableSearch).toHaveBeenCalledWith({ cfg: memoryConfig, agentId: "main" });
+        expect(runtime.getMemorySearchManager).not.toHaveBeenCalled();
+      } else {
+        expect(runtime.getMemorySearchManager).toHaveBeenCalledWith({
+          cfg: memoryConfig,
+          agentId: "main",
+          purpose: expectedPurpose,
+        });
+      }
+    },
+  );
+
+  it("preserves a reusable reader acquisition warning as a request-scoped outcome", async () => {
+    const runtime = createRuntime();
+    const warning = "Automatic memory index repair was requested.";
+    Object.assign(runtime, {
+      getReusableMemorySearchManager: vi.fn(async () => ({
+        manager: null,
+        error: "query failed after repair",
+        warning,
+      })),
+    });
+    const { registry } = createRegistry(runtime);
+    mocks.loadPluginRegistryHandle.mockReturnValue(registry);
+
+    await expect(
+      getActiveMemorySearchManagerCore({
+        cfg: memoryConfig,
+        agentId: "main",
+        purpose: "search",
+      }),
+    ).resolves.toMatchObject({ error: "query failed after repair", warning });
+  });
+
   it("loads only the selected memory plugin into a non-activating handle", async () => {
     const { registry, runtime } = createRegistry();
     runtime.getMemorySearchManager.mockImplementationOnce(async () => {

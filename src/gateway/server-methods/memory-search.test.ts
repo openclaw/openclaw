@@ -134,7 +134,7 @@ describe("memory.search gateway method", () => {
       undefined,
       expect.objectContaining({ message: expect.stringContaining(notice.warning) }),
     );
-    expect(manager.close).toHaveBeenCalledOnce();
+    expect(manager.close).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -151,7 +151,99 @@ describe("memory.search gateway method", () => {
       maxResults: expected,
       minScore: 0.42,
     });
+    expect(manager.close).not.toHaveBeenCalled();
+  });
+
+  it("keeps repeated Gateway searches on the shared reader lifecycle", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    const manager = createStubManager();
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
+
+    await invokeMemorySearch({ query: "first" }, cfg);
+    await invokeMemorySearch({ query: "second" }, cfg);
+
+    expect(getActiveMemorySearchManagerCore).toHaveBeenCalledTimes(2);
+    expect(getActiveMemorySearchManagerCore).toHaveBeenNthCalledWith(1, {
+      cfg,
+      agentId: "main",
+      purpose: "search",
+    });
+    expect(getActiveMemorySearchManagerCore).toHaveBeenNthCalledWith(2, {
+      cfg,
+      agentId: "main",
+      purpose: "search",
+    });
+    expect(manager.search).toHaveBeenCalledTimes(2);
+    expect(manager.close).not.toHaveBeenCalled();
+  });
+
+  it("closes a legacy runtime's transient CLI manager after the Gateway request", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    const manager = createStubManager();
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager, transient: true });
+
+    await invokeMemorySearch({ query: "legacy" }, cfg);
+
+    expect(manager.search).toHaveBeenCalledOnce();
     expect(manager.close).toHaveBeenCalledOnce();
+  });
+
+  it.each(["search", "status"] as const)(
+    "reacquires once when reader replacement closes the manager during %s",
+    async (phase) => {
+      const cfg = createConfig(testState.workspaceDir);
+      const retired = createStubManager();
+      const replacement = createStubManager();
+      if (phase === "search") {
+        retired.search.mockRejectedValueOnce(new Error("Memory index manager is closed"));
+      } else {
+        retired.status.mockImplementationOnce(() => {
+          throw new Error("Database handle is closed");
+        });
+      }
+      replacement.search.mockResolvedValueOnce([{ path: "memory/fresh.md" } as MemorySearchResult]);
+      getActiveMemorySearchManagerCore
+        .mockResolvedValueOnce({ manager: retired, warning: "repair warning before replacement" })
+        .mockResolvedValueOnce({ manager: replacement });
+
+      const respond = await invokeMemorySearch({ query: "lantern" }, cfg);
+
+      expect(getActiveMemorySearchManagerCore).toHaveBeenCalledTimes(2);
+      expect(replacement.search).toHaveBeenCalledOnce();
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          results: [{ path: "memory/fresh.md" }],
+          warning: "repair warning before replacement",
+        }),
+        undefined,
+      );
+    },
+  );
+
+  it("preserves all acquisition warnings when closed-reader reacquisition fails", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    const retired = createStubManager();
+    retired.search.mockRejectedValueOnce(new Error("Memory index manager is closed"));
+    getActiveMemorySearchManagerCore
+      .mockResolvedValueOnce({ manager: retired, warning: "initial repair warning" })
+      .mockResolvedValueOnce({
+        manager: null,
+        error: "replacement unavailable",
+        warning: "retry repair warning",
+      });
+
+    const respond = await invokeMemorySearch({ query: "lantern" }, cfg);
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringMatching(
+          /replacement unavailable.*initial repair warning.*retry repair warning/iu,
+        ),
+      }),
+    );
   });
 
   it("rejects an unknown agentId without acquiring a manager", async () => {
@@ -259,7 +351,7 @@ describe("memory.search gateway method", () => {
     expect(getActiveMemorySearchManagerCore).toHaveBeenCalledWith({
       cfg,
       agentId: configured,
-      purpose: "cli",
+      purpose: "search",
     });
     expect(resolveDefaultAgentId).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
@@ -279,6 +371,7 @@ describe("memory.search gateway method", () => {
     getActiveMemorySearchManagerCore.mockResolvedValue({
       manager: null,
       error: "memory plugin unavailable",
+      warning: "repair warning before reader creation failed",
     });
 
     const respond = await invokeMemorySearch({ query: "lantern" }, cfg);
@@ -292,7 +385,7 @@ describe("memory.search gateway method", () => {
       undefined,
       expect.objectContaining({
         code: "UNAVAILABLE",
-        message: "memory plugin unavailable",
+        message: "memory plugin unavailable repair warning before reader creation failed",
       }),
     );
   });
@@ -392,13 +485,19 @@ describe("memory.search gateway method", () => {
     );
   });
 
-  it("shares one format repair across concurrent transient Gateway searches", async () => {
+  it("uses one reusable query-only reader after writer-owned format repair", async () => {
     const { memoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
       memoryRuntime: MemoryPluginRuntime;
       configureMemoryCoreDreamingState: (
         openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
       ) => void;
     }>("../../../extensions/memory-core/runtime-api.js");
+    if (!memoryRuntime.getReusableMemorySearchManager) {
+      assert.fail("Expected Memory Core reusable search acquisition");
+    }
+    const acquireReusable: NonNullable<MemoryPluginRuntime["getReusableMemorySearchManager"]> = (
+      params,
+    ) => memoryRuntime.getReusableMemorySearchManager!(params);
     const stateEnv = testState.env;
     configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
       createPluginStateKeyedStore<T>("memory-core", { ...options, env: stateEnv }),
@@ -447,11 +546,16 @@ describe("memory.search gateway method", () => {
           )
           .run();
       };
-      const expectRecall = (respond: Awaited<ReturnType<typeof invokeMemorySearch>>) => {
+      const expectRecall = (
+        respond: Awaited<ReturnType<typeof invokeMemorySearch>>,
+        options?: { warning?: boolean },
+      ) => {
         expect(respond).toHaveBeenCalledWith(
           true,
           expect.objectContaining({
-            warning: expect.stringContaining("does not call an embedding provider"),
+            ...(options?.warning === false
+              ? {}
+              : { warning: expect.stringContaining("does not call an embedding provider") }),
             results: [
               expect.objectContaining({
                 path: "memory/orchard.md",
@@ -462,8 +566,11 @@ describe("memory.search gateway method", () => {
           undefined,
         );
       };
-      getActiveMemorySearchManagerCore.mockImplementation((params) =>
-        memoryRuntime.getMemorySearchManager(params),
+      getActiveMemorySearchManagerCore.mockImplementation(async (params) =>
+        acquireReusable({
+          cfg: params.cfg,
+          agentId: params.agentId,
+        }),
       );
       markOldProvenance();
       const beforeControl = readRevision();
@@ -477,7 +584,7 @@ describe("memory.search gateway method", () => {
       const acquired: RegisteredMemorySearchManager[] = [];
       const bothAcquired = createDeferredCore();
       getActiveMemorySearchManagerCore.mockImplementation(async (params) => {
-        const result = await memoryRuntime.getMemorySearchManager(params);
+        const result = await acquireReusable({ cfg: params.cfg, agentId: params.agentId });
         if (result.manager) {
           acquired.push(result.manager);
         }
@@ -492,9 +599,49 @@ describe("memory.search gateway method", () => {
         invokeMemorySearch({ query: "Juniper", agentId: "main" }, cfg),
       ]);
       expect(acquired).toHaveLength(2);
-      expect(acquired[0]).not.toBe(acquired[1]);
-      responses.forEach(expectRecall);
+      expect(acquired[0]).toBe(acquired[1]);
+      responses.forEach((response) => expectRecall(response, { warning: false }));
+      expect(
+        responses.some((response) =>
+          response.mock.calls.some(([, payload]) =>
+            String(payload?.warning ?? "").includes("does not call an embedding provider"),
+          ),
+        ),
+      ).toBe(true);
       expect(readRevision() - beforeConcurrent).toBe(singleRepairWrites);
+      const beforeReadOnlyReuse = await fs.stat(dbPath);
+      const reused = await invokeMemorySearch({ query: "Juniper", agentId: "main" }, cfg);
+      expectRecall(reused, { warning: false });
+      expect(reused).toHaveBeenCalledWith(
+        true,
+        expect.not.objectContaining({ warning: expect.anything() }),
+        undefined,
+      );
+      const afterReadOnlyReuse = await fs.stat(dbPath);
+      expect(afterReadOnlyReuse.size).toBe(beforeReadOnlyReuse.size);
+      expect(afterReadOnlyReuse.mtimeMs).toBe(beforeReadOnlyReuse.mtimeMs);
+      expect(acquired).toHaveLength(3);
+      expect(new Set(acquired).size).toBe(1);
+
+      markOldProvenance();
+      getActiveMemorySearchManagerCore.mockImplementationOnce(async (params) => {
+        const result = await acquireReusable({ cfg: params.cfg, agentId: params.agentId });
+        assert(result.manager, result.error ?? "Expected repaired query-only reader");
+        vi.spyOn(result.manager, "search").mockRejectedValueOnce(
+          new Error("synthetic query failure after writer repair"),
+        );
+        return result;
+      });
+      const failed = await invokeMemorySearch({ query: "Juniper", agentId: "main" }, cfg);
+      expect(failed).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: expect.stringMatching(
+            /synthetic query failure after writer repair.*does not call an embedding provider/iu,
+          ),
+        }),
+      );
     } finally {
       await memoryRuntime.closeAllMemorySearchManagers?.();
       db?.close();

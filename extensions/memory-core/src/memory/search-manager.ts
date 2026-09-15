@@ -8,7 +8,7 @@ import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js
 
 const loadManagerRuntime = createLazyRuntimeModule(() => import("../../manager-runtime.js"));
 
-type MemorySearchManagerPurpose = "default" | "status" | "cli";
+type MemorySearchManagerPurpose = "default" | "status" | "cli" | "search";
 type MemorySearchManagerParams = {
   cfg: OpenClawConfig;
   agentId: string;
@@ -19,6 +19,7 @@ type MemorySearchManagerParams = {
 
 type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
+  warning?: string;
   error?: string;
   debug?: {
     backend: "builtin";
@@ -45,11 +46,19 @@ export async function getMemorySearchManager(
 async function getBuiltinMemorySearchManager(
   params: MemorySearchManagerParams,
 ): Promise<Omit<MemorySearchManagerResult, "debug">> {
+  const acquisitionOutcome: { warning?: string } = {};
   try {
     const { MemoryIndexManager } = await loadManagerRuntime();
-    return { manager: await MemoryIndexManager.get(params) };
+    const manager =
+      params.purpose === "search"
+        ? await MemoryIndexManager.get({ ...params, acquisitionOutcome })
+        : await MemoryIndexManager.get(params);
+    return {
+      manager,
+      ...acquisitionOutcome,
+    };
   } catch (err) {
-    return { manager: null, error: formatErrorMessage(err) };
+    return { manager: null, error: formatErrorMessage(err), ...acquisitionOutcome };
   }
 }
 

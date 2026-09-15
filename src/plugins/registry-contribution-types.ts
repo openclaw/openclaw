@@ -225,6 +225,22 @@ export type MemoryPluginRuntime = {
     inspectSources?: boolean;
   }): Promise<{
     manager: RegisteredMemorySearchManager | null;
+    warning?: string;
+    debug?: {
+      backend?: "builtin";
+      purpose?: "default" | "status" | "cli";
+      managerMs?: number;
+    };
+    error?: string;
+  }>;
+  /** Acquire a reusable query-only manager when the runtime supports that lifecycle. */
+  getReusableMemorySearchManager?(params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    inspectSources?: boolean;
+  }): Promise<{
+    manager: RegisteredMemorySearchManager | null;
+    warning?: string;
     debug?: {
       backend?: "builtin";
       purpose?: "default" | "status" | "cli";

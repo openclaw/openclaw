@@ -173,3 +173,154 @@ it("fences acquisition when reload starts before the manager owner initializes",
   await registry.closeAll();
   expect(manager.close).toHaveBeenCalledOnce();
 });
+
+it("does not reuse a cached search manager after its adapter starts retiring", async () => {
+  const registry = new MemoryManagerRegistry();
+  const manager = { close: vi.fn(async () => {}) };
+  const adapter: MemoryEmbeddingProviderAdapter = {
+    id: "retiring",
+    create: async () => ({ provider: null }),
+  };
+  const callbacks = {
+    prepare: () => ({
+      key: "main:reader:search",
+      create: () => manager,
+      reuse: () => true,
+    }),
+  };
+  expect(await registry.acquire({ agentId: "main", purpose: "search" }, callbacks)).toBe(manager);
+  await registry.createProvider(manager, adapter, () =>
+    adapter.create({ config: {}, model: "test" }),
+  );
+
+  const retirement = registry.prepareReload({
+    retireRuntime: false,
+    retiringEmbeddingProviders: [adapter],
+  });
+  try {
+    await expect(
+      registry.acquire({ agentId: "main", purpose: "search" }, callbacks),
+    ).rejects.toThrow("reloading");
+    expect(manager.close).not.toHaveBeenCalled();
+    await expect(retirement.drain()).resolves.toEqual({ errors: [] });
+    expect(manager.close).toHaveBeenCalledOnce();
+  } finally {
+    retirement.resume();
+  }
+});
+
+it("does not publish a search replacement retired while the old reader closes", async () => {
+  const registry = new MemoryManagerRegistry();
+  const oldCloseEntered = createDeferred<void>();
+  const releaseOldClose = createDeferred<void>();
+  const oldManager = {
+    close: vi.fn(async () => {
+      oldCloseEntered.resolve();
+      await releaseOldClose.promise;
+    }),
+  };
+  const candidate = { close: vi.fn(async () => {}) };
+  const adapter: MemoryEmbeddingProviderAdapter = {
+    id: "candidate",
+    create: async () => ({ provider: null }),
+  };
+  await registry.acquire(
+    { agentId: "main", purpose: "search" },
+    {
+      prepare: () => ({ key: "main:old:search", create: () => oldManager, reuse: () => true }),
+    },
+  );
+
+  const replacement = registry.acquire(
+    { agentId: "main", purpose: "search" },
+    {
+      prepare: () => ({
+        key: "main:new:search",
+        create: () => candidate,
+        reuse: () => true,
+      }),
+    },
+  );
+  await oldCloseEntered.promise;
+  await registry.createProvider(candidate, adapter, () =>
+    adapter.create({ config: {}, model: "test" }),
+  );
+  const retirement = registry.prepareReload({
+    retireRuntime: false,
+    retiringEmbeddingProviders: [adapter],
+  });
+  try {
+    await expect(retirement.drain()).resolves.toEqual({ errors: [] });
+    expect(candidate.close).toHaveBeenCalledOnce();
+    releaseOldClose.resolve();
+    await expect(replacement).rejects.toThrow("reloading");
+  } finally {
+    releaseOldClose.resolve();
+    retirement.resume();
+  }
+});
+
+it.each(["scoped", "global"])(
+  "retains a candidate rejected after retirement preparation for %s close retry",
+  async (closeKind) => {
+    const registry = new MemoryManagerRegistry();
+    const oldCloseEntered = createDeferred<void>();
+    const releaseOldClose = createDeferred<void>();
+    const oldManager = {
+      close: vi.fn(async () => {
+        oldCloseEntered.resolve();
+        await releaseOldClose.promise;
+      }),
+    };
+    const cleanupFailure = new Error("candidate close failed");
+    const candidate = {
+      close: vi.fn().mockRejectedValueOnce(cleanupFailure).mockResolvedValue(undefined),
+    };
+    const adapter: MemoryEmbeddingProviderAdapter = {
+      id: "candidate",
+      create: async () => ({ provider: null }),
+    };
+    await registry.acquire(
+      { agentId: "main", purpose: "search" },
+      {
+        prepare: () => ({ key: "main:old:search", create: () => oldManager, reuse: () => true }),
+      },
+    );
+
+    const replacement = registry.acquire(
+      { agentId: "main", purpose: "search" },
+      {
+        prepare: () => ({
+          key: "main:new:search",
+          create: () => candidate,
+          reuse: () => true,
+        }),
+      },
+    );
+    const rejected = expect(replacement).rejects.toThrow("candidate cleanup also failed");
+    await oldCloseEntered.promise;
+    await registry.createProvider(candidate, adapter, () =>
+      adapter.create({ config: {}, model: "test" }),
+    );
+    const retirement = registry.prepareReload({
+      retireRuntime: false,
+      retiringEmbeddingProviders: [adapter],
+    });
+    try {
+      releaseOldClose.resolve();
+      await rejected;
+    } finally {
+      releaseOldClose.resolve();
+      retirement.resume();
+    }
+
+    expect(oldManager.close).toHaveBeenCalledOnce();
+    expect(candidate.close).toHaveBeenCalledOnce();
+    if (closeKind === "scoped") {
+      await registry.closeForAgent({ agentId: "main", purpose: "search" });
+    } else {
+      await registry.closeAll();
+    }
+    expect(candidate.close).toHaveBeenCalledTimes(2);
+  },
+);
