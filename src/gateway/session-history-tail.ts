@@ -266,6 +266,7 @@ export async function readIncrementalChatHistoryTail(params: {
       {
         includeCommentaryFallbacks: true,
         maxChars: params.effectiveMaxChars,
+        redactInlineMedia: true,
         ...(resolveProfileDisplay && !params.deferProfileDisplay
           ? { resolveCurrentUserProfileDisplay }
           : {}),

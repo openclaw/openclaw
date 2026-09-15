@@ -231,6 +231,7 @@ function buildSessionHistorySnapshot(
     projectChatDisplayMessagesWithState(params.rawMessages, {
       includeCommentaryFallbacks: true,
       maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      redactInlineMedia: true,
       ...(options.deferProfileDisplay ? {} : { resolveCurrentUserProfileDisplay }),
     });
   const visibleMessages = projected.messages;
@@ -335,6 +336,7 @@ export class SessionHistorySseState {
     const nextProjection = projectChatDisplayMessagesWithState([nextMessage], {
       includeCommentaryFallbacks: true,
       maxChars: this.maxChars,
+      redactInlineMedia: true,
       turnBoundaryPending: hadPendingTurnBoundary,
       assistantErrorPending: this.assistantErrorPending,
     });
@@ -354,6 +356,7 @@ export class SessionHistorySseState {
       {
         includeCommentaryFallbacks: true,
         maxChars: this.maxChars,
+        redactInlineMedia: true,
         resolveCurrentUserProfileDisplay,
       },
     );

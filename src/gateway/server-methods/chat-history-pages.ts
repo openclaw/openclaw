@@ -388,6 +388,7 @@ export async function readChatHistoryPageLocal(
       projectChatDisplayMessagesWithState(messages, {
         includeCommentaryFallbacks: true,
         maxChars: effectiveMaxChars,
+        redactInlineMedia: true,
         ...(options.deferProfileDisplay ? {} : { resolveCurrentUserProfileDisplay }),
         turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(overreadContextMessage),
       });
@@ -531,6 +532,7 @@ export async function readChatHistoryPageLocal(
     const displayMessages = projectChatDisplayMessages(mergedMessages, {
       includeCommentaryFallbacks: true,
       maxChars: effectiveMaxChars,
+      redactInlineMedia: true,
       ...(options.deferProfileDisplay ? {} : { resolveCurrentUserProfileDisplay }),
     });
     if (!completeCliHistory.expanded && !messageId) {

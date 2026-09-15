@@ -51,6 +51,9 @@ import type {
 type ChatDisplayProjectionOptions = {
   includeCommentaryFallbacks?: boolean;
   maxChars?: number;
+  // Stored-history readers enable this; live session.message delivery must retain
+  // inline images so WebChat can render image and QR-code responses.
+  redactInlineMedia?: boolean;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   stripEnvelope?: boolean;
   turnBoundaryPending?: boolean;
@@ -430,7 +433,7 @@ function projectEmptyAssistantErrorMessages(
 
 type ChatHistoryRecoveryOptions = Pick<
   ChatDisplayProjectionOptions,
-  "maxChars" | "stripEnvelope" | "assistantErrorPending"
+  "maxChars" | "stripEnvelope" | "assistantErrorPending" | "redactInlineMedia"
 >;
 
 function prepareChatHistoryRecoveryMessages(
@@ -454,6 +457,7 @@ function prepareChatHistoryRecoveryMessages(
     const sanitized = sanitizeChatHistoryMessage(
       { ...result, role: "toolResult" },
       options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      { redactInlineMedia: options?.redactInlineMedia },
     ).message;
     return {
       ...asOptionalRecord(message),
@@ -516,6 +520,7 @@ export function projectChatDisplayMessagesWithState(
   const sanitizedMessages = toProjectedMessages(
     sanitizeChatHistoryMessages(projectedErrors, Number.MAX_SAFE_INTEGER, {
       includeCommentaryFallbacks: options?.includeCommentaryFallbacks,
+      redactInlineMedia: options?.redactInlineMedia,
     }),
   );
   const commentaryFallbacksObserved =
@@ -530,6 +535,7 @@ export function projectChatDisplayMessagesWithState(
   const displayMessages = sanitizeChatHistoryMessages(
     mergeTtsSupplementMessages(filtered.messages),
     options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+    { redactInlineMedia: options?.redactInlineMedia },
   ) as Array<Record<string, unknown>>;
   const result: ChatDisplayProjectionResult = {
     messages: projectCurrentUserProfileAvatars(
