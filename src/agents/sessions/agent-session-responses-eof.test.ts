@@ -25,13 +25,19 @@ registerAgentSessionLoopTestLifecycle();
 it.each([
   { failure: "eof", recover: true },
   { failure: "max_output_tokens", recover: true },
+  { failure: "max_output_tokens", responseStatus: "absent", recover: true },
+  ...["completed", "failed", "cancelled", "in_progress", "queued"].map((responseStatus) => ({
+    failure: "max_output_tokens",
+    responseStatus,
+    recover: false,
+  })),
   { failure: "content_filter", recover: false },
   { failure: "unknown", recover: false },
   { failure: "completed", recover: false },
   { failure: "max_output_tokens", recover: false, retryEnabled: false },
 ])(
-  "handles Responses $failure after settled tools (recovery: $recover)",
-  async ({ failure, recover, retryEnabled }) => {
+  "handles Responses $failure after settled tools (status: $responseStatus, recovery: $recover)",
+  async ({ failure, recover, retryEnabled, responseStatus }) => {
     const execute = vi.fn(async () => ({
       content: [{ type: "text" as const, text: "saved result" }],
       details: {},
@@ -76,7 +82,12 @@ it.each([
               type: failure === "completed" ? "response.completed" : "response.incomplete",
               response: {
                 id: "resp_incomplete",
-                status: failure === "completed" ? "completed" : "incomplete",
+                ...(responseStatus === "absent"
+                  ? {}
+                  : {
+                      status:
+                        responseStatus ?? (failure === "completed" ? "completed" : "incomplete"),
+                    }),
                 incomplete_details: { reason: failure },
                 output: [
                   {
