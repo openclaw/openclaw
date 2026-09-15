@@ -31,6 +31,7 @@ const SCENARIOS = new Set([
   "msteams-polls",
   "abandoned-update",
   "legacy-operator-state",
+  "workshop-doctor-recovery",
   "mobile-pairing-reconnect",
   "acpx-openclaw-tools-bridge",
   "feishu-channel",
