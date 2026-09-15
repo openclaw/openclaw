@@ -151,6 +151,17 @@ export type TelegramPromptContextProjectionSequence = ReturnType<
   typeof createTelegramPromptContextProjectionSequence
 >;
 
+export function resolveTelegramPromptContextTranscriptMessageId(
+  marker: TelegramPromptContextProjectionMarker | undefined,
+): string | undefined {
+  if (!marker) {
+    return undefined;
+  }
+  return marker.kind === "valid"
+    ? marker.projection.transcriptMessageId
+    : marker.transcriptMessageId;
+}
+
 export function resolveCompleteTelegramPromptContextProjectionIds(
   markers: readonly (TelegramPromptContextProjectionMarker | undefined)[],
 ): ReadonlySet<string> {

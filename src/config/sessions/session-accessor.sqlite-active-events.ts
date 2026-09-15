@@ -163,6 +163,78 @@ export function readSessionTranscriptActivePathEntryRelation(
   });
 }
 
+/**
+ * Point membership check for one transcript entry against the active
+ * projection: true when the entry is on the active path, false when a rewind
+ * or branch switch cut it, undefined when no such entry is recorded (its
+ * provenance cannot be established). Indexed point reads only; nothing is
+ * decoded, so the cost is per candidate, not per discarded history.
+ */
+export function readSessionTranscriptEntryActiveState(
+  scope: SessionTranscriptReadScope,
+  entryId: string,
+): boolean | undefined {
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const db = getActiveTranscriptKysely(projection.database);
+    const identity = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("transcript_event_identities as identity")
+        .select("identity.seq")
+        .where("identity.session_id", "=", projection.resolved.sessionId)
+        .where("identity.event_id", "=", entryId),
+    );
+    if (!identity) {
+      return undefined;
+    }
+    const active = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_active_events as active")
+        .select("active.event_seq")
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .where("active.event_seq", "=", identity.seq),
+    );
+    return active !== undefined;
+  });
+}
+
+/**
+ * Point inactivity check for one cached transport message against the exact
+ * identity the ordinary ingress writer persisted (`channel-user:v1:<hash>`).
+ * True only when that source turn is recorded and no longer on the active
+ * path. An entry whose identity cannot be established returns false and is
+ * retained, because transport ids repeat across conversations.
+ */
+export function readSessionTransportMessageInactiveState(
+  scope: SessionTranscriptReadScope,
+  params: { sourceTurnId: string },
+): boolean {
+  return withCurrentProjectionSnapshot(scope, (projection) => {
+    const db = getActiveTranscriptKysely(projection.database);
+    const identity = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("transcript_event_identities as identity")
+        .select("identity.seq")
+        .where("identity.session_id", "=", projection.resolved.sessionId)
+        .where("identity.message_idempotency_key", "=", params.sourceTurnId),
+    );
+    if (!identity) {
+      return false;
+    }
+    const active = executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_active_events as active")
+        .select("active.event_seq")
+        .where("active.session_id", "=", projection.resolved.sessionId)
+        .where("active.event_seq", "=", identity.seq),
+    );
+    return active === undefined;
+  });
+}
+
 /** Reads a bounded context tail, preserving control facts but excluding display-only messages. */
 export function readRecentSessionTranscriptActiveEvents(
   scope: SessionTranscriptReadScope,

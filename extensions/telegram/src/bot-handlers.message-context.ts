@@ -49,7 +49,10 @@ import {
   type TelegramCachedMessageNode,
   type TelegramReplyChainEntry,
 } from "./message-cache.js";
-import { resolveCompleteTelegramPromptContextProjectionIds } from "./prompt-context-projection.js";
+import {
+  resolveCompleteTelegramPromptContextProjectionIds,
+  resolveTelegramPromptContextTranscriptMessageId,
+} from "./prompt-context-projection.js";
 
 function legacyAssistantTextKey(node: TelegramCachedMessageNode, botUserId?: number) {
   if (node.promptContextProjectionMarker) {
@@ -415,20 +418,28 @@ export function createTelegramMessageContextRuntime({
     ctx: TelegramContext,
     flags?: { replyTarget?: boolean },
     media?: TelegramMediaRef,
-  ) => ({
-    message_id: node.messageId,
-    thread_id: node.threadId,
-    sender: resolvePromptSender(node, ctx),
-    sender_id: node.senderId,
-    sender_username: node.senderUsername,
-    timestamp_ms: node.timestamp,
-    body: node.body,
-    media_type: media?.contentType ?? media?.kind ?? node.mediaType,
-    media_path: media?.path,
-    media_ref: media?.path ? undefined : node.mediaRef,
-    reply_to_id: node.replyToId,
-    is_reply_target: flags?.replyTarget === true ? true : undefined,
-  });
+  ) => {
+    // Lets the session transcript merge drop this entry after a rewind/branch
+    // switch cut its turn from the active path.
+    const transcriptMessageId = resolveTelegramPromptContextTranscriptMessageId(
+      node.promptContextProjectionMarker,
+    );
+    return {
+      message_id: node.messageId,
+      thread_id: node.threadId,
+      sender: resolvePromptSender(node, ctx),
+      sender_id: node.senderId,
+      sender_username: node.senderUsername,
+      timestamp_ms: node.timestamp,
+      body: node.body,
+      media_type: media?.contentType ?? media?.kind ?? node.mediaType,
+      media_path: media?.path,
+      media_ref: media?.path ? undefined : node.mediaRef,
+      reply_to_id: node.replyToId,
+      is_reply_target: flags?.replyTarget === true ? true : undefined,
+      ...(transcriptMessageId ? { session_transcript_id: transcriptMessageId } : {}),
+    };
+  };
 
   const buildPromptContextForMessage = async (
     ctx: TelegramContext,

@@ -4,6 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import {
+  isInactiveTranscriptEntry,
+  isInactiveTransportMessage,
+} from "../../config/sessions/transcript-inactive-identities.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import { runPreparedChannelTurn } from "../turn/execution.js";
 import { mergeSessionTranscriptContext } from "./session-transcript-context.runtime.js";
@@ -12,7 +16,14 @@ vi.mock("../../config/sessions/transcript.js", () => ({
   readRecentUserAssistantTextForSession: vi.fn(),
 }));
 
+vi.mock("../../config/sessions/transcript-inactive-identities.js", () => ({
+  isInactiveTranscriptEntry: vi.fn(async () => false),
+  isInactiveTransportMessage: vi.fn(async () => false),
+}));
+
 const readRecent = vi.mocked(readRecentUserAssistantTextForSession);
+const inactiveEntry = vi.mocked(isInactiveTranscriptEntry);
+const inactiveTransport = vi.mocked(isInactiveTransportMessage);
 
 function context(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
@@ -36,6 +47,8 @@ describe("session transcript inbound context", () => {
 
   beforeEach(() => {
     readRecent.mockReset();
+    inactiveEntry.mockReset().mockResolvedValue(false);
+    inactiveTransport.mockReset().mockResolvedValue(false);
   });
 
   it("restores Slack assistant context when the live window is empty after restart", async () => {
@@ -203,6 +216,220 @@ describe("session transcript inbound context", () => {
     expect(ctx.ChannelStructuredContext?.[0]?.payload).toEqual({
       messages: [{ body: "target", is_reply_target: true }],
     });
+  });
+
+  it("drops window entries whose turns were cut from the active branch", async () => {
+    readRecent.mockResolvedValue([
+      { id: "u1", role: "user", text: "retained prefix", timestamp: 1_000 },
+      { id: "u3", role: "user", text: "fresh turn", timestamp: 4_000 },
+    ]);
+    const ctx = context({
+      ChannelStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "selected_for_current_message",
+            messages: [
+              { message_id: "101", sender: "Pat", body: "retained prefix", timestamp_ms: 1_000 },
+              { message_id: "102", sender: "Pat", body: "discarded question", timestamp_ms: 2_000 },
+              {
+                message_id: "103",
+                sender: "Bot",
+                body: "discarded reply",
+                timestamp_ms: 3_000,
+                session_transcript_id: "assistant-cut",
+              },
+              { message_id: "104", sender: "Pat", body: "ambient noise", timestamp_ms: 3_500 },
+            ],
+          },
+        },
+      ],
+    });
+    inactiveEntry.mockImplementation(async (_scope, entryId) => entryId === "assistant-cut");
+    inactiveTransport.mockImplementation(async (_scope, message) => message.messageId === "102");
+
+    await mergeSessionTranscriptContext({
+      agentId: "main",
+      ctx,
+      sessionKey: ctx.SessionKey!,
+      storePath: "/tmp/sessions.json",
+    });
+
+    const payload = asRecord(ctx.ChannelStructuredContext?.[0]?.payload);
+    expect((payload.messages as Array<Record<string, unknown>>).map((m) => m.message_id)).toEqual([
+      "101",
+      "104",
+      "session:u3",
+    ]);
+  });
+
+  it("prunes a discarded reply target instead of pinning it", async () => {
+    readRecent.mockResolvedValue([]);
+    const ctx = context({
+      ChannelStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "selected_for_current_message",
+            messages: [
+              { message_id: "101", sender: "Pat", body: "retained", timestamp_ms: 1_000 },
+              {
+                message_id: "102",
+                sender: "Pat",
+                body: "discarded question",
+                timestamp_ms: 2_000,
+                is_reply_target: true,
+              },
+            ],
+          },
+        },
+      ],
+    });
+    inactiveTransport.mockImplementation(async (_scope, message) => message.messageId === "102");
+
+    await mergeSessionTranscriptContext({
+      agentId: "main",
+      ctx,
+      sessionKey: ctx.SessionKey!,
+      storePath: "/tmp/sessions.json",
+    });
+
+    const payload = asRecord(ctx.ChannelStructuredContext?.[0]?.payload);
+    expect((payload.messages as Array<Record<string, unknown>>).map((m) => m.message_id)).toEqual([
+      "101",
+    ]);
+  });
+
+  it("keeps cached entries when the transport probe abstains", async () => {
+    readRecent.mockResolvedValue([]);
+    const ctx = context({
+      ChannelStructuredContext: [
+        {
+          label: "Thread history",
+          source: "slack",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "selected_for_current_message",
+            messages: [{ message_id: "102", sender: "Pat", body: "same id, other channel" }],
+          },
+        },
+      ],
+    });
+    // the probe answers false: nothing confirmed inactive for this conversation
+    inactiveTransport.mockResolvedValue(false);
+
+    await mergeSessionTranscriptContext({
+      agentId: "main",
+      ctx,
+      sessionKey: ctx.SessionKey!,
+      storePath: "/tmp/sessions.json",
+    });
+
+    const payload = asRecord(ctx.ChannelStructuredContext?.[0]?.payload);
+    expect((payload.messages as Array<Record<string, unknown>>).map((m) => m.message_id)).toEqual([
+      "102",
+    ]);
+  });
+
+  it("keeps a same-id cached message when the cut turn belongs to another conversation", async () => {
+    readRecent.mockResolvedValue([]);
+    const ctx = context({
+      ChannelStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "selected_for_current_message",
+            messages: [
+              { message_id: "101", sender: "Pat", body: "retained", timestamp_ms: 1_000 },
+              { message_id: "102", sender: "Pat", body: "same id, other chat", timestamp_ms: 2_000 },
+            ],
+          },
+        },
+      ],
+    });
+    // the same transport id was cut in another conversation, not this one
+    inactiveTransport.mockImplementation(
+      async (_scope, message) =>
+        message.conversationId === "someone-else" && message.messageId === "102",
+    );
+
+    await mergeSessionTranscriptContext({
+      agentId: "main",
+      ctx,
+      sessionKey: ctx.SessionKey!,
+      storePath: "/tmp/sessions.json",
+    });
+
+    const payload = asRecord(ctx.ChannelStructuredContext?.[0]?.payload);
+    expect((payload.messages as Array<Record<string, unknown>>).map((m) => m.message_id)).toEqual([
+      "101",
+      "102",
+    ]);
+  });
+
+  it("keeps transport-id matches when the current conversation cannot be established", async () => {
+    readRecent.mockResolvedValue([]);
+    const ctx = context({
+      Provider: undefined,
+      From: undefined,
+      To: undefined,
+      SessionKey: "agent:main:main",
+      ChannelStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "selected_for_current_message",
+            messages: [
+              { message_id: "101", sender: "Pat", body: "retained", timestamp_ms: 1_000 },
+              { message_id: "102", sender: "Pat", body: "unverifiable id", timestamp_ms: 2_000 },
+            ],
+          },
+        },
+      ],
+    });
+
+    await mergeSessionTranscriptContext({
+      agentId: "main",
+      ctx,
+      sessionKey: ctx.SessionKey!,
+      storePath: "/tmp/sessions.json",
+    });
+
+    const payload = asRecord(ctx.ChannelStructuredContext?.[0]?.payload);
+    expect((payload.messages as Array<Record<string, unknown>>).map((m) => m.message_id)).toEqual([
+      "101",
+      "102",
+    ]);
+    // with no current conversation the transport probe must not run at all
+    expect(inactiveTransport).not.toHaveBeenCalled();
+  });
+
+  it("skips the inactive-branch probes when no window carries messages", async () => {
+    readRecent.mockResolvedValue([]);
+    const ctx = context();
+
+    await mergeSessionTranscriptContext({
+      agentId: "main",
+      ctx,
+      sessionKey: ctx.SessionKey!,
+      storePath: "/tmp/sessions.json",
+    });
+
+    expect(inactiveEntry).not.toHaveBeenCalled();
+    expect(inactiveTransport).not.toHaveBeenCalled();
   });
 
   it("preserves a provider-owned thread window while enriching a populated session prompt", async () => {
