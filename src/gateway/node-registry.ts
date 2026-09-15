@@ -837,6 +837,18 @@ export class NodeRegistry {
 
   /** Revalidates that one inbound node connection still owns its persisted pairing state. */
   async isConnectionCurrentPairingState(connId: string): Promise<boolean> {
+    return (await this.resolveConnectionPairingState(connId)) === "current";
+  }
+
+  /**
+   * Resolves the settled pairing outcome for one inbound node connection without
+   * retiring it. "unavailable" means the persisted pairing state could not be read,
+   * so callers must keep the connection and retry instead of treating it as stale
+   * (#148693).
+   */
+  async resolveConnectionPairingState(
+    connId: string,
+  ): Promise<"current" | "stale" | "unavailable"> {
     const nodeId = this.nodesByConn.get(connId);
     const initial = nodeId ? this.nodesById.get(nodeId) : undefined;
     if (
@@ -846,7 +858,7 @@ export class NodeRegistry {
       initial.client.invalidated === true ||
       !this.options.resolveCurrentPairingState
     ) {
-      return false;
+      return "stale";
     }
     const resolution = await this.resolvePairingLease(this.capturePairingLease(initial), {
       invalidateStale: true,
@@ -854,7 +866,7 @@ export class NodeRegistry {
     if (resolution.status === "stale" && resolution.presenceInvalidated) {
       this.publishActiveNodeContext();
     }
-    return resolution.status === "current";
+    return resolution.status;
   }
 
   private clearDesktopAvailability(node: NodeSession): void {

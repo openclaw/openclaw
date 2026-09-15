@@ -1193,14 +1193,32 @@ describe("gateway/node-registry", () => {
       pairingGeneration: "generation-a",
     });
 
-    await expect(registry.isConnectionCurrentPairingState("conn-generation")).resolves.toBe(true);
+    await expect(registry.resolveConnectionPairingState("conn-generation")).resolves.toBe(
+      "current",
+    );
     resolveCurrentPairingState.mockResolvedValue({
       identity: "identity-a",
       generation: "generation-b",
     });
-    await expect(registry.isConnectionCurrentPairingState("conn-generation")).resolves.toBe(false);
+    await expect(registry.resolveConnectionPairingState("conn-generation")).resolves.toBe("stale");
     expect(client.invalidated).toBe(true);
     expect(resolveCurrentPairingState).toHaveBeenCalledWith("node-generation");
+  });
+
+  it("reports an unreadable pairing store as unavailable without retiring the connection", async () => {
+    const resolveCurrentPairingState = vi.fn().mockRejectedValue(new Error("pairing store down"));
+    const registry = createNodeRegistry({ resolveCurrentPairingState });
+    const client = makeClient("conn-unavailable", "node-unavailable");
+    registerNodeSession(registry, client, {
+      pairingIdentity: "identity-a",
+      pairingGeneration: "generation-a",
+    });
+
+    await expect(registry.resolveConnectionPairingState("conn-unavailable")).resolves.toBe(
+      "unavailable",
+    );
+    expect(client.invalidated).not.toBe(true);
+    expect(registry.get("node-unavailable")).toBeDefined();
   });
 
   it("removes an externally replaced session from connected and active projections", async () => {

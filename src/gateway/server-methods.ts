@@ -325,17 +325,35 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   if (sessionMutation.error) {
     return { error: sessionMutation.error };
   }
-  if (
-    params.client?.connect.role === "node" &&
-    (!params.client.connId ||
-      !(await params.context.nodeRegistry.isConnectionCurrentPairingState(params.client.connId)))
-  ) {
-    return {
-      error: errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
-        retryable: true,
-        details: { code: "PAIRING_CHANGED" },
-      }),
-    };
+  if (params.client?.connect.role === "node") {
+    const connId = params.client.connId;
+    const pairingState = connId
+      ? await params.context.nodeRegistry.resolveConnectionPairingState(connId)
+      : "stale";
+    if (pairingState !== "current") {
+      // A definitively stale pairing must not linger as a connected node: retire the
+      // node's projections and mark the transport invalidated so every buffered request
+      // fails, then close the socket after this rejection frame is written so the
+      // client's reconnect lifecycle takes over (#148693). A pairing store that could
+      // not be read stays retryable without retiring a possibly valid connection.
+      if (connId && pairingState === "stale") {
+        params.context.nodeRegistry.invalidateConnectionForPairingChange(
+          connId,
+          "node pairing changed before request dispatch",
+        );
+        const deviceId = params.client.connect.device?.id;
+        if (deviceId && params.context.disconnectClientsForDevice) {
+          const disconnect = params.context.disconnectClientsForDevice.bind(params.context);
+          setTimeout(() => disconnect(deviceId, { role: "node" }), 0);
+        }
+      }
+      return {
+        error: errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
+          retryable: true,
+          details: { code: "PAIRING_CHANGED" },
+        }),
+      };
+    }
   }
   return {
     error: null,
