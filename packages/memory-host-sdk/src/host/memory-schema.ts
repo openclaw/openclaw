@@ -7,6 +7,8 @@ import {
   MEMORY_INDEX_STATE_TABLE,
 } from "./memory-schema-base.js";
 import {
+  assertSafeMemoryFtsTableName,
+  assertSafeMemorySqlIdentifier,
   dropDisabledMemoryFts,
   dropMemoryPathFtsTriggers,
   ensureMemoryChunkFtsSchema,
@@ -601,8 +603,11 @@ export function ensureMemoryIndexSchema(params: {
   ftsEnabled: boolean;
   ftsTokenizer?: "unicode61" | "trigram";
 }): { ftsAvailable: boolean; ftsError?: string } {
-  const embeddingCacheTable = params.embeddingCacheTable ?? MEMORY_EMBEDDING_CACHE_TABLE;
-  const ftsTable = params.ftsTable ?? MEMORY_INDEX_FTS_TABLE;
+  const embeddingCacheTable = assertSafeMemorySqlIdentifier(
+    params.embeddingCacheTable ?? MEMORY_EMBEDDING_CACHE_TABLE,
+    "embedding cache table",
+  );
+  const ftsTable = assertSafeMemoryFtsTableName(params.ftsTable ?? MEMORY_INDEX_FTS_TABLE);
   params.db.exec(
     buildMemoryIndexStrictSchema({
       embeddingCacheTable,
