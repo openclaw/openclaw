@@ -19,10 +19,20 @@ import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
+import {
+  adjustTextareaHeight,
+  disconnectTextareaOverflowObserver,
+  observeTextareaOverflow,
+} from "../chat/components/chat-composer-dom.ts";
 import { renderCustodianAlertCard } from "./custodian-alert-card.ts";
 import { custodianAlertStore } from "./custodian-alert-store.ts";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
 import * as eventNudgeState from "./event-nudge.ts";
+import {
+  currentPluginHelpReference,
+  pendingPluginHelpDraft,
+  pluginHelpFocusRequest,
+} from "./plugin-help.ts";
 import { sessionVariant } from "./session-lifecycle.ts";
 import { renderCustodianTranscriptEntry } from "./transcript.ts";
 
@@ -40,7 +50,9 @@ class CustodianSurface extends OpenClawLightDomElement {
   @property({ attribute: false }) compact = false;
   @property({ attribute: false }) historyContent: TemplateResult | typeof nothing = nothing;
 
+  private composerTextarea: HTMLTextAreaElement | null = null;
   private lastMessageId: number | null = null;
+  private lastPluginHelpFocus = 0;
 
   constructor() {
     super();
@@ -71,12 +83,40 @@ class CustodianSurface extends OpenClawLightDomElement {
     this.store.connect(this.context, sessionVariant(this.onboarding, this.newAgentIntent));
   }
 
+  override disconnectedCallback(): void {
+    if (this.composerTextarea) {
+      disconnectTextareaOverflowObserver(this.composerTextarea);
+      this.composerTextarea = null;
+    }
+    super.disconnectedCallback();
+  }
+
   override updated(): void {
     const store = this.store;
+    const textarea = this.querySelector<HTMLTextAreaElement>("textarea");
+    if (this.composerTextarea && this.composerTextarea !== textarea) {
+      disconnectTextareaOverflowObserver(this.composerTextarea);
+    }
+    this.composerTextarea = textarea;
+    if (textarea) {
+      observeTextareaOverflow(textarea);
+      adjustTextareaHeight(textarea);
+    }
     if (store.canSend && !store.sensitive && !store.hasUnresolvedQuestion()) {
       custodianAlertStore.askIfReady(
         (question, admission, display) => void store.send(question, display, false, admission),
       );
+    }
+    const focusRequest = pluginHelpFocusRequest(this.context);
+    if (
+      focusRequest > 0 &&
+      focusRequest !== this.lastPluginHelpFocus &&
+      !store.sensitive &&
+      !store.wizardInputPending &&
+      store.canSend
+    ) {
+      this.lastPluginHelpFocus = focusRequest;
+      textarea?.focus();
     }
     const transcript = this.querySelector<HTMLElement>(".custodian__messages");
     const messageId = this.store.messages.at(-1)?.id ?? null;
@@ -99,6 +139,7 @@ class CustodianSurface extends OpenClawLightDomElement {
 
   override render() {
     const store = this.store;
+    const plugin = currentPluginHelpReference(this.context);
     const alertCard = custodianAlertStore.alert
       ? renderCustodianAlertCard({
           alert: custodianAlertStore.alert,
@@ -141,6 +182,10 @@ class CustodianSurface extends OpenClawLightDomElement {
           emptyError ? "custodian-surface--empty-error" : ""
         }"
       >
+        <div>
+          ${plugin ? html`<div class="custodian__plugin-reference">${t("custodian.viewingPlugin", { plugin: plugin.name })}</div>` : nothing}
+          ${pendingPluginHelpDraft(this.context) ? html`<p class="custodian__plugin-reference" role="status">${t("custodian.pluginHelpPending")}</p>` : nothing}
+        </div>
         <div
           class="custodian__messages"
           ${markdownBlocks()}

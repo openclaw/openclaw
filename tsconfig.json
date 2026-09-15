@@ -109,6 +109,7 @@
       "@openclaw/gateway-protocol/startup-unavailable": [
         "./packages/gateway-protocol/src/startup-unavailable.ts"
       ],
+      "@openclaw/gateway-protocol/system-agent-context": ["./packages/gateway-protocol/src/system-agent-context.ts"],
       "@openclaw/gateway-protocol/version": ["./packages/gateway-protocol/src/version.ts"],
       "@openclaw/gateway-protocol/*": ["./packages/gateway-protocol/src/*"],
       "@openclaw/media-generation-core": ["./packages/media-generation-core/src/index.ts"],

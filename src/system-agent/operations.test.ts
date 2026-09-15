@@ -355,6 +355,26 @@ describe("system agent operations", () => {
     expect(output).not.toContain("<redacted>");
   });
 
+  it("reads installed plugin field schemas and authored help from the active metadata", async () => {
+    const config = { plugins: { entries: { codex: { enabled: true } } } };
+    mockConfig.setConfig(config);
+    setRuntimeConfigSnapshot(config, config);
+    const metadata = createSystemAgentPluginMetadataTestSnapshot(config);
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    try {
+      await metadata.run(() =>
+        executeSystemAgentOperation(
+          { kind: "config-schema", path: "plugins.entries.codex.config.codexDynamicToolsLoading" },
+          runtime,
+        ),
+      );
+      expect(lines.join("\n")).toContain("searchable");
+      expect(lines.join("\n")).toContain("Use searchable to defer OpenClaw dynamic tools");
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
   it("redacts config values marked sensitive only by active plugin metadata", async () => {
     const authorization = "Bearer plugin-only-secret";
     const config = {
@@ -917,34 +937,6 @@ describe("system agent operations", () => {
     );
     expect(result.applied).toBe(true);
     expect(runConfigSet).toHaveBeenCalledOnce();
-  });
-
-  it("runs plugin list and search as read-only operations", async () => {
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const runPluginsList = vi.fn(async (pluginRuntime: RuntimeEnv) => {
-      pluginRuntime.log("plugin rows");
-    });
-    const runPluginsSearch = vi.fn(async (query: string, pluginRuntime: RuntimeEnv) => {
-      pluginRuntime.log(`search rows: ${query}`);
-    });
-
-    const listResult = await executeSystemAgentOperation({ kind: "plugin-list" }, runtime, {
-      deps: { runPluginsList, runPluginsSearch },
-    });
-    expect(listResult.applied).toBe(false);
-    const searchResult = await executeSystemAgentOperation(
-      { kind: "plugin-search", query: "calendar" },
-      runtime,
-      {
-        deps: { runPluginsList, runPluginsSearch },
-      },
-    );
-    expect(searchResult.applied).toBe(false);
-
-    expect(runPluginsList).toHaveBeenCalledWith(runtime);
-    expect(runPluginsSearch).toHaveBeenCalledWith("calendar", runtime);
-    expect(lines.join("\n")).toContain("plugin rows");
-    expect(lines.join("\n")).toContain("search rows: calendar");
   });
 
   it("installs plugins only after approval and audits the write", async () => {

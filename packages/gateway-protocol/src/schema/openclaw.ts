@@ -1,6 +1,12 @@
 // Gateway Protocol schema module defines OpenClaw chat payloads.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import {
+  SYSTEM_AGENT_PLUGIN_ID_MAX_CHARS,
+  SYSTEM_AGENT_PLUGIN_NAME_MAX_CHARS,
+  SYSTEM_AGENT_SETTING_PATH_MAX_SEGMENTS,
+  SYSTEM_AGENT_SETTING_SEGMENT_MAX_CHARS,
+} from "../system-agent-context.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import {
@@ -42,6 +48,26 @@ export const SystemAgentChatParamsSchema = closedObject({
         maxLength: 64,
         pattern: "^[A-Za-z0-9/_-]{1,64}$",
       }),
+      plugin: Type.Optional(
+        closedObject({
+          id: Type.String({
+            minLength: 1,
+            maxLength: SYSTEM_AGENT_PLUGIN_ID_MAX_CHARS,
+            pattern: "^[A-Za-z0-9@][A-Za-z0-9@._/-]{0,127}$",
+          }),
+          name: Type.String({ minLength: 1, maxLength: SYSTEM_AGENT_PLUGIN_NAME_MAX_CHARS }),
+          installed: Type.Optional(Type.Boolean()),
+          setting: Type.Optional(
+            closedObject({
+              path: Type.Array(
+                Type.String({ minLength: 1, maxLength: SYSTEM_AGENT_SETTING_SEGMENT_MAX_CHARS }),
+                { minItems: 1, maxItems: SYSTEM_AGENT_SETTING_PATH_MAX_SEGMENTS },
+              ),
+              label: Type.String({ minLength: 1, maxLength: SYSTEM_AGENT_PLUGIN_NAME_MAX_CHARS }),
+            }),
+          ),
+        }),
+      ),
     }),
   ),
   /** Host-only regular-agent delegation context. Never model-authored. */

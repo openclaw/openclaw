@@ -4,10 +4,17 @@ import { buildSystemAgentSessionInvalidatedErrorDetails } from "@openclaw/gatewa
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { hasSensitiveConfigData } from "../../components/config-form.shared.ts";
 import { installSafeLocalStorageForTesting } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext } from "./custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
+import {
+  publishPluginHelpContext,
+  createPluginHelpRequest,
+  currentPluginHelpReference,
+  pendingPluginHelpDraft,
+} from "./plugin-help.ts";
 import { custodianErrorMessage } from "./transcript.ts";
 
 describe("CustodianSessionStore", () => {
@@ -17,7 +24,190 @@ describe("CustodianSessionStore", () => {
 
   afterEach(() => {
     localStorage.clear();
+    window.history.replaceState({}, "", "/");
     vi.restoreAllMocks();
+  });
+
+  it("retains a cold plugin question through initialization and sends only on explicit submission", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValue({ sessionId: "plugin-help-session", reply: "Ready.", action: "none" });
+    const { context, setPathname } = createContext(request);
+    setPathname("/settings/plugins/example");
+    const plugin = { id: "example", name: "Example" };
+    publishPluginHelpContext(context, {}, plugin, { overview: false, installed: true });
+    await createPluginHelpRequest(
+      context,
+      plugin,
+    )({
+      path: ["plugins", "entries", "example", "config", "names.with.dots"],
+      label: "Names",
+      value: ["first"],
+      sensitive: false,
+    });
+    expect(request).not.toHaveBeenCalled();
+    const store = new CustodianSessionStore();
+    store.connect(context, "caretaker");
+    await waitForFast(() => expect(store.canSend).toBe(true));
+    expect(store.input).toBe('Help me understand Names for Example.\n\nCurrent value: ["first"]');
+    expect(request.mock.calls.every((call) => call[1].message === undefined)).toBe(true);
+    const message = store.input;
+    await store.send();
+    expect(request.mock.calls.at(-1)?.[1]).toMatchObject({
+      sessionId: "plugin-help-session",
+      message,
+      context: {
+        plugin: {
+          ...plugin,
+          setting: {
+            path: ["plugins", "entries", "example", "config", "names.with.dots"],
+            label: "Names",
+          },
+        },
+      },
+    });
+  });
+
+  it("appends setting questions without overwriting an ordinary draft or a hosted secret answer", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValue({ sessionId: "plugin-help-session", reply: "Ready.", action: "none" });
+    const { context } = createContext(request);
+    const store = new CustodianSessionStore();
+    store.connect(context, "caretaker");
+    await waitForFast(() => expect(store.canSend).toBe(true));
+    store.setInput("Keep this ordinary draft.");
+    store.sensitive = true;
+    store.wizardInputPending = true;
+    store.setInput("synthetic-answer");
+    const plugin = { id: "example", name: "Example" };
+    await createPluginHelpRequest(
+      context,
+      plugin,
+    )({
+      path: ["plugins", "entries", "example", "config", "apiKey"],
+      label: "API key",
+      value: "synthetic-secret",
+      sensitive: true,
+    });
+    expect(store.input).toBe("synthetic-answer");
+    expect(pendingPluginHelpDraft(context)).toBe(true);
+    expect(request).toHaveBeenCalledOnce();
+    store.sensitive = false;
+    store.wizardInputPending = false;
+    store.requestNudgeUpdate();
+    expect(store.input).toBe(
+      "Keep this ordinary draft.\n\nHelp me understand API key for Example.\n\nCurrent value: <redacted>",
+    );
+    expect(pendingPluginHelpDraft(context)).toBe(false);
+  });
+
+  it("masks nested sensitive values, references, sentinels and URL credentials in setting drafts", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValue({ sessionId: "plugin-help-session", reply: "Ready.", action: "none" });
+    const { context } = createContext(request);
+    const store = new CustodianSessionStore();
+    store.connect(context, "caretaker");
+    await waitForFast(() => expect(store.canSend).toBe(true));
+    const path = ["plugins", "entries", "example", "config", "accounts"];
+    const hints = { "plugins.entries.example.config.accounts.*.opaque": { sensitive: true } };
+    const values = [
+      { work: { opaque: "nested-secret" } },
+      { source: "env", provider: "default", id: "PRIVATE_KEY" },
+      { value: "__OPENCLAW_REDACTED__" },
+      "https://fixture-user:fixture-password@example.invalid/",
+      "https://example.invalid/?access_token=fixture-token&safe=keep",
+      { endpoints: ["https://example.invalid/#client_secret=fixture-secret"] },
+      { "https://fixture-user:fixture-password@example.invalid/": "route" },
+      "https://example.invalid/?next=https%3A%2F%2Fnested.invalid%2F%3Fapi_key%3Dfixture-key",
+      "https%3A%2F%2Ffixture-user%3Afixture-password%40example.invalid%2F",
+      `https://example.invalid/${"x".repeat(520)}?token=fixture-token`,
+    ];
+    for (const value of values) {
+      const original = structuredClone(value);
+      store.setInput("");
+      await createPluginHelpRequest(context, { id: "example", name: "Example" })({
+        path,
+        label: "Accounts",
+        value,
+        sensitive: hasSensitiveConfigData(value, path, hints),
+      });
+      expect(store.input).toBe(
+        "Help me understand Accounts for Example.\n\nCurrent value: <redacted>",
+      );
+      expect(value).toEqual(original);
+    }
+    const value = { endpoints: ["https://example.invalid/?region=eu&discount=100%25"] };
+    const original = structuredClone(value);
+    store.setInput("");
+    await createPluginHelpRequest(context, { id: "example", name: "Example" })({
+      path,
+      label: "Accounts",
+      value,
+      sensitive: false,
+    });
+    expect(store.input).toContain(`Current value: ${JSON.stringify(original)}`);
+    expect(value).toEqual(original);
+  });
+
+  it("releases only its publication and clears plugin references and pending drafts on owner change", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValue({ sessionId: "plugin-help-session", reply: "Ready.", action: "none" });
+    const { context, setGatewayToken } = createContext(request);
+    const owner = {};
+    const releaseOld = publishPluginHelpContext(
+      context,
+      owner,
+      { id: "first", name: "First" },
+      { overview: true, installed: true },
+    );
+    const releaseCurrent = publishPluginHelpContext(
+      context,
+      owner,
+      { id: "second", name: "Second" },
+      { overview: true, installed: true },
+    );
+    releaseOld();
+    expect(currentPluginHelpReference(context)?.id).toBe("second");
+    await createPluginHelpRequest(context, { id: "second", name: "Second" })({
+      path: ["limit"],
+      label: "Limit",
+      value: 5,
+      sensitive: false,
+    });
+    setGatewayToken("replacement-operator");
+    expect(currentPluginHelpReference(context)).toBeUndefined();
+    releaseCurrent();
+    const store = new CustodianSessionStore();
+    store.connect(context, "caretaker");
+    await waitForFast(() => expect(store.canSend).toBe(true));
+    expect(store.input).toBe("");
+  });
+
+  it("retires route references and ignores a setting request finishing after navigation", async () => {
+    const request = vi.fn().mockResolvedValue({ sessionId: "s1", reply: "Ready.", action: "none" });
+    const { context, setPathname } = createContext(request);
+    const plugin = { id: "example", name: "Example" };
+    setPathname("/settings/plugins/example");
+    publishPluginHelpContext(context, {}, plugin, { overview: false, installed: true });
+    const pending = createPluginHelpRequest(
+      context,
+      plugin,
+    )({
+      path: ["limit"],
+      label: "Limit",
+      value: 5,
+      sensitive: false,
+    });
+    setPathname("/agents");
+    await pending;
+    expect(currentPluginHelpReference(context)).toBeUndefined();
+    const store = new CustodianSessionStore();
+    store.connect(context, "caretaker");
+    await waitForFast(() => expect(store.canSend).toBe(true));
+    expect(store.input).toBe("");
   });
 
   it("redacts secrets in displayed request failures", () => {

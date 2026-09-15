@@ -2666,6 +2666,12 @@ export const en: TranslationMap & {
     removeSelection: "Remove selected text",
   },
   custodian: {
+    viewingPlugin: "Viewing {plugin}",
+    pluginHelpQuestion: "Help me understand {setting} for {plugin}.",
+    pluginHelpFailed: "Could not prepare the setting question. Try Ask OpenClaw again.",
+    pluginHelpUnset: "Not set",
+    pluginHelpValue: "Current value: {value}",
+    pluginHelpPending: "Your plugin question is saved as a draft and will appear after this step.",
     title: "OpenClaw",
     subtitleCaretaker: "System setup and care.",
     exitSetup: "Exit setup",

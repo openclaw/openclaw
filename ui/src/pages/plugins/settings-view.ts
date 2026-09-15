@@ -29,11 +29,12 @@ import {
   renderPluginCapabilitySection,
   renderPluginMetadata,
   renderPluginPublisher,
+  renderPluginAskAction,
 } from "./overview.ts";
 import { renderPluginStateStatus } from "./plugin-card.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.ts";
 import { matchesPluginQuery } from "./plugin-state-presentation.ts";
-import type { PluginSettingsEditor } from "./settings-editor.ts";
+import type { PluginSettingsEditor, PluginSettingsField } from "./settings-editor.ts";
 import { renderPluginLifecycle } from "./settings-lifecycle.ts";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
 import type { PluginToolPreview } from "./tool-preview.ts";
@@ -75,6 +76,8 @@ type InventoryProps = SharedProps & {
 export type DetailProps = SharedProps &
   PluginSettingsEditorModel & {
     renderCredential?: PluginSettingsEditor["renderCredential"];
+    onAskPlugin?: () => void;
+    onAskSetting?: (field: PluginSettingsField) => void;
     skillsSection?: TemplateResult;
     tools?: PluginToolPreview[];
     onOpenTool?: (name: string) => void;
@@ -451,6 +454,7 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
         <openclaw-plugin-settings-editor
           .model=${props}
           .renderCredential=${props.renderCredential}
+          .onAskSetting=${props.onAskSetting}
           .renderPermissions=${(query: string) => renderPermissions(props, query)}
         ></openclaw-plugin-settings-editor>
       `,
@@ -475,14 +479,14 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
         >${props.iconUrls[plugin.id] ? html`<img src=${props.iconUrls[plugin.id]} alt="" @error=${() => props.onIconError(plugin.id)} />` : icons.box}</span
       >`,
       identity: renderPluginPublisher(catalog, props.inspection?.overview?.publisherName),
-      titleAction: renderPluginLifecycle(
+      titleAction: html`${renderPluginLifecycle(
         {
           ...props,
           settingsHref: props.settingsHref ?? "#configuration",
           onSettings: () => props.onTabChange("configuration"),
         },
         plugin,
-      ),
+      )}${renderPluginAskAction(props.onAskPlugin)}`,
       sidebar:
         catalog || plugin.version || props.inspection?.overview
           ? renderPluginMetadata(catalog, plugin.version, props.inspection?.overview)
