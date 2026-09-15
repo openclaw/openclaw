@@ -111,3 +111,97 @@ it.each([undefined, "transport-user-key"])(
     }
   },
 );
+
+it("annotates and mirrors the admitted prompt content when a write hook rewrites it", async () => {
+  const createUserTurnTranscriptRecorder = await loadUserTurnTranscriptRecorderFactoryForTest();
+  const base = await createParams();
+  const target = {
+    agentId: "main",
+    sessionId: base.sessionId,
+    sessionKey: "agent:main:monitor",
+    storePath: path.join(base.workspaceDir, "openclaw-agent.sqlite"),
+  };
+  await upsertSessionEntry({ ...target, entry: { sessionId: target.sessionId, updatedAt: 1 } });
+  const recorder = createUserTurnTranscriptRecorder({
+    input: {
+      text: "Check the monitor.",
+      provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+    },
+    target: { ...target, sessionEntry: undefined },
+    // A content-changing write hook makes the admitted bytes diverge from the
+    // prepared prompt (here: a trailing newline is appended during persistence).
+    beforeMessageWrite: ({ message }) => ({
+      ...message,
+      content: typeof message.content === "string" ? `${message.content}\n` : message.content,
+    }),
+  });
+  await recorder.persistApproved();
+  expect(recorder.getPersistedMessage?.()?.content).toBe("Check the monitor.\n");
+  const attempt = {
+    ...base,
+    ...target,
+    sessionTarget: target,
+    userTurnTranscriptRecorder: recorder,
+  };
+  const host = await createAdmittedHostCapabilityTestFixture(attempt);
+  const params = { ...attempt, hostCapabilities: host.hostCapabilities };
+  try {
+    const mirror = {
+      params,
+      agentId: target.agentId,
+      sessionKey: target.sessionKey,
+      cwd: base.workspaceDir,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      notifyUserMessagePersisted: createCodexAppServerUserMessagePersistenceNotifier(params),
+    };
+    await mirrorPromptAtTurnStartBestEffort({
+      ...mirror,
+      upstreamUserText: "Check the monitor.",
+    });
+    const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1", {
+      upstreamUserText: "Check the monitor.",
+    });
+    projector.recordDynamicToolCall({
+      callId: "result",
+      tool: "heartbeat_respond",
+      arguments: {},
+    });
+    projector.recordDynamicToolResult({
+      callId: "result",
+      tool: "heartbeat_respond",
+      success: true,
+      terminalType: "completed",
+      contentItems: [{ type: "inputText", text: "Monitor completed." }],
+    });
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const first = await codexTranscriptMirrorRuntime.mirrorBestEffort({ ...mirror, result });
+    const second = await codexTranscriptMirrorRuntime.mirrorBestEffort({ ...mirror, result });
+    const prompts = (await readSessionTranscriptEvents(target)).filter((event) => {
+      const message = asOptionalRecord(asOptionalRecord(event)?.message);
+      return asOptionalRecord(message?.["__openclaw"])?.mirrorIdentity === "turn-1:prompt";
+    });
+    // One canonical admitted row keeps its transformed content and native provenance.
+    expect(prompts).toHaveLength(1);
+    const promptMessage = asOptionalRecord(asOptionalRecord(prompts[0])?.message);
+    expect(promptMessage?.content).toBe("Check the monitor.\n");
+    const provenance = asOptionalRecord(promptMessage?.["__openclaw"]);
+    expect(provenance?.mirrorOrigin).toBe("codex-app-server");
+    expect(provenance?.upstreamUserText).toBe("Check the monitor.");
+    expect(typeof provenance?.mirrorSourceFingerprint).toBe("string");
+    expect(provenance?.runId).toBe(base.runId);
+    // Repeated final mirroring keeps the same admitted row in the mirrored set.
+    for (const mirrored of [first, second]) {
+      expect(
+        mirrored.mirroredMessages.some(
+          (message) =>
+            asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.mirrorIdentity ===
+            "turn-1:prompt",
+        ),
+      ).toBe(true);
+    }
+  } finally {
+    host.closeHost();
+    host.closeAdmission();
+  }
+});
