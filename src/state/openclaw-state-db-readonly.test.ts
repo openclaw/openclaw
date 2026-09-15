@@ -3,7 +3,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
@@ -401,6 +401,44 @@ describe.each(["admission", "explicit", "async"] as const)("%s read-only state r
         opened.db.exec("ROLLBACK");
       }
     });
+  });
+});
+
+it("preserves catalog authorization denial and recovers the cached reader", async () => {
+  await withTempDir("openclaw-state-readonly-authorizer-", async (stateDir) => {
+    const options = createOptions(stateDir);
+    const opened = openOpenClawStateDatabase(options);
+    opened.db.enableDefensive(true);
+    const schemaVersion = opened.db.prepare("PRAGMA schema_version").get();
+    const operation = vi.fn(() => "unexpected");
+    // A retry must not hide the first refusal by entering legacy tolerance.
+    let denied = false;
+    opened.db.setAuthorizer((action) => {
+      if (action === constants.SQLITE_SELECT && !denied) {
+        denied = true;
+        return constants.SQLITE_DENY;
+      }
+      return constants.SQLITE_OK;
+    });
+    try {
+      expect(() => withExistingOpenClawStateDatabaseReadOnly(operation, options)).toThrow(
+        /not authorized/,
+      );
+    } finally {
+      opened.db.setAuthorizer(null);
+    }
+    expect(denied).toBe(true);
+    expect(operation).not.toHaveBeenCalled();
+    expect(opened.db.prepare("PRAGMA writable_schema").get()).toEqual({ writable_schema: 0 });
+    opened.db.exec("PRAGMA schema_version = 2147483647;");
+    expect(opened.db.prepare("PRAGMA schema_version").get()).toEqual(schemaVersion);
+    expect(
+      withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+        expect(db).toBe(opened.db);
+        return db.prepare("SELECT role FROM schema_meta").get();
+      }, options),
+    ).toEqual({ role: "global" });
+    expect(opened.db.prepare("PRAGMA writable_schema").get()).toEqual({ writable_schema: 0 });
   });
 });
 
