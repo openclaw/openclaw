@@ -326,6 +326,53 @@ describe("update CLI shared helpers", () => {
     },
   );
 
+  it.each(["destination", "staging"] as const)(
+    "preserves a replaced %s directory before publication and cleanup",
+    async (replaced) => {
+      await withTestDir({ prefix: "openclaw-update-clone-replaced-" }, async (base) => {
+        const checkoutDir = path.join(base, "openclaw");
+        const displacedDir = path.join(base, "displaced");
+        await fs.mkdir(checkoutDir);
+        runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
+          await fs.writeFile(path.join(cloneTarget(argv), "checkout.marker"), "complete\n");
+          return successfulCommandResult;
+        });
+        let replacementStage = "";
+        await expect(
+          ensureGitCheckout({
+            dir: checkoutDir,
+            timeoutMs: 1_000,
+            env: process.env,
+            useStagedCheckout: async (stagingDir, publish) => {
+              const movedDir = replaced === "destination" ? checkoutDir : stagingDir;
+              await fs.rename(movedDir, displacedDir);
+              await fs.mkdir(movedDir);
+              replacementStage = stagingDir;
+              if (replaced === "destination") {
+                await fs.rename(path.join(displacedDir, path.basename(stagingDir)), stagingDir);
+              }
+              const userDir = replaced === "destination" ? displacedDir : stagingDir;
+              await fs.writeFile(path.join(userDir, "user.marker"), "keep\n");
+              await publish();
+            },
+          }),
+        ).rejects.toThrow("changed before publication");
+        const userDir = replaced === "destination" ? displacedDir : replacementStage;
+        await expect(fs.readFile(path.join(userDir, "user.marker"), "utf8")).resolves.toBe(
+          "keep\n",
+        );
+        if (replaced === "destination") {
+          await expect(fs.readdir(checkoutDir)).resolves.toEqual([]);
+        } else {
+          await expect(fs.readdir(replacementStage)).resolves.toEqual(["user.marker"]);
+          await expect(
+            fs.readFile(path.join(displacedDir, "checkout.marker"), "utf8"),
+          ).resolves.toBe("complete\n");
+        }
+      });
+    },
+  );
+
   it("retains recovery files when publication and rollback both fail", async () => {
     await withTestDir({ prefix: "openclaw-update-clone-rollback-" }, async (base) => {
       const checkoutDir = path.join(base, "openclaw");

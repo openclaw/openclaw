@@ -25,6 +25,10 @@ aligned:
 - `beta` -> prefers npm dist-tag `beta`, falling back to `latest` when beta is
   missing or older than the current stable release.
 
+Fresh clones are validated before publication. If the destination or staging
+folder is replaced during validation, the update stops without changing the
+replacement. Choose an empty `OPENCLAW_GIT_DIR` and retry.
+
 ### Validation and activation
 
 If the resolved registry package version equals the installed version without changing
