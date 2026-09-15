@@ -1,4 +1,3 @@
-// Browser tests cover server context.ensure browser available.waits for cdp ready plugin behavior.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -96,6 +95,34 @@ afterEach(() => {
 });
 
 describe("browser server-context ensureBrowserAvailable", () => {
+  it("keeps a shared launch running when one caller cancels its wait", async () => {
+    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
+      setupEnsureBrowserAvailableHarness();
+    const controller = new AbortController();
+    const reason = new Error("caller cancelled");
+    const entered = deferred<void>();
+    const launch = deferred<RunningChrome>();
+    const running = fakeRunning(1200);
+    launchOpenClawChrome.mockImplementationOnce(async () => {
+      entered.resolve();
+      return await launch.promise;
+    });
+    isChromeCdpReady.mockResolvedValue(true);
+
+    const first = profile.ensureBrowserAvailable({ signal: controller.signal });
+    const second = profile.ensureBrowserAvailable();
+    await entered.promise;
+    const cancelled = expect(first).rejects.toBe(reason);
+    controller.abort(reason);
+    await cancelled;
+    launch.resolve(running);
+    await expect(second).resolves.toBeUndefined();
+
+    expect(state.profiles.get("openclaw")?.running).toBe(running);
+    expect(launchOpenClawChrome).toHaveBeenCalledOnce();
+    expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+
   it("rejects and cleans a deferred launch before stop returns, then allows restart", async () => {
     const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
       setupEnsureBrowserAvailableHarness();
@@ -188,7 +215,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });
 
-  it("keeps launched Chrome when readiness responses take 750ms", async () => {
+  it("keeps Chrome across startup and later operations when readiness responses take 750ms", async () => {
     const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
       setupEnsureBrowserAvailableHarness();
     isChromeCdpReady.mockImplementation(
@@ -203,6 +230,14 @@ describe("browser server-context ensureBrowserAvailable", () => {
     await vi.advanceTimersByTimeAsync(8100);
     await ready;
 
+    vi.mocked(chromeModule.isChromeReachable).mockImplementation(async () =>
+      Boolean(state.profiles.get("openclaw")?.running),
+    );
+    const reused = expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(8100);
+    await reused;
+
+    expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
     expect(state.profiles.get("openclaw")?.running).toBe(launched);
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });
@@ -247,6 +282,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
       launched.pid,
       expect.any(Number),
       undefined,
+      expect.any(AbortSignal),
     );
     expect(stopOpenClawChrome).toHaveBeenCalledExactlyOnceWith(launched);
     expect(state.profiles.get("openclaw")?.running).toBeNull();
@@ -365,7 +401,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
       startedAt: Date.now(),
       proc: existingProc,
     };
-    isChromeReachable.mockResolvedValueOnce(true).mockResolvedValue(false);
+    isChromeReachable.mockImplementation(async () => Boolean(runtime.running));
     isChromeCdpReady.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     mockLaunchedChrome(launchOpenClawChrome, 987);
 
@@ -517,12 +553,14 @@ describe("browser server-context ensureBrowserAvailable", () => {
       "http://127.0.0.1:18800",
       PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
       undefined,
+      expect.any(AbortSignal),
     );
     expect(isChromeReachable).toHaveBeenNthCalledWith(
       2,
       "http://127.0.0.1:18800",
       PROFILE_ATTACH_RETRY_TIMEOUT_MS,
       undefined,
+      expect.any(AbortSignal),
     );
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
@@ -582,6 +620,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
         allowPrivateNetwork: true,
         allowedHostnames: ["browserless"],
       },
+      { signal: expect.any(AbortSignal) },
     );
     expect(isChromeCdpReady).toHaveBeenNthCalledWith(
       2,
@@ -592,6 +631,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
         allowPrivateNetwork: true,
         allowedHostnames: ["browserless"],
       },
+      { signal: expect.any(AbortSignal) },
     );
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
@@ -613,13 +653,14 @@ describe("browser server-context ensureBrowserAvailable", () => {
       "http://127.0.0.1:9222",
       state.resolved.remoteCdpTimeoutMs,
       undefined,
+      expect.any(AbortSignal),
     );
     expect(isChromeCdpReady).toHaveBeenCalledWith(
       "http://127.0.0.1:9222",
       state.resolved.remoteCdpTimeoutMs,
       state.resolved.remoteCdpHandshakeTimeoutMs,
       undefined,
-      { onDiagnostic: expect.any(Function) },
+      { signal: expect.any(AbortSignal), onDiagnostic: expect.any(Function) },
     );
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
@@ -652,13 +693,14 @@ describe("browser server-context ensureBrowserAvailable", () => {
       "ws://127.0.0.1:9222",
       state.resolved.remoteCdpTimeoutMs,
       undefined,
+      expect.any(AbortSignal),
     );
     expect(isChromeCdpReady).toHaveBeenCalledWith(
       "ws://127.0.0.1:9222",
       state.resolved.remoteCdpTimeoutMs,
       state.resolved.remoteCdpHandshakeTimeoutMs,
       undefined,
-      { onDiagnostic: expect.any(Function) },
+      { signal: expect.any(AbortSignal), onDiagnostic: expect.any(Function) },
     );
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
