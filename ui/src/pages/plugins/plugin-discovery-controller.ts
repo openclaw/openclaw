@@ -227,7 +227,9 @@ export class PluginDiscoveryController {
   }
 
   invalidate(): void {
+    // Reconnects reload the latest input without replaying its manual observation.
     this.disconnect();
+    this.committedQuery = this.query.trim();
     void this.browseTask.run([null, this.intent, this.category, this.committedQuery, false]);
     this.result = null;
     this.error = null;

@@ -199,6 +199,10 @@ it("counts only settled manual searches across refresh, filters and connection i
   controller.invalidate();
   await vi.advanceTimersByTimeAsync(250);
   expect(request).not.toHaveBeenCalled();
+  controller.ensureInitial();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(request.mock.lastCall?.[1]).toEqual({ intent: "all", query: "calendar", pageSize: 100 });
+  request.mockClear();
   controller.updateQuery("notion");
   controller.disconnect();
   await vi.advanceTimersByTimeAsync(250);
