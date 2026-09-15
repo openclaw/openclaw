@@ -275,6 +275,7 @@ as untrusted.
   and rejects group and room ids — so a group reply arrives without one. Heartbeat
   turns also show the loading animation while the reply is generated.
 - Media downloads are capped by `channels.line.mediaMaxMb` (default 10).
+- Group history context uses `channels.line.historyLimit` (or `channels.line.accounts.*.historyLimit`), falling back to `messages.groupChat.historyLimit`. Set `0` to disable (default 50).
 - Inbound media is saved under `~/.openclaw/media/inbound/` before it is passed
   to the agent, matching the shared media store used by other channel plugins.
 - LINE webhooks carry ids but no names, so the sender's display name and the
