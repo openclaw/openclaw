@@ -4902,6 +4902,109 @@ describe("task-registry", () => {
     },
   );
 
+  it("preserves cron succeeded recorded during cancellation", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const runId = "run-cron-cancel-race";
+      const task = createTaskFixture("cron", {
+        sourceId: "cron-cancel-race",
+        ownerKey: "",
+        scopeKind: "system",
+        runId,
+        task: "Finish during cancellation",
+        notifyPolicy: "silent",
+      });
+      hoisted.cancelActiveCronTaskRunMock.mockImplementation(() => true);
+      // Cancellation snapshots running, then suspends at the control-runtime
+      // loader await. Commit completion while suspended so the resume must
+      // observe the terminal row instead of promoting cancellation.
+      const cancelPromise = cancelTask(task.taskId);
+      finalizeTaskRecordByRunId({
+        runId,
+        runtime: "cron",
+        status: "succeeded",
+        endedAt: 200,
+        lastEventAt: 200,
+        terminalSummary: "Recorded terminal result",
+      });
+      const result = await cancelPromise;
+
+      expectRecordFields(result, {
+        found: true,
+        cancelled: false,
+        reason: "Task became succeeded while cancellation was in progress.",
+      });
+      for (const record of [result.task, getTaskById(task.taskId)]) {
+        expectRecordFields(record, {
+          status: "succeeded",
+          endedAt: 200,
+          error: undefined,
+          terminalSummary: "Recorded terminal result",
+        });
+      }
+    });
+  });
+
+  it("preserves legacy cron succeeded recorded during cancellation with real handles", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const { registerActiveCronTaskRun, cancelActiveCronTaskRun: realCancelActiveCronTaskRun } =
+        await import("../cron/service/active-run-cancellation.js");
+      const cronHandleTestApi = (globalThis as Record<PropertyKey, unknown>)[
+        Symbol.for("openclaw.activeCronTaskRunTestApi")
+      ] as { resetActiveCronTaskRunsForTests: () => void } | undefined;
+      // Use the real cancellation handle instead of the suite stub so this
+      // test exercises the production handle lifecycle: the runner releases
+      // its handle before finalizing the registry row.
+      setTaskRegistryControlRuntimeForTests({
+        cancelActiveCronTaskRun: realCancelActiveCronTaskRun,
+      } as never);
+      try {
+        const runId = "cron:legacy-cancel-race:456";
+        const controller = new AbortController();
+        const releaseHandle = registerActiveCronTaskRun({ runId, controller });
+        const task = createTaskFixture("cron", {
+          sourceId: "legacy-cancel-race",
+          ownerKey: "",
+          scopeKind: "system",
+          runId,
+          task: "Legacy cron work",
+          notifyPolicy: "silent",
+        });
+        // Cancellation snapshots running, then suspends at the control-runtime
+        // loader await. Complete the run in real runner order (release the
+        // handle, then finalize) while suspended.
+        const cancelPromise = cancelTask(task.taskId);
+        releaseHandle?.();
+        finalizeTaskRecordByRunId({
+          runId,
+          runtime: "cron",
+          status: "succeeded",
+          endedAt: 300,
+          lastEventAt: 300,
+          terminalSummary: "Recorded terminal result",
+        });
+        const result = await cancelPromise;
+
+        expectRecordFields(result, {
+          found: true,
+          cancelled: false,
+          reason: "Task became succeeded while cancellation was in progress.",
+        });
+        for (const record of [result.task, getTaskById(task.taskId)]) {
+          expectRecordFields(record, {
+            status: "succeeded",
+            endedAt: 300,
+            error: undefined,
+            terminalSummary: "Recorded terminal result",
+          });
+        }
+        // The released run owned nothing to abort.
+        expect(controller.signal.aborted).toBe(false);
+      } finally {
+        cronHandleTestApi?.resetActiveCronTaskRunsForTests();
+      }
+    });
+  });
+
   it("cancels subagent-backed tasks through subagent control", async () => {
     await withTaskRegistryTempDir(async () => {
       const silentTask = createTaskFixture("subagent", {
