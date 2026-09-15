@@ -203,7 +203,7 @@ describe("auth-store", () => {
   });
 
   it("reports partial phone-code creds that cannot be cleared from a custom auth dir", async () => {
-    const authDir = tempDirs.make("openclaw-wa-auth-phone-code-external-partial");
+    const authDir = tempDirs.make("openclaw-wa-auth-phone-code-external-partial-");
     const credsPath = path.join(authDir, "creds.json");
     fsSync.writeFileSync(
       credsPath,
@@ -241,45 +241,37 @@ describe("auth-store", () => {
   });
 
   it("reports linked credentials that fresh login cannot clear from a custom auth dir", async () => {
-    const authDir = createTempAuthDir("openclaw-wa-auth-force-fresh-external");
+    const authDir = tempDirs.make("openclaw-wa-auth-force-fresh-external-");
     const credsPath = path.join(authDir, "creds.json");
-    try {
-      fsSync.writeFileSync(
-        credsPath,
-        JSON.stringify(createCompletedPhoneCodeCreds({ registered: true })),
-        "utf-8",
-      );
+    fsSync.writeFileSync(
+      credsPath,
+      JSON.stringify(createCompletedPhoneCodeCreds({ registered: true })),
+      "utf-8",
+    );
 
-      await expect(
-        prepareWebAuthForLogin({
-          authDir,
-          isLegacyAuthDir: false,
-          mode: "clear-existing",
-        }),
-      ).resolves.toBe("not-cleared");
-      expect(fsSync.existsSync(credsPath)).toBe(true);
-    } finally {
-      fsSync.rmSync(authDir, { recursive: true, force: true });
-    }
+    await expect(
+      prepareWebAuthForLogin({
+        authDir,
+        isLegacyAuthDir: false,
+        mode: "clear-existing",
+      }),
+    ).resolves.toBe("not-cleared");
+    expect(fsSync.existsSync(credsPath)).toBe(true);
   });
 
   it("reports fresh login ready when no credentials exist", async () => {
-    const authDir = createTempAuthDir("openclaw-wa-auth-force-fresh-absent");
-    try {
-      await expect(
-        prepareWebAuthForLogin({
-          authDir,
-          isLegacyAuthDir: false,
-          mode: "clear-existing",
-        }),
-      ).resolves.toBe("not-needed");
-    } finally {
-      fsSync.rmSync(authDir, { recursive: true, force: true });
-    }
+    const authDir = tempDirs.make("openclaw-wa-auth-force-fresh-absent-");
+    await expect(
+      prepareWebAuthForLogin({
+        authDir,
+        isLegacyAuthDir: false,
+        mode: "clear-existing",
+      }),
+    ).resolves.toBe("not-needed");
   });
 
   it("treats completed phone-code pairing creds as linked", async () => {
-    const authDir = tempDirs.make("openclaw-wa-auth-phone-code-linked");
+    const authDir = tempDirs.make("openclaw-wa-auth-phone-code-linked-");
     fsSync.writeFileSync(
       path.join(authDir, "creds.json"),
       JSON.stringify(createCompletedPhoneCodeCreds({ registered: true })),

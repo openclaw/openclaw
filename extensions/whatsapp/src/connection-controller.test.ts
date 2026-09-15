@@ -5,16 +5,14 @@ import path from "node:path";
 import { DisconnectReason } from "baileys";
 import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  closeWaSocket,
-  waitForWhatsAppLoginResult,
-  WhatsAppConnectionController,
-} from "./connection-controller.js";
+import { prepareWebAuthForLogin } from "./auth-store.js";
+import { closeWaSocket, WhatsAppConnectionController } from "./connection-controller.js";
+import { waitForWhatsAppLoginResult } from "./login-result.js";
 import { enqueueCredsSave, writeCredsJsonAtomically } from "./creds-persistence.js";
 import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
+import { createCompletedPhoneCodeCreds } from "./phone-code.test-helpers.js";
 import {
   createWaSocket,
-  prepareWebAuthForLogin,
   readWebAuthExistsForDecision,
   waitForCredsSaveQueueWithTimeout,
   waitForWaConnection,
@@ -27,9 +25,16 @@ vi.mock("./session.js", async () => {
     ...actual,
     createWaSocket: vi.fn(),
     waitForWaConnection: vi.fn(),
-    prepareWebAuthForLogin: vi.fn(async () => "cleared" as const),
     readWebAuthExistsForDecision: vi.fn(async () => ({ outcome: "stable" as const, exists: true })),
     waitForCredsSaveQueueWithTimeout: vi.fn(async () => "drained" as const),
+  };
+});
+
+vi.mock("./auth-store.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
+  return {
+    ...actual,
+    prepareWebAuthForLogin: vi.fn(async () => "cleared" as const),
   };
 });
 
@@ -165,7 +170,7 @@ describe("WhatsAppConnectionController", () => {
     registerChannelRuntimeContextMock.mockReturnValue({ dispose: vi.fn() });
     connectionOwnerMocks.acquire.mockResolvedValue({ release: connectionOwnerMocks.release });
     connectionOwnerMocks.release.mockResolvedValue(undefined);
-    logoutWebMock.mockResolvedValue(true);
+    prepareWebAuthForLoginMock.mockReset().mockResolvedValue("cleared");
     readWebAuthExistsForDecisionMock
       .mockReset()
       .mockResolvedValue({ outcome: "stable", exists: true });
@@ -412,13 +417,12 @@ describe("WhatsAppConnectionController", () => {
   });
 
   it("waits for queued creds persistence so linked auth survives an auth-dir reuse", async () => {
-    const actualSession = await vi.importActual<typeof import("./session.js")>("./session.js");
     const actualAuthStore =
       await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
     const authDir = await fs.mkdtemp(path.join(os.tmpdir(), "wa-auth-durability-"));
     try {
       readWebAuthExistsForDecisionMock.mockImplementation(
-        actualSession.readWebAuthExistsForDecision,
+        actualAuthStore.readWebAuthExistsForDecision,
       );
       let credsSaved = false;
       enqueueCredsSave(
@@ -427,7 +431,10 @@ describe("WhatsAppConnectionController", () => {
           await new Promise((resolve) => {
             setTimeout(resolve, 50);
           });
-          await writeCredsJsonAtomically(authDir, { me: { id: "123@s.whatsapp.net" } });
+          await writeCredsJsonAtomically(
+            authDir,
+            createCompletedPhoneCodeCreds({ registered: true }),
+          );
           credsSaved = true;
         },
         () => {},

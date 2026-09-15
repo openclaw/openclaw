@@ -354,14 +354,14 @@ describe("login-qr", () => {
     const authState = Promise.withResolvers<{ outcome: "stable"; exists: true }>();
     const authority = revocableAuthority();
     const beforeCredentialPersistence = authority.check;
-    readWebAuthExistsForDecisionMock.mockReturnValueOnce(authState.promise);
     prepareWebAuthForLoginMock.mockImplementationOnce(async (options) => {
+      await authState.promise;
       await options.beforeCredentialPersistence?.();
       return "cleared";
     });
 
     const resultPromise = startQr(accountId, { force: true, beforeCredentialPersistence });
-    await vi.waitFor(() => expect(readWebAuthExistsForDecisionMock).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(prepareWebAuthForLoginMock).toHaveBeenCalledOnce());
     authority.revoke();
     authState.resolve({ outcome: "stable", exists: true });
 
@@ -370,6 +370,7 @@ describe("login-qr", () => {
       "WhatsApp login failed: formatted:Error: plugin tool host authority is no longer active",
     );
     expect(beforeCredentialPersistence).toHaveBeenCalledOnce();
+    expect(readWebAuthExistsForDecisionMock).not.toHaveBeenCalled();
     expect(createWaSocketMock).not.toHaveBeenCalled();
   });
 

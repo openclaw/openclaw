@@ -17,4 +17,5 @@ export {
   webAuthExists,
 } from "./auth-store.js";
 export { monitorWebChannel } from "./auto-reply/monitor.js";
-export { loginWeb, runWhatsAppLogin } from "./login.js";
+export { runWhatsAppLogin } from "./login-flow.js";
+export { loginWeb } from "./login.js";

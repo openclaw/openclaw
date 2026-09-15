@@ -44,7 +44,7 @@ export { newConnectionId } from "./reconnect.js";
 
 export {
   getWebAuthAgeMs,
-  logoutWeb,
+  prepareWebAuthForLogin,
   readWebAuthExistsForDecision,
   readWebSelfId,
   WHATSAPP_AUTH_UNSTABLE_CODE,
@@ -61,6 +61,8 @@ const LOGGED_OUT_STATUS = 401;
 const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
+const WHATSAPP_BROWSER: WABrowserDescription = ["openclaw", "cli", VERSION];
+export const WHATSAPP_PHONE_CODE_BROWSER: WABrowserDescription = ["openclaw", "Chrome", VERSION];
 const OPENCLAW_WHATSAPP_WEB_SOCKET_URL_ENV = "OPENCLAW_WHATSAPP_WEB_SOCKET_URL";
 
 async function rejectUnsafeWebCredsPath(authDir: string): Promise<void> {
@@ -128,6 +130,8 @@ export async function createWaSocket(
     getMessage?: (key: WAMessageKey) => Promise<proto.IMessage | undefined>;
     cachedGroupMetadata?: (jid: string) => Promise<GroupMetadata | undefined>;
     waWebSocketUrl?: string | URL;
+    qrTimeoutMs?: number;
+    browser?: WABrowserDescription;
   } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   return await createWaSocketInternal(printQr, verbose, opts, "normal");
@@ -242,7 +246,7 @@ async function createWaSocketInternal(
     version,
     logger,
     printQRInTerminal: false,
-    browser: OPENCLAW_WHATSAPP_BROWSER,
+    browser: opts.browser ?? WHATSAPP_BROWSER,
     syncFullHistory: false,
     fireInitQueries: receiveMode !== "directory",
     markOnlineOnConnect: false,
@@ -252,6 +256,7 @@ async function createWaSocketInternal(
     fetchAgent,
     ...(makeSignalRepository ? { makeSignalRepository } : {}),
     ...(waWebSocketUrl ? { waWebSocketUrl } : {}),
+    ...(opts.qrTimeoutMs === undefined ? {} : { qrTimeout: opts.qrTimeoutMs }),
     ...(opts.getMessage ? { getMessage: opts.getMessage } : {}),
     ...(opts.cachedGroupMetadata ? { cachedGroupMetadata: opts.cachedGroupMetadata } : {}),
   });

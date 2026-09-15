@@ -5,6 +5,7 @@ import { resetLogger, setLoggerOverride, success } from "openclaw/plugin-sdk/run
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareWebAuthForLogin, restoreCredsFromBackupIfNeeded } from "./auth-store.js";
 import { loginWeb, loginWebWithPhoneCode, normalizeWhatsAppPairingPhoneNumber } from "./login.js";
+import { createCompletedPhoneCodeCreds } from "./phone-code.test-helpers.js";
 import { createWaSocket, type waitForWaConnection } from "./session.js";
 
 const waiter = vi.fn<typeof waitForWaConnection>();
@@ -214,6 +215,10 @@ describe("web login", () => {
     const loginPromise = loginWebWithPhoneCode(false, "+1 (555) 123-4567", waiter, runtime);
     await loginPromise;
 
+    expect(vi.mocked(createWaSocket).mock.calls[0]?.[2]).toMatchObject({
+      browser: ["openclaw", "Chrome", expect.any(String)],
+      qrTimeoutMs: 5 * 60_000,
+    });
     expect(sock.requestPairingCode).toHaveBeenCalledWith("15551234567");
     expect(waiter).toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(success("WhatsApp pairing code: 1234 5678"));

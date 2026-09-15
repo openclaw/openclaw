@@ -1,3 +1,4 @@
+import type { ConnectionState } from "baileys";
 import { parsePhoneNumberFromString } from "libphonenumber-js/min";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -11,10 +12,11 @@ import {
   restoreCredsFromBackupIfNeeded,
   WhatsAppAuthUnstableError,
 } from "./auth-store.js";
-import { closeWaSocket, waitForWhatsAppLoginResult } from "./connection-controller.js";
+import { closeWaSocket } from "./connection-controller.js";
+import { waitForWhatsAppLoginResult } from "./login-result.js";
 import { resolveComparableIdentity } from "./identity.js";
 import { renderQrTerminal } from "./qr-terminal.js";
-import { createWaSocket, waitForWaConnection } from "./session.js";
+import { createWaSocket, WHATSAPP_PHONE_CODE_BROWSER, waitForWaConnection } from "./session.js";
 import { resolveWhatsAppSocketTiming } from "./socket-timing.js";
 
 const QR_LINK_INSTRUCTION = "Open the WhatsApp app, go to Linked Devices, then scan this QR:";
@@ -110,22 +112,17 @@ function createWhatsAppPairingCodeReadySignal(timeoutMs: number): {
           resolve();
           return;
         }
-        const evWithOff = sock.ev as {
-          on: (event: string, listener: (...args: unknown[]) => void) => void;
-          off?: (event: string, listener: (...args: unknown[]) => void) => void;
-        };
         const timer = setTimeout(onTimeout, timeoutMs);
         function cleanup() {
           clearTimeout(timer);
-          evWithOff.off?.("connection.update", handler);
+          sock.ev.off("connection.update", handler);
         }
         function finish() {
           ready = true;
           cleanup();
           resolve();
         }
-        function handler(...args: unknown[]) {
-          const update = (args[0] ?? {}) as Partial<import("baileys").ConnectionState>;
+        function handler(update: Partial<ConnectionState>) {
           // Baileys emits "connecting" on the next tick before its WebSocket is
           // necessarily open. The server's pair-device QR proves sendNode is ready.
           if (update.qr) {
@@ -141,7 +138,7 @@ function createWhatsAppPairingCodeReadySignal(timeoutMs: number): {
           cleanup();
           reject(new Error("Timed out waiting for WhatsApp to offer phone-code pairing."));
         }
-        evWithOff.on("connection.update", handler);
+        sock.ev.on("connection.update", handler);
         if (ready) {
           finish();
         }
@@ -193,6 +190,13 @@ async function runWebLogin(
   const cfg = await captureRuntimeConfigAsyncReader()();
   const account = resolveWhatsAppAccount({ cfg, accountId });
   const socketTiming = resolveWhatsAppSocketTiming();
+  await prepareWebAuthForLoginOrThrow({
+    authDir: account.authDir,
+    accountId: account.accountId,
+    isLegacyAuthDir: account.isLegacyAuthDir,
+    runtime,
+    beforeCredentialPersistence,
+  });
   const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir, {
     beforeCredentialPersistence,
   });
@@ -306,6 +310,8 @@ async function runWebLogin(
   let sock = await createWaSocket(false, verbose, {
     authDir: account.authDir,
     ...socketTiming,
+    ...(phoneMode ? { qrTimeoutMs: PHONE_CODE_PAIRING_READY_TIMEOUT_MS } : {}),
+    ...(phoneMode ? { browser: WHATSAPP_PHONE_CODE_BROWSER } : {}),
     onQr,
     ...credentialPersistenceOptions,
   });
@@ -321,6 +327,8 @@ async function runWebLogin(
       runtime,
       waitForConnection,
       socketTiming,
+      ...(phoneMode ? { qrTimeoutMs: PHONE_CODE_PAIRING_READY_TIMEOUT_MS } : {}),
+      ...(phoneMode ? { browser: WHATSAPP_PHONE_CODE_BROWSER } : {}),
       onQr,
       ...phoneLoginHooks,
       ...credentialPersistenceOptions,
