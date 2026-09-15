@@ -148,7 +148,12 @@ export function formatCompactCount(value: number): string {
   }
   if (value < 1_000_000) {
     const thousands = value / 1_000;
-    return `${thousands >= 100 ? Math.round(thousands) : Number(thousands.toFixed(1))}k`;
+    const rounded = thousands >= 100 ? Math.round(thousands) : Number(thousands.toFixed(1));
+    // Values from 999,500 upward round to 1000 at thousands precision; roll
+    // over to the millions branch instead of displaying "1000k".
+    if (rounded < 1_000) {
+      return `${rounded}k`;
+    }
   }
   const millions = value / 1_000_000;
   return `${millions >= 100 ? Math.round(millions) : Number(millions.toFixed(1))}m`;
