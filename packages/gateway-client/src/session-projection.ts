@@ -396,24 +396,35 @@ export function projectLiveSessionMessage(
   const existing =
     matches.find((entry) => sameTranscriptIdentity(entry.identity, incoming.identity)) ??
     (matches.length === 1 ? matches[0] : undefined);
-  if (existing && isToolUsePersistedFinalRow(existing.message)) {
-    // The #148297 relaxation admits a text-only toolUse-persisted row as a
-    // final, but only when the run actually ended there. A later same-run
-    // assistant row proves the run continued past it, so a live terminal must
-    // not be absorbed by (or replaced with) that row on the live path either —
-    // the snapshot reconciler enforces the same position rule.
-    const existingIndex = state.entries.indexOf(existing);
-    const runId = existing.identity?.runId;
-    const runContinuedPast = runId
-      ? state.entries.some(
-          (entry, index) =>
-            index > existingIndex &&
-            entry.identity?.runId === runId &&
-            entry.identity.role === "assistant",
-        )
-      : true;
-    if (runContinuedPast) {
-      return withEntries(state, insertEntry(state.entries, incoming, state.runs));
+  if (existing && !sameTranscriptIdentity(existing.identity, incoming.identity)) {
+    const durable = existing.identity?.id ? existing : incoming.identity.id ? incoming : null;
+    const provisional = durable === existing ? incoming : existing;
+    if (durable && isToolUsePersistedFinalRow(durable.message)) {
+      // Exact durable replay never needs inference. For provisional adoption,
+      // use the snapshot owner in both arrival orders, excluding the live copy
+      // itself from the history that can contradict the terminal position.
+      const history = state.entries.filter((entry) => entry !== provisional);
+      const snapshot = durable === incoming ? insertEntry(history, durable) : history;
+      const runId = provisional.identity?.runId;
+      const run = runId ? state.runs[runId] : undefined;
+      const terminalMatch = findUniqueSnapshotTerminalMatch(provisional, [durable], run, snapshot);
+      if (!terminalMatch) {
+        return withEntries(state, insertEntry(state.entries, incoming, state.runs));
+      }
+      if (terminalMatch.inferred && durable.identity && runId && run) {
+        // Keep the original live entry until authoritative history confirms
+        // the inference or restores it after revealing a later assistant row.
+        state = {
+          ...state,
+          runs: {
+            ...state.runs,
+            [runId]: {
+              ...run,
+              inferredSnapshotTerminal: { entry: provisional, matchedIdentity: durable.identity },
+            },
+          },
+        };
+      }
     }
   }
   if (!existing) {

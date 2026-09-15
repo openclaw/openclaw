@@ -42,7 +42,67 @@ function terminalEvent() {
   };
 }
 
+function laterToolMessage() {
+  return {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "read-next", name: "read", arguments: {} }],
+    stopReason: "toolUse",
+    __openclaw: { id: "later-tool", seq: 218, runId: "announce:repro" },
+  };
+}
+
 describe("session projection final-answer dedup", () => {
+  it.each([true, false])("keeps durable replay idempotent (run ownership: %s)", (owned) => {
+    const durable = {
+      ...saved,
+      __openclaw: { id: "saved", seq: 217, ...(owned ? { runId: "announce:repro" } : {}) },
+    };
+    const later = laterToolMessage();
+    let state = createSessionProjection(scope, [durable, later]);
+    for (let replay = 0; replay < 2; replay += 1) {
+      state = reduceSessionProjection(state, {
+        type: "messagePersisted",
+        message: structuredClone(durable),
+      });
+      expect(state.messages).toEqual([durable, later]);
+    }
+  });
+
+  it("keeps the live final when the earlier durable row arrives after a later tool row", () => {
+    const later = laterToolMessage();
+    let state = reduceSessionProjection(createSessionProjection(scope), terminalEvent());
+    state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
+    state = reduceSessionProjection(state, { type: "messagePersisted", message: later });
+    state = reduceSessionProjection(state, { type: "messagePersisted", message: saved });
+
+    expect(state.messages).toHaveLength(3);
+    expect(state.messages).toContain(live);
+    expect(state.messages).toContain(saved);
+    expect(state.messages).toContain(later);
+  });
+
+  it.each(["history-first", "durable-second"] as const)(
+    "restores a %s inferred final across repeated contradictory snapshots",
+    (order) => {
+      let state = createSessionProjection(scope, order === "history-first" ? [saved] : []);
+      state = reduceSessionProjection(state, terminalEvent());
+      state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
+      if (order === "durable-second") {
+        state = reduceSessionProjection(state, { type: "messagePersisted", message: saved });
+      }
+      expect(state.messages).toEqual([saved]);
+      expect(state.runs["announce:repro"].inferredSnapshotTerminal?.entry.message).toBe(live);
+
+      state = reconcileSessionProjectionSnapshot(state, [saved], scope);
+      expect(state.messages).toEqual([saved]);
+      const later = laterToolMessage();
+      for (let refresh = 0; refresh < 2; refresh += 1) {
+        state = reconcileSessionProjectionSnapshot(state, [saved, later], scope);
+        expect(state.messages).toEqual([saved, later, live]);
+      }
+    },
+  );
+
   it("reconciles a toolUse-persisted final with the live final (live first)", () => {
     let state = createSessionProjection(scope);
     state = reduceSessionProjection(state, terminalEvent());
