@@ -23,6 +23,7 @@ import { waitForFixtureFile } from "../helpers/process-wait.js";
 import { fixturePreloadArgs } from "./fixtures/ci-fixture-runtime.cjs";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 import {
+  createControlledWorkerCompiler,
   createWorkerArtifactTest,
   preparationClient,
   workerBorrowingProbe,
@@ -787,12 +788,13 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
           workerArtifacts.fixtureLifetime.run(async () => {
             const directory = workerArtifacts.fixtureDirectory();
             const { config } = workerBorrowingProbe(directory);
+            const compiler = createControlledWorkerCompiler(directory, process.env);
             const budgetReceipt = path.join(directory, "compiler-budget.json");
             const preload = writeFixture(
               directory,
               "compiler-budget.mjs",
               `import fs from "node:fs";
-if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
+if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("./fixtures/vitest-worker-compiler.mjs", import.meta.url)))}) {
   fs.writeFileSync(${JSON.stringify(budgetReceipt)}, JSON.stringify([process.env.RAYON_NUM_THREADS, process.env.TOKIO_WORKER_THREADS]));
 }`,
             );
@@ -808,11 +810,11 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
               ],
               root,
               {
-                ...process.env,
+                ...compiler.env,
                 OPENCLAW_VITEST_MAX_WORKERS: "2",
                 RAYON_NUM_THREADS: "",
                 TOKIO_WORKER_THREADS: "",
-                NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import ${pathToFileURL(preload).href}`,
+                NODE_OPTIONS: `${compiler.env.NODE_OPTIONS} --import ${pathToFileURL(preload).href}`,
               },
             );
             expect(result.code, result.stderr + result.stdout).toBe(0);
@@ -825,6 +827,9 @@ if (process.argv[1]?.endsWith("vitest-worker-compiler.mts")) {
               .map((line) => JSON.parse(line) as string);
             expect(generations).toHaveLength(2);
             expect(new Set(generations).size).toBe(1);
+            expect(compiler.read().map((record) => record.directory)).toEqual([
+              path.dirname(path.dirname(path.dirname(fileURLToPath(generations[0]!)))),
+            ]);
             expect(fs.existsSync(new URL(generations[0]!))).toBe(false);
             return generations[0]!;
           }),
