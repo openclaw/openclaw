@@ -655,7 +655,7 @@ describe("installPackageDir", () => {
     await expect(fs.readdir(backupRoot)).resolves.toHaveLength(1);
   });
 
-  it("installs peer dependencies for isolated plugin package installs", async () => {
+  it("installs runtime peers without resolving host or development dependencies", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
     const sourceDir = path.join(fixtureRoot, "source");
@@ -667,19 +667,48 @@ describe("installPackageDir", () => {
         name: "demo-plugin",
         version: "1.0.0",
         dependencies: {
+          openclaw: ">=2026.4.5",
+          yaml: "^2.0.0",
+        },
+        peerDependencies: {
+          openclaw: ">=2026.4.5",
           zod: "^4.0.0",
+        },
+        peerDependenciesMeta: {
+          openclaw: { optional: true },
+          zod: { optional: false },
+        },
+        devDependencies: {
+          openclaw: "2026.6.1",
+          typescript: "~5.9.0",
         },
       }),
       "utf-8",
     );
 
-    vi.mocked(runCommandWithTimeout).mockResolvedValue({
-      stdout: "",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (_argv, optionsOrTimeout) => {
+      const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
+      if (cwd === undefined) {
+        throw new Error("expected package install cwd");
+      }
+      const manifest = JSON.parse(await fs.readFile(path.join(cwd, "package.json"), "utf8"));
+      expect(manifest).toMatchObject({
+        dependencies: { yaml: "^2.0.0" },
+        peerDependencies: { zod: "^4.0.0" },
+        peerDependenciesMeta: { zod: { optional: false } },
+      });
+      expect(manifest.dependencies).not.toHaveProperty("openclaw");
+      expect(manifest.peerDependencies).not.toHaveProperty("openclaw");
+      expect(manifest.peerDependenciesMeta).not.toHaveProperty("openclaw");
+      expect(manifest).not.toHaveProperty("devDependencies");
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
     });
 
     const result = await installPackageDir({
@@ -689,10 +718,26 @@ describe("installPackageDir", () => {
       timeoutMs: 1_000,
       copyErrorPrefix: "failed to copy plugin",
       hasDeps: true,
+      omitOpenClawHostDependency: true,
       depsLogMessage: "Installing deps…",
     });
 
     expect(result).toEqual({ ok: true });
+    const installedManifest = JSON.parse(
+      await fs.readFile(path.join(targetDir, "package.json"), "utf8"),
+    );
+    expect(installedManifest).toMatchObject({
+      dependencies: { openclaw: ">=2026.4.5", yaml: "^2.0.0" },
+      peerDependencies: { openclaw: ">=2026.4.5", zod: "^4.0.0" },
+      peerDependenciesMeta: {
+        openclaw: { optional: true },
+        zod: { optional: false },
+      },
+      devDependencies: {
+        openclaw: "2026.6.1",
+        typescript: "~5.9.0",
+      },
+    });
     const installOptions = expectRunCommandCallForArgv([
       "npm",
       "install",
@@ -818,7 +863,7 @@ describe("installPackageDir", () => {
     expect("npm_config_prefix" in env).toBe(false);
   });
 
-  it("surfaces npm stderr when dependency install fails", async () => {
+  it("surfaces npm stderr when dependency install fails after manifest sanitization", async () => {
     await fixtureRootTracker.setup();
     const fixtureRoot = await fixtureRootTracker.make("case");
     const sourceDir = path.join(fixtureRoot, "source");
@@ -831,6 +876,9 @@ describe("installPackageDir", () => {
         version: "1.0.0",
         dependencies: {
           bad: "workspace:^",
+        },
+        devDependencies: {
+          openclaw: "2026.6.1",
         },
       }),
       "utf-8",
@@ -855,6 +903,7 @@ describe("installPackageDir", () => {
       timeoutMs: 1_000,
       copyErrorPrefix: "failed to copy plugin",
       hasDeps: true,
+      omitOpenClawHostDependency: true,
       depsLogMessage: "Installing deps…",
     });
 
