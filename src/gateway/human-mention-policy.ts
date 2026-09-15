@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
+import { listUserProfileGitHubLogins } from "../state/user-profile-github-identity.js";
 import { listProfiles } from "../state/user-profiles.js";
 import {
   resolveCurrentUserProfileDisplay,
@@ -70,8 +71,10 @@ export function createHumanMentionPolicy(params: {
 }) {
   let profileVersion = -1;
   const displays = new Map<string, CurrentUserProfileDisplay>();
-  let directory: { ids: string[]; truncated: boolean } | undefined;
-  let eligibleDirectory: { key: string; users: MentionableUser[]; truncated: boolean } | undefined;
+  let directory: { profiles: { id: string; logins: string[] }[]; truncated: boolean } | undefined;
+  let eligibleDirectory:
+    | { key: string; users: (MentionableUser & { logins: string[] })[]; truncated: boolean }
+    | undefined;
 
   function readProfile(profileId: string): MentionProfile | undefined {
     const version = readUserProfileVersion();
@@ -257,15 +260,18 @@ export function createHumanMentionPolicy(params: {
       const { target, profile } = context.value;
       if (!directory) {
         const profiles = listProfiles().filter((candidate) => candidate.mergedInto === null);
+        const logins = listUserProfileGitHubLogins();
         directory = {
-          ids: profiles.slice(0, MAX_DIRECTORY_PROFILES).map((candidate) => candidate.id),
+          profiles: profiles
+            .slice(0, MAX_DIRECTORY_PROFILES)
+            .map((candidate) => ({ id: candidate.id, logins: logins.get(candidate.id) ?? [] })),
           truncated: profiles.length > MAX_DIRECTORY_PROFILES,
         };
       }
       // Keystrokes reuse one bounded eligible roster; identity/session/role changes replace it.
       const key = JSON.stringify([profileVersion, target, cfg.gateway?.roles]);
       if (eligibleDirectory?.key !== key) {
-        const users = directory.ids.flatMap((id) => {
+        const users = directory.profiles.flatMap(({ id, logins }) => {
           const candidate = recipientProfile(id, target, cfg);
           return candidate
             ? [
@@ -273,6 +279,7 @@ export function createHumanMentionPolicy(params: {
                   profileId: candidate.profileId,
                   displayName: humanMentionDisplayLabel(candidate.label, candidate.profileId),
                   avatarUrl: candidate.avatarUrl,
+                  logins,
                   online: false,
                 },
               ]
@@ -284,7 +291,9 @@ export function createHumanMentionPolicy(params: {
       const users = eligibleDirectory.users.filter(
         (candidate) =>
           candidate.profileId !== profile.profileId &&
-          (!query || candidate.displayName.toLocaleLowerCase().includes(query)),
+          (!query ||
+            candidate.displayName.toLocaleLowerCase().includes(query) ||
+            candidate.logins.some((login) => login.toLocaleLowerCase().includes(query))),
       );
       const names = new Map<string, number>();
       for (const candidate of users) {

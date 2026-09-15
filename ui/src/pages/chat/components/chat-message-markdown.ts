@@ -6,6 +6,7 @@ import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+import { readHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import {
   normalizeMessage,
@@ -62,11 +63,28 @@ export function resolveCappedMessageId(message: unknown, role: string): string |
 // Options and action handlers outlive a render; keep this preparation separate from them.
 export function prepareChatMessageRender(message: unknown) {
   const normalizedMessage = normalizeMessage(message);
-  return {
-    message,
-    normalizedMessage,
-    displayMarkdown: resolveMessageDisplayMarkdown(message, normalizedMessage),
-  };
+  const displayMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
+  const record = asNullableRecord(message);
+  const metadata = asNullableRecord(record?.["__openclaw"]);
+  let humanMentions: ReturnType<typeof readHumanMentions>;
+  if (record?.role === "user" && metadata?.humanMentions) {
+    const source =
+      typeof record.content === "string"
+        ? record.content
+        : Array.isArray(record.content)
+          ? record.content
+              .flatMap((block: unknown) => {
+                const item = asNullableRecord(block);
+                return item?.type === "text" && typeof item.text === "string" ? [item.text] : [];
+              })
+              .join("\n")
+          : null;
+    // Selections belong to submitted bytes, not a stripped envelope or display cap.
+    if (source === displayMarkdown) {
+      humanMentions = readHumanMentions(displayMarkdown, metadata.humanMentions);
+    }
+  }
+  return { message, normalizedMessage, displayMarkdown, humanMentions };
 }
 
 export type ChatMessageRenderPreparation = ReturnType<typeof prepareChatMessageRender>;

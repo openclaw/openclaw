@@ -13,6 +13,7 @@ const USER_PROFILES_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS user_profiles (
   id TEXT NOT NULL PRIMARY KEY,
   display_name TEXT,
+  primary_github_account_id INTEGER,
   avatar BLOB,
   avatar_mime TEXT,
   avatar_sha256 TEXT,
@@ -48,6 +49,7 @@ export type UserProfilesDatabase = {
   user_profiles: {
     id: string;
     display_name: string | null;
+    primary_github_account_id?: number | null;
     avatar: Uint8Array | null;
     avatar_mime: string | null;
     avatar_sha256: string | null;
@@ -122,6 +124,7 @@ export function ensureUserProfilesSchema(
     ({ db }) => {
       db.exec(USER_PROFILES_SCHEMA_SQL); // sqlite-allow-raw -- Canonical feature-local additive DDL.
       ensureColumn(db, "user_profile_identities", "canonical_login TEXT");
+      ensureColumn(db, "user_profiles", "primary_github_account_id INTEGER");
       hasRoleColumn = tableHasColumn(db, "user_profiles", "role");
     },
     options,

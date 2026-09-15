@@ -1,0 +1,34 @@
+/* An inline person is a reveal control, not a notification or a rewritten label. */
+.markdown-person-reference {
+  display: inline;
+  margin: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 0 0.2em;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--accent);
+  font: inherit;
+  font-weight: 550;
+  line-height: inherit;
+  overflow-wrap: anywhere;
+  text-align: inherit;
+  cursor: default;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.markdown-person-reference:hover,
+.markdown-person-reference[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.markdown-person-reference:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.person-reference__status {
+  padding: 16px;
+  color: var(--muted);
+  font-size: calc(12px * var(--control-ui-text-scale));
+}

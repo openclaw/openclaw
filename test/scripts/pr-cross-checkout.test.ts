@@ -201,6 +201,10 @@ describePosix("native PR wrapper repository ownership", () => {
       expect(f.git(f.caller, ["show-ref"])).toBe(callerRefs);
       expect(f.git(f.owner, ["for-each-ref", "--format=%(refname)", lockRef])).toBe("");
       expect(f.readCalls()).toHaveLength(4);
+      expect(f.readCalls().slice(0, 2)).toEqual([
+        `${f.owner}\trepo view --json nameWithOwner,url`,
+        `${f.owner}\tapi --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0`,
+      ]);
       expect(f.readCalls().every((call) => call.startsWith(`${f.owner}\t`))).toBe(true);
       expect(f.readCalls().some((call) => call.includes("pr merge") || call.includes("POST"))).toBe(
         false,

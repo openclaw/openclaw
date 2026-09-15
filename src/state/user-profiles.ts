@@ -17,14 +17,11 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
-import { mergeUserGitHubConnection } from "./user-github-connections.js";
-import { mergeUserModelAccounts } from "./user-model-accounts.js";
-import { ensureUserPreferencesSchema, mergeUserPreferences } from "./user-preferences.store.js";
-import { emitUserProfilesChanged, publishUserProfileAliasChange } from "./user-profile-events.js";
+import { ensureUserPreferencesSchema } from "./user-preferences.store.js";
+import { emitUserProfilesChanged } from "./user-profile-events.js";
 import {
   applyVerifiedGitHubIdentity,
   githubAuthenticationSubject,
-  prepareUserProfileGitHubMerge,
   selectUserProfileGitHubIdentities,
 } from "./user-profile-github-identity.js";
 import {
@@ -37,6 +34,7 @@ import {
   userProfileAvatarPresence,
   userProfilesDb,
 } from "./user-profiles-internal.js";
+import { mergeUserProfiles } from "./user-profiles-merge.js";
 import { ensureGatewayOwnerProfileRow } from "./user-profiles-owner.js";
 import {
   ensureUserProfileRoleSchema,
@@ -361,57 +359,6 @@ function ensureProfileForProviderIdentity(params: {
     params.options,
     { operationLabel: "user-profiles.ensure-identity" },
   );
-}
-
-function mergeUserProfiles(
-  db: DatabaseSync,
-  sourceProfileId: string,
-  targetProfileId: string,
-  now: number,
-): void {
-  if (sourceProfileId === targetProfileId) {
-    return;
-  }
-  const kysely = userProfilesDb(db);
-  const sourceProfileIds = [
-    sourceProfileId,
-    ...executeSqliteQuerySync(
-      db,
-      kysely.selectFrom("user_profiles").select("id").where("merged_into", "=", sourceProfileId),
-    ).rows.map((row) => row.id),
-  ];
-  prepareUserProfileGitHubMerge(db, sourceProfileIds, targetProfileId);
-  mergeUserModelAccounts(db, sourceProfileId, targetProfileId);
-  mergeUserGitHubConnection(db, sourceProfileId, targetProfileId);
-  for (const mergedProfileId of sourceProfileIds) {
-    mergeUserPreferences(db, mergedProfileId, targetProfileId);
-  }
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .updateTable("user_profile_emails")
-      .set({ profile_id: targetProfileId })
-      .where("profile_id", "in", sourceProfileIds),
-  );
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .updateTable("user_profile_identities")
-      .set({ profile_id: targetProfileId })
-      .where("profile_id", "in", sourceProfileIds),
-  );
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .updateTable("user_profiles")
-      .set({ merged_into: targetProfileId, updated_at: now })
-      .where("id", "in", sourceProfileIds),
-  );
-  executeSqliteQuerySync(
-    db,
-    kysely.updateTable("user_profiles").set({ updated_at: now }).where("id", "=", targetProfileId),
-  );
-  deferSqlitePostCommitPublication(db, publishUserProfileAliasChange);
 }
 
 function adoptDisplayNameIfEmpty(

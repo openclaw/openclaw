@@ -1,3 +1,7 @@
+import type { HumanMention } from "@openclaw/gateway-protocol";
+
+export type MarkdownHumanMentionToken = { marker: string; profileId: string; label: string };
+
 type MarkdownCodeBlockChrome = "copy" | "none";
 type MarkdownCodeBlockInteraction = "interactive" | "static";
 type MarkdownTableInteractions = "enabled" | "none";
@@ -9,6 +13,7 @@ export type MarkdownRenderOptions = {
   codeBlockInteraction?: MarkdownCodeBlockInteraction;
   fileLinks?: boolean;
   githubRepo?: { owner: string; repo: string } | null;
+  humanMentions?: readonly HumanMention[];
   interactiveImages?: boolean;
   linkFavicons?: boolean;
   progressBars?: boolean;
@@ -20,6 +25,7 @@ export type MarkdownRenderOptions = {
 
 export type MarkdownRenderEnv = Required<MarkdownRenderOptions> & {
   streamingOpenFence?: boolean;
+  humanMentionTokens?: readonly MarkdownHumanMentionToken[];
 };
 
 export function normalizeMarkdownRenderOptions(
@@ -31,6 +37,7 @@ export function normalizeMarkdownRenderOptions(
     codeBlockInteraction: options.codeBlockInteraction ?? "static",
     fileLinks: options.fileLinks ?? false,
     githubRepo: options.githubRepo ?? null,
+    humanMentions: options.humanMentions ?? [],
     interactiveImages: options.interactiveImages ?? false,
     linkFavicons: options.linkFavicons ?? false,
     progressBars: options.progressBars ?? false,

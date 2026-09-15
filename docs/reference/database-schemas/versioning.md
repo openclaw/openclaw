@@ -159,6 +159,16 @@ proportional to history. Rewrites invalidate or rebuild the projection in their
 own transaction, and transcript deletion removes its eligibility rows. Downgrade
 leaves the additive column and index intact; re-upgrade reconciles unknown rows.
 
+Multi-account person profiles add the bare nullable
+`user_profiles.primary_github_account_id INTEGER` column on first profile use,
+without changing the shared-state schema version. Existing single-account profiles
+have an unambiguous primary; explicit merges retain all verified account rows and
+keep the target primary. This deliberately accepts a downgrade limitation:
+older single-account writers can discard secondary account links or split a linked
+person again. Re-upgrading cannot reconstruct discarded links. Keep a backup
+before downgrading, and explicitly relink affected profiles after upgrading.
+The version number does not certify preservation of multi-account relationships.
+
 User profiles use the same rule for the nullable bare `user_profiles.role TEXT`
 column in state schema 9. Operator-role assignment lazily ensures the column on
 first use. Older readers ignore the column and can reopen the same database

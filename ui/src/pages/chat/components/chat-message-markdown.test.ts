@@ -10,6 +10,7 @@ import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
+import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender, resolveMessageActionDetails } from "./chat-message-markdown.ts";
 import { renderMessageMarkdown } from "./chat-message-text.ts";
 
@@ -360,5 +361,68 @@ describe("message Markdown source preservation", () => {
       senderLabel: "assistant",
     });
     expect(details?.markdown).toBe(source);
+  });
+});
+
+describe("persisted human mentions in message bubbles", () => {
+  const text = "@Ada Lovelace cc @Ada Lovelace";
+  const humanMentions = [{ profileId: "profile-ada", start: 0, end: 13 }];
+
+  it.each([{ content: text }, { content: [{ type: "text", text }] }])(
+    "renders only explicit spans while preserving copy text",
+    ({ content }) => {
+      const message = { role: "user", content, __openclaw: { humanMentions } };
+      const host = document.createElement("div");
+      render(
+        renderGroupedMessage(prepareChatMessageRender(message), "message", {
+          isStreaming: false,
+          showReasoning: false,
+        }),
+        host,
+      );
+      const references = host.querySelectorAll("openclaw-person-reference");
+      expect(references).toHaveLength(1);
+      expect(references[0]?.getAttribute("profile-id")).toBe("profile-ada");
+      expect(references[0]?.getAttribute("label")).toBe("@Ada Lovelace");
+      expect(host.querySelector(".chat-bubble")?.getAttribute("data-message-text")).toBe(text);
+    },
+  );
+
+  it.each([
+    { role: "assistant", content: text, __openclaw: { humanMentions } },
+    {
+      role: "user",
+      content: text,
+      __openclaw: { humanMentions, truncated: true, reason: "oversized" },
+    },
+    { role: "user", content: text },
+  ])("does not attach identities to assistant, capped or unselected text", (message) => {
+    const host = document.createElement("div");
+    render(
+      renderGroupedMessage(prepareChatMessageRender(message), "message", {
+        isStreaming: false,
+        showReasoning: false,
+      }),
+      host,
+    );
+    expect(host.querySelector("openclaw-person-reference")).toBeNull();
+  });
+
+  it("does not reuse selection offsets after the displayed message is replaced", () => {
+    const host = document.createElement("div");
+    render(
+      renderGroupedMessage(
+        prepareChatMessageRender({ role: "user", content: text, __openclaw: { humanMentions } }),
+        "message",
+        {
+          isStreaming: false,
+          showReasoning: false,
+          messageActions: { markdown: "@Different Person" },
+        },
+      ),
+      host,
+    );
+    expect(host.querySelector("openclaw-person-reference")).toBeNull();
+    expect(host.textContent).toContain("@Different Person");
   });
 });

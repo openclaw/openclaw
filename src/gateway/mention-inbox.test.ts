@@ -16,6 +16,7 @@ import {
   linkEmail,
   setDisplayName,
   setUserProfileRole,
+  syncGitHubIdentity,
 } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createMentionInbox } from "./mention-inbox.js";
@@ -763,6 +764,53 @@ describe("temporary human mention Inbox", () => {
 });
 
 describe("human mention directory", () => {
+  it("resolves verified handles and full names to the same recipient without exposing account data", async () => {
+    await withInbox(async (f) => {
+      syncGitHubIdentity({
+        identity: { accountId: 42, login: "bobby", name: "Robert Example" },
+        authenticationAlias: { kind: "email", email: "bob@mentions.example.test" },
+      });
+      setDisplayName(f.bob.id, "Robert Example");
+      syncGitHubIdentity({
+        identity: { accountId: 43, login: "bob-work" },
+        authenticationAlias: { kind: "email", email: "bob-work@mentions.example.test" },
+      });
+      linkEmail("bob-work@mentions.example.test", f.bob.id);
+      for (const query of ["bobby", "BOBBY", "bob-work", "Robert Example"]) {
+        const response = await f.call(
+          "users.mentionable",
+          { sessionKey: SESSION_KEY, query },
+          f.aliceClient,
+        );
+        if (!response.ok || !validateUsersMentionableResult(response.payload)) {
+          throw new Error("Invalid mention directory response");
+        }
+        expect(response.payload.users).toHaveLength(1);
+        expect(response.payload.users[0]).toEqual({
+          profileId: f.bob.id,
+          displayName: "Robert Example",
+          avatarUrl: expect.any(String),
+          online: true,
+        });
+      }
+      expect(
+        f.inbox.validateRecipients(f.aliceClient, { sessionKey: SESSION_KEY }, [f.bob.id]),
+      ).toEqual({ ok: true, value: [f.bob.id] });
+      f.post();
+      expect(read(f.inbox, f.bobClient).items).toHaveLength(1);
+      syncGitHubIdentity({
+        identity: { accountId: 42, login: "robert-new" },
+        authenticationAlias: { kind: "email", email: "bob@mentions.example.test" },
+      });
+      expect(
+        f.inbox.mentionable(f.aliceClient, { sessionKey: SESSION_KEY, query: "bobby" }),
+      ).toMatchObject({ ok: true, value: { users: [] } });
+      expect(
+        f.inbox.mentionable(f.aliceClient, { sessionKey: SESSION_KEY, query: "robert-new" }),
+      ).toMatchObject({ ok: true, value: { users: [{ profileId: f.bob.id }] } });
+    });
+  });
+
   it("includes offline people without leaking administrative profile fields or binding raw presence", async () => {
     await withInbox(async (f) => {
       const offline = ensureProfileForEmail("offline@mentions.example.test");

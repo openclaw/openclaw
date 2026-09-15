@@ -7,6 +7,7 @@ import {
 import type { UserProfileGitHubIdentity } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { normalizeGitHubLogin } from "../utils/github-login.js";
+import { tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
@@ -43,24 +44,55 @@ function toPublicGitHubIdentity(identity: StoredGitHubIdentity): UserProfileGitH
 export function selectStoredGitHubIdentities(
   db: DatabaseSync,
   profileIds?: readonly string[],
-): Map<string, StoredGitHubIdentity> {
+): Map<string, { accounts: StoredGitHubIdentity[]; primary: StoredGitHubIdentity | undefined }> {
   if (profileIds?.length === 0) {
     return new Map();
   }
   let query = userProfilesDb(db)
     .selectFrom("user_profile_identities")
+    .innerJoin("user_profiles", "user_profiles.id", "user_profile_identities.profile_id")
     .select(["profile_id", "subject", "canonical_login"])
+    // Read-only catalog projections must not initialize a pre-feature database.
+    .select((eb) => [
+      tableHasColumn(db, "user_profiles", "primary_github_account_id")
+        ? "user_profiles.primary_github_account_id"
+        : eb.val<number | null>(null).as("primary_github_account_id"),
+    ])
     .where("provider", "=", GITHUB_PROVIDER)
-    .where("canonical_login", "is not", null);
+    .where("canonical_login", "is not", null)
+    .orderBy("subject", "asc");
   if (profileIds) {
     query = query.where("profile_id", "in", [...profileIds]);
   }
   const rows = executeSqliteQuerySync(db, query).rows;
+  const profiles = new Map<
+    string,
+    { accounts: StoredGitHubIdentity[]; primaryId: number | null }
+  >();
+  for (const row of rows) {
+    const identity = parseStoredGitHubIdentity(row);
+    if (!identity) {
+      continue;
+    }
+    const profile = profiles.get(row.profile_id) ?? {
+      accounts: [],
+      primaryId: row.primary_github_account_id ?? null,
+    };
+    profile.accounts.push(identity);
+    profiles.set(row.profile_id, profile);
+  }
   return new Map(
-    rows.flatMap((row) => {
-      const identity = parseStoredGitHubIdentity(row);
-      return identity ? [[row.profile_id, identity] as const] : [];
-    }),
+    [...profiles].map(([id, { accounts, primaryId }]) => [
+      id,
+      {
+        accounts,
+        // Old single-account profiles have an unambiguous primary; never pick one from several.
+        primary:
+          primaryId === null && accounts.length === 1
+            ? accounts[0]
+            : accounts.find((account) => account.accountId === primaryId),
+      },
+    ]),
   );
 }
 
@@ -87,28 +119,23 @@ export function resolveCachedGitHubIdentity(
     return undefined;
   }
   const identity = selectStoredGitHubIdentities(db, [profile.id]).get(profile.id);
-  return identity?.accountId === params.accountId
+  return identity?.accounts.some((account) => account.accountId === params.accountId)
     ? { profileId: profile.id, updatedAt: profile.updated_at }
     : undefined;
 }
 
-function deleteProfileGitHubIdentities(
-  db: DatabaseSync,
-  profileIds: readonly string[],
-  keepSubject?: string,
-): void {
-  if (profileIds.length === 0) {
-    return;
-  }
-  let query = userProfilesDb(db)
-    .deleteFrom("user_profile_identities")
-    .where("provider", "=", GITHUB_PROVIDER)
-    .where("profile_id", "in", [...profileIds])
-    .where("canonical_login", "is not", null);
-  if (keepSubject) {
-    query = query.where("subject", "!=", keepSubject);
-  }
-  executeSqliteQuerySync(db, query);
+/** All verified handles are searchable; the primary controls only public credit/projection. */
+export function listUserProfileGitHubLogins(
+  options: OpenClawStateDatabaseOptions = {},
+): Map<string, string[]> {
+  const database = openOpenClawStateDatabase(options);
+  ensureUserProfilesSchema(options, database);
+  return new Map(
+    [...selectStoredGitHubIdentities(database.db)].map(([id, profile]) => [
+      id,
+      profile.accounts.map((account) => account.login),
+    ]),
+  );
 }
 
 export function githubAuthenticationSubject(login: string): string {
@@ -125,10 +152,9 @@ export function selectUserProfileGitHubIdentities(
   profileIds?: readonly string[],
 ): Map<string, UserProfileGitHubIdentity> {
   return new Map(
-    [...selectStoredGitHubIdentities(db, profileIds)].map(([profileId, identity]) => [
-      profileId,
-      toPublicGitHubIdentity(identity),
-    ]),
+    [...selectStoredGitHubIdentities(db, profileIds)].flatMap(([profileId, { primary }]) =>
+      primary ? [[profileId, toPublicGitHubIdentity(primary)] as const] : [],
+    ),
   );
 }
 
@@ -160,35 +186,41 @@ export function resolveUserProfileGitHubAttribution(
     [...canonicalBySource].map(([sourceId, canonicalId]) => [
       sourceId,
       isGitCoauthorCreditEnabled(preferences.get(canonicalId))
-        ? (identities.get(canonicalId) ?? null)
+        ? (identities.get(canonicalId)?.primary ?? null)
         : null,
     ]),
   );
 }
 
-/** Keeps GitHub consent attached only to the immutable account that survives a profile merge. */
+/** Retain every account; the merge target owns primary choice and its coauthor consent. */
 export function prepareUserProfileGitHubMerge(
   db: DatabaseSync,
   sourceProfileIds: readonly string[],
   targetProfileId: string,
 ): void {
   const identities = selectStoredGitHubIdentities(db, [targetProfileId, ...sourceProfileIds]);
-  const targetIdentity = identities.get(targetProfileId);
-  const survivingSourceProfileId = targetIdentity
+  const targetAccounts = identities.get(targetProfileId);
+  const targetIdentity = targetAccounts?.primary;
+  const survivingSourceProfileId = targetAccounts
     ? undefined
-    : sourceProfileIds.find((profileId) => identities.has(profileId));
+    : sourceProfileIds.find((profileId) => identities.get(profileId)?.primary);
   const survivingAccountId =
     targetIdentity?.accountId ??
-    (survivingSourceProfileId ? identities.get(survivingSourceProfileId)?.accountId : undefined);
+    (survivingSourceProfileId
+      ? identities.get(survivingSourceProfileId)?.primary?.accountId
+      : undefined);
   for (const sourceProfileId of sourceProfileIds) {
-    const sourceIdentity = identities.get(sourceProfileId);
+    const sourceIdentity = identities.get(sourceProfileId)?.primary;
     if (!sourceIdentity || sourceIdentity.accountId !== survivingAccountId) {
       mutateUserPreference(db, sourceProfileId, GIT_COAUTHOR_PREFERENCE_KEY);
     }
   }
-  deleteProfileGitHubIdentities(
+  executeSqliteQuerySync(
     db,
-    sourceProfileIds.filter((profileId) => profileId !== survivingSourceProfileId),
+    userProfilesDb(db)
+      .updateTable("user_profiles")
+      .set({ primary_github_account_id: survivingAccountId ?? null })
+      .where("id", "=", targetProfileId),
   );
 }
 
@@ -246,7 +278,9 @@ export function applyVerifiedGitHubIdentity(params: {
   const reusableAliasProfileId =
     aliasProfileId &&
     (aliasGitHubIdentity === undefined ||
-      aliasGitHubIdentity.accountId === params.identity.accountId)
+      aliasGitHubIdentity.accounts.some(
+        (account) => account.accountId === params.identity.accountId,
+      ))
       ? aliasProfileId
       : undefined;
   const currentProfileId =
@@ -270,7 +304,7 @@ export function applyVerifiedGitHubIdentity(params: {
   );
   if (
     targetProfileId === currentProfileId &&
-    currentIdentity?.accountId !== params.identity.accountId
+    !currentIdentity?.accounts.some((account) => account.accountId === params.identity.accountId)
   ) {
     mutateUserPreference(db, targetProfileId, GIT_COAUTHOR_PREFERENCE_KEY);
   }
@@ -278,7 +312,20 @@ export function applyVerifiedGitHubIdentity(params: {
   if (currentProfileId !== targetProfileId) {
     params.mergeProfiles(currentProfileId, targetProfileId);
   }
-  deleteProfileGitHubIdentities(db, [targetProfileId], subject);
+  const targetAccounts = selectStoredGitHubIdentities(db, [targetProfileId]).get(targetProfileId);
+  // A secondary sign-in never selects public credit or repairs an ambiguous primary.
+  if (!targetAccounts || targetAccounts.primary) {
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .updateTable("user_profiles")
+        .set({
+          primary_github_account_id:
+            targetAccounts?.primary?.accountId ?? params.identity.accountId,
+        })
+        .where("id", "=", targetProfileId),
+    );
+  }
   executeSqliteQuerySync(
     db,
     kysely

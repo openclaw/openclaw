@@ -433,7 +433,13 @@ if (args[0] === 'pr' && args[1] === 'view') {
       throw new Error('Unexpected GraphQL request');
     }
   } else if (endpoint === 'repos/fixture/repo') {
-    value = { id: 123, node_id: 'fixture-repo', full_name: 'fixture/repo', html_url: 'https://github.com/fixture/repo' };
+    if (JSON.stringify(args) !== JSON.stringify([
+      'api', '--hostname', 'github.com', 'repos/fixture/repo', '-H', 'Cache-Control: max-age=0',
+    ])) throw new Error('Unexpected repository identity request');
+    value = {
+      id: 123, node_id: 'fixture-repo', full_name: 'fixture/repo',
+      html_url: 'https://github.com/fixture/repo',
+    };
   } else if (endpoint === 'repos/fixture/repo/commits/${head}') {
     const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae', ${JSON.stringify(head)}]).split('\\n');
     value = { commit: { author: { name, email } }, author: { ...control.metadata.author, type: 'User' } };

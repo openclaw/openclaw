@@ -13,7 +13,7 @@ const people = [
 ];
 
 suite.define(() => {
-  it("keeps complete mention results while refining and backspacing without another request", async () => {
+  it("searches refined queries on the server and reuses exact results on backspace", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 900 }, colorScheme: "dark" },
       async ({ page }) => {
@@ -34,13 +34,17 @@ suite.define(() => {
         await input.fill("@h");
         const menu = page.getByRole("listbox", { name: "Mention a person" });
         await expect.poll(() => menu.getByRole("option").count()).toBe(2);
+        await gateway.setMethodResponse("users.mentionable", {
+          users: people.slice(0, 1),
+          truncated: false,
+        });
         await input.press("a");
         await expect.poll(() => menu.getByRole("option").count()).toBe(1);
         expect(await menu.textContent()).toContain("Harper");
         expect(await menu.textContent()).not.toContain("Henry");
         await input.press("Backspace");
         await expect.poll(() => menu.getByRole("option").count()).toBe(2);
-        await expectRequestCountStable(gateway, "users.mentionable", 1);
+        await expectRequestCountStable(gateway, "users.mentionable", 2);
         await input.press("ArrowDown");
         await input.press("Enter");
         expect(await input.inputValue()).toBe("@Henry ");
