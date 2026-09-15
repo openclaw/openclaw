@@ -62,49 +62,38 @@ export function asSafeIntegerInRange(
   return value;
 }
 
-function normalizeNumericString(value: string): string | undefined {
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
+function parseStrictNumericValue(
+  value: unknown,
+  pattern: RegExp,
+  isValid: (value: number) => boolean,
+): number | undefined {
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    if (!pattern.test(normalized)) {
+      return undefined;
+    }
+    value = Number(normalized);
+  }
+  return typeof value === "number" && isValid(value) ? value : undefined;
 }
 
 /** Parses finite numbers from number values or strict numeric string tokens. */
 export function parseFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
-  }
   return parseStrictFiniteNumber(value);
 }
 
 /** Parses only safe integer numbers or base-10 integer strings. */
 export function parseStrictInteger(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isSafeInteger(value) ? value : undefined;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeNumericString(value);
-  if (!normalized || !/^[+-]?\d+$/.test(normalized)) {
-    return undefined;
-  }
-  const parsed = Number(normalized);
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
+  return parseStrictNumericValue(value, /^[+-]?\d+$/, Number.isSafeInteger);
 }
 
 /** Parses only finite decimal/scientific string tokens, rejecting partial numbers. */
 export function parseStrictFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeNumericString(value);
-  if (!normalized || !/^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/i.test(normalized)) {
-    return undefined;
-  }
-  const parsed = Number(normalized);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return parseStrictNumericValue(
+    value,
+    /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/i,
+    Number.isFinite,
+  );
 }
 
 /** Returns positive safe integers without string coercion. */
