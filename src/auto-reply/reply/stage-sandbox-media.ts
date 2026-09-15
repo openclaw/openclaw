@@ -31,6 +31,49 @@ import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../templa
 /** Maximum size of one file copied into an agent sandbox or staging workspace. */
 export const SANDBOX_MEDIA_MAX_BYTES = 50 * 1024 * 1024;
 const SCP_STDERR_TAIL_CHARS = 16_384;
+/** Slowest sustained throughput still treated as a healthy remote transfer. */
+export const SCP_MIN_SUPPORTED_THROUGHPUT_BYTES_PER_SEC = 256 * 1024;
+/** Floor so the derived budget never gets unreasonably tight for small files. */
+export const SCP_TRANSFER_TIMEOUT_FLOOR_MS = 30_000;
+
+/**
+ * Deadline for one sandbox SCP transfer. Derived from the size cap instead of a
+ * fixed cutoff so a slow but healthy transfer is not killed mid-flight: 50 MiB at
+ * the supported 256 KiB/s floor needs ~200s, while a fixed 30s cutoff would fail
+ * every attempt and silently skip the attachment. The budget stays bounded, so a
+ * stalled transfer still dies instead of waiting forever.
+ * `OPENCLAW_SANDBOX_SCP_TIMEOUT_MS` overrides it (operator knob; tests use it to
+ * exercise the deadline without waiting minutes).
+ * The shared runner owns the timer, process-tree termination, and settlement.
+ */
+export function resolveScpTransferTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+  maxBytes: number = SANDBOX_MEDIA_MAX_BYTES,
+): number {
+  const override = Number(env.OPENCLAW_SANDBOX_SCP_TIMEOUT_MS);
+  if (Number.isFinite(override) && override > 0) {
+    return Math.floor(override);
+  }
+  const scaled = Math.ceil((maxBytes / SCP_MIN_SUPPORTED_THROUGHPUT_BYTES_PER_SEC) * 1000);
+  return Math.max(SCP_TRANSFER_TIMEOUT_FLOOR_MS, scaled);
+}
+
+/**
+ * A transfer the shared runner killed on the staging deadline. The copy stopped
+ * making progress, so retrying the same stalled transfer only multiplies the
+ * wait; callers get one bounded failure instead.
+ */
+class ScpTransferDeadlineError extends Error {
+  readonly timeoutMs: number;
+  constructor(timeoutMs: number, stderr: string) {
+    super(
+      `scp transfer exceeded its ${Math.round(timeoutMs / 1000)}s staging deadline` +
+        (stderr ? `: ${stderr}` : ""),
+    );
+    this.name = "ScpTransferDeadlineError";
+    this.timeoutMs = timeoutMs;
+  }
+}
 
 // Attachment indexes are the staging identity. Callers use this map to detect
 // partial failures without matching rewritten strings back to source paths.
@@ -285,6 +328,7 @@ async function stageRemoteFileIntoRoot(params: {
   await fs.mkdir(tmpRoot, { recursive: true });
   const tmpDir = await fs.mkdtemp(path.join(tmpRoot, "stage-sandbox-media-"));
   const tmpPath = path.join(tmpDir, "download");
+  const scpTransferTimeoutMs = resolveScpTransferTimeoutMs();
   try {
     await retryAsync(
       async () => {
@@ -303,9 +347,10 @@ async function stageRemoteFileIntoRoot(params: {
             tmpPath,
           ],
           {
-            // The runner owns both descendants and settlement before temp cleanup.
+            // The runner owns the deadline, descendants, and settlement before temp cleanup.
             signal: abortSignal,
             killProcessTree: true,
+            timeoutMs: scpTransferTimeoutMs,
             // Four UTF-8 bytes retain the existing UTF-16 diagnostic tail bound.
             maxOutputBytes: { stdout: 1, stderr: SCP_STDERR_TAIL_CHARS * 4 },
           },
@@ -316,10 +361,20 @@ async function stageRemoteFileIntoRoot(params: {
             return;
           }
           const stderr = sliceUtf16Safe(result.stderr, -SCP_STDERR_TAIL_CHARS).trim();
+          if (result.termination === "timeout") {
+            throw new ScpTransferDeadlineError(scpTransferTimeoutMs, stderr);
+          }
           throw new Error(`scp failed (${result.code}): ${stderr}`);
         }
       },
-      { attempts: 3, label: "remote inbound media SCP", shouldRetry: () => !abortSignal?.aborted },
+      {
+        attempts: 3,
+        label: "remote inbound media SCP",
+        // A deadline kill means the copy stopped progressing: retrying it only
+        // re-waits the whole budget, so surface one bounded failure instead.
+        shouldRetry: (error) =>
+          !abortSignal?.aborted && !(error instanceof ScpTransferDeadlineError),
+      },
     );
     // Preserve arbitrary abort reasons outside retry's Error normalization.
     abortSignal?.throwIfAborted();
