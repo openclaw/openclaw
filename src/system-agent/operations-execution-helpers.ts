@@ -333,10 +333,12 @@ export async function runConfigSetOperation(params: {
 }
 
 async function isDefaultAgentListPath(segments: readonly string[]): Promise<boolean> {
-  const listIndexSegment = segments
+  const normalizedSegments = segments
     .map((segment) => segment.trim().toLowerCase())
-    .filter(Boolean)[2];
-  if (!listIndexSegment || !/^\d+$/.test(listIndexSegment)) {
+    .filter(Boolean);
+  const isEntriesShape = normalizedSegments[1] === "entries";
+  const listIndexSegment = normalizedSegments[2];
+  if (!listIndexSegment || (!isEntriesShape && !/^\d+$/.test(listIndexSegment))) {
     // Path addresses agents.list.<field> without an index; fail closed.
     return true;
   }
@@ -346,13 +348,18 @@ async function isDefaultAgentListPath(segments: readonly string[]): Promise<bool
     return true;
   }
   const config = snapshot.sourceConfig ?? snapshot.config;
+  const defaultAgentId = config ? tryResolveAmbientOwnerAgentId(config) : undefined;
+  if (isEntriesShape) {
+    return (
+      !defaultAgentId || normalizeAgentId(listIndexSegment) === normalizeAgentId(defaultAgentId)
+    );
+  }
   const authoredList = snapshot.sourceConfigBeforeMigrations?.agents?.list;
   const entry = Array.isArray(authoredList) ? authoredList[Number(listIndexSegment)] : undefined;
   if (!entry?.id) {
     // Unknown or id-less entry: cannot prove it is off the default route.
     return true;
   }
-  const defaultAgentId = config ? tryResolveAmbientOwnerAgentId(config) : undefined;
   return !defaultAgentId || normalizeAgentId(entry.id) === normalizeAgentId(defaultAgentId);
 }
 
