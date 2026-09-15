@@ -39,6 +39,35 @@ describe("channel plugin module loader helpers", () => {
     },
   );
 
+  it.each(["cjs", "mjs"])(
+    "resolves extensionless plugin module specifiers to built %s runtimes",
+    (extension) => {
+      const rootDir = tempDirs.make("openclaw-channel-module-loader-");
+      const expectedPath = path.join(rootDir, `configured-state.${extension}`);
+      fs.writeFileSync(expectedPath, "// built runtime artifact\n", "utf8");
+
+      expect(resolveExistingPluginModulePath(rootDir, "./configured-state")).toBe(expectedPath);
+    },
+  );
+
+  it("loads a built .cjs runtime through an extensionless specifier", () => {
+    const rootDir = tempDirs.make("openclaw-channel-module-loader-");
+    const expectedPath = path.join(rootDir, "configured-state.cjs");
+    fs.writeFileSync(
+      expectedPath,
+      "module.exports = { hasConfiguredChannelState: () => true };\n",
+      "utf8",
+    );
+
+    const modulePath = resolveExistingPluginModulePath(rootDir, "./configured-state");
+    expect(modulePath).toBe(expectedPath);
+
+    const loaded = loadChannelPluginModule({ modulePath, rootDir }) as {
+      hasConfiguredChannelState: () => boolean;
+    };
+    expect(loaded.hasConfiguredChannelState()).toBe(true);
+  });
+
   it("preserves explicit JavaScript plugin module specifiers", () => {
     const rootDir = tempDirs.make("openclaw-channel-module-loader-");
     const expectedPath = path.join(rootDir, "checker.js");
