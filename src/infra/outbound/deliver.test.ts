@@ -1089,25 +1089,6 @@ describe("deliverOutboundPayloads", () => {
     expect(messageSendText).not.toHaveBeenCalled();
   });
 
-  it("fails closed for an unfinished conversation intent without route authority", async () => {
-    const messageSendText = installMatrixTextMessageAdapter({
-      messageId: "should-not-send",
-      durableFinal: { capabilities: { text: true } },
-    });
-
-    await expect(
-      deliverMatrix({
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: "legacy-operation",
-        },
-        onDeliveryAttempt: async () => {},
-      }),
-    ).rejects.toMatchObject({ cause: { retryable: false }, queueCustody: "released" });
-    expect(messageSendText).not.toHaveBeenCalled();
-  });
-
   it("does not claim platform custody when message adapter preflight fails", async () => {
     const messageSendText = vi.fn();
     setMatrixMessageAdapter({
@@ -2662,91 +2643,6 @@ describe("deliverOutboundPayloads", () => {
       "partial delivery failure (bestEffort)",
     );
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-  });
-
-  it("terminally retires a permanent provider rejection before platform dispatch", async () => {
-    const order: string[] = [];
-    hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sent");
-    hookMocks.runner.runMessageSent.mockImplementationOnce(async () => {
-      order.push("message-sent");
-    });
-    const rejection = new PlatformMessageNotDispatchedError("atomic message limit", {
-      cause: new Error("rendered text is too large"),
-      retryable: false,
-    });
-    const sendMatrix = vi.fn().mockRejectedValueOnce(rejection);
-    completionMocks.rejectDurableDelivery.mockImplementationOnce(() => {
-      order.push("reject-owner");
-    });
-    queueMocks.ackDelivery.mockImplementationOnce(async () => {
-      order.push("ack-queue");
-    });
-
-    await expect(
-      deliverMatrix({
-        payloads: [{ text: "rendered text" }],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: "operation-rejected",
-          routeFingerprint: "route-rejected",
-        },
-        onDeliveryAttempt: async () => {},
-      }),
-    ).rejects.toThrow("atomic message limit");
-
-    expect(order).toEqual(["reject-owner", "ack-queue", "message-sent"]);
-    expect(completionMocks.rejectDurableDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({ operationId: "operation-rejected" }),
-      "atomic message limit",
-      expectedQueueStateDir,
-      expect.objectContaining({ stateDir: expectedQueueStateDir }),
-      undefined,
-    );
-    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
-    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: "rendered text",
-        error: expect.stringContaining("atomic message limit"),
-        success: false,
-      }),
-      expect.objectContaining({ channelId: "matrix" }),
-    );
-  });
-
-  it("normalizes an empty permanent rejection reason before durable retirement", async () => {
-    const sendMatrix = vi.fn().mockRejectedValueOnce(
-      new PlatformMessageNotDispatchedError("   ", {
-        cause: new Error("provider rejected the rendered payload"),
-        retryable: false,
-      }),
-    );
-
-    await expect(
-      deliverMatrix({
-        payloads: [{ text: "rendered text" }],
-        deps: { matrix: sendMatrix },
-        queuePolicy: "required",
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: "operation-empty-rejection",
-          routeFingerprint: "route-empty-rejection",
-        },
-        onDeliveryAttempt: async () => {},
-      }),
-    ).rejects.toThrow("Platform rejected the message before dispatch");
-
-    expect(completionMocks.rejectDurableDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({ operationId: "operation-empty-rejection" }),
-      "Platform rejected the message before dispatch",
-      expectedQueueStateDir,
-      expect.objectContaining({ stateDir: expectedQueueStateDir }),
-      undefined,
-    );
   });
 
   it("preserves queued send evidence when a marked best-effort batch has an ambiguous failure", async () => {

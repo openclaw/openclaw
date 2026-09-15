@@ -7,7 +7,6 @@ import {
   resolveDeliveryNotSentRetryability,
 } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
-import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { OutboundHandoffRejectedError } from "./deliver-handoff.js";
 import {
   OutboundDeliveryError,
@@ -16,7 +15,7 @@ import {
   type PlatformMessageNotDispatchedError,
   type PlatformSendRoute,
 } from "./deliver-types.js";
-import { rejectDurableDelivery } from "./delivery-completion.js";
+import { rejectDurableDelivery, type ConversationDeliveryTarget } from "./delivery-completion.js";
 import { retireUnsentDelivery } from "./delivery-queue-ack.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
@@ -187,10 +186,10 @@ export function isProvenBatchNotSent(
 export async function rejectQueuedDelivery(
   owner: QueuedDeliveryOwner,
   rejection: PlatformMessageNotDispatchedError,
-  params: Pick<
-    InternalDeliverOutboundPayloadsParams,
-    "deliveryQueueStateContext" | "conversationDeliveryTarget"
-  >,
+  params: {
+    deliveryQueueStateContext?: DeliveryQueueStateContext;
+    conversationDeliveryTarget?: ConversationDeliveryTarget;
+  },
   terminals: DeliveryFailureSettlement["terminals"],
 ): Promise<boolean> {
   try {
