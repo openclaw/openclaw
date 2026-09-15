@@ -39,7 +39,10 @@ import {
 } from "./doctor-contract.js";
 import { collectGoogleChatMutableAllowlistWarnings } from "./doctor.js";
 import { startGoogleChatGatewayAccount } from "./gateway.js";
-import { describeGoogleChatMessageTool } from "./message-tool-api.js";
+import {
+  describeGoogleChatMessageTool,
+  supportsGoogleChatMessageAction,
+} from "./message-tool-api.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 
 const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
@@ -49,7 +52,7 @@ const loadGoogleChatChannelRuntime = createLazyRuntimeNamedExport(
 
 const googlechatActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeGoogleChatMessageTool,
-  supportsAction: ({ action }) => action === "send",
+  supportsAction: supportsGoogleChatMessageAction,
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async (ctx) => {
     const { googlechatMessageActions } = await import("./actions.js");

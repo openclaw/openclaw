@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
@@ -10,7 +11,7 @@ import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-const loopback = vi.hoisted(() => ({ baseUrl: "" }));
+const loopback = vi.hoisted(() => ({ baseUrl: "", editStatus: 200 }));
 const requests = vi.hoisted(() => [] as Array<{ method: string; path: string; body: string }>);
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
@@ -20,21 +21,28 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     // Keep the real guarded fetch; only send it at the loopback origin.
     fetchWithSsrFGuard: async (...args: Parameters<typeof actual.fetchWithSsrFGuard>) => {
       const [params] = args;
+      const url = new URL(params.url);
+      if (
+        url.origin !== "https://chat.googleapis.com" &&
+        url.origin !== "https://oauth2.googleapis.com"
+      ) {
+        throw new Error(`Unexpected origin in Google Chat fixture: ${url.origin}`);
+      }
       return await actual.fetchWithSsrFGuard({
         ...params,
-        url: params.url.replace("https://chat.googleapis.com", loopback.baseUrl),
+        url: `${loopback.baseUrl}${url.pathname}${url.search}`,
+        dispatcherPolicy: { mode: "direct" },
         policy: { allowPrivateNetwork: true },
       });
     },
   };
 });
 
-vi.mock("./auth.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./auth.js")>()),
-  getGoogleChatAccessToken: vi.fn(async () => "transport-proof-token"),
-}));
-
-import { googlechatPlugin } from "../api.js";
+import { googlechatPlugin } from "../extensions/googlechat/api.js";
+import {
+  mintMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../src/gateway/message-action-turn-capability.js";
 
 const CANONICAL_SPACE = "spaces/AAQA1bC2dEf";
 const FOLDED_SPACE = "spaces/aaqa1bc2def";
@@ -50,11 +58,33 @@ beforeAll(async () => {
     });
     request.on("end", () => {
       const path = request.url ?? "";
+      if (path === "/token") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            access_token: "transport-proof-token",
+            token_type: "Bearer",
+            expires_in: 3600,
+          }),
+        );
+        return;
+      }
       requests.push({
         method: request.method ?? "",
         path,
         body: Buffer.concat(chunks).toString("utf8"),
       });
+      if (request.method === "PATCH") {
+        response.writeHead(loopback.editStatus, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify(
+            loopback.editStatus === 200
+              ? { name: path.replace(/^\/v1\//, "").split("?")[0] }
+              : { error: { message: "Edit denied by fixture" } },
+          ),
+        );
+        return;
+      }
       response.writeHead(200, { "content-type": "application/json" });
       if (request.method === "POST" && path.includes("/messages")) {
         const space = path.replace(/^\/v1\//, "").replace(/\/messages.*$/, "");
@@ -82,16 +112,24 @@ afterAll(async () => {
 });
 
 describe("session-derived Google Chat delivery", () => {
-  it("delivers to the canonical mixed-case space recorded by the session", async () => {
+  it("sends and edits in the canonical mixed-case space recorded by the session", async () => {
     await withOpenClawTestState({ prefix: "googlechat-session-target-" }, async (state) => {
+      const { privateKey } = generateKeyPairSync("rsa", {
+        modulusLength: 2048,
+        privateKeyEncoding: { type: "pkcs8", format: "pem" },
+        publicKeyEncoding: { type: "spki", format: "pem" },
+      });
       const config: OpenClawConfig = {
         agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
         channels: {
           googlechat: {
             accounts: {
               default: {
-                serviceAccount:
-                  '{"client_email":"proof@example.iam.gserviceaccount.com","private_key":"proof-key"}',
+                serviceAccount: JSON.stringify({
+                  type: "service_account",
+                  client_email: "proof@example.iam.gserviceaccount.com",
+                  private_key: privateKey,
+                }),
               },
             },
           },
@@ -147,6 +185,79 @@ describe("session-derived Google Chat delivery", () => {
       expect(sends).toHaveLength(1);
       expect(sends[0]?.path).toBe(`/v1/${CANONICAL_SPACE}/messages`);
       expect(JSON.parse(sends[0]!.body)).toEqual({ text: "session-derived reply" });
+
+      // Editing requires the host-admitted current conversation and account.
+      const runId = "googlechat-edit-proof";
+      const capability = mintMessageActionTurnCapability({
+        agentId: "main",
+        runId,
+        sessionKey: SESSION_KEY,
+        sessionId: "proof-session",
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: "googlechat",
+          currentChatType: "group",
+          currentChannelId: CANONICAL_SPACE,
+        },
+      });
+      try {
+        const editTool = createOpenClawCodingTools({
+          config,
+          agentId: "main",
+          agentAccountId: "default",
+          runId,
+          sessionKey: SESSION_KEY,
+          sessionId: "proof-session",
+          messageProvider: "googlechat",
+          messageTo: CANONICAL_SPACE,
+          currentChannelId: CANONICAL_SPACE,
+          chatType: "group",
+          messageActionTurnCapability: capability,
+          workspaceDir: state.workspaceDir,
+        }).find((entry) => entry.name === "message");
+        expect(editTool).toBeDefined();
+        // Use the ID returned by send through the registered tool and lazy adapter.
+        const messageId = `${CANONICAL_SPACE}/messages/proof-1`;
+        const edit = (id = messageId) =>
+          editTool!.execute("edit-proof", {
+            action: "edit",
+            target: CANONICAL_SPACE,
+            messageId: id,
+            message: "corrected reply",
+          });
+        requests.length = 0;
+        const edited = await edit();
+        expect(edited.details).toMatchObject({
+          ok: true,
+          to: CANONICAL_SPACE,
+          messageName: messageId,
+        });
+        expect(requests.filter((entry) => entry.method !== "GET")).toEqual([
+          {
+            method: "PATCH",
+            path: `/v1/${messageId}?updateMask=text`,
+            body: JSON.stringify({ text: "corrected reply" }),
+          },
+        ]);
+
+        requests.length = 0;
+        await expect(edit(`${FOLDED_SPACE}/messages/proof-1`)).rejects.toThrow(
+          "messageId must belong to the target Google Chat space",
+        );
+        expect(requests.filter((entry) => entry.method !== "GET")).toEqual([]);
+
+        for (const status of [403, 404]) {
+          requests.length = 0;
+          loopback.editStatus = status;
+          await expect(edit()).rejects.toThrow(`Google Chat API ${status}`);
+          expect(
+            requests.filter((entry) => entry.method !== "GET").map((entry) => entry.method),
+          ).toEqual(["PATCH"]);
+        }
+      } finally {
+        loopback.editStatus = 200;
+        revokeMessageActionTurnCapability(capability);
+      }
     });
   }, 60_000);
 });

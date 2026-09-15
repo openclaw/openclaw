@@ -84,7 +84,7 @@ describe("googlechatPlugin config adapter", () => {
     } as OpenClawConfig;
 
     expect(googlechatPlugin.actions?.describeMessageTool?.({ cfg })).toEqual({
-      actions: ["send"],
+      actions: ["send", "edit"],
     });
     expect(googlechatPlugin.actions?.supportsAction?.({ action: "send" })).toBe(true);
     expect(googlechatPlugin.actions?.supportsAction?.({ action: "upload-file" })).toBe(false);
