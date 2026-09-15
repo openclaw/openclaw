@@ -128,6 +128,12 @@ The legacy engine does not register tools or provide a `systemPromptAddition`.
 
 When no `plugins.slots.contextEngine` is set (or it's set to `"legacy"`), this engine is used automatically.
 
+Disabling the selected plugin preserves the slot preference but uses `legacy`
+normally, without degradation warnings or quarantine. Global plugin disablement
+and deny policy have the same effect. Re-enabling the plugin restores the retained
+selection when its runtime registration is available. An enabled selection that
+is missing or fails still follows the failure-isolation behavior below.
+
 ## Plugin engines
 
 A plugin can register a context engine using the plugin API:
