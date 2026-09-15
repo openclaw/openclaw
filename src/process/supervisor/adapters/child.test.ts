@@ -493,27 +493,31 @@ describe("createChildAdapter", () => {
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
-  it("selects the exact service relay instead of direct shared-group signaling", async () => {
-    process.env.OPENCLAW_SERVICE_MARKER = "1";
-    try {
-      await startChildAdapter({
-        argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
-        exactEnv: true,
-        stdinMode: "pipe-open",
-      });
-      expect(createServiceChildRelayAdapterMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          command: "node",
-          args: ["-e", "setTimeout(() => {}, 1000)"],
+  it.each(["linux", "darwin", "freebsd"] as const)(
+    "selects the exact service relay instead of direct shared-group signaling on %s",
+    async (platform) => {
+      setPlatform(platform);
+      process.env.OPENCLAW_SERVICE_MARKER = "1";
+      try {
+        await startChildAdapter({
+          argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+          exactEnv: true,
           stdinMode: "pipe-open",
-        }),
-      );
-      expect(spawnWithFallbackMock).not.toHaveBeenCalled();
-      expect(signalProcessTreeMock).not.toHaveBeenCalled();
-    } finally {
-      delete process.env.OPENCLAW_SERVICE_MARKER;
-    }
-  });
+        });
+        expect(createServiceChildRelayAdapterMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            command: "node",
+            args: ["-e", "setTimeout(() => {}, 1000)"],
+            stdinMode: "pipe-open",
+          }),
+        );
+        expect(spawnWithFallbackMock).not.toHaveBeenCalled();
+        expect(signalProcessTreeMock).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.OPENCLAW_SERVICE_MARKER;
+      }
+    },
+  );
 
   it("uses process-tree kill for graceful SIGTERM cancellation", async () => {
     const { adapter, killMock } = await createAdapterHarness({ pid: 7654 });

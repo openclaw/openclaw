@@ -22,7 +22,7 @@ concurrency:
 
 env:
   NODE_OPTIONS: --max-old-space-size=8192
-  SOURCE_PINS: '{"src/agents/mcp-stdio-transport.test.ts":"77a2ffe0c413d2fd7f8aee85ff6e98e293daa360de278889dee09825ba865b34","src/agents/mcp-stdio-transport.windows.test.ts":"ebe0c6e53a1e0a2bb1b3bc69f473549291fb2d39af89854cb2c89f14c70ed036","src/process/owned-stdio.ts":"b8ddeb89684c9453587ce49a840217c3046a36187c4b05d5ca855b3cdd140457","src/process/supervisor/adapters/child.test.ts":"99e34559a498857120e839c8464834caa0aacca694c78224c1aa87a2d1ac3703","src/process/supervisor/adapters/child.ts":"471d6afab07067b962676f32bb8b44a16b2a47385d38b58c4bbfddbc6b74ae38","src/process/supervisor/service-child-relay-host.test.ts":"7c9f9996252dc23a84f5daf153c012966a3466c802be255659aa775a878b1fc0","src/process/supervisor/service-child-relay-host.ts":"5eb61a5debfc0340b930ace9762ef36b00da87ba1b6ddbb2e41d724d9579e163"}'
+  SOURCE_PINS: '{"src/agents/mcp-stdio-transport.test.ts":"77a2ffe0c413d2fd7f8aee85ff6e98e293daa360de278889dee09825ba865b34","src/agents/mcp-stdio-transport.windows.test.ts":"ebe0c6e53a1e0a2bb1b3bc69f473549291fb2d39af89854cb2c89f14c70ed036","src/process/owned-stdio.ts":"b8ddeb89684c9453587ce49a840217c3046a36187c4b05d5ca855b3cdd140457","src/process/supervisor/adapters/child.test.ts":"aa50b13a54e224c250e6cd588702cbc6a34bd129aaecba8fe99dd22c2de95f09","src/process/supervisor/adapters/child.ts":"471d6afab07067b962676f32bb8b44a16b2a47385d38b58c4bbfddbc6b74ae38","src/process/supervisor/service-child-relay-host.test.ts":"7c9f9996252dc23a84f5daf153c012966a3466c802be255659aa775a878b1fc0","src/process/supervisor/service-child-relay-host.ts":"5eb61a5debfc0340b930ace9762ef36b00da87ba1b6ddbb2e41d724d9579e163"}'
 
 jobs:
   linux-owner:
