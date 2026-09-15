@@ -9,6 +9,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import {
+  buildRealtimeVoiceAgentCancelProviderResult,
   buildRealtimeVoiceAgentConsultWorkingResponse,
   buildRealtimeVoiceAgentErrorProviderResult,
   calculateMulawRms,
@@ -71,6 +72,7 @@ const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
 const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
 const RECENT_FINAL_USER_TRANSCRIPT_TTL_MS = 2_000;
 const BARGE_IN_REQUIRED_LOUD_CHUNKS = 2;
+const END_CALL_PLAYBACK_TIMEOUT_MS = 2_000;
 const logger = createSubsystemLogger("voice-call/realtime");
 
 function buildGreetingInstructions(
@@ -320,6 +322,13 @@ type UserTranscriptOwnerAdoption = {
 };
 
 type RealtimeCallEndCause = "completed" | "disconnect" | "shutdown" | "inactivity" | "error";
+type RealtimeEndCallDrainResult = "played" | "interrupted" | "timed-out";
+type RealtimeEndCallDrain = {
+  completion: Promise<RealtimeEndCallDrainResult>;
+  markName: string;
+  resolve: (result: RealtimeEndCallDrainResult) => void;
+  timer?: ReturnType<typeof setTimeout>;
+};
 
 // Each socket keeps its exact binding; the call map only grants current-generation
 // record termination. Replacement can retire old audio without a late close killing its successor.
@@ -327,8 +336,10 @@ type RealtimeTelephonyBinding = {
   bridge: ActiveRealtimeVoiceBridge;
   acknowledgeCarrierMark: (markName?: string) => void;
   close: (cause: RealtimeCallEndCause) => Promise<void>;
+  drainPlaybackBeforeEndCall: () => Promise<RealtimeEndCallDrainResult>;
   endCall: () => void;
   noteMediaActivity: () => void;
+  resumeAfterEndCallDrain: () => void;
   retire: () => void;
 };
 
@@ -963,10 +974,31 @@ export class RealtimeCallHandler {
       return true;
     };
     const pendingMarkAcks = new Map<string, () => void>();
+    let outputFencedForEndCall = false;
+    let endCallDrain: RealtimeEndCallDrain | undefined;
+    const settleEndCallDrain = (
+      drain: RealtimeEndCallDrain,
+      result: RealtimeEndCallDrainResult,
+    ): void => {
+      if (endCallDrain !== drain) {
+        return;
+      }
+      if (drain.timer) {
+        clearTimeout(drain.timer);
+        drain.timer = undefined;
+      }
+      pendingMarkAcks.delete(drain.markName);
+      drain.resolve(result);
+    };
     const audioPacer = new RealtimeAudioPacer({
       // Every pacer reset discards queued marks, so their stored provider
       // acknowledgements can never fire and must be retired with them.
-      onPlaybackReset: () => pendingMarkAcks.clear(),
+      onPlaybackReset: () => {
+        pendingMarkAcks.clear();
+        if (endCallDrain) {
+          settleEndCallDrain(endCallDrain, "interrupted");
+        }
+      },
       send: sendString,
       serializer: {
         media: (payload) => adapter.serializeMedia(payload),
@@ -982,6 +1014,39 @@ export class RealtimeCallHandler {
         }
       },
     });
+    const drainPlaybackBeforeEndCall = (): Promise<RealtimeEndCallDrainResult> => {
+      if (endCallDrain) {
+        return endCallDrain.completion;
+      }
+      outputFencedForEndCall = true;
+      const markName = `openclaw-end-call-${randomUUID()}`;
+      let resolve!: (result: RealtimeEndCallDrainResult) => void;
+      const completion = new Promise<RealtimeEndCallDrainResult>((settle) => {
+        resolve = settle;
+      });
+      const drain: RealtimeEndCallDrain = { completion, markName, resolve };
+      endCallDrain = drain;
+      audioPacer.sendMark(markName, (sent) => {
+        if (endCallDrain !== drain) {
+          return;
+        }
+        if (!sent) {
+          settleEndCallDrain(drain, "interrupted");
+          return;
+        }
+        pendingMarkAcks.set(markName, () => settleEndCallDrain(drain, "played"));
+        drain.timer = setTimeout(
+          () => settleEndCallDrain(drain, "timed-out"),
+          END_CALL_PLAYBACK_TIMEOUT_MS,
+        );
+        drain.timer.unref?.();
+      });
+      return completion;
+    };
+    const resumeAfterEndCallDrain = (): void => {
+      outputFencedForEndCall = false;
+      endCallDrain = undefined;
+    };
     const speechDetector = createSpeechThresholdGate({
       rmsThreshold: 0.035,
       speechFrames: BARGE_IN_REQUIRED_LOUD_CHUNKS,
@@ -1092,6 +1157,9 @@ export class RealtimeCallHandler {
       audioSink: {
         isOpen: () => !sessionClosed && ws.readyState === WebSocket.OPEN,
         sendAudio: (muLaw, metadata) => {
+          if (outputFencedForEndCall) {
+            return;
+          }
           harness.recordOutputAudio(muLaw);
           audioPacer.sendAudio(muLaw, metadata);
         },
@@ -1519,6 +1587,7 @@ export class RealtimeCallHandler {
         }
       },
       close: (cause) => closeBinding(telephonyBinding, cause),
+      drainPlaybackBeforeEndCall,
       endCall: () => {
         // Close the provider session before the carrier socket so no pending
         // response can reach the caller after the hang-up request succeeds.
@@ -1549,6 +1618,7 @@ export class RealtimeCallHandler {
         }, REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS);
         livenessTimer.unref?.();
       },
+      resumeAfterEndCallDrain,
       retire: () => {
         void closeBinding(telephonyBinding);
       },
@@ -2058,6 +2128,42 @@ export class RealtimeCallHandler {
       return;
     }
 
+    const drainResult = await binding.drainPlaybackBeforeEndCall();
+    if (
+      this.activeTelephonyBindingsByCallId.get(params.callId) !== binding ||
+      !this.isActiveBridgeOwner(params.callId, params.bridge)
+    ) {
+      return;
+    }
+    if (drainResult !== "played") {
+      binding.resumeAfterEndCallDrain();
+      if (drainResult === "timed-out") {
+        console.warn(
+          `[voice-call] realtime end-call playback mark timed out callId=${params.callId}`,
+        );
+      }
+      const detail =
+        drainResult === "timed-out"
+          ? "Farewell playback could not be confirmed before the timeout. Keep the phone call connected and continue with the caller."
+          : "The farewell was interrupted before playback completed. Keep the phone call connected and continue with the caller's latest request.";
+      const toolResult = buildRealtimeVoiceAgentCancelProviderResult(detail);
+      await params.bridge.submitToolResult(
+        params.bridgeCallId,
+        toolResult,
+        params.bridge.bridge.supportsToolResultSuppression === false
+          ? undefined
+          : { suppressResponse: true },
+      );
+      params.harness.emit({
+        type: "tool.result",
+        turnId: params.turnId,
+        callId: params.bridgeCallId,
+        payload: { name: REALTIME_VOICE_END_CALL_TOOL_NAME, result: toolResult },
+        final: true,
+      });
+      return;
+    }
+
     let result: { success: boolean; error?: string };
     try {
       result = await this.manager.endCall(params.callId);
@@ -2072,6 +2178,7 @@ export class RealtimeCallHandler {
       return;
     }
     if (!result.success) {
+      binding.resumeAfterEndCallDrain();
       const detail = result.error?.trim() || "the telephony provider returned no reason";
       const toolResult = {
         error: `Could not end the current phone call: ${detail}. Tell the caller the call could not be ended and they can hang up or ask you to try again.`,

@@ -21,6 +21,7 @@ type RealtimeAudioQueueItem =
     }
   | {
       name: string;
+      onSent?: (sent: boolean) => void;
       type: "mark";
     };
 
@@ -133,11 +134,12 @@ export class RealtimeAudioPacer {
   }
 
   /** Queue a provider mark frame after prior audio frames. */
-  sendMark(name: string): void {
+  sendMark(name: string, onSent?: (sent: boolean) => void): void {
     if (this.closed || !name) {
+      onSent?.(false);
       return;
     }
-    this.queue.push({ type: "mark", name });
+    this.queue.push({ type: "mark", name, onSent });
     this.ensurePump();
   }
 
@@ -309,6 +311,9 @@ export class RealtimeAudioPacer {
       }
 
       const sent = item.type === "audio" ? this.sendAudioItem(item) : this.sendMarkItem(item);
+      if (item.type === "mark") {
+        item.onSent?.(sent);
+      }
       if (!sent) {
         this.resetQueue();
         this.queuedAudioBytes = 0;
