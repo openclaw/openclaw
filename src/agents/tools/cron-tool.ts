@@ -25,6 +25,7 @@ import { resolveSessionAgentId } from "../agent-scope.js";
 import {
   bindCronManagementGrant,
   bindCronRequesterGrant,
+  resolveCronToolManagementMode,
 } from "../cron-creator-authority-context.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { withToolEffectBoundary } from "../tool-effect-receipt.js";
@@ -142,6 +143,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const readOnly = opts?.readOnly === true;
   const assertStreamConfigCurrent = captureCronStreamPolicyConfigCurrentness(opts);
   const managementAuthority = bindCronManagementGrant(opts?.runId, config);
+  const management = resolveCronToolManagementMode(opts?.runId, config);
   const requesterAuthority = bindCronRequesterGrant(opts?.runId);
   const allowCommandJobs = config?.tools?.gatewayPolicy?.automations?.allowCommandJobs !== false;
   const automation = createCronAutomationActions(opts);
@@ -152,7 +154,10 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const tool: AnyAgentTool = {
     label: "Automations",
     name: AUTOMATIONS_TOOL_NAME,
-    displaySummary: readOnly ? "Inspect recorded automation state." : CRON_TOOL_DISPLAY_SUMMARY,
+    displaySummary:
+      (readOnly && "Inspect recorded automation state.") ||
+      (management === "only" && "Manage existing automations within this turn's scope.") ||
+      CRON_TOOL_DISPLAY_SUMMARY,
     description: buildCronToolDescription({
       triggersEnabled,
       callerScoped: !isCronModelManagementAllowed(config),
@@ -160,7 +165,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       selfRemoveOnly,
       activeRun,
       nextCheckEnabled,
-      managementOnly: managementAuthority?.managementOnly,
+      managementOnly: management === "only",
       allowCommandJobs,
     }),
     outputSchema: CronToolOutputSchema,
@@ -172,7 +177,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
       selfRemoveOnly,
       activeRun,
       nextCheckEnabled,
-      management: managementAuthority && (managementAuthority.managementOnly ? "only" : "also"),
+      management,
     }),
     execute: async (_toolCallId, args, operationSignal) => {
       operationSignal?.throwIfAborted();

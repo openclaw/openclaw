@@ -3,6 +3,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   consumeCronCreatorAuthorityGrant,
   mintCronCreatorAuthorityGrant,
@@ -21,6 +22,7 @@ import {
   bindCronManagementGrant,
   bindCronRequesterGrant,
   createCronCreatorAuthorityCapability,
+  resolveCronToolManagementMode,
   runWithCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapabilityResolver,
 } from "./cron-creator-authority-context.js";
@@ -141,9 +143,20 @@ it.each([
     const runId = "control-ui-scope-run";
     const { scope, authority, run } = admittedFixture(runId, kind, source, callerScopedCreation);
     await run(async () => {
-      expect(
-        withoutGatewayToolCallerIdentity(() => bindCronManagementGrant(runId)),
-      ).toBeUndefined();
+      withoutGatewayToolCallerIdentity(() => {
+        expect(resolveCronToolManagementMode(undefined)).toBe(
+          kind === "unknown" && !callerScopedCreation ? "only" : "also",
+        );
+        expect(resolveCronToolManagementMode("other-run")).toBeUndefined();
+        expect(bindCronManagementGrant(runId)).toBeUndefined();
+        expect(createCronTool().parameters).toHaveProperty(
+          "properties.action.enum",
+          kind !== "unknown" || callerScopedCreation
+            ? expect.arrayContaining(["add"])
+            : expect.not.arrayContaining(["add"]),
+        );
+      });
+      expect(bindCronManagementGrant(undefined)).toBeUndefined();
       const management = bindCronManagementGrant(runId)!;
       expect(management.managementOnly).toBe(kind === "unknown" && !callerScopedCreation);
       for (const method of ["cron.list", "cron.get", "cron.update", "cron.run", "cron.remove"]) {
@@ -192,6 +205,21 @@ it.each([
     });
   },
 );
+
+it("does not project management admission when deployment policy keeps caller scope", async () => {
+  const { run } = admittedFixture("caller-policy-inventory");
+  await run(async () => {
+    const config: OpenClawConfig = {
+      tools: { gatewayPolicy: { allow: [], automations: { scope: "caller" } } },
+    };
+    expect(resolveCronToolManagementMode(undefined, config)).toBeUndefined();
+    expect(bindCronManagementGrant("caller-policy-inventory", config)).toBeUndefined();
+    expect(createCronTool({ config }).parameters).toHaveProperty(
+      "properties.action.enum",
+      expect.arrayContaining(["add"]),
+    );
+  });
+});
 
 it("does not transfer an admin tool's authority to a replacement with the same run id", async () => {
   const runId = "control-ui-admin-run";
