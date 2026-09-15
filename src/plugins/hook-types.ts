@@ -705,6 +705,8 @@ export type PluginHookToolRequesterContext = {
 };
 
 export type PluginHookToolContext = {
+  /** Host-supplied native preflight, where parameter rewrites are not supported. */
+  policyPhase?: "native-pre-tool-use";
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;

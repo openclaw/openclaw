@@ -31,6 +31,10 @@ contributions, and transcript persistence. Part of the [Plugin hooks](/plugins/h
 - optional `event.toolCallId`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
   `ctx.runId`, `ctx.toolKind`, `ctx.toolInputKind`, and diagnostic `ctx.trace`
+- optional `ctx.policyPhase: "native-pre-tool-use"`, set by the host for native
+  preflight. These calls support observation and blocking, but reject parameter
+  rewrites. Ordinary host tool execution leaves it absent. This field does not
+  grant authority and is never read from tool arguments.
 - optional `ctx.abortSignal`, which aborts when the owning tool call is
   cancelled; handlers should pass it to cancellable I/O and remove any
   listeners they register
