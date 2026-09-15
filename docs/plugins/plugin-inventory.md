@@ -152,6 +152,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[sglang](/plugins/reference/sglang)** (`@openclaw/sglang-provider`) - included in OpenClaw. Adds SGLang model provider support to OpenClaw.
 
+- **[staan](/plugins/reference/staan)** (`@openclaw/staan-plugin`) - included in OpenClaw, and also from npm or ClawHub: `clawhub:@openclaw/staan-plugin`. Adds web search provider support.
+
 - **[talk-voice](/plugins/reference/talk-voice)** (`openclaw`) - included in OpenClaw. Manage Talk voice selection (list/set).
 
 - **[telegram](/plugins/reference/telegram)** (`@openclaw/telegram`) - included in OpenClaw. OpenClaw Telegram channel plugin.

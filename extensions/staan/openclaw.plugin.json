@@ -1,0 +1,55 @@
+{
+  "id": "staan",
+  "categories": ["web"],
+  "activation": {
+    "onStartup": false
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "staan",
+        "envVars": ["STAAN_API_KEY"]
+      }
+    ]
+  },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Staan API Key",
+      "help": "Staan Search API key (fallback: STAAN_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "stn_..."
+    },
+    "webSearch.baseUrl": {
+      "label": "Staan Search Base URL",
+      "help": "Optional Staan API base URL override. OpenClaw appends /search/web when the URL does not already end there."
+    },
+    "webSearch.market": {
+      "label": "Staan Default Market",
+      "help": "Default market for searches, e.g. en-gb, fr-fr, de-de. Callers can override per query."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["staan"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "market": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
