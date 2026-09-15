@@ -337,6 +337,7 @@ export async function runStatusScript(params: StatusScriptParams) {
       observe() {}
     },
     URL: globalThis.URL,
+    URLSearchParams: globalThis.URLSearchParams,
     atob: globalThis.atob,
     crypto: { randomUUID: () => "teams-caption-epoch" },
     document,
@@ -423,6 +424,7 @@ export function audioStatusParams(params: StatusOverrides = {}): StatusScriptPar
 }
 
 export function runLeaveScript(params: {
+  meetingUrl?: string;
   bodyText?: string;
   currentUrl?: string;
   leave?: PageControl;
@@ -462,9 +464,11 @@ export function runLeaveScript(params: {
     window["__openclawTeamsAudioOutputs"] = params.priorAudioOutputs;
   }
   const run = runInNewContext(
-    `(${teamsMeetingLeaveScript({ leaveInitiated: params.leaveInitiated ?? false, meetingSessionId: params.meetingSessionId ?? "session-1", meetingUrl: URL })})`,
+    `(${teamsMeetingLeaveScript({ leaveInitiated: params.leaveInitiated ?? false, meetingSessionId: params.meetingSessionId ?? "session-1", meetingUrl: params.meetingUrl ?? URL })})`,
     {
       URL: globalThis.URL,
+      atob: globalThis.atob,
+      URLSearchParams: globalThis.URLSearchParams,
       document,
       location,
       window,

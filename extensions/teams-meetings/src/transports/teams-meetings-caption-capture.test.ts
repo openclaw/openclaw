@@ -530,7 +530,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       sessionId: "session-1",
       visible: [],
     };
-    const currentUrl = "https://teams.live.com/v2/";
+    const currentUrl = "https://teams.microsoft.com/v2/";
     const { window } = await runStatusScript({
       captureCaptions: true,
       currentUrl,
@@ -550,7 +550,7 @@ describe("Microsoft Teams meeting captions and permissions", () => {
 
   it("keeps the live caption observer during a bounded in-call control rerender", async () => {
     const leave = control({ label: "Leave" });
-    const currentUrl = "https://teams.live.com/v2/";
+    const currentUrl = "https://teams.microsoft.com/v2/";
     const page = await runCaptionStatusScript({
       captionRows: [captionRow("OpenClaw QA", "Caption before control rerender")],
       currentUrl,
@@ -562,6 +562,13 @@ describe("Microsoft Teams meeting captions and permissions", () => {
         sessionId: "session-1",
         verifiedAt: Date.now(),
       },
+    });
+
+    expect(page.result.inCall).toBe(true);
+    expect(page.window["__openclawTeamsCaptions"]).toMatchObject({
+      observerInstalled: true,
+      observer: { disconnect: expect.any(Function) },
+      visible: [{ text: "Caption before control rerender" }],
     });
 
     leave.isConnected = false;
