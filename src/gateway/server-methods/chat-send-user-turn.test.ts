@@ -28,6 +28,7 @@ import {
   buildPersistedUserTurnMessage,
   type UserTurnInput,
 } from "../../sessions/user-turn-transcript.js";
+import { withOpenClawAgentDatabaseWrite } from "../../state/openclaw-agent-db-write.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as chatAttachments from "../chat-attachments.js";
@@ -215,9 +216,9 @@ describe("prepareChatSendUserTurn", () => {
         prepareChannelParticipantObservation(prepared.ctx);
         recordAcceptedSessionParticipantInput({ ...prepared.ctx }, target);
         recordAcceptedSessionParticipantInput(prepared.ctx, target);
-        await new Promise<void>((resolve) => {
-          queueMicrotask(resolve);
-        });
+        // Enqueue deferred history, then wait behind it on the canonical database lane.
+        await Promise.resolve();
+        await withOpenClawAgentDatabaseWrite({ ...scope, path: target.storePath }, () => undefined);
         expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)).toEqual(
           kind === "profile"
             ? [
