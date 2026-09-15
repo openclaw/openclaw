@@ -4694,7 +4694,7 @@ export const en: TranslationMap & {
       closeSearch: "Close search",
       loading: "Loading chat",
       showEarlier: "Show earlier",
-      loadingEarlier: "Loading earlier history…",
+      loadingEarlier: "Loading earlier…",
       noMatches: "No matching messages",
       positionRail: "Conversation position",
       positionMarker: "{label}, marker {position} of {count}",

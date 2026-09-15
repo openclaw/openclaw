@@ -421,7 +421,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         historyHasMore || this.loadingOlder
           ? {
               hasMore: historyHasMore,
-              loading: this.loadingOlder,
+              loading: this.loadingOlder || (catalogKey ? this.catalogLoading : state.chatLoading),
               onShowEarlier: () => void this.loadOlderMessages(),
             }
           : undefined,
