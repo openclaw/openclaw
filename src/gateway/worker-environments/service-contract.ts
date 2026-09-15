@@ -190,6 +190,7 @@ export type WorkerPlacementDispatchContract = {
     request: WorkerPlacementDispatchRequest,
     onTransition?: (placement: WorkerSessionPlacementRecord) => void,
     authorize?: WorkerPlacementAuthorization,
+    callerSignal?: AbortSignal,
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "active" }>>;
   move?(
     request: WorkerPlacementMoveRequest,

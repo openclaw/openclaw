@@ -65,6 +65,36 @@ describe("native subagent Gateway transport ownership", () => {
     },
   );
 
+  it("preserves acceptance when the source closes after the child is admitted", async () => {
+    let current = true;
+    const assertDispatchCurrent = () => {
+      if (!current) {
+        throw new Error("source closed");
+      }
+    };
+    setSubagentSpawnDepsForTest({
+      hasInProcessGatewayContext: () => true,
+      dispatchGatewayMethodInProcess: async <T>(
+        _method: string,
+        _params: Record<string, unknown>,
+      ) => {
+        assertDispatchCurrent();
+        current = false;
+        return { runId: "accepted-child", status: "accepted" } as T;
+      },
+    });
+    await expect(
+      callNativeSubagentGateway({
+        method: "agent",
+        params: { message: "start", idempotencyKey: "accepted-child" },
+        assertDispatchCurrent,
+      }),
+    ).resolves.toMatchObject({
+      response: { runId: "accepted-child" },
+      taskRowOwnership: "required",
+    });
+  });
+
   it("keeps socket dispatch available when no Gateway owner was bound", async () => {
     const callGateway = vi.fn<() => void>();
     setSubagentSpawnDepsForTest({

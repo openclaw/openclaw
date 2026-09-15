@@ -201,9 +201,11 @@ export async function invokeSessionDispatch(
     profileId: "test",
   },
   sessionMutationAuthorization?: SessionMutationAuthorization,
+  signal?: AbortSignal,
 ) {
   const respond = vi.fn() as unknown as RespondFn;
   await getSessionDispatchHandler()({
+    signal,
     req: { id: "dispatch-request" } as never,
     params: { key: dispatchTestSessionKey, ...target },
     respond,

@@ -382,11 +382,11 @@ export function createSessionsSpawnTool(
     parameters,
     execute: async (_toolCallId, args, signal) =>
       withToolEffectBoundary(async (onSpawnEffectsStart) => {
-        const assertSourceActive = captureAgentToolSourceExecutionGuard(
+        const executionSignal =
           signal && opts?.signal
             ? AbortSignal.any([signal, opts.signal])
-            : (signal ?? opts?.signal),
-        );
+            : (signal ?? opts?.signal);
+        const assertSourceActive = captureAgentToolSourceExecutionGuard(executionSignal);
         const params = args as Record<PropertyKey, unknown>;
         if (opts?.swarmCollector && params.collect !== true) {
           throw new ToolInputError(
@@ -499,7 +499,12 @@ export function createSessionsSpawnTool(
             runTimeoutSeconds,
             sandbox,
             expectsCompletionMessage,
-            options: { ...opts, onSpawnEffectsStart },
+            options: {
+              ...opts,
+              onSpawnEffectsStart,
+              assertActive,
+              signal: executionSignal,
+            },
           });
         const visibleResult = opts?.expectedParentSessionId
           ? await runWithScopedSessionAccess({
