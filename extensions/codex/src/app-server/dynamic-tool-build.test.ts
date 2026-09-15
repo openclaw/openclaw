@@ -285,6 +285,29 @@ describe("Codex app-server dynamic tool build", () => {
     expect(capturedQuestionPrompt?.messageChannel).toBe("telegram");
   });
 
+  it("prefers an initiator-owned question prompt over the tool-result sink", async () => {
+    const workspaceDir = path.join(tempDir, "question-prompt-owned-workspace");
+    const params = createParams(
+      path.join(tempDir, "question-prompt-owned-session.jsonl"),
+      workspaceDir,
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.onToolResult = vi.fn();
+    const send = vi.fn();
+    params.questionPrompt = { send, messageChannel: "telegram" };
+    let capturedQuestionPrompt: OpenClawCodingToolsOptionsForTest["questionPrompt"];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      capturedQuestionPrompt = options?.questionPrompt;
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir);
+
+    expect(capturedQuestionPrompt?.send).toBe(send);
+    expect(capturedQuestionPrompt?.messageChannel).toBe("telegram");
+  });
+
   it("binds a resolver-backed constructed tool surface exactly once", async () => {
     const workspaceDir = path.join(tempDir, "resolver-bound-workspace");
     const params = createParams(path.join(tempDir, "resolver-bound-session.jsonl"), workspaceDir);

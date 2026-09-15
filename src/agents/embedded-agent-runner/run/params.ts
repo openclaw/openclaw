@@ -62,6 +62,7 @@ import type { ScheduledToolPolicyContext } from "../../scheduled-tool-policy.js"
 import type { SessionManager } from "../../sessions/index.js";
 import type { TrustedSubagentCompletionHandoff } from "../../subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode, PromptMode } from "../../system-prompt.types.js";
+import type { QuestionPromptDelivery } from "../../tools/question-prompt-delivery.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
@@ -398,6 +399,13 @@ export type RunEmbeddedAgentParams = {
   streamReasoningInNonStreamModes?: boolean;
   onReasoningEnd?: () => void | Promise<void>;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
+  /**
+   * How this run shows a blocking question tool's prompt. Initiators whose
+   * tool results go nowhere visible (a Voice Call consult) point it at the
+   * conversation that requested the work; the harness then leaves the prompt
+   * to the tool instead of reserving it against `onToolResult`.
+   */
+  questionPrompt?: QuestionPromptDelivery;
   /** Synchronous private observer for the sanitized per-tool result. */
   onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
   /** Reports a committed generic recovery compaction before its retry starts. */

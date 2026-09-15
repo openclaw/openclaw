@@ -428,6 +428,33 @@ function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
 }
 
 describe("handleToolExecutionStart read path checks", () => {
+  it("leaves an ask_user prompt to an initiator-owned delivery instead of the tool-result sink", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+    ctx.params.questionPrompt = { send: vi.fn(), messageChannel: "telegram" };
+    const args = {
+      questions: [
+        {
+          id: "fee",
+          header: "Fee",
+          question: "Approve the fee?",
+          options: [{ label: "Yes" }, { label: "No" }],
+        },
+      ],
+    };
+    await startTool(ctx, {
+      toolName: "ask_user",
+      toolCallId: "ask-call-explicit",
+      args,
+    });
+    await activateAskUserPrompt("ask-call-explicit", args);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(onToolResult).not.toHaveBeenCalled();
+  });
+
   it("delivers a numbered ask_user prompt with question id association", async () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();

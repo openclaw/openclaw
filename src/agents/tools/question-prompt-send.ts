@@ -8,7 +8,6 @@
  * arrive here, so the prompt is identical either way.
  */
 import type { QuestionRequestQuestion } from "../../../packages/gateway-protocol/src/index.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
@@ -22,21 +21,18 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel-normalize.js";
 import { buildAgentHarnessQuestionPromptPayload } from "../harness/user-input-bridge.js";
+import type {
+  QuestionPromptDelivery,
+  QuestionPromptSend,
+} from "./question-prompt-delivery.types.js";
 
 /** Tools whose call opens a question a person must answer before the turn continues. */
 export type QuestionPromptToolName = "ask_user" | "secrets";
 
-/** Publishes one prompt into the originating conversation. */
-export type QuestionPromptSend = (
-  payload: ReplyPayload,
-  options?: { signal?: AbortSignal },
-) => void | Promise<void>;
-
-/** A run's own way to show a question prompt, plus the channel it would appear in. */
-export type QuestionPromptDelivery = {
-  send: QuestionPromptSend;
-  messageChannel?: string;
-};
+export type {
+  QuestionPromptDelivery,
+  QuestionPromptSend,
+} from "./question-prompt-delivery.types.js";
 
 /** Builds a portable prompt sender for Gateway-scoped / loopback tool construction. */
 export function createChannelQuestionPromptDelivery(params: {

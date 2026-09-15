@@ -136,14 +136,13 @@ export function prepareEmbeddedAttemptStream(input: {
   const attempt = input.attempt;
   const activityScope = randomUUID();
   let nestedStartOrder = 0;
-  const hookRunner = input.hookRunner;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
   let acceptingSteerMessages = true;
   let activeQueueAdmissions = 0;
   const shouldRunBeforeAgentFinalize =
     attempt.operation !== "settled-tool-finalization" &&
-    hookRunner?.hasHooks("before_agent_finalize");
+    input.hookRunner?.hasHooks("before_agent_finalize");
   const onBeforeTerminalDelivery = shouldRunBeforeAgentFinalize
     ? async (event: {
         messages: AgentMessage[];
@@ -254,7 +253,7 @@ export function prepareEmbeddedAttemptStream(input: {
                 channelContext: attempt.channelContext,
               }),
             },
-            hookRunner,
+            hookRunner: input.hookRunner,
           });
           if (outcome.action !== "revise") {
             return;
@@ -311,6 +310,7 @@ export function prepareEmbeddedAttemptStream(input: {
     observeToolTerminal: attempt.observeToolTerminal,
     trajectoryRecorder: input.trajectoryRecorder,
     onToolResult: attempt.onToolResult,
+    questionPrompt: attempt.questionPrompt,
     onReasoningStream: attempt.onReasoningStream,
     streamReasoningInNonStreamModes: attempt.streamReasoningInNonStreamModes,
     onReasoningEnd: attempt.onReasoningEnd,

@@ -12,6 +12,7 @@ import {
   createQuestionPromptLifetime,
   type GatewayQuestionCall,
 } from "../tools/gateway-question-lifecycle.js";
+import { questionAliases } from "./gateway-question-aliases.js";
 import {
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
@@ -175,6 +176,12 @@ function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionI
 export function registerPendingAgentQuestion(params: {
   questionId: string;
   sessionKey: string;
+  /**
+   * Other conversations whose plain-text replies may answer this question, such
+   * as the chat that requested a voice consult. A key that already has its own
+   * pending question is skipped rather than shadowed.
+   */
+  answerSessionKeys?: readonly string[];
   questions: readonly AgentHarnessUserInputQuestion[];
   gatewayCall?: AgentHarnessQuestionGatewayCall | AgentQuestionDispatcher;
   answer?: Promise<QuestionWaitAnswerResult>;
@@ -221,6 +228,7 @@ export function registerPendingAgentQuestion(params: {
     resolving: false,
   };
   pendingAgentQuestions.set(sessionKey, state);
+  const aliasSessionKeys = questionAliases.register(state, params.answerSessionKeys);
   return {
     attachRegistration: state.attachRegistration,
     setAnswer: (answer) => {
@@ -240,6 +248,7 @@ export function registerPendingAgentQuestion(params: {
       if (pendingAgentQuestions.get(sessionKey) === state) {
         pendingAgentQuestions.delete(sessionKey);
       }
+      questionAliases.release(state, aliasSessionKeys);
       if (!registrationAttached) {
         rejectRegistration(new Error("gateway question registration disposed before attachment"));
       }
@@ -256,9 +265,9 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
   caller: ReplyToolAuthorityOverlay;
   assertSourceCurrent: () => void;
 }): Promise<boolean> {
-  const state = params.sessionKey ? pendingAgentQuestions.get(params.sessionKey.trim()) : undefined;
+  const route = questionAliases.resolveAnswerRoute(pendingAgentQuestions, params.sessionKey);
   return claimPendingAgentQuestionAnswer({
-    sessionKey: params.sessionKey,
+    sessionKey: route?.state.sessionKey ?? params.sessionKey,
     text: params.text,
     persist: params.persist,
     sourceRecorder: params.sourceRecorder,
@@ -267,12 +276,9 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
       assertCurrent: () => {
         try {
           params.assertSourceCurrent();
-          if (state) {
-            if (!state.answerAuthority) {
-              throw new Error("pending question has no prepared creator authority");
-            }
-            state.answerAuthority.assertCaller(params.caller);
-            if (pendingAgentQuestions.get(state.sessionKey) !== state) {
+          if (route) {
+            route.assertCaller(params.caller);
+            if (pendingAgentQuestions.get(route.state.sessionKey) !== route.state) {
               throw new Error("pending question is no longer current");
             }
           }
@@ -517,6 +523,7 @@ type RunAgentHarnessGatewayQuestionParams = {
   promptOptions?: AgentHarnessUserInputPromptOptions;
   signal?: AbortSignal;
   questionId?: string;
+  answerSessionKeys?: readonly string[];
 };
 
 /** Registers, presents, and waits for one harness-owned gateway question record. */
@@ -567,6 +574,7 @@ async function runScopedAgentHarnessQuestion(
   const claim = registerPendingAgentQuestion({
     questionId,
     sessionKey: params.sessionKey,
+    answerSessionKeys: params.answerSessionKeys,
     questions: params.questions,
     gatewayCall: params.gatewayCall,
     onCancel: prompt.close,

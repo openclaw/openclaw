@@ -186,6 +186,7 @@ it.each([
         timeoutMs: 5_000,
         oneShotCliRun,
         runtimePluginToolGrant,
+        questionPrompt: { send: vi.fn(), messageChannel: "telegram" },
       };
       let lifecycleGeneration = getAgentEventLifecycleGeneration();
       const laneController = createEmbeddedRunLaneController({
@@ -309,6 +310,8 @@ it.each([
           storePath: undefined,
         });
         expect.soft(runAttempt.mock.calls[0]?.[0].oneShotCliRun).toBe(oneShotCliRun);
+        // An initiator-owned question delivery must survive the run-to-attempt boundary.
+        expect.soft(runAttempt.mock.calls[0]?.[0].questionPrompt).toBe(params.questionPrompt);
         expect
           .soft(runAttempt.mock.calls[0]?.[0].runtimePluginToolGrant)
           .toBe(runtimePluginToolGrant);
