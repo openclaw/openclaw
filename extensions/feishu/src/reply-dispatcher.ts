@@ -7,10 +7,10 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelMessageReplyPipeline,
-  formatChannelProgressDraftLineForEntry,
-  isChannelProgressDraftWorkToolName,
+  createChannelProgressDraftCompositor,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
+  type AgentPlanStep,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { toStringifiedError as toFeishuError } from "openclaw/plugin-sdk/error-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
@@ -35,6 +35,7 @@ import {
   renderFeishuReplyPayload,
   withinCardTableLimit,
 } from "./presentation-card.js";
+import { buildFeishuCompactionProgressLine, stripFeishuProgressLabel } from "./progress-draft.js";
 import {
   createFeishuPartialReplyDeliveryError,
   createFeishuReplyDeliveryResult,
@@ -281,12 +282,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu", accountId);
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
+  const streamMode = resolveChannelPreviewStreamMode(account.config, "partial");
+  const keepProgressAtFinal = account.config?.streaming?.finalize === "append";
   // Streaming cards cannot attach native mention recipients. Bot-authored ingress
   // therefore uses normal cards/posts so every emitted unit reaches the peer bot.
   const streamingEnabled =
-    !requiredMentionTargets?.length &&
-    resolveChannelPreviewStreamMode(account.config, "partial") !== "off" &&
-    renderMode !== "raw";
+    !requiredMentionTargets?.length && streamMode !== "off" && renderMode !== "raw";
   const hookRunner = getGlobalHookRunner();
   const modifyingHooksRegistered =
     (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
@@ -294,8 +295,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   // A preview exists before modifying hooks accept the logical payload, so suppress all eager
   // CardKit activity whenever either hook could rewrite or cancel the eventual send.
   const previewStreamingEnabled = streamingEnabled && !modifyingHooksRegistered;
-  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
-  const coreBlockStreamingEnabled = blockStreamingEnabled === true;
+  // Match the Telegram dispatch path (bot-message-dispatch-draft.ts): pass the
+  // streaming policy so an unset channels.feishu.streaming.block follows the
+  // agent-level blockStreamingDefault instead of being hard-disabled, while an
+  // explicit channel choice still wins. Blocks then cover replies where no
+  // preview card can render (mention-required groups, raw render mode,
+  // modifying hooks).
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config, {
+    previewAvailable: previewStreamingEnabled,
+    blockStreamingDefault: cfg.agents?.defaults?.blockStreamingDefault,
+  });
+  const coreBlockStreamingEnabled = blockStreamingEnabled;
   const reasoningPreviewEnabled = previewStreamingEnabled && params.allowReasoningPreview === true;
 
   let streaming: FeishuStreamingSession | null = null;
@@ -303,6 +313,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let lastPartial = "";
   let reasoningText = "";
   let statusLine = "";
+  let progressDraftLabel: string | undefined;
   let snapshotBaseText = "";
   let lastSnapshotTextLength = 0;
   // Partial previews are replaceable; only committed final text may precede an error notice.
@@ -385,20 +396,39 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return parts.join("");
   };
 
-  const flushStreamingCardUpdate = (combined: string) => {
+  const flushStreamingCardUpdate = (combined: string): Promise<boolean> => {
     const session = streaming;
     const generation = activeStreamingGeneration;
     const startPromise = streamingStartPromise;
-    partialUpdateQueue = partialUpdateQueue.then(async () => {
+    let observed: Promise<boolean> | undefined;
+    // The serialization chain carries only the write itself: update() parks
+    // the snapshot in the session's pendingText and returns, so rapid
+    // snapshots coalesce to the latest one instead of each waiting out a
+    // full throttle window (or a confirmed write) inside the chain.
+    const chained = partialUpdateQueue.then(async () => {
       if (startPromise) {
         await startPromise;
       }
       // Updates queued before close owns the captured session; updates queued after the
       // generation is sealed have no owner and cannot race provider finalization.
-      if (generation !== undefined && session?.isActive()) {
+      if (generation !== undefined && session?.isActive() && combined) {
+        // Observation registers BEFORE the write: an immediate rejected
+        // attempt settles its observers inside update() without scheduling
+        // another cycle, so a registration made afterwards could never
+        // settle and the progress callback would hang.
+        observed = session.registerContentObserver(combined);
         await session.update(combined);
       }
     });
+    // The chain must tolerate a failed task; callers get false, not a rejection.
+    partialUpdateQueue = chained.then(
+      () => undefined,
+      () => undefined,
+    );
+    // Acceptance resolves off the coalescing chain: a rejected write reports
+    // false so the compositor keeps the publication unacknowledged, without
+    // delaying the next snapshot behind that observation.
+    return chained.then(() => observed ?? false);
   };
 
   const queueStreamingUpdate = (
@@ -436,7 +466,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
       lastSnapshotTextLength = nextText.length;
     }
-    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    void flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
   };
 
   const queueReasoningUpdate = (nextThinking: string) => {
@@ -444,7 +474,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       return;
     }
     reasoningText = nextThinking;
-    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    void flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
   };
 
   const startStreaming = () => {
@@ -565,8 +595,21 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       let result = noVisibleFeishuReplyDelivery;
       let finalizationError: unknown;
       if (streamingToClose?.isActive()) {
+        // Append finalize keeps the rolling progress lines but drops the rotating
+        // status label (it marks an in-flight turn, which has just ended) and
+        // places the retained lines above the answer behind a separator.
+        // Progress only counts as delivered content alongside a committed
+        // answer: retaining it on an empty turn would make closeWithResult
+        // report visible content and suppress the no-visible-reply fallback.
+        // Overwrite drops the lines entirely, matching the other draft channels.
+        const retainedProgress =
+          keepProgressAtFinal && finalizedAnswerText
+            ? stripFeishuProgressLabel(statusLine, progressDraftLabel)
+            : "";
         statusLine = "";
-        const text = buildCombinedStreamText(finalizedReasoningText, finalizedAnswerText);
+        const text = retainedProgress
+          ? `${retainedProgress}\n\n· · ·\n\n${buildCombinedStreamText(finalizedReasoningText, finalizedAnswerText)}`
+          : buildCombinedStreamText(finalizedReasoningText, finalizedAnswerText);
         let closed;
         try {
           if (disposition === "discarded") {
@@ -658,6 +701,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const closeStreaming = (
     disposition: StreamingDisposition = "closed",
   ): Promise<StreamingCloseOutcome> => {
+    // A committed final owns the card from here on; the progress draft must
+    // stop accepting events so a late tool line cannot start a phantom card.
+    // A discarded preview may be a mid-turn retraction, so the draft stays
+    // armed and later work events may open a fresh card.
+    if (disposition === "closed") {
+      progressCompositor.markFinalReplyStarted();
+    }
     const session = streaming;
     const generation = activeStreamingGeneration;
     // Closing seals the active generation before awaiting I/O. The captured session,
@@ -725,19 +775,39 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
   };
 
-  const updateStreamingStatusLine = (
-    nextStatusLine: string,
-    options?: { startIfNeeded?: boolean },
-  ) => {
-    statusLine = nextStatusLine;
-    const hasStreamingSession = Boolean(streaming?.isActive() || streamingStartPromise);
-    if (!hasStreamingSession && (options?.startIfNeeded === false || renderMode !== "card")) {
-      return false;
-    }
-    startStreaming();
-    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
-    return false;
-  };
+  // Shared progress-draft compositor (same engine as Telegram/Discord/Slack/
+  // Mattermost/MS Teams progress drafts). The composed draft text lives in the
+  // card's status slot: it starts the card on the first work event, updates it
+  // as tool lines/plan steps/approvals arrive, and performStreamingClose already
+  // clears the slot so the finalized card carries only the committed answer.
+  const progressCompositor = createChannelProgressDraftCompositor({
+    entry: account.config,
+    mode: streamMode,
+    active: previewStreamingEnabled,
+    seed: `${account.accountId}:${sendTarget}`,
+    // Narration preambles flow through the shared commentary lane; the 💬 lane
+    // marker is this channel's presentation choice for it.
+    commentaryLinePrefix: "💬 ",
+    update: async (draftText, options) => {
+      statusLine = draftText;
+      progressDraftLabel = options.snapshot.label;
+      startStreaming();
+      // Acceptance comes from the transport itself: flush awaits CardKit
+      // creation settling and the confirmed content write. An acknowledged
+      // publication is cached as rendered, so a rejected write must return
+      // false to keep identical retries alive.
+      return await flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    },
+    deleteCurrent: async () => {
+      statusLine = "";
+      if (!streamText && !reasoningText) {
+        await discardStreamingPreview();
+        return;
+      }
+      void flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    },
+    shouldStartNow: (line) => typeof line !== "string" && line?.kind === "tool",
+  });
 
   const sendChunkedTextReply = async (paramsLocal: {
     text: string;
@@ -1301,9 +1371,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         visibleReplySent = false;
         replyOutcome = undefined;
       }
-      if (previewStreamingEnabled && renderMode === "card") {
-        startStreaming();
-      }
+      // The streaming card starts lazily on the first work event or streamed
+      // text, like the other draft channels; no eager placeholder card here.
       await Promise.resolve(typingCallbacks?.onReplyStart?.());
     },
     onIdle: () => queueIdleSideEffects(),
@@ -1551,7 +1620,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               hasStreamingFinalText = true;
               snapshotBaseText = "";
               lastSnapshotTextLength = text.length;
-              flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+              void flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
             }
           }
           // Send media even when streaming handled the text
@@ -1646,8 +1715,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     delivery,
     replyOptions: {
       onModelSelected,
-      disableBlockStreaming:
-        typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : true,
+      disableBlockStreaming: !blockStreamingEnabled,
+      // The streaming card's progress draft owns tool-progress display while the
+      // preview is active; core only forwards quiet progress callbacks
+      // (onToolStart, onItemEvent, onPlanUpdate, onCommandOutput, compaction)
+      // to channels that declare ownership this way.
+      suppressDefaultToolProgressMessages: previewStreamingEnabled,
+      // Verbose progress text (narration, tool lines) is gated by this flag,
+      // not the Default one above: with preview and blocks both off nothing
+      // renders mid-turn progress, so ask dispatch to skip those messages —
+      // otherwise an explicit channel block-off keeps emitting them when no
+      // preview card can render.
+      suppressToolProgressMessages: !previewStreamingEnabled && !blockStreamingEnabled,
       onPartialReply: previewStreamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {
@@ -1685,35 +1764,106 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             phase?: string;
             args?: Record<string, unknown>;
             detailMode?: "explain" | "raw";
+          }) => progressCompositor.pushToolEvent(payload)
+        : undefined,
+      onItemEvent: previewStreamingEnabled
+        ? (payload: {
+            itemId?: string;
+            kind?: string;
+            title?: string;
+            phase?: string;
+            status?: string;
+            toolCallId?: string;
+            name?: string;
+            summary?: string;
+            progressText?: string;
+            meta?: string;
+            commandBearing?: boolean;
           }) => {
-            if (!isChannelProgressDraftWorkToolName(payload.name)) {
-              return false;
+            if (payload.kind === "preamble") {
+              // Narration text the model authors between tool calls. The shared
+              // commentary lane owns its semantics end to end — progress-status
+              // sanitization (NO_REPLY/directives stripped), cumulative
+              // identity for id-less snapshot streams, and keyed retraction on
+              // an empty update — so partial mode delegates instead of
+              // rebuilding a parallel 💬 line here.
+              return progressCompositor.pushCommentaryProgress(payload.progressText, {
+                itemId: payload.itemId,
+              });
             }
-            const statusLineLocal = formatChannelProgressDraftLineForEntry(
-              account.config,
-              {
-                event: "tool",
-                name: payload.name,
-                phase: payload.phase,
-                args: payload.args,
-              },
-              {
-                detailMode: payload.detailMode,
-              },
-            );
-            if (statusLineLocal) {
-              return updateStreamingStatusLine(statusLineLocal);
-            }
+            return progressCompositor.pushItemEvent(payload);
+          }
+        : undefined,
+      onPlanUpdate: previewStreamingEnabled
+        ? (payload: {
+            phase?: string;
+            steps?: AgentPlanStep[];
+            explanation?: string;
+            explanationFormat?: "plain";
+          }) =>
+            payload.phase === "update"
+              ? progressCompositor.pushPlanProgress(payload.steps, {
+                  explanation: payload.explanation,
+                  explanationFormat: payload.explanationFormat,
+                })
+              : false
+        : undefined,
+      onApprovalEvent: previewStreamingEnabled
+        ? (payload: {
+            approvalId?: string;
+            phase?: string;
+            title?: string;
+            command?: string;
+            reason?: string;
+            message?: string;
+          }) => progressCompositor.pushApprovalEvent(payload)
+        : undefined,
+      onCommandOutput: previewStreamingEnabled
+        ? (payload: {
+            itemId?: string;
+            toolCallId?: string;
+            phase?: string;
+            title?: string;
+            name?: string;
+            status?: string;
+            exitCode?: number | null;
+          }) => progressCompositor.pushCommandOutputEvent(payload)
+        : undefined,
+      onPatchSummary: previewStreamingEnabled
+        ? (payload: {
+            itemId?: string;
+            toolCallId?: string;
+            phase?: string;
+            title?: string;
+            name?: string;
+            added?: string[];
+            modified?: string[];
+            deleted?: string[];
+            summary?: string;
+          }) => progressCompositor.pushPatchEvent(payload)
+        : undefined,
+      onAssistantMessageStart: previewStreamingEnabled
+        ? () => {
+            progressCompositor.beginAssistantMessage();
             return false;
           }
         : undefined,
-      onAssistantMessageStart: previewStreamingEnabled
-        ? () => updateStreamingStatusLine("", { startIfNeeded: false })
-        : undefined,
       onCompactionStart: previewStreamingEnabled
-        ? () => updateStreamingStatusLine("📦 **Compacting context...**")
+        ? () =>
+            progressCompositor.pushToolProgress(buildFeishuCompactionProgressLine("start"), {
+              startImmediately: true,
+              flush: true,
+            })
         : undefined,
-      onCompactionEnd: previewStreamingEnabled ? () => updateStreamingStatusLine("") : undefined,
+      onCompactionEnd: previewStreamingEnabled
+        ? (payload?: { completed?: boolean }) =>
+            progressCompositor.pushToolProgress(
+              buildFeishuCompactionProgressLine(
+                payload?.completed === false ? "incomplete" : "complete",
+              ),
+              { startImmediately: true, flush: true },
+            )
+        : undefined,
     },
     ensureNoVisibleReplyFallback,
     getVisibleReplyState: () => ({

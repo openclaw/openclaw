@@ -10,6 +10,7 @@ import {
   expectDeliveryTraceMatchesGolden,
   runDeliveryTraceScenario,
   type DeliveryTraceInStep,
+  type DeliveryTraceStep,
   type DeliveryTraceScenarioName,
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
@@ -35,7 +36,10 @@ type FeishuTraceState = {
   setupCount: number;
   loadedMedia: { buffer: Buffer; fileName: string; contentType: string } | null;
   omitNextMessageReceipt: boolean;
-  wireFaults: Array<{ fault: "rate-limit"; retryAfterMs: number }>;
+  wireFaults: Array<
+    | { fault: "rate-limit"; retryAfterMs: number }
+    | { fault: "write-error"; code: number; msg: string }
+  >;
 };
 
 const traceState = vi.hoisted((): FeishuTraceState => ({
@@ -311,11 +315,15 @@ function createRecordingCardKitFetch(): typeof fetch {
       if (wirePath.endsWith("/elements/content/content")) {
         const body = parseJsonRecord(init?.body);
         const fault = traceState.wireFaults.shift();
-        if (fault) {
+        if (fault?.fault === "rate-limit") {
           record(body, { status: 429, retryAfterMs: fault.retryAfterMs });
           return jsonResponse({ code: 99991400, msg: "rate limited" }, 429, {
             "retry-after": String(Math.ceil(fault.retryAfterMs / 1000)),
           });
+        }
+        if (fault?.fault === "write-error") {
+          record(body, { code: fault.code, msg: fault.msg });
+          return jsonResponse({ code: fault.code, msg: fault.msg });
         }
         record(body, { code: 0 });
         return jsonResponse({ code: 0, msg: "ok" });
@@ -345,7 +353,10 @@ function createRecordingCardKitFetch(): typeof fetch {
   ) as typeof fetch;
 }
 
-function makeTraceAccount(scenario: DeliveryTraceScenarioName): ResolvedFeishuAccount {
+function makeTraceAccount(
+  scenario: DeliveryTraceScenarioName | (typeof LOCAL_TRACE_ACCOUNTS)[number],
+  channelOverrides?: Record<string, unknown>,
+): ResolvedFeishuAccount {
   traceState.setupCount += 1;
   return {
     accountId: "main",
@@ -357,24 +368,37 @@ function makeTraceAccount(scenario: DeliveryTraceScenarioName): ResolvedFeishuAc
     appId: `app-${scenario}-${traceState.setupCount}`,
     appSecret: "test-secret",
     domain: "feishu",
-    // Nested streaming.mode "partial" matches the retired `streaming: true`
-    // boolean, so the recorded wire goldens stay byte-identical.
-    config: FeishuConfigSchema.parse({ renderMode: "auto", streaming: { mode: "partial" } }),
+    config: FeishuConfigSchema.parse(
+      channelOverrides ?? {
+        renderMode: "auto",
+        streaming: { mode: "partial" },
+      },
+    ),
   };
 }
 
-function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenarioName) {
+function setupFeishuTrace(
+  recorder: WireRecorder,
+  scenario: DeliveryTraceScenarioName,
+  overrides?: {
+    scenarioName?: string;
+    channel?: Record<string, unknown>;
+    agentBlockDefault?: "on" | "off";
+  },
+) {
   traceState.recordWireCall = recorder.recordWireCall;
   traceState.messageCount = 0;
   traceState.reactionCount = 0;
   traceState.cardCount = 0;
   traceState.wireFaults = [];
-  traceState.account = makeTraceAccount(scenario);
+  traceState.account = makeTraceAccount(scenario, overrides?.channel);
   traceState.larkClient = createRecordingLarkClient();
   traceState.cardKitFetch = createRecordingCardKitFetch();
 
   const created = createFeishuReplyDispatcher({
-    cfg: {} as never,
+    cfg: (overrides?.agentBlockDefault
+      ? { agents: { defaults: { blockStreamingDefault: overrides.agentBlockDefault } } }
+      : {}) as never,
     agentId: "agent",
     runtime: { log: () => {}, error: () => {} } as never,
     chatId: "oc-trace-chat",
@@ -395,7 +419,7 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         await created.delivery.deliver({ text: step.text }, { kind: "block" });
         break;
       case "tool-progress":
-        created.replyOptions.onToolStart?.({ name: step.name, phase: step.phase });
+        await created.replyOptions.onToolStart?.({ name: step.name, phase: step.phase });
         break;
       case "final":
         await created.delivery.deliver(
@@ -415,11 +439,21 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         options.onCleanup?.();
         break;
       case "wire-fault":
-        if (step.fault !== "rate-limit") {
-          throw new Error("feishu trace scenarios script only rate-limit wire faults");
+        if (step.fault === "rate-limit") {
+          traceState.wireFaults.push({ fault: step.fault, retryAfterMs: step.retryAfterMs });
+          break;
         }
-        traceState.wireFaults.push({ fault: step.fault, retryAfterMs: step.retryAfterMs });
-        break;
+        if (step.fault === "write-error" && step.errorName === "sequence-rejected") {
+          traceState.wireFaults.push({
+            fault: "write-error",
+            code: 19_001,
+            msg: "sequence rejected",
+          });
+          break;
+        }
+        throw new Error(
+          `feishu trace scenarios script does not support wire fault: ${step.fault}/${"errorName" in step ? step.errorName : "?"}`,
+        );
     }
   };
 }
@@ -431,6 +465,71 @@ const FEISHU_TRACE_SCENARIOS: readonly DeliveryTraceScenarioName[] = [
   "rate-limit-during-preview",
   "overflow-pagination",
 ];
+
+// Local scenario (not in the shared contract set): a CardKit content update is
+// rejected mid-stream (sequence conflict), the session keeps the rejected
+// snapshot pending, and the next publication retries the write instead of
+// dropping it — the wire-level record of the acceptance-recovery contract.
+const recoveredContentRejectionScenario = {
+  name: "recovered-content-rejection",
+  steps: [
+    { kind: "reply-start" },
+    { kind: "tool-progress", name: "web_search", phase: "start" },
+    { kind: "advance", ms: 300 },
+    { kind: "partial", text: "Collecting traces" },
+    { kind: "advance", ms: 300 },
+    { kind: "wire-fault", fault: "write-error", errorName: "sequence-rejected" },
+    { kind: "partial", text: "Collecting traces from the gateway." },
+    { kind: "advance", ms: 400 },
+    { kind: "partial", text: "Collecting traces from the gateway. Found the failure." },
+    { kind: "advance", ms: 300 },
+    { kind: "final", text: "Collecting traces from the gateway. Found the failure." },
+    { kind: "idle" },
+  ],
+} as const;
+
+// Local block-inheritance matrix (channel unset vs explicit vs legacy flat
+// key against an agent-level blockStreamingDefault): preview is off so the
+// wire outcome of each block boundary is exactly the inherited policy.
+const LOCAL_TRACE_ACCOUNTS = [
+  "block-inherited-on",
+  "block-explicit-off",
+  "block-explicit-on",
+] as const;
+
+const blockGuidePartOne = "Part one of the install guide: prerequisites and download.";
+const blockGuidePartTwo = "Part two of the install guide: run the installer and verify.";
+
+function blockInheritanceSteps(): readonly DeliveryTraceStep[] {
+  return [
+    { kind: "reply-start" },
+    { kind: "partial", text: blockGuidePartOne },
+    { kind: "advance", ms: 300 },
+    { kind: "block-final", text: blockGuidePartOne },
+    { kind: "advance", ms: 300 },
+    { kind: "partial", text: blockGuidePartTwo },
+    { kind: "advance", ms: 300 },
+    { kind: "block-final", text: blockGuidePartTwo },
+    { kind: "advance", ms: 300 },
+    { kind: "final", text: `${blockGuidePartOne}\n\n${blockGuidePartTwo}` },
+    { kind: "idle" },
+  ];
+}
+
+const blockInheritanceScenarios = {
+  "block-inherited-on": {
+    channel: { renderMode: "auto", streaming: { mode: "off" } },
+    agentBlockDefault: "on" as const,
+  },
+  "block-explicit-off": {
+    channel: { renderMode: "auto", streaming: { mode: "off", block: { enabled: false } } },
+    agentBlockDefault: "on" as const,
+  },
+  "block-explicit-on": {
+    channel: { renderMode: "auto", streaming: { mode: "off", block: { enabled: true } } },
+    agentBlockDefault: "off" as const,
+  },
+} as const;
 
 describe("feishu delivery trace goldens", () => {
   it("updates the accepted card without a duplicate send when its message receipt is absent", async () => {
@@ -591,6 +690,35 @@ describe("feishu delivery trace goldens", () => {
       const events = await runDeliveryTraceScenario({
         scenario: deliveryTraceScenarios[scenarioName],
         setup: (recorder) => setupFeishuTrace(recorder, scenarioName),
+      });
+      expectDeliveryTraceMatchesGolden({
+        goldenUrl: new URL(`./__traces__/${scenarioName}.trace.jsonl`, import.meta.url),
+        events,
+      });
+    });
+  }
+
+  it("records recovered-content-rejection", async () => {
+    const events = await runDeliveryTraceScenario({
+      scenario: recoveredContentRejectionScenario,
+      setup: (recorder) => setupFeishuTrace(recorder, "streaming-happy"),
+    });
+    expectDeliveryTraceMatchesGolden({
+      goldenUrl: new URL("./__traces__/recovered-content-rejection.trace.jsonl", import.meta.url),
+      events,
+    });
+  });
+
+  for (const scenarioName of LOCAL_TRACE_ACCOUNTS) {
+    it(`records ${scenarioName}`, async () => {
+      const preset = blockInheritanceScenarios[scenarioName];
+      const events = await runDeliveryTraceScenario({
+        scenario: { name: scenarioName, steps: blockInheritanceSteps() },
+        setup: (recorder) =>
+          setupFeishuTrace(recorder, "final-only", {
+            channel: preset.channel,
+            agentBlockDefault: preset.agentBlockDefault,
+          }),
       });
       expectDeliveryTraceMatchesGolden({
         goldenUrl: new URL(`./__traces__/${scenarioName}.trace.jsonl`, import.meta.url),

@@ -69,6 +69,12 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   const quietProgress = params.presentation === "summary" || !previewToolProgressEnabled;
   const commentaryProgressEnabled =
     params.active && resolveChannelStreamingProgressCommentary(params.entry, false, params.mode);
+  // The commentary lane is an opt-in presentation in progress mode. Partial
+  // preview mode (editable card drafts) adopts it unconditionally for narration
+  // preambles, mirroring how tool lines already flow there through
+  // previewToolProgressEnabled instead of the progress-only opt-in.
+  const commentaryLaneEnabled =
+    params.mode === "progress" ? commentaryProgressEnabled : previewToolProgressEnabled;
   // Reasoning is authored text, not tool telemetry: a quiet draft keeps it.
   const thinkingProgressEnabled = params.active && (params.reasoningGate ?? true);
   const suppressDefaultToolProgressMessages =
@@ -714,7 +720,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       return false;
     },
     async pushCommentaryProgress(text?: string, options?: { itemId?: string }) {
-      if (!params.active || params.mode !== "progress" || !commentaryProgressEnabled) {
+      if (!params.active || !commentaryLaneEnabled) {
         return false;
       }
       if (finalReplyStarted || finalReplyDelivered) {
@@ -753,7 +759,9 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         lastIdLessCommentaryId = lineId;
         lastIdLessCommentaryBare = bareNormalized;
       }
-      return await startAndRender();
+      // Progress mode keeps the delayed-start gate; partial preview publishes
+      // through the channel's update callback, as tool lines already do.
+      return params.mode === "progress" ? await startAndRender() : await publish({ flush: true });
     },
   };
 }
