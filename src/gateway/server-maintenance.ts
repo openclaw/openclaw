@@ -132,27 +132,20 @@ export function startGatewayMaintenanceTimers(params: {
   const restartChannelsIfIdle = async (
     mode: "new-thaw" | "deferred-retry",
   ): Promise<HostThawChannelRestartOutcome> => {
+    const snapshot = createGatewayActiveWorkSnapshot(params.activeWorkInspectors, {
+      ignoreTerminalSessions: true,
+    });
+    if (!snapshot.idle) {
+      return { status: "retry", reason: "active-work" };
+    }
+    // Inspection and admission commit are synchronous: no new work can enter
+    // between them, and a busy tick never changes the admission phase.
     let invalidated = false;
     const admission = tryBeginGatewaySuspendAdmission(() => {
       invalidated = true;
     });
     if (!admission) {
       return { status: "retry", reason: "admission-closed" };
-    }
-    let snapshot: ReturnType<typeof createGatewayActiveWorkSnapshot>;
-    try {
-      snapshot = createGatewayActiveWorkSnapshot(params.activeWorkInspectors, {
-        ignoreTerminalSessions: true,
-      });
-    } catch (error) {
-      // Inspection runs while admission is preparing. Never strand that global
-      // fence closed when an inspector fails before the restart can commit.
-      admission.rollback();
-      throw error;
-    }
-    if (!snapshot.idle) {
-      admission.rollback();
-      return { status: "retry", reason: "active-work" };
     }
     if (!admission.commit()) {
       return { status: "retry", reason: "admission-closed" };
