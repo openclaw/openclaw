@@ -203,7 +203,7 @@ describe("Doctor maintenance admission", () => {
 });
 
 describe("Doctor agent lease admission", () => {
-  it("admits the exact dangling Workshop index without mutating state", async () => {
+  it("reserves dangling Workshop index admission for Doctor without mutating state", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const opened = openOpenClawStateDatabase({ env: state.env });
       const pathname = opened.path;
@@ -231,8 +231,21 @@ describe("Doctor agent lease admission", () => {
       }
       const before = fs.readFileSync(pathname);
 
-      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).not.toThrow();
+      expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).toThrow(
+        /malformed database schema/,
+      );
       expect(fs.readFileSync(pathname)).toEqual(before);
+      const doctor = await doctorMaintenance.beginDoctorMaintenance({
+        options: { repair: true, nonInteractive: true },
+        root: null,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      });
+      try {
+        expect(doctor).toBeDefined();
+        expect(fs.readFileSync(pathname)).toEqual(before);
+      } finally {
+        await doctor?.release();
+      }
     });
   });
 
