@@ -93,7 +93,11 @@ export function createModelCatalogView(params: {
   return {
     logicalEntries: dedupeByKey(params.catalog, keyOf),
     variantsOf,
-    project(entry: ModelCatalogEntry, evaluation: ModelAuthAvailabilityEvaluation) {
+    project(
+      entry: ModelCatalogEntry,
+      evaluation: ModelAuthAvailabilityEvaluation,
+      routeVariants?: readonly ModelCatalogEntry[],
+    ) {
       const projection: ModelCatalogRouteProjection =
         evaluation.routeResolution === null
           ? { kind: "unmanaged" }
@@ -104,7 +108,8 @@ export function createModelCatalogView(params: {
                 policy: openAIModelCatalogRoutePolicy,
               }
             : { kind: "unresolved", policy: openAIModelCatalogRoutePolicy };
-      const variants = variantsOf(entry);
+      // Runtime selection can narrow donors without rebuilding the configured-row index.
+      const variants = routeVariants ?? variantsOf(entry);
       const overrides = resolveOverrides(entry);
       return projectModelCatalogEntryForRoute({
         entry,

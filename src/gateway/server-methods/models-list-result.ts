@@ -122,11 +122,7 @@ export function createGatewayAgentModelCatalogProjector(params: ModelCatalogDeci
               pluginRegistry: params.pluginRegistry,
             })?.id ?? "openclaw";
           const selected = selectModelCatalogRuntimeEntry({ entry, routeVariants, runtimeId });
-          return createModelCatalogView({
-            cfg: params.cfg,
-            catalog: [selected.entry],
-            routeVariants: selected.variants,
-          }).project(selected.entry, evaluation).runtimeEntry;
+          return view.project(selected.entry, evaluation, selected.variants).runtimeEntry;
         }),
       ));
     },
