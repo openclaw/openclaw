@@ -221,66 +221,79 @@ export async function respondWithCachedSessionList(params: {
   run: () => Promise<SessionsListResult>;
   diagnostics?: SessionListDiagnostics;
 }): Promise<void> {
-  const workKey = sessionListWorkKey(params.request, params.client, params.config);
-  const state = sessionListState(params.context, params.config);
-  const modelCatalogRevision = readSessionListModelCatalogFence(params.modelCatalog);
-  // Activity windows and child retention expire without mutations; hidden paginated rows
-  // prevent deriving a safe deadline, so only concurrent temporal requests share work.
-  // Rejected and off-page candidates can change live/goal state without a store write.
-  // Searches and active-only reads may coalesce in flight, but cannot reuse completed pages.
-  const cacheCompleted =
-    params.request.activeMinutes === undefined &&
-    params.request.activeOnly !== true &&
-    !params.request.spawnedBy &&
-    !params.request.search?.trim();
-  const completed = cacheCompleted
-    ? readCompletedSessionList(state, workKey, modelCatalogRevision)
-    : undefined;
-  if (completed) {
-    params.diagnostics?.setCacheRole("completed-hit");
-    params.diagnostics?.setSelectedRowCount(completed.count);
-    params.respond(true, completed, undefined);
-    return;
-  }
-  const pending = state.inFlight.get(workKey);
-  if (pending?.modelCatalogRevision === modelCatalogRevision) {
-    params.diagnostics?.setCacheRole("in-flight-follower", pending.workTrace);
-    const result = await pending.promise;
-    params.diagnostics?.setSelectedRowCount(result.count);
-    params.respond(true, result, undefined);
-    return;
-  }
-
-  // A request may share only work begun at the same fence. A transition during projection
-  // leaves current callers intact but fences every later caller and cache write.
-  params.diagnostics?.setCacheRole("projection-owner");
-  const promise = Promise.resolve()
-    .then(params.run)
-    .then((result) => {
-      if (
-        cacheCompleted &&
-        sessionListsByContext.get(params.context) === state &&
-        matchesSessionListFence(state, readSessionListFence(params.context)) &&
-        readSessionListModelCatalogFence(params.modelCatalog) === modelCatalogRevision
-      ) {
-        const expiresAt = resolveSessionListExpiration(result);
-        if (expiresAt !== null && (expiresAt === undefined || expiresAt > Date.now())) {
-          state.completed.delete(workKey);
-          state.completed.set(workKey, { modelCatalogRevision, result, expiresAt });
-          pruneMapToMaxSize(state.completed, SESSIONS_LIST_COMPLETED_CACHE_LIMIT);
-        }
-      }
-      return result;
-    });
-  const operation = { modelCatalogRevision, promise, workTrace: params.diagnostics?.trace };
-  state.inFlight.set(workKey, operation);
+  let selectionCpu = params.diagnostics?.startSyncCpu();
   try {
-    const result = await promise;
-    params.diagnostics?.setSelectedRowCount(result.count);
-    params.respond(true, result, undefined);
-  } finally {
-    if (state.inFlight.get(workKey) === operation) {
-      state.inFlight.delete(workKey);
+    const workKey = sessionListWorkKey(params.request, params.client, params.config);
+    const state = sessionListState(params.context, params.config);
+    const modelCatalogRevision = readSessionListModelCatalogFence(params.modelCatalog);
+    // Activity windows and child retention expire without mutations; hidden paginated rows
+    // prevent deriving a safe deadline, so only concurrent temporal requests share work.
+    // Rejected and off-page candidates can change live/goal state without a store write.
+    // Searches and active-only reads may coalesce in flight, but cannot reuse completed pages.
+    const cacheCompleted =
+      params.request.activeMinutes === undefined &&
+      params.request.activeOnly !== true &&
+      !params.request.spawnedBy &&
+      !params.request.search?.trim();
+    const completed = cacheCompleted
+      ? readCompletedSessionList(state, workKey, modelCatalogRevision)
+      : undefined;
+    const pending = completed ? undefined : state.inFlight.get(workKey);
+    params.diagnostics?.finishSyncCpu("cacheSelectionThreadCpuMs", selectionCpu);
+    selectionCpu = undefined;
+    if (completed) {
+      params.diagnostics?.setCacheRole("completed-hit");
+      params.diagnostics?.setSelectedRowCount(completed.count);
+      params.respond(true, completed, undefined);
+      return;
     }
+    if (pending?.modelCatalogRevision === modelCatalogRevision) {
+      params.diagnostics?.setCacheRole("in-flight-follower", pending.workTrace);
+      const result = await pending.promise;
+      params.diagnostics?.setSelectedRowCount(result.count);
+      params.respond(true, result, undefined);
+      return;
+    }
+
+    // A request may share only work begun at the same fence. A transition during projection
+    // leaves current callers intact but fences every later caller and cache write.
+    params.diagnostics?.setCacheRole("projection-owner");
+    const promise = Promise.resolve()
+      .then(params.run)
+      .then((result) => {
+        const publicationCpu = params.diagnostics?.startSyncCpu();
+        try {
+          if (
+            cacheCompleted &&
+            sessionListsByContext.get(params.context) === state &&
+            matchesSessionListFence(state, readSessionListFence(params.context)) &&
+            readSessionListModelCatalogFence(params.modelCatalog) === modelCatalogRevision
+          ) {
+            const expiresAt = resolveSessionListExpiration(result);
+            if (expiresAt !== null && (expiresAt === undefined || expiresAt > Date.now())) {
+              state.completed.delete(workKey);
+              state.completed.set(workKey, { modelCatalogRevision, result, expiresAt });
+              pruneMapToMaxSize(state.completed, SESSIONS_LIST_COMPLETED_CACHE_LIMIT);
+            }
+          }
+          return result;
+        } finally {
+          params.diagnostics?.finishSyncCpu("cachePublicationThreadCpuMs", publicationCpu);
+        }
+      });
+    const operation = { modelCatalogRevision, promise, workTrace: params.diagnostics?.trace };
+    state.inFlight.set(workKey, operation);
+    try {
+      const result = await promise;
+      params.diagnostics?.setSelectedRowCount(result.count);
+      params.respond(true, result, undefined);
+    } finally {
+      if (state.inFlight.get(workKey) === operation) {
+        state.inFlight.delete(workKey);
+      }
+    }
+  } finally {
+    // Normal selection closes before any response or wait; this also covers selection errors.
+    params.diagnostics?.finishSyncCpu("cacheSelectionThreadCpuMs", selectionCpu);
   }
 }

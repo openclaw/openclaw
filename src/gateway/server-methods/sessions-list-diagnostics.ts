@@ -25,6 +25,13 @@ type Phase =
   | "response"
   | "handlerExit";
 type CacheRole = "unreached" | "completed-hit" | "in-flight-follower" | "projection-owner";
+type SynchronousCpuMetric =
+  | "storeLoadThreadCpuMs"
+  | "prepareThreadCpuMs"
+  | "rowThreadCpuMs"
+  | "cacheSelectionThreadCpuMs"
+  | "cachePublicationThreadCpuMs"
+  | "responseThreadCpuMs";
 const sessionListDiagnostics = channel("openclaw.session.list");
 
 export type SessionListDiagnostics = NonNullable<ReturnType<typeof startSessionListDiagnostics>>;
@@ -53,6 +60,30 @@ function startSessionListDiagnostics(
     | undefined;
   let selectedRowCount: number | undefined;
   let responseOutcome: "none" | "ok" | "error" | "threw" = "none";
+  let cpuMetrics: Partial<Record<SynchronousCpuMetric, number>> | undefined = {};
+  const startSyncCpu = (): NodeJS.CpuUsage | undefined => {
+    if (!cpuMetrics) {
+      return undefined;
+    }
+    try {
+      return process.threadCpuUsage();
+    } catch {
+      cpuMetrics = undefined;
+      return undefined;
+    }
+  };
+  const finishSyncCpu = (metric: SynchronousCpuMetric, started: NodeJS.CpuUsage | undefined) => {
+    if (!started || !cpuMetrics) {
+      return;
+    }
+    try {
+      const used = process.threadCpuUsage(started);
+      cpuMetrics[metric] = (cpuMetrics[metric] ?? 0) + (used.user + used.system) / 1_000;
+    } catch {
+      // Failed probes omit CPU totals for this request without replacing its result.
+      cpuMetrics = undefined;
+    }
+  };
   const mark = (next: Phase) => {
     checkpoint = performance.now();
     timing.mark(phase);
@@ -61,6 +92,8 @@ function startSessionListDiagnostics(
   return {
     trace,
     mark,
+    startSyncCpu,
+    finishSyncCpu,
     get projection() {
       return projection;
     },
@@ -82,12 +115,14 @@ function startSessionListDiagnostics(
     respond: ((...args) => {
       mark("response");
       responseOutcome = args[0] ? "ok" : "error";
+      const responseCpu = startSyncCpu();
       try {
         return respond(...args);
       } catch (error) {
         responseOutcome = "threw";
         throw error;
       } finally {
+        finishSyncCpu("responseThreadCpuMs", responseCpu);
         mark("handlerExit");
       }
     }) satisfies RespondFn,
@@ -116,6 +151,7 @@ function startSessionListDiagnostics(
           handlerElapsedMs: Math.round(handlerElapsedMs),
           cacheRole,
           phaseDurationsMs,
+          ...cpuMetrics,
           ...(projection
             ? Object.fromEntries(
                 Object.entries(projection).map(([key, value]) => [key, Math.round(value)]),
