@@ -53,6 +53,14 @@ const page = {
   nextOffset: null,
 };
 const list = { ...page, jobs: [compactJob], snapshotRevision: "inventory-revision" };
+const restrictedList = {
+  ...list,
+  visibility: {
+    mode: "caller" as const,
+    restricted: true as const,
+    warning: "Automation list is restricted to the caller-visible inventory.",
+  },
+};
 const deliveryPreview = { label: "Current conversation", detail: "No external delivery" };
 const createJob = {
   name: job.name,
@@ -220,6 +228,22 @@ describe("automations output contract", () => {
     ).toEqual([]);
   });
 
+  it.each(["caller", "role"] as const)(
+    "accepts %s-restricted inventories through the real tool output contract",
+    async (mode) => {
+      const tool = createCronTool(undefined, {
+        callGatewayTool: vi.fn().mockResolvedValue({
+          ...restrictedList,
+          visibility: { ...restrictedList.visibility, mode },
+        }),
+      });
+      const result = await tool.execute("call-list-" + mode, { action: "list" });
+      expect(
+        Value.Errors(expectDefined(tool.outputSchema, "automations output schema"), result.details),
+      ).toEqual([]);
+    },
+  );
+
   it("describes self-scoped status, inventory, and paced proposals", async () => {
     const runId = "automation-output-run";
     claimAgentRunContext(runId, {
@@ -251,7 +275,7 @@ describe("automations output contract", () => {
     onTestFinished(resetCodeModeTestState);
     const h = createCodeModeHarness();
     const replies: Record<string, unknown> = {
-      "cron.list": list,
+      "cron.list": restrictedList,
       "cron.status": { enabled: true, jobs: 1 },
       "cron.get": job,
       "cron.runs": history,
@@ -276,6 +300,7 @@ async function consume() {
   const listed = await automations({ action: "list" });
   const names: string[] = listed.jobs.map(job => job.name);
   const next: number | null = listed.nextOffset;
+  const visibilityMode: "caller" | "role" | undefined = listed.visibility?.mode;
   const status = await automations({ action: "status" });
   const enabled: boolean = status.enabled;
   const jobCount: number | undefined = status.jobs;
@@ -283,7 +308,7 @@ async function consume() {
   const name: string = details.name;
   const runs = await automations({ action: "runs", jobId: details.id });
   const summaries: (string | undefined)[] = runs.entries.map(entry => entry.summary);
-  return { names, next, enabled, jobCount, name, summaries };
+  return { names, next, visibilityMode, enabled, jobCount, name, summaries };
 }
 `;
     const fileName = "/automations-consumer.ts";
@@ -345,6 +370,7 @@ async function checkContracts(action: "list" | "runs", input: Parameters<typeof 
       value: {
         names: [job.name],
         next: null,
+        visibilityMode: "caller",
         enabled: true,
         jobCount: 1,
         name: job.name,
