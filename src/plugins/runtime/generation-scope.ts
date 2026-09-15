@@ -14,7 +14,10 @@ import {
   runOutsidePluginRuntimeGenerationRegistryScope,
 } from "./generation-state.js";
 
-export { getPluginRuntimeGenerationRegistry } from "./generation-state.js";
+export {
+  getPluginRuntimeGenerationRegistry,
+  isPluginRuntimeGenerationRegistrySelected,
+} from "./generation-state.js";
 
 /** Carries one prepared plugin generation through all nested runtime lookups. */
 export function withPluginRuntimeGenerationScope<T>(
@@ -24,16 +27,23 @@ export function withPluginRuntimeGenerationScope<T>(
   },
   run: () => T,
 ): T {
-  const pluginRegistry = generation.pluginRegistry ?? createEmptyPluginRegistry();
+  const preferredRegistry = generation.pluginRegistry;
+  // A registry-less run still installs the placeholder empty registry, so provider
+  // and metadata lookups stay isolated; only the hook/policy selection flag says
+  // whether this generation actually selected plugin content (#142783).
+  const pluginRegistry = preferredRegistry ?? createEmptyPluginRegistry();
   return withPluginMetadataSnapshotScope(
     generation.metadataSnapshot,
     () =>
-      withPluginRuntimeGenerationRegistryScope(pluginRegistry, () =>
-        withPluginRuntimeRegistryScope(
-          pluginRegistry,
-          run,
-          generation.metadataSnapshot.declaredProviderOwners,
-        ),
+      withPluginRuntimeGenerationRegistryScope(
+        pluginRegistry,
+        () =>
+          withPluginRuntimeRegistryScope(
+            pluginRegistry,
+            run,
+            generation.metadataSnapshot.declaredProviderOwners,
+          ),
+        { selected: preferredRegistry !== undefined },
       ),
     // The prepared generation already owns discovery and policy compatibility.
     { trustConfigIdentity: true },
