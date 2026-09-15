@@ -13,6 +13,8 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const securityRuntimeMock = vi.hoisted(() => ({
   failReadTextOnceFor: undefined as string | undefined,
+  failReadTextCountFor: undefined as string | undefined,
+  readTextFailuresRemaining: 0,
   failReadTextAlwaysFor: undefined as string | undefined,
   readTextOnceError: new Error("transient existing-page read failure"),
   readTextError: new Error("persistent existing-page read failure"),
@@ -30,10 +32,19 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
           if (prop !== "readText") {
             return Reflect.get(target, prop, receiver);
           }
-          return async (relativePath: string) => {
+          return async (...readArgs: Parameters<typeof vault.readText>) => {
+            const [relativePath] = readArgs;
             if (securityRuntimeMock.failReadTextAlwaysFor === relativePath) {
               securityRuntimeMock.readTextFailureInjected = true;
               throw securityRuntimeMock.readTextError;
+            }
+            if (
+              securityRuntimeMock.failReadTextCountFor === relativePath &&
+              securityRuntimeMock.readTextFailuresRemaining > 0
+            ) {
+              securityRuntimeMock.readTextFailuresRemaining -= 1;
+              securityRuntimeMock.readTextFailureInjected = true;
+              throw securityRuntimeMock.readTextOnceError;
             }
             if (
               securityRuntimeMock.failReadTextOnceFor === relativePath &&
@@ -42,7 +53,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
               securityRuntimeMock.readTextFailureInjected = true;
               throw securityRuntimeMock.readTextOnceError;
             }
-            return target.readText(relativePath);
+            return target.readText(...readArgs);
           };
         },
       });
@@ -110,6 +121,8 @@ describe("memory-wiki existing-page read retry", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     securityRuntimeMock.failReadTextOnceFor = undefined;
+    securityRuntimeMock.failReadTextCountFor = undefined;
+    securityRuntimeMock.readTextFailuresRemaining = 0;
     securityRuntimeMock.failReadTextAlwaysFor = undefined;
     securityRuntimeMock.readTextOnceError = new Error("transient existing-page read failure");
     securityRuntimeMock.readTextError = new Error("persistent existing-page read failure");
@@ -137,17 +150,8 @@ describe("memory-wiki existing-page read retry", () => {
     await fs.writeFile(pagePath, edited, "utf8");
 
     await fs.writeFile(inputPath, "v2 content updated\n", "utf8");
-    const originalReadFile = fs.readFile.bind(fs);
-    let injectedFailure = false;
-    vi.spyOn(fs, "readFile").mockImplementation(
-      async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
-        if (!injectedFailure && args[0] === pagePath && args[1] === "utf8") {
-          injectedFailure = true;
-          throw new Error("transient existing-page read failure");
-        }
-        return originalReadFile(...args);
-      },
-    );
+    securityRuntimeMock.failReadTextOnceFor = "sources/roadmap.md";
+    securityRuntimeMock.readTextOnceError = new Error("transient existing-page read failure");
 
     await ingestMemoryWikiSource({
       config,
@@ -155,8 +159,8 @@ describe("memory-wiki existing-page read retry", () => {
       nowMs: Date.UTC(2026, 3, 6, 12, 0, 0),
     });
 
-    const after = await originalReadFile(pagePath, "utf8");
-    expect(injectedFailure).toBe(true);
+    const after = await fs.readFile(pagePath, "utf8");
+    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
     expect(after).toContain("v2 content updated");
     expect(after).toContain(userNote);
   });
@@ -284,17 +288,9 @@ describe("memory-wiki existing-page read retry", () => {
 
     const pagePath = path.join(config.vault.path, "sources", "roadmap.md");
     await fs.writeFile(inputPath, "v2 content updated\n", "utf8");
-    const originalReadFile = fs.readFile.bind(fs);
-    let remainingExistingPageReadFailures = 2;
-    vi.spyOn(fs, "readFile").mockImplementation(
-      async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
-        if (remainingExistingPageReadFailures > 0 && args[0] === pagePath && args[1] === "utf8") {
-          remainingExistingPageReadFailures -= 1;
-          throw Object.assign(new Error("page disappeared"), { code: "ENOENT" });
-        }
-        return originalReadFile(...args);
-      },
-    );
+    securityRuntimeMock.failReadTextCountFor = "sources/roadmap.md";
+    securityRuntimeMock.readTextFailuresRemaining = 2;
+    securityRuntimeMock.readTextOnceError = new FsSafeError("not-found", "page disappeared");
 
     const result = await ingestMemoryWikiSource({
       config,
@@ -303,8 +299,9 @@ describe("memory-wiki existing-page read retry", () => {
     });
 
     expect(result.created).toBe(false);
-    expect(remainingExistingPageReadFailures).toBe(0);
-    await expect(originalReadFile(pagePath, "utf8")).resolves.toContain("v2 content updated");
+    expect(securityRuntimeMock.readTextFailuresRemaining).toBe(0);
+    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toContain("v2 content updated");
   });
 
   it("leaves ingested source pages unchanged after a persistent existing-page read failure", async () => {
@@ -322,15 +319,10 @@ describe("memory-wiki existing-page read retry", () => {
     const pagePath = path.join(config.vault.path, "sources", "roadmap.md");
     const before = await fs.readFile(pagePath, "utf8");
     await fs.writeFile(inputPath, "v2 content updated\n", "utf8");
-    const originalReadFile = fs.readFile.bind(fs);
-    vi.spyOn(fs, "readFile").mockImplementation(
-      async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
-        if (args[0] === pagePath && args[1] === "utf8") {
-          throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
-        }
-        return originalReadFile(...args);
-      },
-    );
+    securityRuntimeMock.failReadTextAlwaysFor = "sources/roadmap.md";
+    securityRuntimeMock.readTextError = Object.assign(new Error("resource busy"), {
+      code: "EBUSY",
+    });
 
     await expect(
       ingestMemoryWikiSource({
@@ -340,7 +332,8 @@ describe("memory-wiki existing-page read retry", () => {
       }),
     ).rejects.toMatchObject({ code: "EBUSY" });
 
-    await expect(originalReadFile(pagePath, "utf8")).resolves.toBe(before);
+    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(before);
   });
 
   it("preserves synthesis notes and frontmatter after a transient existing-page read failure", async () => {
