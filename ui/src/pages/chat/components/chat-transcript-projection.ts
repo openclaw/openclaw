@@ -86,7 +86,6 @@ export function projectChatTranscript(
   const state = getTranscriptState(props.paneId);
   const asyncQuestions = createAsyncQuestionPresentation(state, props);
   const requestUpdate = props.onRequestUpdate ?? (() => {});
-  const displayStream = props.stream ?? null;
   const sessionHost = props.sessionHost ?? null;
   const activeSession = props.selectedSession;
   // Use unfiltered history and retained participants so searching or paging away
@@ -144,7 +143,7 @@ export function projectChatTranscript(
     toolMessages: props.toolMessages,
     guardianNotices: props.guardianNotices,
     streamSegments: props.streamSegments,
-    stream: displayStream,
+    stream: props.stream ?? null,
     streamStartedAt: props.streamStartedAt,
     queue: props.queue,
     initialTurnId: props.initialTurnId,
@@ -487,6 +486,7 @@ export function projectChatTranscript(
       sessionKey: props.sessionKey,
       runWorking: Boolean(props.runWorking),
       searchActive: searchFiltering,
+      session: activeSession,
     }),
     { searchActive: searchFiltering },
   );
