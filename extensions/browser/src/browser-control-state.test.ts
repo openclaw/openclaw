@@ -57,23 +57,40 @@ describe("browser control lifecycle", () => {
     await stop("service");
   });
 
-  it("rejects a start requested after stop intent but before stop drains", async () => {
+  it("rejects a start requested after stopping begins but before stop drains", async () => {
     await start("service");
     let releaseStop!: () => void;
     const stopGate = new Promise<void>((resolve) => {
       releaseStop = resolve;
     });
+    let markStopEntered!: () => void;
+    const stopEntered = new Promise<void>((resolve) => {
+      markStopEntered = resolve;
+    });
     runtimeMocks.stopBrowserRuntime.mockImplementationOnce(async (params) => {
+      markBrowserRuntimeStopping(params.current);
+      markStopEntered();
       await stopGate;
       params.clearState();
     });
 
     const stopping = stop("service");
+    await stopEntered;
     const starting = start("service");
-    releaseStop();
+    const startOutcome = starting.then(
+      () => "resolved" as const,
+      (error: unknown) => error,
+    );
+    await Promise.resolve();
 
-    await stopping;
-    await expect(starting).rejects.toThrow("stopping");
+    try {
+      await expect(Promise.race([startOutcome, Promise.resolve("pending")])).resolves.toMatchObject(
+        { message: "Browser runtime is stopping." },
+      );
+    } finally {
+      releaseStop();
+      await Promise.allSettled([stopping, startOutcome]);
+    }
     expect(getBrowserControlState()).toBeNull();
   });
 
