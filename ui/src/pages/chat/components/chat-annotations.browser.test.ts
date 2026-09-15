@@ -91,6 +91,37 @@ function contrast(element: HTMLElement) {
 }
 
 describe("annotation chip and hovercard", () => {
+  it.each([1440, 390])(
+    "reads the final line of a long comment by keyboard (%ipx)",
+    async (width) => {
+      await page.viewport(width, 900);
+      const trigger = mountComments(10, 430);
+      const { tooltip } = await openComments(trigger);
+      const comment = container.querySelector<HTMLElement>(".chat-comment-preview__text--comment")!;
+      await userEvent.tab();
+      await userEvent.tab();
+      expect(document.activeElement).toBe(comment);
+      const scrolled = new Promise<void>((resolve) => {
+        comment.addEventListener("scrollend", () => resolve(), { once: true });
+      });
+      await userEvent.keyboard("{End}");
+      await scrolled;
+      await expect
+        .poll(() => comment.scrollTop + comment.clientHeight)
+        .toBeGreaterThanOrEqual(comment.scrollHeight - 1);
+      const text = comment.firstChild!;
+      const lastWord = document.createRange();
+      lastWord.setStart(text, text.textContent!.length - 8);
+      lastWord.setEnd(text, text.textContent!.length);
+      const bounds = comment.getBoundingClientRect();
+      expect(lastWord.getBoundingClientRect().top).toBeGreaterThanOrEqual(bounds.top);
+      expect(lastWord.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom + 1);
+      await userEvent.keyboard("{Home}");
+      await expect.poll(() => comment.scrollTop).toBe(0);
+      expect(tooltip.hasAttribute("open")).toBe(true);
+    },
+  );
+
   it.each(["light", "dark"])("keeps attachment-chip text readable in %s", async (theme) => {
     document.documentElement.dataset.themeMode = theme;
     const trigger = mountComments(3, 450);

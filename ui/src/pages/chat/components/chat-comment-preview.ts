@@ -59,8 +59,11 @@ export function renderCommentPreviewRow(
           ? html`<span class="muted">${t("chat.messages.annotationUserComment")}</span>
               <div
                 class="chat-comment-preview__text chat-comment-preview__text--comment"
+                tabindex="0"
+                role="region"
+                aria-label=${t("chat.messages.annotationUserComment")}
                 .textContent=${comment.comment}
-                ${scrollState(false, false)}
+                ${scrollState()}
               ></div>`
           : nothing
       }
