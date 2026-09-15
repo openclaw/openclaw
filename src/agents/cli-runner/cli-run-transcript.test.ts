@@ -98,3 +98,49 @@ it.each([
     }
   },
 );
+
+it("persists the supplied terminal cumulative usage in the assistant transcript", async () => {
+  const root = tempDirs.make("openclaw-cli-usage-transcript-");
+  const target = {
+    agentId: "main",
+    sessionId: "cli-usage-session",
+    sessionKey: "agent:main:cli-usage",
+    storePath: path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite"),
+  };
+  await upsertSessionEntry({
+    ...target,
+    entry: { sessionId: target.sessionId, updatedAt: Date.now() },
+  });
+
+  const result = await persistCliAssistantTranscript({
+    runParams: {
+      ...target,
+      sessionFile: `sqlite://agents/main/${target.sessionId}`,
+      workspaceDir: root,
+      prompt: "use the terminal total",
+      provider: "claude-cli",
+      runId: "cli-usage-run",
+      timeoutMs: 1_000,
+      persistAssistantTranscript: true,
+    },
+    text: "final answer",
+    modelId: "claude-sonnet-4-6",
+    usage: { input: 30, output: 15, cacheRead: 300, cacheWrite: 12, total: 357 },
+    stopReason: "stop",
+  });
+
+  expect(result.owned).toBe(true);
+  const messages = (await loadTranscriptEvents(target)).flatMap((event) =>
+    typeof event === "object" && event !== null && "message" in event ? [event.message] : [],
+  );
+  expect(messages).toHaveLength(1);
+  expect(messages[0]).toMatchObject({
+    usage: {
+      input: 30,
+      output: 15,
+      cacheRead: 300,
+      cacheWrite: 12,
+      totalTokens: 357,
+    },
+  });
+});

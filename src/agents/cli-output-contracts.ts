@@ -49,7 +49,7 @@ export type CliOutput = {
   /** Backend-owned assistant boundary that can safely anchor a later resumed fork. */
   resumeCheckpointId?: string;
   usage?: CliUsage;
-  /** Terminal cumulative turn usage for diagnostics; reply accounting keeps using `usage`. */
+  /** Terminal cumulative turn usage; per-call usage remains in `usage`. */
   diagnosticUsage?: CliUsage;
   toolSummary?: ToolSummaryTrace;
   errorText?: string;
