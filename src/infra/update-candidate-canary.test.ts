@@ -1,13 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { formatCliFailureLines, formatCliJsonFailure } from "../cli/failure-output.js";
-import { createUpdateProgress } from "../cli/update-cli/progress.js";
 import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { defaultRuntime } from "../runtime.js";
 import * as diskSpace from "./disk-space.js";
 import * as readiness from "./update-candidate-canary-readiness.test-support.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
@@ -15,6 +13,7 @@ import {
   completeCanaryCommand,
   createCanarySnapshotResult,
   FakeChild,
+  renderSteps,
   stubHealthyGateway,
 } from "./update-candidate-canary.test-support.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
@@ -30,7 +29,6 @@ import {
 } from "./update-post-core-context.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), snapshot: vi.fn(), signal: vi.fn() }));
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -61,19 +59,6 @@ let databasePath: string | undefined;
 
 function canaryStateOptions(timeoutMs?: number) {
   return { root, stateDir: root, config: {}, env: {}, timeoutMs };
-}
-
-function renderSteps(steps: UpdateStepResult[]) {
-  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-  const presentation = createUpdateProgress(true);
-  onTestFinished(() => {
-    presentation.dispose();
-    log.mockRestore();
-  });
-  for (const [index, step] of steps.entries()) {
-    presentation.progress.onStepComplete?.({ ...step, index, total: steps.length });
-  }
-  return log.mock.calls.flat().join("\n");
 }
 
 beforeEach(async () => {
@@ -127,7 +112,7 @@ afterEach(() => {
 });
 
 describe("update candidate canary", () => {
-  readiness.registerCanaryReadinessBudgetTests(() => root);
+  readiness.registerCanaryReadinessBudgetTests(() => root, mocks.spawn);
   it("records a typed capacity refusal before notifying the snapshot failure", async () => {
     const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
       targetPath,
@@ -524,6 +509,20 @@ describe("update candidate canary", () => {
       expect(result).not.toHaveProperty("checkpointContinuation");
     },
   );
+  it("reports a runtime inspection failure before preparing a snapshot", async () => {
+    const directory = path.join(root, "dist", "infra");
+    await fs.rm(directory, { recursive: true });
+    await fs.writeFile(directory, "not a directory");
+    const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
+    expect(result).toMatchObject({ status: "error", phase: "runtime" });
+    expect(result.steps).toEqual([
+      expect.objectContaining({ name: "candidate runtime", exitCode: 1 }),
+    ]);
+    expect(result.steps[0]?.stderrTail).toContain("ENOTDIR");
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
   it("reports unavailable validation when the candidate predates the migration-continuation contract", async () => {
     await fs.rm(path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"));
     stubHealthyGateway();
@@ -684,8 +683,8 @@ describe("update candidate canary", () => {
       env: {},
       timeoutMs: 3_000,
     });
+    const options = { ...canaryStateOptions(3_000), config, rehearsal };
     try {
-      const options = { ...canaryStateOptions(3_000), config, rehearsal };
       const first = await validateUpdateCandidateCanary(options);
       expect(first.status).toBe("ok");
       const copied = JSON.parse(await fs.readFile(rehearsal.configPath, "utf8")) as OpenClawConfig;

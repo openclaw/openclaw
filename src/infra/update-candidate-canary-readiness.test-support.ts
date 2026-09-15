@@ -1,9 +1,10 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
+import { FakeChild } from "./update-candidate-canary.test-support.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
@@ -28,7 +29,12 @@ export function expectCanaryReadinessWarning(
   });
 }
 
-export function registerCanaryReadinessBudgetTests(root: () => string) {
+export function registerCanaryReadinessBudgetTests(
+  root: () => string,
+  spawnMock: Mock<
+    (command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => FakeChild
+  >,
+) {
   it.each(["gateway-only", "proxy", "block"] as const)(
     "probes the canary with managed proxy mode %s",
     async (loopbackMode) => {
@@ -162,6 +168,52 @@ export function registerCanaryReadinessBudgetTests(root: () => string) {
     expect(cancelled.status).toBe("error");
     expect(cancelled.steps.at(-1)?.advisory).toBeUndefined();
     expect(cancelled.logTail.join("\n")).toContain("operator cancelled");
+  });
+
+  it.each([
+    ["lint", "candidate migration rehearsal", "candidate doctor lint"],
+    ["startup", "candidate migration continuation", "candidate gateway canary"],
+    ["config", undefined, "candidate config validation"],
+  ] as const)("attributes %s failures to their check", async (phase, previous, name) => {
+    let now = 2_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    onTestFinished(() => clock.mockRestore());
+    const spawnNormally = spawnMock.getMockImplementation()!;
+    spawnMock.mockImplementation((command, args, options) => {
+      const fails = phase === "config" && args.includes("validate");
+      if (!args.includes("--fix") && !fails) {
+        return spawnNormally(command, args, options);
+      }
+      const child = new FakeChild(42_000);
+      queueMicrotask(() => {
+        child.stderr.write(
+          fails ? "Configuration unavailable\n" : "Earlier check completed successfully\n",
+        );
+        now += fails ? 25 : 0;
+        child.emit("close", fails ? 1 : 0);
+      });
+      return child;
+    });
+    const result = await validateUpdateCandidateCanary({
+      root: root(),
+      stateDir: root(),
+      config: {},
+      env: {},
+      timeoutMs: 1_000,
+      onStep: (step) => {
+        now += step.name === previous ? 1_000 : phase === "config" ? 100 : 0;
+      },
+    });
+    const failed = result.steps.at(-1);
+    const durationMs = phase === "config" ? 25 : 0;
+    expect(result).toMatchObject({ status: "error", phase });
+    expect(result.durationMs).toBe(phase === "config" ? 425 : 1_000);
+    expect(failed).toMatchObject({ name, durationMs, exitCode: 1 });
+    expect(failed?.failureFacts?.[0]?.message).toContain(
+      phase === "config" ? "Configuration unavailable" : "deadline exceeded",
+    );
+    expect(failed?.stderrTail).not.toContain("Earlier check");
+    expect(result.logTail.join("\n")).toContain("Earlier check completed successfully");
   });
 
   it.each(
