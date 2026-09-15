@@ -17,6 +17,7 @@ import {
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { bindUserTurnTranscriptAnnotation } from "../../sessions/user-turn-transcript-annotation.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
+import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
 import {
   getAdmittedRunDelegatedAuthority,
   retainAdmittedRunBeforeToolCallRecovery,
@@ -28,7 +29,7 @@ import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
-import { createOpenClawCodingTools } from "../agent-tools.js";
+import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
@@ -267,6 +268,7 @@ export function createAgentHarnessHostCapabilities(params: {
       : {}),
   };
   const config = attempt.config ? cloneSnapshot(attempt.config) : undefined;
+  const hostSandboxEnabled = attempt.sandbox?.enabled === true;
   const prepareContextMedia = bindHarnessContextMedia({ attempt, config, assertActive });
   const recorder = attempt.userTurnTranscriptRecorder;
   const sessionTarget = attempt.sessionTarget ? cloneSnapshot(attempt.sessionTarget) : undefined;
@@ -508,7 +510,21 @@ export function createAgentHarnessHostCapabilities(params: {
       const tools = bindTools(
         withAgentQuestionAnswerAuthority(resolveAgentQuestionAnswerAuthority(capabilities), () =>
           withInstallationTarget(installationTarget, () =>
-            createOpenClawCodingTools({ ...options, operationalRunInstance }),
+            createOpenClawCodingToolsInternal(
+              {
+                ...options,
+                skillsSnapshot: options?.skillsSnapshot ?? skillsSnapshot,
+                skillUsagePaths: options?.skillUsagePaths ?? skillUsagePaths,
+                operationalRunInstance,
+              },
+              // Sandboxes use their materialized snapshot paths, never host library pins.
+              !hostSandboxEnabled &&
+                !options?.sandbox?.enabled &&
+                options?.includeCoreTools !== false &&
+                options?.toolConstructionPlan?.includeBaseCodingTools !== false
+                ? resolveSkillResourceCandidates(skillsSnapshot)
+                : undefined,
+            ),
           ),
         ),
         bindingOptions,

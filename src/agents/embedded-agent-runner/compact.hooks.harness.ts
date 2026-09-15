@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { vi, type Mock } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
-import type { createOpenClawCodingTools } from "../agent-tools.js";
+import type { createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { clearAgentHarnesses } from "../harness/registry.js";
 import type { AgentHarness } from "../harness/types.js";
@@ -262,7 +262,9 @@ function createMockToolDefinitions(tools: unknown[] = []) {
     };
   });
 }
-export const createOpenClawCodingToolsMock = vi.fn<typeof createOpenClawCodingTools>(() => []);
+export const createOpenClawCodingToolsMock = vi.fn<typeof createOpenClawCodingToolsInternal>(
+  () => [],
+);
 export const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
 export const resolveEffectiveCompactionModeMock = vi.fn(() => "default");
 export const guardSessionManagerMock = vi.fn((sessionManager: Record<string, unknown>) => ({
@@ -966,6 +968,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
 
   vi.doMock("../agent-tools.js", () => ({
     createOpenClawCodingTools: createOpenClawCodingToolsMock,
+    createOpenClawCodingToolsInternal: createOpenClawCodingToolsMock,
   }));
 
   vi.doMock("./replay-history.js", () => ({

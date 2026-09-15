@@ -41,7 +41,7 @@ type CopilotToolBridgeTestInput = Omit<
 type CopilotCodingToolsOptions = NonNullable<
   Parameters<NonNullable<CopilotToolBridgeInput["createOpenClawCodingTools"]>>[0]
 >;
-const testHostCapabilities = createCopilotTestHostCapabilities();
+const testHostCapabilities = createCopilotTestHostCapabilities(createRealOpenClawCodingTools);
 
 function createCopilotToolBridge(input: CopilotToolBridgeTestInput) {
   const { attemptParams, ...baseInput } = input;
