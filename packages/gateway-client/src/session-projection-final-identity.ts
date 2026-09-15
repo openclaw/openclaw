@@ -37,6 +37,17 @@ export function sameTranscriptIdentity(
   return left.sequence !== null && right.sequence !== null && left.sequence === right.sequence;
 }
 
+/**
+ * The class of rows the #148297 relaxation newly admits as finals: persisted
+ * with the run's terminal tool stop reason while carrying no tool-call
+ * content. Both adoption directions and every position rule scope to this
+ * predicate, so pre-existing match semantics stay untouched.
+ */
+export function isToolUsePersistedFinalRow(message: unknown): boolean {
+  const record = readRecord(message);
+  return record?.["stopReason"] === "toolUse" && !isSessionProjectionToolContinuation(message);
+}
+
 type TerminalProjectionEntry = {
   message: unknown;
   identity: SessionMessageIdentity | null;

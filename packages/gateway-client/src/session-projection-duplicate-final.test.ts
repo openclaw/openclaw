@@ -92,6 +92,23 @@ describe("session projection final-answer dedup", () => {
     expect(state.messages).toHaveLength(2);
   });
 
+  it("does not let a different-content toolUse-persisted row replace a live answer", () => {
+    const differentSaved = {
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: "A different persisted answer" }],
+      stopReason: "toolUse" as const,
+      __openclaw: { id: "saved-other", seq: 217, runId: "announce:repro" },
+    };
+    let state = createSessionProjection(scope);
+    state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
+
+    // The durable row arrives second with different content: both rows stay,
+    // as they did before the relaxation.
+    state = projectLiveSessionMessage(state, differentSaved, { runId: "announce:repro" });
+
+    expect(state.messages).toHaveLength(2);
+  });
+
   it("retains the live terminal when a later same-run row contradicts the toolUse inference", () => {
     const laterToolRow = {
       role: "assistant" as const,
@@ -115,6 +132,33 @@ describe("session projection final-answer dedup", () => {
     // The run continued past the toolUse-persisted row (a later tool row
     // exists), so the live terminal must stay instead of being inferred away:
     // saved row + later tool row + live terminal all remain.
+    expect(state.messages).toHaveLength(3);
+    expect(state.messages).toContain(live);
+  });
+
+  it("retains the live terminal when contradicting history loads before the live delivery", () => {
+    const laterToolRow = {
+      role: "assistant" as const,
+      content: [
+        { type: "text" as const, text: "Checking another file." },
+        {
+          type: "toolCall" as const,
+          id: "read-2",
+          name: "read",
+          arguments: { path: "src/index.ts" },
+        },
+      ],
+      stopReason: "toolUse" as const,
+      __openclaw: { id: "assistant-tool-boundary", seq: 218, runId: "announce:repro" },
+    };
+    let state = createSessionProjection(scope);
+    state = reconcileSessionProjectionSnapshot(state, [saved, laterToolRow], scope);
+    state = reduceSessionProjection(state, terminalEvent());
+    state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
+
+    // History-first: the same position rule applies on the live adoption
+    // path — the run continued past the persisted row, so the live terminal
+    // is inserted rather than absorbed.
     expect(state.messages).toHaveLength(3);
     expect(state.messages).toContain(live);
   });

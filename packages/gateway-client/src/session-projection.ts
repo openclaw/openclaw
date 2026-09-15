@@ -7,6 +7,7 @@ import {
   findUniqueSnapshotTerminalMatch,
   isUnsequencedLiveTerminal,
   isSessionProjectionToolContinuation,
+  isToolUsePersistedFinalRow,
   readFinalContentIdentity,
   readSessionProjectionFinalMessageIdentity,
   sameTranscriptIdentity,
@@ -264,15 +265,13 @@ function entryMatches(
       provisionalEntry.live &&
       !durableSegment &&
       !isSessionProjectionToolContinuation(durableEntry.message) &&
-      // Admitting a text-only toolUse-persisted final must not let a durable
-      // row adopt a *different* same-run live answer: when such a row is kept,
-      // a unique match suppresses the other side without any content
-      // comparison downstream, so require identical final content for the
-      // newly admitted class only. Pre-existing matches (no tool stop reason,
-      // or the durable row arriving as an identity promotion) keep their
-      // established semantics.
-      (durableEntry !== left ||
-        readRecord(durableEntry.message)?.["stopReason"] !== "toolUse" ||
+      // Admitting a text-only toolUse-persisted final must not let it merge
+      // with a *different* same-run answer in either direction: the kept side
+      // suppresses or replaces the other without any content comparison
+      // downstream. Scope the content requirement to that newly admitted
+      // class only; pre-existing matches (identity promotions, non-toolUse
+      // rows) keep their established semantics.
+      (!isToolUsePersistedFinalRow(durableEntry.message) ||
         readFinalContentIdentity(durableEntry.message) ===
           readFinalContentIdentity(provisionalEntry.message)) &&
       provisionalEntry.identity.sequence === null &&
@@ -397,6 +396,26 @@ export function projectLiveSessionMessage(
   const existing =
     matches.find((entry) => sameTranscriptIdentity(entry.identity, incoming.identity)) ??
     (matches.length === 1 ? matches[0] : undefined);
+  if (existing && isToolUsePersistedFinalRow(existing.message)) {
+    // The #148297 relaxation admits a text-only toolUse-persisted row as a
+    // final, but only when the run actually ended there. A later same-run
+    // assistant row proves the run continued past it, so a live terminal must
+    // not be absorbed by (or replaced with) that row on the live path either —
+    // the snapshot reconciler enforces the same position rule.
+    const existingIndex = state.entries.indexOf(existing);
+    const runId = existing.identity?.runId;
+    const runContinuedPast = runId
+      ? state.entries.some(
+          (entry, index) =>
+            index > existingIndex &&
+            entry.identity?.runId === runId &&
+            entry.identity.role === "assistant",
+        )
+      : true;
+    if (runContinuedPast) {
+      return withEntries(state, insertEntry(state.entries, incoming, state.runs));
+    }
+  }
   if (!existing) {
     return withEntries(state, insertEntry(state.entries, incoming, state.runs));
   }
