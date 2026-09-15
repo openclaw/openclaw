@@ -11,6 +11,18 @@ import {
 
 const LAUNCHER_ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
 const LAUNCHER_ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level", "--container"]);
+const GATEWAY_RUN_VALUE_FLAGS = new Set([
+  "--port",
+  "--bind",
+  "--token",
+  "--token-file",
+  "--auth",
+  "--password",
+  "--password-file",
+  "--tailscale",
+  "--ws-log",
+  "--raw-stream-path",
+]);
 export const isNativeHookRelayInvocation = (argv) => argv[2] === "hooks" && argv[3] === "relay";
 
 const isLauncherRootOptionValueToken = (arg) => {
@@ -61,11 +73,58 @@ export const isForegroundGmailRunInvocation = (argv) => {
   return commandPath.join(" ") === "webhooks gmail run";
 };
 
+// Mirror the entry's foreground Gateway policy without loading the built CLI.
+// Keep this unexported: only runRespawnedChild uses it for grace selection.
+const isForegroundGatewayRunInvocation = (argv) => {
+  const args = argv.slice(2);
+  let sawGateway = false;
+  let subcommand;
+  for (let index = 0; index < args.length; index += 1) {
+    const consumed = consumeLauncherRootOptionToken(args, index);
+    if (consumed > 0) {
+      index += consumed - 1;
+      continue;
+    }
+    const arg = args[index];
+    if (!arg) {
+      continue;
+    }
+    if (sawGateway) {
+      const equalsIndex = arg.indexOf("=");
+      const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
+      if (GATEWAY_RUN_VALUE_FLAGS.has(flag)) {
+        if (equalsIndex === -1) {
+          index += 1;
+        }
+        continue;
+      }
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    if (!sawGateway) {
+      if (arg !== "gateway") {
+        return false;
+      }
+      sawGateway = true;
+      continue;
+    }
+    if (subcommand !== undefined) {
+      return false;
+    }
+    subcommand = arg;
+  }
+  return sawGateway && (subcommand === undefined || subcommand === "run");
+};
+
 const respawnSignals =
   process.platform === "win32"
     ? ["SIGTERM", "SIGINT", "SIGBREAK"]
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
 const respawnSignalExitGraceMs = 1_000;
+// The Gateway owns a 325-second cooperative shutdown inside the service manager's
+// 330-second deadline. A recovery wrapper must not impose an earlier deadline.
+const gatewayRespawnSignalExitGraceMs = 328_000;
 const respawnSignalForceKillGraceMs = 1_000;
 const respawnSignalHardExitGraceMs = 1_000;
 
@@ -127,9 +186,14 @@ export const runRespawnedChild = (command, args, env) => {
     if (signalExitTimer) {
       return;
     }
-    signalExitTimer = setTimeout(() => {
-      requestChildTermination();
-    }, respawnSignalExitGraceMs);
+    signalExitTimer = setTimeout(
+      () => {
+        requestChildTermination();
+      },
+      isForegroundGatewayRunInvocation(process.argv)
+        ? gatewayRespawnSignalExitGraceMs
+        : respawnSignalExitGraceMs,
+    );
     signalExitTimer.unref?.();
   };
   for (const signal of respawnSignals) {

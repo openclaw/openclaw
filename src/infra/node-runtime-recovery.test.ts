@@ -9,7 +9,11 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { isUsableNode, recoverNodeRuntime } from "../../node-runtime-recovery.mjs";
+import {
+  isUsableNode,
+  recoverNodeRuntime,
+  runRespawnedChild,
+} from "../../node-runtime-recovery.mjs";
 import { SQLITE_CAPABILITY_PROBE } from "../../node-sqlite.mjs";
 import { buildTaskScript } from "../daemon/schtasks-layout.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -939,5 +943,72 @@ describe("candidate admission probe", () => {
 
       expect(isUsableNode(candidate)).toBe(false);
     });
+  });
+});
+
+describe("runtime recovery child shutdown", () => {
+  function installRespawnListener(argvTail: string[]) {
+    process.argv = [process.execPath, "/fixture/openclaw.mjs", ...argvTail];
+    const kill = vi.spyOn(child, "kill").mockReturnValue(true);
+    const existingListeners = new Set(process.listeners("SIGTERM"));
+    runRespawnedChild(process.execPath, process.argv.slice(1), process.env);
+    const listener = process
+      .listeners("SIGTERM")
+      .find((candidate) => !existingListeners.has(candidate));
+    expect(listener).toBeDefined();
+    return { kill, listener };
+  }
+
+  it.each([
+    { argvTail: ["gateway", "run"] },
+    { argvTail: ["gateway"] },
+    { argvTail: ["--profile", "p", "gateway", "run"] },
+    { argvTail: ["gateway", "run", "--port", "18789"] },
+  ])("leaves foreground Gateway shutdown inside its drain budget (%j)", ({ argvTail }) => {
+    vi.useFakeTimers();
+    try {
+      const { kill, listener } = installRespawnListener(argvTail);
+      listener?.("SIGTERM");
+      expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+      vi.advanceTimersByTime(2_500);
+      expect(kill).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([{ argvTail: ["gateway", "status"] }, { argvTail: ["agent", "run"] }])(
+    "keeps non-foreground Gateway children on the short grace (%j)",
+    ({ argvTail }) => {
+      vi.useFakeTimers();
+      try {
+        const { kill, listener } = installRespawnListener(argvTail);
+        listener?.("SIGTERM");
+        expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+        vi.advanceTimersByTime(1_000);
+        expect(kill).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("force-kills a stuck foreground Gateway after the drain budget", () => {
+    vi.useFakeTimers();
+    try {
+      const { kill, listener } = installRespawnListener(["gateway", "run"]);
+      listener?.("SIGTERM");
+      expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+
+      vi.advanceTimersByTime(328_000);
+      expect(kill).toHaveBeenCalledTimes(2);
+      expect(kill).toHaveBeenLastCalledWith("SIGTERM");
+
+      vi.advanceTimersByTime(1_000);
+      expect(kill).toHaveBeenCalledTimes(3);
+      expect(kill).toHaveBeenLastCalledWith("SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
