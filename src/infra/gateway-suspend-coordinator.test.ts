@@ -18,10 +18,7 @@ import {
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import {
-  createGatewayActiveWorkSnapshot,
-  type GatewayActiveWorkInspectors,
-} from "./gateway-active-work.js";
+import { createGatewayActiveWorkSnapshot } from "./gateway-active-work.js";
 import {
   armGatewaySuspendHandoff,
   consumeGatewaySuspendHandoff,
@@ -31,40 +28,22 @@ import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "./gateway-suspend-coordinator.js";
+import { inspectors } from "./gateway-suspend-coordinator.test-support.js";
+import { resetGatewaySuspensionParticipantsForTest } from "./gateway-suspension-participants.test-support.js";
 
 const SUSPEND_TTL_MS = 2 * 60_000;
 const SUSPEND_RETRY_AFTER_MS = 20_000;
 
-function inspectors(
-  overrides: Partial<GatewayActiveWorkInspectors> = {},
-): GatewayActiveWorkInspectors {
-  return {
-    getQueueSize: () => 0,
-    getPendingReplies: () => 0,
-    getEmbeddedRuns: () => 0,
-    getBackgroundExecSessions: () => 0,
-    getCronRuns: () => 0,
-    getActiveTasks: () => 0,
-    getTaskBlockers: () => [],
-    getRootRequests: () => 0,
-    getSessionAdmissions: () => 0,
-    getSessionMutations: () => 0,
-    getChatRuns: () => 0,
-    getQueuedTurns: () => 0,
-    getTerminalPersistence: () => 0,
-    getTerminalSessions: () => 0,
-    ...overrides,
-  };
-}
-
 beforeEach(() => {
   resetProcessRegistryForTests();
+  resetGatewaySuspensionParticipantsForTest();
   resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetGatewayWorkAdmission();
 });
 
 afterEach(() => {
   resetProcessRegistryForTests();
+  resetGatewaySuspensionParticipantsForTest();
   resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetGatewayWorkAdmission();
 });

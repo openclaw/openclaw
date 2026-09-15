@@ -39,6 +39,10 @@ import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginChannelRegistrySnapshotFromState } from "./runtime-channel-state.js";
 import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
 import { PLUGIN_REGISTRY_STATE, type RegistryState } from "./runtime-state.js";
+import {
+  publishPluginSuspensionParticipants,
+  type SuspensionParticipantProjection,
+} from "./runtime-suspension-participants.js";
 import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
 export { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
 
@@ -286,6 +290,7 @@ export function stageActivePluginRegistry(
     runtimeSubagentMode,
     workspaceDir: workspaceDir ?? null,
     retirePrevious: false,
+    stagedPreviousRegistry: state.activeRegistry,
   });
 }
 
@@ -293,14 +298,18 @@ export function commitStagedPluginRegistry(
   previousRegistry: PluginRegistry | null,
   registry: PluginRegistry,
 ): void {
-  if (state.activeRegistry === registry) {
-    retirePluginRegistryIfUnused(previousRegistry);
+  if (state.activeRegistry !== registry) {
+    return;
   }
+  publishGatewaySuspensionParticipants({ stagedPreviousRegistry: null });
+  state.stagedPreviousRegistry = null;
+  retirePluginRegistryIfUnused(previousRegistry);
 }
 
 export function captureActivePluginRegistrySnapshot() {
   return {
     activeRegistry: state.activeRegistry,
+    stagedPreviousRegistry: state.stagedPreviousRegistry,
     key: state.key,
     runtimeSubagentMode: state.runtimeSubagentMode,
     workspaceDir: state.workspaceDir,
@@ -338,18 +347,24 @@ export function rollbackStagedPluginRegistry(
 }
 
 function installActivePluginRegistry(
-  params: PluginRegistrySnapshot & {
+  params: Omit<PluginRegistrySnapshot, "stagedPreviousRegistry"> & {
+    stagedPreviousRegistry?: PluginRegistry | null;
     retirePrevious?: boolean;
     activateRegistry?: boolean;
   },
 ): number {
   const previousSnapshot = captureActivePluginRegistrySnapshot();
   const registry = params.activeRegistry;
+  publishGatewaySuspensionParticipants({
+    activeRegistry: registry,
+    stagedPreviousRegistry: params.stagedPreviousRegistry ?? null,
+  });
   const retirement =
     previousSnapshot.activeRegistry !== registry
       ? preparePluginRegistryRetirement(previousSnapshot.activeRegistry)
       : undefined;
   state.activeRegistry = registry;
+  state.stagedPreviousRegistry = params.stagedPreviousRegistry ?? null;
   const installedVersion = ++state.activeVersion;
   if (registry) {
     registryVersions.set(registry, installedVersion);
@@ -401,15 +416,45 @@ function installActivePluginRegistry(
   return installedVersion;
 }
 
+function publishGatewaySuspensionParticipants(
+  projection: SuspensionParticipantProjection = {},
+): void {
+  publishPluginSuspensionParticipants({
+    activeRegistry: state.activeRegistry,
+    stagedPreviousRegistry: state.stagedPreviousRegistry,
+    owners: registryOwners,
+    projection,
+  });
+}
+
+/** Update one live registry without dropping another Gateway's participants. */
+export function syncPluginRegistrySuspensionParticipants(
+  registry: PluginRegistry,
+  registrations = registry.gatewaySuspensionParticipants,
+): void {
+  if (
+    state.activeRegistry !== registry &&
+    state.stagedPreviousRegistry !== registry &&
+    ![...registryOwners].some((owner) => owner.activeRegistry === registry)
+  ) {
+    return;
+  }
+  publishGatewaySuspensionParticipants({
+    registrationReplacement: { registry, registrations },
+  });
+}
+
 /** Each Gateway owns its current registry; the process default is only a lookup projection. */
 export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir?: string) {
   const owner: RegistryOwner = {
     key: null,
     runtimeSubagentMode: "gateway-bindable",
     workspaceDir: workspaceDir ?? null,
+    stagedPreviousRegistry: null,
     ...(state.activeRegistry === registry ? captureActivePluginRegistrySnapshot() : {}),
     activeRegistry: registry,
   };
+  publishGatewaySuspensionParticipants({ extraRegistries: [registry] });
   registryOwners.add(owner);
   return {
     get registry() {
@@ -420,6 +465,9 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
         throw new Error("Plugin registry publication requires a live owner and active candidate");
       }
       const previous = owner.activeRegistry;
+      publishGatewaySuspensionParticipants({
+        ownerReplacement: { owner, registry: next },
+      });
       Object.assign(owner, captureActivePluginRegistrySnapshot());
       retirePluginRegistryIfUnused(previous, () =>
         registryOwners.has(owner) ? owner.activeRegistry : null,
@@ -474,6 +522,7 @@ export function createPluginRegistryOwner(registry: PluginRegistry, workspaceDir
           const retire = () =>
             (retirement ??= Promise.resolve().then(async () => {
               registryOwners.delete(owner);
+              publishGatewaySuspensionParticipants();
               const survivor = [...registryOwners].findLast((candidate) => !candidate.closing);
               if (state.activeRegistry === previous) {
                 if (survivor) {
@@ -522,6 +571,7 @@ export function requireActivePluginRegistry(): PluginRegistry {
     return registry;
   }
   state.activeRegistry = createEmptyPluginRegistry();
+  publishGatewaySuspensionParticipants();
   markPluginRegistryActive(state.activeRegistry);
   state.activeVersion += 1;
   registryVersions.set(state.activeRegistry, state.activeVersion);
@@ -606,7 +656,12 @@ export function listImportedRuntimePluginIds(): string[] {
 
 function clearActivePluginRegistryState(): PluginRegistry | null {
   const previousRegistry = state.activeRegistry;
+  publishGatewaySuspensionParticipants({
+    activeRegistry: null,
+    stagedPreviousRegistry: null,
+  });
   state.activeRegistry = null;
+  state.stagedPreviousRegistry = null;
   state.activeVersion += 1;
   state.key = null;
   state.workspaceDir = null;

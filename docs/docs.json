@@ -2532,6 +2532,7 @@
                       "gateway/background-process",
                       "gateway/restart-recovery",
                       "gateway/cloud-sessions",
+                      "gateway/host-suspension",
                       "gateway/cloud-workers",
                       {
                         "group": "Cloud Workers",

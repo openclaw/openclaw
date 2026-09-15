@@ -13,6 +13,7 @@ import type {
   PluginRecord as RegistryPluginRecord,
   PluginRegistryParams,
 } from "./registry-types.js";
+import { syncPluginRegistrySuspensionParticipants } from "./runtime.js";
 
 export type {
   PluginHttpRouteRegistration,
@@ -51,6 +52,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const rollbackPluginGlobalSideEffects = (pluginId: string, record: RegistryPluginRecord) => {
     runtimeResolver.revokePluginRuntimeRecord(pluginId, record);
     projectPluginContributions(state.registry, record);
+    syncPluginRegistrySuspensionParticipants(state.registry);
     const recordSnapshot = registrationRecordSnapshots.get(record);
     if (recordSnapshot) {
       Object.keys(record).forEach((key) => Reflect.deleteProperty(record, key));

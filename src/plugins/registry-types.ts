@@ -3,6 +3,7 @@ import type { GatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { GatewaySuspensionParticipant } from "../infra/gateway-suspension-participants.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { DetachedTaskLifecycleRuntimeRegistration } from "../tasks/detached-task-runtime-contract.js";
 import type {
@@ -449,6 +450,7 @@ export type PluginRegistry = {
   controlUiDescriptors: PluginControlUiDescriptorRegistryRegistration[];
   runtimeLifecycles: PluginRuntimeLifecycleRegistryRegistration[];
   agentEventSubscriptions: PluginAgentEventSubscriptionRegistryRegistration[];
+  gatewaySuspensionParticipants: { pluginId: string; participant: GatewaySuspensionParticipant }[];
   sessionSchedulerJobs: PluginSessionSchedulerJobRegistryRegistration[];
   sessionActions: PluginSessionActionRegistryRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];

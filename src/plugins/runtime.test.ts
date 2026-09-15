@@ -385,12 +385,14 @@ describe("setActivePluginRegistry", () => {
           replaceAgain
             ? {
                 activeRegistry: newer,
+                stagedPreviousRegistry: null,
                 key: "newer",
                 workspaceDir: "/virtual/newer",
                 runtimeSubagentMode: "gateway-bindable",
               }
             : {
                 activeRegistry: null,
+                stagedPreviousRegistry: null,
                 key: null,
                 workspaceDir: null,
                 runtimeSubagentMode: "default",

@@ -1383,7 +1383,7 @@ export async function runGatewayLoop(params: {
       resetCronActiveJobs();
       // Resume the retired scheduler before resetAllLanes invalidates its
       // suspension admission callback and discards the coordinator entry.
-      resetGatewaySuspendCoordinatorForLifecycleRestart();
+      await resetGatewaySuspendCoordinatorForLifecycleRestart({ wait: true });
       resetAllLanes();
       // resetAllLanes installs the next admission generation. Keep the local
       // mirror aligned so a restart queued during cleanup closes that generation.

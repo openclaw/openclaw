@@ -52,6 +52,7 @@ export const pluginArrays = [
   "controlUiDescriptors",
   "runtimeLifecycles",
   "agentEventSubscriptions",
+  "gatewaySuspensionParticipants",
   "sessionSchedulerJobs",
   "sessionActions",
   "conversationBindingResolvedHandlers",

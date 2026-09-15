@@ -820,6 +820,7 @@ enum class GatewayMethod(
   ControlUiSessionPreview("controlUi.sessionPreview"),
   GatewaySuspendPrepare("gateway.suspend.prepare"),
   GatewaySuspendStatus("gateway.suspend.status"),
+  GatewaySuspendPreflight("gateway.suspend.preflight"),
   GatewaySuspendResume("gateway.suspend.resume"),
   ChatToolTitles("chat.toolTitles"),
   SessionsDiff("sessions.diff"),

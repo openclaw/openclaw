@@ -11,6 +11,7 @@ import {
   normalizeCommandDescriptorName,
   sanitizeCommandDescriptorDescription,
 } from "../cli/program/command-descriptor-utils.js";
+import type { GatewaySuspensionParticipant } from "../infra/gateway-suspension-participants.js";
 import {
   NODE_EXEC_APPROVALS_COMMANDS,
   isPrivateNodeInvokeCommand,
@@ -20,9 +21,12 @@ import {
 } from "../infra/node-commands.js";
 import { isReservedCommandName, registerPluginCommandInRegistry } from "./command-registration.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import type { PluginInstanceConsumer } from "./plugin-instance.types.js";
 import type { WidgetPresenter } from "./plugin-registration.types.js";
+import { getPluginRecordRegistry } from "./registry-lifecycle.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
+import { syncPluginRegistrySuspensionParticipants } from "./runtime.js";
 import type {
   OpenClawGatewayDiscoveryService,
   OpenClawPluginCliRegistrationOptions,
@@ -318,6 +322,67 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     );
   };
 
+  const registerGatewaySuspensionParticipant = (
+    record: PluginRecord,
+    participant: GatewaySuspensionParticipant,
+  ) => {
+    const id = participant.id.trim();
+    if (!id) {
+      reportRegistrationError(record, "gateway suspension participant requires a non-empty id");
+      return () => {};
+    }
+    // Namespace by plugin so two plugins cannot collide on a shared queue name,
+    // and so an operator can tell which plugin is holding the fence open.
+    const instance = getPluginInstance(record);
+    let consumer: PluginInstanceConsumer | undefined;
+    const run = <T>(callback: () => T): T => (consumer ? consumer.run(callback) : callback());
+    const releaseConsumer = (current: PluginInstanceConsumer): void => {
+      if (consumer === current) {
+        consumer = undefined;
+        current.release();
+      }
+    };
+    const entry = {
+      pluginId: record.id,
+      participant: {
+        id: `${record.id}:${id}`,
+        prepare: () => {
+          consumer ??= instance?.retainConsumer();
+          return run(() => participant.prepare());
+        },
+        status: () => run(() => participant.status()),
+        resume: () => {
+          const current = consumer;
+          const result = run(() => participant.resume());
+          if (!current) {
+            return result;
+          }
+          if (result) {
+            return result.then(() => releaseConsumer(current));
+          }
+          releaseConsumer(current);
+        },
+      },
+    };
+    const owner = getPluginRecordRegistry(state.registry, record);
+    const registrations = owner.gatewaySuspensionParticipants;
+    const next = registrations.filter((value) => value.participant.id !== entry.participant.id);
+    next.push(entry);
+    syncPluginRegistrySuspensionParticipants(owner, next);
+    registrations.splice(0, registrations.length, ...next);
+    return () => {
+      const currentOwner = getPluginRecordRegistry(state.registry, record);
+      const currentRegistrations = currentOwner.gatewaySuspensionParticipants;
+      const index = currentRegistrations.indexOf(entry);
+      if (index < 0) {
+        return;
+      }
+      const remaining = currentRegistrations.filter((value) => value !== entry);
+      syncPluginRegistrySuspensionParticipants(currentOwner, remaining);
+      currentRegistrations.splice(index, 1);
+    };
+  };
+
   const resolveServiceRegistrationId = (
     record: PluginRecord,
     service: { id: string },
@@ -437,6 +502,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registerNodeHostCommand,
     registerNodeInvokePolicy,
     registerSecurityAuditCollector,
+    registerGatewaySuspensionParticipant,
     registerService,
     registerGatewayDiscoveryService,
     registerCommand,

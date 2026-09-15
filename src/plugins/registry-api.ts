@@ -139,6 +139,14 @@ export function createPluginApiFactory(
               },
               registerNodeInvokePolicy: (policy) =>
                 bound.registerNodeInvokePolicy(policy, params.pluginConfig),
+              registerGatewaySuspensionParticipant: (participant) => {
+                if (!shouldCommitWorkflowSideEffect()) {
+                  throw new Error(
+                    "gateway suspension participant registration is no longer active",
+                  );
+                }
+                return bound.registerGatewaySuspensionParticipant(participant);
+              },
               onConversationBindingResolved: bound.registerConversationBindingResolvedHandler,
               registerContextEngine: (id, factory) =>
                 bound.registerContextEngine(id, factory, registrationMode),

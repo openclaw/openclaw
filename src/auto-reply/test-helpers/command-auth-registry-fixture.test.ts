@@ -29,6 +29,7 @@ describe.each(["cold", "populated"])("command-auth fixture with a %s predecessor
       // Retire only this test's scratch registry, never the ambient predecessor.
       rollbackStagedPluginRegistry({
         activeRegistry: null,
+        stagedPreviousRegistry: null,
         key: null,
         workspaceDir: null,
         runtimeSubagentMode: "default",

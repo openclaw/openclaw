@@ -7635,17 +7635,28 @@ public struct GatewaySuspendBlocker: Codable, Sendable {
     public let count: Int
     public let message: String
     public let task: GatewaySuspendTaskBlocker?
+    public let participantid: String?
 
     public init(
         kind: AnyCodable,
         count: Int,
         message: String,
-        task: GatewaySuspendTaskBlocker? = nil)
+        task: GatewaySuspendTaskBlocker? = nil,
+        participantid: String? = nil)
     {
         self.kind = kind
         self.count = count
         self.message = message
         self.task = task
+        self.participantid = participantid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case count
+        case message
+        case task
+        case participantid = "participantId"
     }
 }
 
@@ -7686,6 +7697,116 @@ public struct GatewaySuspendHandoffResult: Codable, Sendable {
         case status
         case suspensionid = "suspensionId"
         case expiresatms = "expiresAtMs"
+    }
+}
+
+public struct GatewaySuspendPreflightCounts: Codable, Sendable {
+    public let queuesize: Int
+    public let pendingreplies: Int
+    public let embeddedruns: Int
+    public let backgroundexecsessions: Int
+    public let cronruns: Int
+    public let activetasks: Int
+    public let rootrequests: Int
+    public let sessionadmissions: Int
+    public let sessionmutations: Int
+    public let chatruns: Int
+    public let queuedturns: Int
+    public let terminalpersistence: Int
+    public let terminalsessions: Int
+    public let pluginparticipants: Int
+    public let totalactive: Int
+
+    public init(
+        queuesize: Int,
+        pendingreplies: Int,
+        embeddedruns: Int,
+        backgroundexecsessions: Int,
+        cronruns: Int,
+        activetasks: Int,
+        rootrequests: Int,
+        sessionadmissions: Int,
+        sessionmutations: Int,
+        chatruns: Int,
+        queuedturns: Int,
+        terminalpersistence: Int,
+        terminalsessions: Int,
+        pluginparticipants: Int,
+        totalactive: Int)
+    {
+        self.queuesize = queuesize
+        self.pendingreplies = pendingreplies
+        self.embeddedruns = embeddedruns
+        self.backgroundexecsessions = backgroundexecsessions
+        self.cronruns = cronruns
+        self.activetasks = activetasks
+        self.rootrequests = rootrequests
+        self.sessionadmissions = sessionadmissions
+        self.sessionmutations = sessionmutations
+        self.chatruns = chatruns
+        self.queuedturns = queuedturns
+        self.terminalpersistence = terminalpersistence
+        self.terminalsessions = terminalsessions
+        self.pluginparticipants = pluginparticipants
+        self.totalactive = totalactive
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case queuesize = "queueSize"
+        case pendingreplies = "pendingReplies"
+        case embeddedruns = "embeddedRuns"
+        case backgroundexecsessions = "backgroundExecSessions"
+        case cronruns = "cronRuns"
+        case activetasks = "activeTasks"
+        case rootrequests = "rootRequests"
+        case sessionadmissions = "sessionAdmissions"
+        case sessionmutations = "sessionMutations"
+        case chatruns = "chatRuns"
+        case queuedturns = "queuedTurns"
+        case terminalpersistence = "terminalPersistence"
+        case terminalsessions = "terminalSessions"
+        case pluginparticipants = "pluginParticipants"
+        case totalactive = "totalActive"
+    }
+}
+
+public struct GatewaySuspendPreflightParams: Codable, Sendable {
+    public let terminalpolicy: AnyCodable?
+
+    public init(
+        terminalpolicy: AnyCodable? = nil)
+    {
+        self.terminalpolicy = terminalpolicy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case terminalpolicy = "terminalPolicy"
+    }
+}
+
+public struct GatewaySuspendPreflightResult: Codable, Sendable {
+    public let status: AnyCodable
+    public let activecount: Int
+    public let counts: GatewaySuspendPreflightCounts
+    public let blockers: [GatewaySuspendBlocker]
+
+    public init(
+        status: AnyCodable,
+        activecount: Int,
+        counts: GatewaySuspendPreflightCounts,
+        blockers: [GatewaySuspendBlocker])
+    {
+        self.status = status
+        self.activecount = activecount
+        self.counts = counts
+        self.blockers = blockers
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case activecount = "activeCount"
+        case counts
+        case blockers
     }
 }
 
