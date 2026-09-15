@@ -9,6 +9,7 @@ import { resolveSplitChannelExtensionShard } from "../../test/vitest/vitest.exte
 import { isCodexExtensionRoot } from "../../test/vitest/vitest.extension-codex-paths.mjs";
 import {
   databaseWorkerExtensionTestFiles,
+  getDatabaseWorkerExtensionTestIncludePatterns,
   isDatabaseWorkerExtensionRoot,
 } from "../../test/vitest/vitest.extension-database-workers-paths.mjs";
 import { isDiffsExtensionRoot } from "../../test/vitest/vitest.extension-diffs-paths.mjs";
@@ -30,7 +31,13 @@ import { isTelegramExtensionRoot } from "../../test/vitest/vitest.extension-tele
 import { isVoiceCallExtensionRoot } from "../../test/vitest/vitest.extension-voice-call-paths.mjs";
 import { isWhatsAppExtensionRoot } from "../../test/vitest/vitest.extension-whatsapp-paths.mjs";
 import { isZaloExtensionRoot } from "../../test/vitest/vitest.extension-zalo-paths.mjs";
-import { isPluginControlUiPath } from "../../test/vitest/vitest.ui-paths.mjs";
+import { relativizeScopedPatterns } from "../../test/vitest/vitest.include-patterns.ts";
+import { sharedVitestExcludePatterns } from "../../test/vitest/vitest.shared-paths.mjs";
+import {
+  isPluginControlUiPath,
+  pluginControlUiPathGlob,
+} from "../../test/vitest/vitest.ui-paths.mjs";
+import { getUnitFastTestFilesForIncludePatterns } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
 import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import { parsePositiveInt } from "./numeric-options.mjs";
@@ -289,7 +296,28 @@ function splitTargetsByFileLimit(targets: string[], maxFilesPerChunk: number) {
   return chunks;
 }
 
-const DATABASE_WORKER_CONFIG = "test/vitest/vitest.extension-database-workers.config.ts";
+export const DATABASE_WORKER_CONFIG = "test/vitest/vitest.extension-database-workers.config.ts";
+
+export function selectDatabaseWorkerExtensionTestFiles(files: readonly string[]) {
+  const include = getDatabaseWorkerExtensionTestIncludePatterns();
+  const scopedInclude = relativizeScopedPatterns(include, "extensions");
+  const scopedExclude = relativizeScopedPatterns(
+    [
+      ...sharedVitestExcludePatterns,
+      ...getUnitFastTestFilesForIncludePatterns(include, { dir: "extensions" }),
+      pluginControlUiPathGlob,
+    ],
+    "extensions",
+  );
+  const scopedFiles = relativizeScopedPatterns(files, "extensions");
+  return files.filter((_, index) => {
+    const file = scopedFiles[index]!;
+    return (
+      scopedInclude.some((pattern) => path.matchesGlob(file, pattern)) &&
+      !scopedExclude.some((pattern) => path.matchesGlob(file, pattern))
+    );
+  });
+}
 
 function splitWorkerTargetsByOriginalConfig(
   targets: string[],

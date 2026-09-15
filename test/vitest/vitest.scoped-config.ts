@@ -1,12 +1,11 @@
 // Vitest scoped config helper builds test configs for scoped file patterns.
 import path from "node:path";
 import { defineConfig, type ViteUserConfig } from "vitest/config";
-import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
+import { intersectIncludePatterns, relativizeScopedPatterns } from "./vitest.include-patterns.ts";
 import {
   loadPatternListFromEnv,
   matchesVitestGlob,
   narrowIncludePatternsForCli,
-  relativizeScopedPatterns,
 } from "./vitest.pattern-file.ts";
 import {
   nonIsolatedRunnerPath,

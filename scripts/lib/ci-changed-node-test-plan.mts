@@ -29,9 +29,11 @@ import {
   type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
 import {
+  DATABASE_WORKER_CONFIG,
   estimateExtensionTestCost,
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
+  selectDatabaseWorkerExtensionTestFiles,
   shouldSplitExtensionTestProcesses,
   splitExtensionTestJobTargets,
 } from "./extension-test-plan.mts";
@@ -388,7 +390,8 @@ function createChangedExtensionConfigShards(
     rootsByConfig.set(config, [...(rootsByConfig.get(config) ?? []), root]);
   }
   const filesByConfig = new Map<string, string[]>();
-  for (const file of rootsByConfig.size > 0 ? listExtensionTestFilesForRoots(["extensions"]) : []) {
+  const allTestFiles = rootsByConfig.size > 0 ? listExtensionTestFilesForRoots(["extensions"]) : [];
+  for (const file of allTestFiles) {
     const config = resolveExtensionTestConfig(file.split("/").slice(0, 2).join("/"));
     filesByConfig.set(config, [...(filesByConfig.get(config) ?? []), file]);
   }
@@ -403,8 +406,13 @@ function createChangedExtensionConfigShards(
       (file) => !splitProcesses || roots.some((root) => file.startsWith(`${root}/`)),
     );
     const chunks = testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
+    // Preserve execution chunks; the unfiltered database config also includes cross-root tests.
+    const pricedFiles =
+      config === DATABASE_WORKER_CONFIG && chunks.length === 1
+        ? selectDatabaseWorkerExtensionTestFiles(allTestFiles)
+        : testFiles;
     const predictedSeconds = Math.ceil(
-      estimateExtensionTestCost(config, testFiles.length) / chunks.length,
+      estimateExtensionTestCost(config, pricedFiles.length) / chunks.length,
     );
     return chunks.length > 1
       ? chunks.map((includePatterns, index) =>

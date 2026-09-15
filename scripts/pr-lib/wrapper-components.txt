@@ -75,6 +75,7 @@ test/vitest/vitest.include-patterns.ts
 test/vitest/vitest.pattern-file.ts
 test/vitest/vitest.performance-config.ts
 test/vitest/vitest.plugin-sdk-paths.mjs
+test/vitest/vitest.shared-paths.mjs
 test/vitest/vitest.test-shards.mjs
 test/vitest/vitest.tooling-isolated-paths.mjs
 test/vitest/vitest.ui-isolated-paths.mjs

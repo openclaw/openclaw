@@ -6,12 +6,11 @@ import { fileURLToPath } from "node:url";
 import { playwright } from "@vitest/browser-playwright";
 import { chromium } from "playwright";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
-import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
 import {
-  loadPatternListFromEnv,
-  matchesVitestGlob,
+  intersectIncludePatterns,
   relativizeScopedPatterns,
-} from "../test/vitest/vitest.pattern-file.ts";
+} from "../test/vitest/vitest.include-patterns.ts";
+import { loadPatternListFromEnv, matchesVitestGlob } from "../test/vitest/vitest.pattern-file.ts";
 import { loadVitestPerformanceConfig } from "../test/vitest/vitest.performance-config.ts";
 import {
   jsdomOptimizedDeps,

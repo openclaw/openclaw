@@ -108,3 +108,10 @@ export const databaseWorkerExtensionTestFiles = [
 export function isDatabaseWorkerExtensionRoot(root) {
   return databaseWorkerExtensionTestRoots.includes(root);
 }
+
+export function getDatabaseWorkerExtensionTestIncludePatterns() {
+  return [
+    ...databaseWorkerExtensionTestRoots.map((root) => `${root}/**/*.test.ts`),
+    ...databaseWorkerExtensionTestFiles,
+  ];
+}

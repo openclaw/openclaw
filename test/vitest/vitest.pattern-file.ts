@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { Minimatch } from "minimatch";
 import { collectVitestFileFilters } from "../../scripts/lib/vitest-cli-mode.mts";
-import { narrowIncludePatterns } from "./vitest.include-patterns.ts";
+import { narrowIncludePatterns, relativizeScopedPatterns } from "./vitest.include-patterns.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const require = createRequire(import.meta.url);
@@ -166,21 +166,6 @@ export function narrowIncludePatternsForCli(
   }
 
   return narrowIncludePatterns(includePatterns, cliPatterns, matchesVitestGlob);
-}
-
-export function relativizeScopedPatterns(values: readonly string[], dir = ""): string[] {
-  const normalizedDir = dir.replaceAll("\\", "/").replace(/\/+$/u, "");
-  return values.map((value) => {
-    const normalized = value.replaceAll("\\", "/");
-    if (!normalizedDir) {
-      return normalized;
-    }
-    if (normalized === normalizedDir) {
-      return ".";
-    }
-    const prefix = `${normalizedDir}/`;
-    return normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
-  });
 }
 
 /** Project one candidate through the same scoped include and CLI file filters as Vitest. */

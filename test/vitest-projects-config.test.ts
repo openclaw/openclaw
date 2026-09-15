@@ -3,7 +3,12 @@ import { globSync } from "node:fs";
 import path from "node:path";
 import { afterEach, assert, describe, expect, it } from "vitest";
 import { resolveConfig } from "vitest/node";
-import { resolveExtensionTestConfig } from "../scripts/lib/extension-test-plan.mts";
+import { createChangedExtensionFallbackShards } from "../scripts/lib/ci-changed-node-test-plan.mts";
+import {
+  estimateExtensionTestCost,
+  resolveExtensionTestConfig,
+  selectDatabaseWorkerExtensionTestFiles,
+} from "../scripts/lib/extension-test-plan.mts";
 import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
@@ -57,6 +62,7 @@ import {
   createGatewayVitestConfig,
 } from "./vitest/vitest.gateway.config.ts";
 import { createInfraVitestConfig } from "./vitest/vitest.infra.config.ts";
+import { matchesVitestGlob } from "./vitest/vitest.pattern-file.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import { createProjectShardVitestConfig } from "./vitest/vitest.project-shard-config.ts";
 import {
@@ -706,6 +712,52 @@ describe("projects vitest config", () => {
     expect(resolveExtensionTestConfig("extensions/slack")).toBe(project);
     expect(rootVitestProjects).toContain(project);
   });
+
+  it("prices full database-worker configs from their runtime-selected files", () => {
+    const project = "test/vitest/vitest.extension-database-workers.config.ts";
+    const config = requireTestConfig(createExtensionDatabaseWorkersVitestConfig({}));
+    assert(config.dir);
+    const runtimeFiles = globSync(config.include ?? [], {
+      cwd: config.dir,
+      exclude: config.exclude,
+    });
+    expect(runtimeFiles.length).toBeGreaterThan(0);
+    const shards = createChangedExtensionFallbackShards(["extensions/memory-core/package.json"]);
+    expect(shards).toHaveLength(1);
+    expect(shards[0]).toMatchObject({
+      configs: [project],
+      planConcurrency: 1,
+      predictedSeconds: estimateExtensionTestCost(project, runtimeFiles.length),
+    });
+    expect(shards[0]?.includePatterns).toBeUndefined();
+  });
+
+  it.each([
+    ["extensions/memory-core/src/pricing.test.ts", true],
+    ["extensions/active-memory/index.test.ts", true],
+    ["extensions/memory-core/src/pricing.test.tsx", false],
+    ["extensions/memory-core/src/pricing.e2e.test.ts", false],
+    ["extensions/memory-core/src/pricing.live.test.ts", false],
+    ["extensions/workboard/browser/pricing.test.ts", false],
+    ["extensions/memory-core/vendor/pricing.test.ts", false],
+    ["extensions/memory-core/node_modules/example/pricing.test.ts", false],
+    ["extensions/memory-core/src/._pricing.test.ts", false],
+    ["extensions/unrelated/pricing.test.ts", false],
+  ] as const)(
+    "keeps database-worker pricing aligned with runtime selection for %s",
+    (file, selected) => {
+      const config = requireTestConfig(createExtensionDatabaseWorkersVitestConfig({}));
+      assert(config.dir);
+      const relative = path
+        .relative(config.dir, path.resolve(repoRoot, file))
+        .replaceAll("\\", "/");
+      const runtimeSelected =
+        (config.include ?? []).some((pattern) => matchesVitestGlob(relative, pattern)) &&
+        !(config.exclude ?? []).some((pattern) => matchesVitestGlob(relative, pattern));
+      expect(runtimeSelected).toBe(selected);
+      expect(selectDatabaseWorkerExtensionTestFiles([file])).toEqual(selected ? [file] : []);
+    },
+  );
 
   it.each(["logbook", "memory-core", "team-reports", "workboard"])(
     "runs %s database owners in main-thread hosts across focused and full suites",

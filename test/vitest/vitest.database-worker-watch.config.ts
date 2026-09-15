@@ -8,13 +8,9 @@ import {
 } from "./vitest.database-worker-core-paths.mjs";
 import { databaseWorkerExtensionTestFiles } from "./vitest.extension-database-workers-paths.mjs";
 import { createExtensionDatabaseWorkersVitestConfig } from "./vitest.extension-database-workers.config.ts";
-import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
+import { intersectIncludePatterns, relativizeScopedPatterns } from "./vitest.include-patterns.ts";
 import { createInfraVitestConfig } from "./vitest.infra.config.ts";
-import {
-  loadPatternListFromEnv,
-  matchesVitestGlob,
-  relativizeScopedPatterns,
-} from "./vitest.pattern-file.ts";
+import { loadPatternListFromEnv, matchesVitestGlob } from "./vitest.pattern-file.ts";
 import { resolveRepoRootPath } from "./vitest.shared.config.ts";
 
 export function createDatabaseWorkerWatchVitestConfig(

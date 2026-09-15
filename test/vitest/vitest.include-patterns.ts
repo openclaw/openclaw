@@ -2,6 +2,21 @@ import path from "node:path";
 
 type GlobMatcher = (value: string, pattern: string) => boolean;
 
+export function relativizeScopedPatterns(values: readonly string[], dir = ""): string[] {
+  const normalizedDir = dir.replaceAll("\\", "/").replace(/\/+$/u, "");
+  return values.map((value) => {
+    const normalized = value.replaceAll("\\", "/");
+    if (!normalizedDir) {
+      return normalized;
+    }
+    if (normalized === normalizedDir) {
+      return ".";
+    }
+    const prefix = `${normalizedDir}/`;
+    return normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
+  });
+}
+
 function literalPrefixForGlobPattern(value: string): string {
   const normalized = value.replaceAll("\\", "/");
   const globIndex = normalized.search(/[?*[\]{}]/u);
