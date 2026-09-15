@@ -9,7 +9,7 @@ import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import { subagentRegistryDeps } from "../agents/subagents/registry/subagent-registry-deps.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { markSubagentRunPausedAfterYield } from "../agents/subagents/registry/subagent-registry-run-wait.js";
+import { markSubagentRunPausedAfterYield } from "../agents/subagents/registry/subagent-registry-run-pause.js";
 import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
 import {
   markSubagentRunTerminated,

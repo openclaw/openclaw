@@ -5,7 +5,7 @@ import type { AgentWaitResult } from "../agents/run-wait.js";
 import { useSubagentControlFixture } from "../agents/subagents/registry/subagent-control.test-support.js";
 import { subagentRegistryDeps } from "../agents/subagents/registry/subagent-registry-deps.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { markSubagentRunPausedAfterYield } from "../agents/subagents/registry/subagent-registry-run-wait.js";
+import { markSubagentRunPausedAfterYield } from "../agents/subagents/registry/subagent-registry-run-pause.js";
 import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
 import { registerSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../agents/subagents/registry/subagent-registry.persistence.test-support.js";

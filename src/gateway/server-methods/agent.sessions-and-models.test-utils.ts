@@ -692,7 +692,10 @@ describe("gateway agent handler", () => {
         delivery: { status: "delivered" },
         cleanupCompletedAt: Date.now(),
       });
-      mockSpawnedChildSessionEntry(childSessionKey);
+      mockSpawnedChildSessionEntry(
+        childSessionKey,
+        path.join(root, "agents", "main", "sessions", "sessions.json"),
+      );
       mocks.agentCommand.mockImplementation(async () => {
         continuedAtDispatch = structuredClone(getSubagentRunByChildSessionKey(childSessionKey));
         completion.resolve({
