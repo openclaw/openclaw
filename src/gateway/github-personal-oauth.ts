@@ -9,6 +9,7 @@ import {
   refreshGitHubOAuthToken,
   type GitHubOAuthTokenPair,
 } from "../agents/github-oauth-client.js";
+import { clearNativeGitHubTokenCache } from "../agents/github-read-identity.js";
 import {
   createManagedGitHubProfileId,
   installManagedGitHubProfile,
@@ -649,6 +650,7 @@ export function createPersonalGitHubOAuthLifecycle() {
     disconnect(action: PersonalGitHubAction): void {
       guard(action);
       disconnectUserGitHubConnection(action.owner, () => guard(action));
+      clearNativeGitHubTokenCache();
     },
     refresh,
     maintain(): Promise<void> {

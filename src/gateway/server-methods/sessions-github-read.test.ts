@@ -1,17 +1,20 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearGitHubCredentialVerificationCache } from "../../agents/github-oauth-client.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import * as publicationAvailability from "../github-publication-availability.js";
 import { sessionsGitHubHandlers } from "./sessions-github.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
-const mocks = vi.hoisted(() => ({ identity: vi.fn() }));
+const mocks = vi.hoisted(() => ({ runCommandBuffered: vi.fn() }));
+vi.mock("../../process/exec.js", () => ({ runCommandBuffered: mocks.runCommandBuffered }));
 vi.mock("../../agents/tools/gateway-caller-context.js", () => ({
   getGatewayToolCallerIdentity: () => undefined,
 }));
-vi.mock("../github-publication-availability.js", () => ({
-  prepareCurrentGitHubPublicationIdentity: mocks.identity,
+vi.mock("../github-oauth-lifecycle.js", () => ({
+  requestCurrentGitHubOAuthRefresh: vi.fn(async () => {}),
 }));
 
 const sessionKey = "agent:main:publication-read";
@@ -89,13 +92,56 @@ function createFixture() {
 }
 
 beforeEach(() => {
-  mocks.identity.mockReset().mockResolvedValue({
+  clearGitHubCredentialVerificationCache();
+  vi.spyOn(
+    publicationAvailability,
+    "prepareCurrentGitHubPublicationOptionsIdentity",
+  ).mockResolvedValue({
     source: publisher.source,
-    account: { accountId: publisher.accountId, login: publisher.login },
+    account: { accountId: publisher.accountId, login: publisher.login, avatarUrl: null },
   });
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("shared publication receipt reads", () => {
+  it("reuses native authentication for consecutive options requests and refreshes after invalidation", async () => {
+    vi.mocked(publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity).mockRestore();
+    vi.stubEnv("GH_TOKEN", undefined);
+    vi.stubEnv("GITHUB_TOKEN", undefined);
+    mocks.runCommandBuffered.mockReset().mockImplementation(async () => ({
+      stdout: Buffer.from("synthetic-options-native"),
+      stderr: Buffer.alloc(0),
+      code: 0,
+      termination: "exit",
+    }));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({ id: 7, login: "shared-bot", avatar_url: null }),
+    );
+    await withReadFixture(async (fixture) => {
+      for (let index = 0; index < 2; index++) {
+        const respond = await fixture.invoke("sessions.github.options", { sessionKey });
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            shared: { ...publisher, source: "system-detected" },
+          }),
+        );
+      }
+      expect(mocks.runCommandBuffered).toHaveBeenCalledOnce();
+      expect(mocks.runCommandBuffered).toHaveBeenCalledWith(
+        ["gh", "auth", "token", "--hostname", "github.com"],
+        expect.any(Object),
+      );
+      expect(fetch).toHaveBeenCalledOnce();
+      clearGitHubCredentialVerificationCache();
+      await fixture.invoke("sessions.github.options", { sessionKey });
+      expect(mocks.runCommandBuffered).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("reads an accepted shared request without a personal profile or write permission", async () => {
     await withReadFixture(async (fixture) => {
       const respond = await fixture.invoke("sessions.github.status", {
@@ -109,7 +155,9 @@ describe("shared publication receipt reads", () => {
       );
       expect(fixture.personalStatus).not.toHaveBeenCalled();
       expect(fixture.requestForSession).not.toHaveBeenCalled();
-      expect(mocks.identity).not.toHaveBeenCalled();
+      expect(
+        publicationAvailability.prepareCurrentGitHubPublicationOptionsIdentity,
+      ).not.toHaveBeenCalled();
     });
   });
 

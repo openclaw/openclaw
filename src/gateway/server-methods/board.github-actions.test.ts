@@ -54,9 +54,10 @@ const commandResult = (value = "", code = 0) => ({
   termination: "exit" as const,
 });
 
+const getOrCreatePromise = lazyPromise.getOrCreatePromise;
+
 function observeSharedReadAdmission() {
   const joined = createDeferred();
-  const getOrCreatePromise = lazyPromise.getOrCreatePromise;
   vi.spyOn(lazyPromise, "getOrCreatePromise").mockImplementation((cache, key, create, options) => {
     const pending = cache.get(key);
     const shared = getOrCreatePromise(cache, key, create, options);
@@ -608,6 +609,8 @@ describe("board authenticated GitHub Actions", () => {
     delete config.tools!.github;
     native.mockImplementation(async () => commandResult(token));
     const { read, invoke } = await reader();
+    // Pinning warmed native auth; this case needs an actual delayed credential read.
+    clearGitHubCredentialVerificationCache();
     const started = createDeferred();
     const release = createDeferred();
     native.mockImplementationOnce(async () => {
@@ -617,7 +620,9 @@ describe("board authenticated GitHub Actions", () => {
     });
     const pending = read();
     try {
-      await started.promise;
+      expect(
+        await Promise.race([started.promise.then(() => "reading"), pending.then(() => "done")]),
+      ).toBe("reading");
       await invoke("board.update", {
         sessionKey: "agent:main:runs",
         ops: [{ kind: "widget_remove", name: "runs" }],
@@ -778,6 +783,7 @@ describe("board authenticated GitHub Actions", () => {
       sessionKey: "agent:main:runs",
       ops: [{ kind: "widget_remove", name: "leader" }],
     });
+    clearGitHubCredentialVerificationCache();
     native.mockImplementationOnce(async () => {
       rereading.resolve();
       await resume.promise;
@@ -785,9 +791,21 @@ describe("board authenticated GitHub Actions", () => {
     });
     release.resolve();
     try {
-      await rereading.promise;
+      expect(
+        await Promise.race([
+          rereading.promise.then(() => "reading"),
+          followerRead.then(() => "done"),
+        ]),
+      ).toBe("reading");
       expect((await leaderRead).mock.calls[0]?.[0]).toBe(false);
-      expect((await third.read()).mock.calls[0]).toEqual([true, result]);
+      const nativeJoined = observeSharedReadAdmission();
+      const thirdRead = third.read();
+      // Native revalidation is shared too; both surviving callers await this lookup.
+      expect(
+        await Promise.race([nativeJoined.then(() => "joined"), thirdRead.then(() => "done")]),
+      ).toBe("joined");
+      resume.resolve();
+      expect((await thirdRead).mock.calls[0]).toEqual([true, result]);
       expect(actionCalls()).toHaveLength(1);
     } finally {
       resume.resolve();

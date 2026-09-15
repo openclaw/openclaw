@@ -9,7 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { prepareCurrentGitHubPublicationIdentity } from "../github-publication-availability.js";
+import { prepareCurrentGitHubPublicationOptionsIdentity } from "../github-publication-availability.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
@@ -162,7 +162,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       }
       let shared = null;
       try {
-        const identity = await prepareCurrentGitHubPublicationIdentity(read.session.agentId);
+        const identity = await prepareCurrentGitHubPublicationOptionsIdentity(read.session.agentId);
         shared = {
           source: identity.source,
           accountId: identity.account.accountId,

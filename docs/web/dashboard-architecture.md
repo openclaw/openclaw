@@ -397,7 +397,10 @@ rechecks the live Gateway, ticket generation, widget revision and grant across
 awaits for both data and action paths. GitHub selects the agent override, System,
 or native identity using the existing credential owner and OAuth refresh
 service. Read authority additionally revalidates selection and credential
-rotation before fetch and before returning data. This does not change the
+rotation before fetch and before returning data. Native `gh auth token` reads
+can reuse a successful lookup for up to 60 seconds, so host login, logout, and
+account switching can take that long to appear. Environment tokens, managed
+credentials, and caller authority remain live checks. This does not change the
 personal publication broker or its admitted credential-snapshot semantics.
 
 Authenticated reads never use preview authentication or anonymous retry.
