@@ -79,6 +79,7 @@ import {
 } from "../cli-execution-auth.js";
 import { runCliAgent } from "../cli-runner.js";
 import { hasCliLiveSession } from "../cli-runner/cli-live-session-registry.js";
+import { resolveCliTranscriptUsage } from "../cli-runner/cli-run-transcript.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-context.js";
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import { clearCliSessionInStore, persistCliSessionBindingResult } from "../cli-session-store.js";
@@ -174,35 +175,6 @@ const ACP_TRANSCRIPT_USAGE = {
     total: 0,
   },
 } as const;
-const CLI_TRANSCRIPT_UNAVAILABLE_USAGE = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  total: 0,
-  contextUsage: { state: "unavailable" },
-} as const;
-
-function resolveCliTranscriptUsage(usage: TranscriptUsage | undefined): TranscriptUsage {
-  if (!usage) {
-    return CLI_TRANSCRIPT_UNAVAILABLE_USAGE;
-  }
-  if (usage.contextUsage) {
-    return usage;
-  }
-  const promptTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-  return {
-    ...usage,
-    contextUsage:
-      promptTokens > 0
-        ? {
-            state: "available",
-            promptTokens,
-            totalTokens: promptTokens + (usage.output ?? 0),
-          }
-        : { state: "unavailable" },
-  };
-}
 function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
   return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
 }
@@ -556,7 +528,10 @@ export async function persistCliTurnTranscript(params: {
       stopReason: "stop",
       // The marker is terminal for fallback scans: without it, readers could
       // skip this turn and revive an older cumulative usage record as fresh.
-      usage: resolveCliTranscriptUsage(result.meta.agentMeta?.lastCallUsage),
+      usage: resolveCliTranscriptUsage(
+        result.meta.agentMeta?.lastCallUsage,
+        result.meta.agentMeta?.diagnosticUsage,
+      ),
     },
   });
 }

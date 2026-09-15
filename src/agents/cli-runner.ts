@@ -548,7 +548,8 @@ async function runPreparedCliAgentOwned(
           // Persisting them here would duplicate the same visible assistant reply.
           text: sourceReplyWasDelivered ? "" : assistantText,
           modelId: context.modelId,
-          usage: output.diagnosticUsage ?? output.usage,
+          usage: output.usage,
+          turnUsage: output.diagnosticUsage,
           stopReason: resolveCliAssistantStopReason(output),
           yielded: output.yielded,
         });

@@ -2772,6 +2772,51 @@ describe("CLI attempt execution", () => {
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
   });
 
+  it("persists the terminal CLI turn usage while keeping last-call context", async () => {
+    const sessionKey = "agent:main:subagent:cli-turn-usage";
+    const sessionEntry = makeSessionEntry("session-cli-turn-usage");
+    const result = makeCliResult("turn reply");
+    if (!result.meta.agentMeta) {
+      throw new Error("expected agent metadata");
+    }
+    const lastCallUsage = { input: 2, output: 1, cacheRead: 27_376, total: 27_379 };
+    result.meta.agentMeta.usage = lastCallUsage;
+    result.meta.agentMeta.lastCallUsage = lastCallUsage;
+    result.meta.agentMeta.diagnosticUsage = {
+      input: 6,
+      output: 77,
+      cacheRead: 54_631,
+      total: 54_714,
+    };
+
+    await persistCliTurnTranscript({
+      body: "run tools",
+      result,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+    });
+
+    const messages = await readSessionMessages({
+      agentId: "main",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      storePath,
+    });
+    const assistant = requireRecord(messages.at(-1), "assistant message");
+    expectRecordFields(requireRecord(assistant.usage, "assistant usage"), {
+      input: 6,
+      output: 77,
+      cacheRead: 54_631,
+      totalTokens: 54_714,
+      contextUsage: { state: "available", promptTokens: 27_378, totalTokens: 27_379 },
+    });
+  });
+
   it("marks CLI transcript context unavailable when only cumulative usage exists", async () => {
     const sessionKey = "agent:main:subagent:cli-cumulative-only";
     const sessionEntry = makeSessionEntry("session-cli-cumulative-only");
