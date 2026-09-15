@@ -26,6 +26,17 @@ export function readSessionProjectionString(value: unknown): string | null {
   return typeof value === "string" ? value.trim() || null : null;
 }
 
+/** Local turns have no durable transcript metadata beyond their own optional send key. */
+export function isLocallyOptimisticSessionMessage(message: unknown): boolean {
+  const record = readRecord(message);
+  const role = readSessionProjectionString(record?.role)?.toLowerCase();
+  if (role !== "user" && role !== "assistant") {
+    return false;
+  }
+  const metadata = readRecord(record?.["__openclaw"]);
+  return !metadata || Object.keys(metadata).every((key) => key === "idempotencyKey");
+}
+
 function readPositiveSafeInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
 }
