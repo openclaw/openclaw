@@ -93,6 +93,7 @@ function mergeResolvedAllowlists(
     matchedEntryIds,
     hasConfiguredEntries: scopedAllowlists.some((allowlist) => allowlist.hasConfiguredEntries),
     hasMatchableEntries: scopedAllowlists.some((allowlist) => allowlist.hasMatchableEntries),
+    hasLiteralWildcard: scopedAllowlists.some((allowlist) => allowlist.hasLiteralWildcard),
     hasWildcard: scopedAllowlists.some((allowlist) => allowlist.hasWildcard),
     accessGroups: {
       referenced: uniqueStrings(
@@ -169,6 +170,11 @@ export function applyIdentifierAuthenticationPolicy(
     hasMatchableEntries: allowlist.normalizedEntries.some(
       (entry) => !rejectedEntryIds.has(entry.opaqueEntryId),
     ),
+    hasWildcard:
+      allowlist.hasLiteralWildcard ||
+      allowlist.normalizedEntries.some(
+        (entry) => entry.wildcard === true && !rejectedEntryIds.has(entry.opaqueEntryId),
+      ),
     match: {
       matched: matchedEntryIds.length > 0,
       matchedEntryIds,

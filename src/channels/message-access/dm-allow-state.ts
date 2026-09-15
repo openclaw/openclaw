@@ -14,7 +14,6 @@ export async function resolveDmAllowAuditState(params: {
   const configAllowFrom = normalizeStringEntries(
     Array.isArray(params.allowFrom) ? params.allowFrom : undefined,
   );
-  const hasWildcard = configAllowFrom.includes("*");
   const storeAllowFrom = await readChannelIngressStoreAllowFromForDmPolicy({
     provider: params.provider,
     accountId: params.accountId,
@@ -23,12 +22,15 @@ export async function resolveDmAllowAuditState(params: {
   });
   const normalizeEntry = params.normalizeEntry ?? ((value: string) => value);
   const normalizedCfg = normalizeStringEntries(
-    configAllowFrom.filter((value) => value !== "*").map((value) => normalizeEntry(value)),
+    configAllowFrom.map((value) => (value === "*" ? "*" : normalizeEntry(value))),
   );
+  const hasWildcard = normalizedCfg.includes("*");
   const normalizedStore = normalizeStringEntries(
     storeAllowFrom.map((value) => normalizeEntry(value)),
   );
-  const admittedPrincipals = Array.from(new Set([...normalizedCfg, ...normalizedStore]));
+  const admittedPrincipals = Array.from(
+    new Set([...normalizedCfg.filter((value) => value !== "*"), ...normalizedStore]),
+  );
   return {
     hasWildcard,
     admittedPrincipals,
