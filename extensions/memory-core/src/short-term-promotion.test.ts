@@ -30,6 +30,7 @@ import {
   deleteShortTermLockEntryIfCurrent,
   withMemoryWorkspaceLock,
 } from "./memory-workspace-lock.js";
+import { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
@@ -177,6 +178,260 @@ function groundedCandidateFixture(
     ...params,
   };
 }
+
+describe("normalizeShortTermRecallStore numeric decoding", () => {
+  const nowIso = "2026-09-13T00:00:00.000Z";
+
+  function storeWithEntry(entry: Record<string, unknown>): unknown {
+    return {
+      version: 1,
+      updatedAt: nowIso,
+      entries: {
+        k1: {
+          path: "memory/2026-09-01.md",
+          source: "memory",
+          snippet: "A note.",
+          firstRecalledAt: nowIso,
+          lastRecalledAt: nowIso,
+          ...entry,
+        },
+      },
+    };
+  }
+
+  function normalizedEntry(entry: Record<string, unknown>) {
+    const normalized = normalizeShortTermRecallStore(storeWithEntry(entry), nowIso);
+    return normalized.entries.k1;
+  }
+
+  baseIt("keeps canonical integers and finite scores", () => {
+    const entry = normalizedEntry({
+      startLine: 1,
+      endLine: 2,
+      recallCount: 3,
+      dailyCount: 1,
+      groundedCount: 0,
+      totalScore: 1.5,
+      maxScore: 0.75,
+    });
+    expect(entry).toBeDefined();
+    expect(entry?.startLine).toBe(1);
+    expect(entry?.endLine).toBe(2);
+    expect(entry?.recallCount).toBe(3);
+    expect(entry?.totalScore).toBe(1.5);
+    expect(entry?.maxScore).toBe(0.75);
+  });
+
+  baseIt.each([
+    ["hex", "0x10", "0x12"],
+    ["exponent", "1e2", "1e3"],
+    ["binary", "0b101", "0b110"],
+    ["boolean", true, false],
+    ["array", [1, 2], [3]],
+    ["fractional", 1.5, 2.5],
+    ["negative", -1, -2],
+  ])(
+    "drops a row whose line range is a non-canonical %s encoding",
+    (_label, startLine, endLine) => {
+      expect(
+        normalizedEntry({ startLine, endLine, recallCount: 1, totalScore: 1, maxScore: 1 }),
+      ).toBeUndefined();
+    },
+  );
+
+  baseIt.each([
+    ["Infinity", Infinity],
+    ["NaN", Number.NaN],
+    ["negative", -5],
+  ])("clamps a non-finite or negative recall count (%s) to zero", (_label, recallCount) => {
+    const entry = normalizedEntry({
+      startLine: 1,
+      endLine: 2,
+      recallCount,
+      totalScore: 1,
+      maxScore: 1,
+    });
+    expect(entry?.recallCount).toBe(0);
+  });
+
+  baseIt("clamps a non-finite score to zero instead of persisting it", () => {
+    const entry = normalizedEntry({
+      startLine: 1,
+      endLine: 2,
+      recallCount: 1,
+      totalScore: Number.NaN,
+      maxScore: Infinity,
+    });
+    expect(entry?.totalScore).toBe(0);
+    expect(entry?.maxScore).toBe(0);
+  });
+
+  baseIt("never persists a non-finite numeric field", () => {
+    const entry = normalizedEntry({
+      startLine: 1,
+      endLine: 2,
+      recallCount: Infinity,
+      dailyCount: Number.NaN,
+      groundedCount: -1,
+      totalScore: Number.NaN,
+      maxScore: Infinity,
+    });
+    expect(entry).toBeDefined();
+    for (const value of [
+      entry?.startLine,
+      entry?.endLine,
+      entry?.recallCount,
+      entry?.dailyCount,
+      entry?.groundedCount,
+      entry?.totalScore,
+      entry?.maxScore,
+    ]) {
+      expect(typeof value === "number" && Number.isFinite(value)).toBe(true);
+      expect(value).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  // An entry's line range determines its identity via buildEntryKey(), so a row
+  // whose range field is unusable must not silently acquire an invented line
+  // number. Older permissive decoders minted the map key from the number they had
+  // coerced, so the key still carries the range the writer meant.
+  function storeKeyedBy(key: string, entry: Record<string, unknown>): unknown {
+    return {
+      version: 1,
+      updatedAt: nowIso,
+      entries: {
+        [key]: {
+          path: "memory/2026-09-01.md",
+          source: "memory",
+          snippet: "A note.",
+          firstRecalledAt: nowIso,
+          lastRecalledAt: nowIso,
+          ...entry,
+        },
+      },
+    };
+  }
+
+  baseIt("recovers a range from the entry key when the field is not canonical", () => {
+    // Old decoder wrote startLine "0x10" as 16 and keyed the row accordingly.
+    const recoveredKey = "memory:memory/2026-09-01.md:16:20";
+    const normalized = normalizeShortTermRecallStore(
+      storeKeyedBy(recoveredKey, {
+        startLine: "0x10",
+        endLine: 20,
+      }),
+      nowIso,
+    );
+    expect(Object.keys(normalized.entries)).toEqual([recoveredKey]);
+    expect(normalized.entries[recoveredKey]?.startLine).toBe(16);
+    expect(normalized.entries[recoveredKey]?.endLine).toBe(20);
+  });
+
+  baseIt("recovers both bounds when neither range field is usable", () => {
+    const recoveredKey = "memory:memory/2026-09-01.md:5:9";
+    const normalized = normalizeShortTermRecallStore(
+      storeKeyedBy(recoveredKey, {
+        startLine: "0b101",
+        endLine: "not-a-number",
+      }),
+      nowIso,
+    );
+    expect(Object.keys(normalized.entries)).toEqual([recoveredKey]);
+    expect(normalized.entries[recoveredKey]?.startLine).toBe(5);
+    expect(normalized.entries[recoveredKey]?.endLine).toBe(9);
+  });
+
+  baseIt("keeps the stored map key as identity even when the field parses", () => {
+    // Pre-existing behavior (upstream `key || buildEntryKey(...)`): the persisted map
+    // key is the identity, so a canonical field does not re-key the row. Recovery only
+    // supplies a range when the fields are unusable.
+    const normalized = normalizeShortTermRecallStore(
+      storeKeyedBy("memory:memory/2026-09-01.md:16:20", {
+        startLine: 3,
+        endLine: 9,
+      }),
+      nowIso,
+    );
+    expect(Object.keys(normalized.entries)).toEqual(["memory:memory/2026-09-01.md:16:20"]);
+  });
+
+  // buildEntryKey appends `:${claimHash}` for grounded entries, so a range cannot be read
+  // by taking the last two colon-separated fields: an all-decimal hash would be mistaken
+  // for the end line, and a hex hash would fail to match and drop the row.
+  baseIt("recovers the range when the key carries a hex claim-hash suffix", () => {
+    const claimKey = "memory:memory/2026-09-01.md:16:20:abcdef012345";
+    const normalized = normalizeShortTermRecallStore(
+      storeKeyedBy(claimKey, { startLine: "0x10", endLine: "0x20" }),
+      nowIso,
+    );
+    expect(Object.keys(normalized.entries)).toEqual([claimKey]);
+    expect(normalized.entries[claimKey]?.startLine).toBe(16);
+    expect(normalized.entries[claimKey]?.endLine).toBe(20);
+  });
+
+  baseIt("does not mistake an all-decimal claim hash for the end line", () => {
+    const claimKey = "memory:memory/2026-09-01.md:16:20:123456";
+    const normalized = normalizeShortTermRecallStore(
+      storeKeyedBy(claimKey, { startLine: "0x10", endLine: "0x20" }),
+      nowIso,
+    );
+    expect(Object.keys(normalized.entries)).toEqual([claimKey]);
+    expect(normalized.entries[claimKey]?.startLine).toBe(16);
+    expect(normalized.entries[claimKey]?.endLine).toBe(20);
+  });
+
+  baseIt("does not recover a range from the daily claim key", () => {
+    const normalized = normalizeShortTermRecallStore(
+      storeKeyedBy("memory:claim:abcdef012345", { startLine: "0x10", endLine: "0x20" }),
+      nowIso,
+    );
+    expect(Object.keys(normalized.entries)).toEqual([]);
+  });
+
+  baseIt("does not recover a range from a key for a different path", () => {
+    const normalized = normalizeShortTermRecallStore(
+      storeKeyedBy("memory:memory/2026-09-02.md:16:20", { startLine: "0x10", endLine: "0x20" }),
+      nowIso,
+    );
+    expect(Object.keys(normalized.entries)).toEqual([]);
+  });
+
+  // Recovery must use the same strict numeric parser as the entry fields. A lenient
+  // parse here would reintroduce `0x10` -> 16 at a second entry point. Surrounding
+  // whitespace is trimmed by the shared parser and stays accepted.
+  baseIt.each([["0x10:1e2"], ["0b101:9"], ["1.9:2"], ["1e2:9"], ["16.0:20"]])(
+    "does not coerce a non-canonical bound in the key (%s)",
+    (bounds) => {
+      const normalized = normalizeShortTermRecallStore(
+        storeKeyedBy(`memory:memory/2026-09-01.md:${bounds}`, {
+          startLine: "bad",
+          endLine: "bad",
+        }),
+        nowIso,
+      );
+      expect(Object.keys(normalized.entries)).toEqual([]);
+    },
+  );
+
+  baseIt("drops a row only when neither the fields nor the key carry a range", () => {
+    const normalized = normalizeShortTermRecallStore(
+      storeKeyedBy("k1", { startLine: "0x10", endLine: 20 }),
+      nowIso,
+    );
+    expect(Object.keys(normalized.entries)).toEqual([]);
+  });
+
+  baseIt("does not invent a range from a non-positive key", () => {
+    const normalized = normalizeShortTermRecallStore(
+      storeKeyedBy("memory:memory/2026-09-01.md:0:0", {
+        startLine: "0x10",
+        endLine: "0x20",
+      }),
+      nowIso,
+    );
+    expect(Object.keys(normalized.entries)).toEqual([]);
+  });
+});
 
 describe("short-term promotion", () => {
   let fixtureRoot = "";
