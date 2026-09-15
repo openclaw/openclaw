@@ -10,7 +10,10 @@ import {
   deserializeWhatsAppDurableInboundMessage,
   serializeWhatsAppDurableInboundMessage,
 } from "./durable-payload.js";
-import { createWhatsAppIngressMonitor } from "./durable-receive.js";
+import {
+  createWhatsAppIngressMonitor,
+  type WhatsAppIngressLifecycle,
+} from "./durable-receive.js";
 
 type WhatsAppDurableInboundPayload = {
   message: ReturnType<typeof serializeWhatsAppDurableInboundMessage>;
@@ -163,7 +166,7 @@ describe("createWhatsAppIngressMonitor", () => {
     });
   });
 
-  it("keeps a second same-lane message pending until the first turn adopts", async () => {
+  it("releases a deferred lane so debounce siblings reach delivery before adoption", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
         channelId: "whatsapp",
@@ -182,7 +185,7 @@ describe("createWhatsAppIngressMonitor", () => {
       });
 
       const dispatched: string[] = [];
-      let adoptFirst: (() => void | Promise<void>) | undefined;
+      const lifecycles: WhatsAppIngressLifecycle[] = [];
       const monitor = createWhatsAppIngressMonitor({
         queue,
         pollIntervalMs: 10,
@@ -192,32 +195,23 @@ describe("createWhatsAppIngressMonitor", () => {
             throw new Error("expected transport id");
           }
           dispatched.push(id);
-          if (id === "msg-4a") {
-            adoptFirst = lifecycle.onAdopted;
-            return { kind: "deferred" as const };
-          }
-          return { kind: "completed" as const };
+          lifecycles.push(lifecycle);
+          return { kind: "deferred" as const };
         },
       });
 
       monitor.start();
-      await monitor.waitForIdle();
+      await vi.waitFor(() => expect(dispatched).toEqual(["msg-4a", "msg-4b"]));
 
-      // Core drain serializes a conversation lane: msg-4b cannot reach the
-      // channel debouncer until msg-4a transfers into the reply lane.
-      expect(dispatched).toEqual(["msg-4a"]);
-      expect((await queue.listClaims()).map((row) => row.id)).toEqual([firstId]);
-      expect((await queue.listPending({ limit: "all" })).map((row) => row.id)).toEqual([secondId]);
-
-      if (!adoptFirst) {
-        throw new Error("expected first adoption callback");
-      }
-      await adoptFirst();
-      await monitor.waitForIdle();
-
-      expect(dispatched).toEqual(["msg-4a", "msg-4b"]);
-      expect(await queue.listClaims()).toEqual([]);
+      expect((await queue.listClaims()).map((row) => row.id).toSorted()).toEqual(
+        [firstId, secondId].toSorted(),
+      );
       expect(await queue.listPending({ limit: "all" })).toEqual([]);
+
+      await Promise.all(lifecycles.map((lifecycle) => lifecycle.onAdopted()));
+      await monitor.waitForIdle();
+
+      expect(await queue.listClaims()).toEqual([]);
       await monitor.stop();
     });
   });

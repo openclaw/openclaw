@@ -137,6 +137,7 @@ export function createWhatsAppIngressMonitor(params: {
       failedMaxEntries: 450,
     },
     drain: {
+      deferredLaneOccupancy: "release",
       resolveNonRetryableFailure: resolveWhatsAppIngressNonRetryableFailure,
       deriveLaneKey: (record) => {
         try {
