@@ -124,7 +124,11 @@ final class ChatComposerUITextView: UITextView {
         modifierFlags: UIKeyModifierFlags) -> Bool
     {
         let commandModifiers: UIKeyModifierFlags = [.shift, .control, .alternate, .command]
-        guard modifierFlags.isDisjoint(with: commandModifiers) else { return false }
+        // UIKit owns composition and selection even while history recall is active.
+        guard modifierFlags.isDisjoint(with: commandModifiers),
+              self.markedTextRange == nil,
+              self.selectedRange.length == 0
+        else { return false }
         switch keyCode {
         case .keyboardUpArrow:
             return self.onHistoryUp?(self.caretOnFirstLine) == true
