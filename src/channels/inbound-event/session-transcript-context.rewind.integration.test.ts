@@ -151,7 +151,9 @@ describe("prepared channel turn after a transcript rewind", () => {
     const windowEntry = ctx.ChannelStructuredContext?.[0];
     const payload = (windowEntry?.payload ?? {}) as Record<string, unknown>;
     const messages = (payload.messages ?? []) as Array<Record<string, unknown>>;
-    const rendered = messages.map((message) => `${message.message_id}:${message.body}`);
+    const rendered = messages.map(
+      (message) => `${String(message.message_id)}:${String(message.body)}`,
+    );
     // Discarded cached entries are gone from the next model input: the cut
     // transport message, the cut transcript id, and neither discarded text.
     expect(rendered.join("\n")).not.toContain("discarded");
