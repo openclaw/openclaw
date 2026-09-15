@@ -283,6 +283,7 @@ export function workerProbe(
     import { cliCompactionBackendEntrypoints } from ${JSON.stringify(path.join(root, "src/agents/command/cli-compaction-runtime.test-support.ts"))};
     import { resolveRuntimeWorkerUrl } from ${JSON.stringify(path.join(root, "src/infra/runtime-worker-url.ts"))};
     import { prepareSqliteReadOnlyLocation } from ${JSON.stringify(path.join(root, "src/infra/sqlite-snapshot-source.ts"))};
+    import { openNodeSqliteDatabase } from ${JSON.stringify(path.join(root, "src/infra/node-sqlite.ts"))};
     import { runSqliteTranscriptArchivePublishWorker } from ${JSON.stringify(path.join(root, "src/config/sessions/session-accessor.sqlite-archive.ts"))};
     const tuiUrls = Object.values(tuiPtyRuntimeEntrypoints).map(entry => resolveRuntimeWorkerUrl(entry).href);
     const setupUrls = cliCompactionBackendEntrypoints.map(entry => resolveRuntimeWorkerUrl(entry).href);
@@ -321,7 +322,7 @@ export function workerProbe(
       try {
         const prepared = await prepareSqliteReadOnlyLocation(file);
         try {
-          const snapshot = new DatabaseSync(prepared.location, {readOnly:true});
+          const snapshot = openNodeSqliteDatabase(prepared.location, {readOnly:true});
           expect(snapshot.prepare('SELECT value FROM probe').get()).toEqual({value:'current source'});
           snapshot.close();
           const args = cp.execFile.mock.calls[0][1];
