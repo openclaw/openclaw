@@ -21,12 +21,23 @@ function resolveChunkEarlyReturn(text: string, limit: number): string[] | undefi
   return undefined;
 }
 
-function scanParenAwareBreakpoints(text: string): { lastNewline: number; lastWhitespace: number } {
+export function scanParenAwareBreakpoints(
+  text: string,
+  start: number,
+  end: number,
+  skipTo?: (index: number) => number | undefined,
+): { lastNewline: number; lastWhitespace: number } {
   let lastNewline = -1;
   let lastWhitespace = -1;
   let depth = 0;
 
-  for (let i = 0; i < text.length; i++) {
+  for (let i = start; i < end; i++) {
+    const skippedEnd = skipTo?.(i);
+    if (skippedEnd !== undefined) {
+      // The fence end remains an eligible breakpoint; resume there after the loop increment.
+      i = skippedEnd - 1;
+      continue;
+    }
     const char = text.charAt(i);
     // Parenthesized spans often contain rewritten links or file references;
     // avoid splitting them unless the window has no safer outside break.
@@ -136,7 +147,7 @@ export function chunkText(text: string, limit: number): string[] {
     }
     const windowEnd = Math.min(text.length, cursor + normalizedLimit);
     const window = text.slice(cursor, windowEnd);
-    const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(window);
+    const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(window, 0, window.length);
     // Prefer block boundaries, then spaces, then a hard size cut when no
     // readable breakpoint exists inside this window.
     const breakOffset = lastNewline > 0 ? lastNewline : lastWhitespace;

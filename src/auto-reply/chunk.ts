@@ -1,3 +1,4 @@
+import { scanParenAwareBreakpoints } from "../../packages/markdown-core/src/chunk-text.js";
 import {
   findFenceSpanAt,
   isSafeFenceBreak,
@@ -554,43 +555,4 @@ function pickSafeBreakIndex(
     return lastWhitespace;
   }
   return -1;
-}
-
-function scanParenAwareBreakpoints(
-  text: string,
-  start: number,
-  end: number,
-  skipTo?: (index: number) => number | undefined,
-): { lastNewline: number; lastWhitespace: number } {
-  let lastNewline = -1;
-  let lastWhitespace = -1;
-  let depth = 0;
-
-  for (let i = start; i < end; i++) {
-    const skippedEnd = skipTo?.(i);
-    if (skippedEnd !== undefined) {
-      // The fence end remains an eligible breakpoint; resume there after the loop increment.
-      i = skippedEnd - 1;
-      continue;
-    }
-    const char = text.charAt(i);
-    if (char === "(") {
-      depth += 1;
-      continue;
-    }
-    if (char === ")" && depth > 0) {
-      depth -= 1;
-      continue;
-    }
-    if (depth !== 0) {
-      continue;
-    }
-    if (char === "\n") {
-      lastNewline = i;
-    } else if (/\s/.test(char)) {
-      lastWhitespace = i;
-    }
-  }
-
-  return { lastNewline, lastWhitespace };
 }
