@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
+import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import {
@@ -13,6 +15,7 @@ type MaintenanceKind = ConstructorParameters<typeof StartupMaintenanceRequiredEr
 type StateMigrationKind = ConstructorParameters<
   typeof OpenClawStateDatabaseSchemaMigrationRequiredError
 >[0];
+type CoordinatorFamily = ConstructorParameters<typeof StateDatabaseCoordinatorContentionError>[0];
 
 type ErrorValue =
   | { ref: number }
@@ -20,7 +23,8 @@ type ErrorValue =
   | { undefined: true };
 
 type ErrorIdentity =
-  | { type: "error" | "aggregate" | "ownership" | "newer-schema" }
+  | { type: "error" | "aggregate" | "ownership" | "newer-schema" | "coordinator" }
+  | { type: "coordinator-contention"; family: CoordinatorFamily }
   | { type: "ownership-metadata"; databasePath: string }
   | { type: "external-ownership"; databasePath: string; managerId: string }
   | { type: "maintenance"; kind: MaintenanceKind }
@@ -31,6 +35,7 @@ type ErrorNode = ErrorIdentity & {
   name: string;
   message: string;
   code?: string | number;
+  errcode?: number;
   cause?: ErrorValue;
   errors?: ErrorValue[];
 };
@@ -45,6 +50,12 @@ export type OpenClawStateWorkerErrorPayload = {
 type ErrorGraphOptions = { includeOrdinary?: boolean };
 
 function identifyError(error: Error): ErrorIdentity {
+  if (error instanceof StateDatabaseCoordinatorContentionError) {
+    return { type: "coordinator-contention", family: error.family };
+  }
+  if (error instanceof SqliteCoordinatorError) {
+    return { type: "coordinator" };
+  }
   if (error instanceof OpenClawStateOwnershipMetadataError) {
     return { type: "ownership-metadata", databasePath: error.databasePath };
   }
@@ -86,6 +97,10 @@ function isScalar(value: unknown): value is string | number | boolean | null {
   );
 }
 
+function isNativeErrorCode(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0x7fff_ffff;
+}
+
 export function encodeOpenClawStateWorkerError(
   error: unknown,
   options: ErrorGraphOptions = {},
@@ -117,6 +132,7 @@ export function encodeOpenClawStateWorkerError(
       const identity = identifyError(current);
       canonical ||= identity.type !== "error" && identity.type !== "aggregate";
       const code = "code" in current ? current.code : undefined;
+      const errcode = "errcode" in current ? current.errcode : undefined;
       nodes.push({
         ...identity,
         name: current.name,
@@ -124,6 +140,7 @@ export function encodeOpenClawStateWorkerError(
         ...(typeof code === "string" || (typeof code === "number" && Number.isFinite(code))
           ? { code }
           : {}),
+        ...(isNativeErrorCode(errcode) ? { errcode } : {}),
         ...("cause" in current ? { cause: encodeValue(current.cause) } : {}),
         ...(current instanceof AggregateError ? { errors: current.errors.map(encodeValue) } : {}),
       });
@@ -154,7 +171,14 @@ function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined
     case "aggregate":
     case "ownership":
     case "newer-schema":
+    case "coordinator":
       return { type: node.type };
+    case "coordinator-contention":
+      return node.family === "gateway-lifecycle" ||
+        node.family === "state-lifecycle" ||
+        node.family === "state-handles"
+        ? { type: node.type, family: node.family }
+        : undefined;
     case "ownership-metadata":
       return typeof node.databasePath === "string"
         ? { type: node.type, databasePath: node.databasePath }
@@ -207,7 +231,14 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
   if (!identity) {
     return undefined;
   }
-  const allowed = new Set([...Object.keys(identity), "name", "message", "code", "cause"]);
+  const allowed = new Set([
+    ...Object.keys(identity),
+    "name",
+    "message",
+    "code",
+    "errcode",
+    "cause",
+  ]);
   const errors: ErrorValue[] = [];
   if (identity.type === "aggregate") {
     allowed.add("errors");
@@ -226,6 +257,7 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
     ("code" in value &&
       typeof value.code !== "string" &&
       !(typeof value.code === "number" && Number.isFinite(value.code))) ||
+    ("errcode" in value && !isNativeErrorCode(value.errcode)) ||
     ("cause" in value && !isErrorValue(value.cause, count))
   ) {
     return undefined;
@@ -237,6 +269,7 @@ function parseNode(value: unknown, count: number): ErrorNode | undefined {
     ...(typeof value.code === "string" || typeof value.code === "number"
       ? { code: value.code }
       : {}),
+    ...(isNativeErrorCode(value.errcode) ? { errcode: value.errcode } : {}),
     ...(isErrorValue(value.cause, count) ? { cause: value.cause } : {}),
     ...(identity.type === "aggregate" ? { errors } : {}),
   };
@@ -252,6 +285,10 @@ function createError(node: ErrorNode): Error {
       return new Error(node.message);
     case "aggregate":
       return new AggregateError([], node.message);
+    case "coordinator":
+      return new SqliteCoordinatorError(node.message);
+    case "coordinator-contention":
+      return new StateDatabaseCoordinatorContentionError(node.family);
     case "ownership":
       return new OpenClawStateOwnershipError(node.message);
     case "ownership-metadata":
@@ -327,6 +364,13 @@ function decodeErrorGraph(
       if (node.code !== undefined) {
         Object.defineProperty(error, "code", {
           value: node.code,
+          configurable: true,
+          writable: true,
+        });
+      }
+      if (node.errcode !== undefined) {
+        Object.defineProperty(error, "errcode", {
+          value: node.errcode,
           configurable: true,
           writable: true,
         });

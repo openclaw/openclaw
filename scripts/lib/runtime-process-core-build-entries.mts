@@ -23,6 +23,7 @@ export const runtimeProcessCoreBuildEntries = createRuntimeProcessBuildEntries(
 // Short-lived snapshot children own a separate bundle; parents retain shared runtime identity.
 export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEntries([
   runtimeProcessEntrypoints.sqliteReadOnly,
+  runtimeProcessEntrypoints.stateRead,
   runtimeProcessEntrypoints.nativeHookRelayClient,
 ]);
 

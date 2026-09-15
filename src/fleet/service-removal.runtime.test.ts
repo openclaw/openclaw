@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { cellAuthSecretDir, cellOwnerId } from "./cell-profile.js";
 import type { FleetContainerInspectResult, FleetContainerRuntime } from "./containers.runtime.js";
@@ -170,6 +173,7 @@ describe("fleet service filesystem and removal", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await tempRoot.cleanup();
   });
@@ -218,7 +222,7 @@ describe("fleet service filesystem and removal", () => {
     const outside = path.join(root, "outside-cell");
     await fs.mkdir(cellsRoot, { recursive: true });
     await fs.mkdir(outside);
-    reserveFleetCell(env, {
+    await reserveFleetCell(env, {
       tenantId: "escape",
       createdAtMs: 1000,
       image: "ghcr.io/openclaw/openclaw:latest",
@@ -232,7 +236,7 @@ describe("fleet service filesystem and removal", () => {
       service.remove({ tenant: "escape", purgeData: true, force: true }),
     ).rejects.toThrow(/outside its fleet-owned directory/iu);
     expect(containers.inspect).not.toHaveBeenCalled();
-    expect(getFleetCell(env, "escape")).toBeDefined();
+    expect(await getFleetCell(env, "escape")).toBeDefined();
     await expect(fs.stat(outside)).resolves.toBeDefined();
   });
 
@@ -253,7 +257,7 @@ describe("fleet service filesystem and removal", () => {
 
     expect(containers.inspect).not.toHaveBeenCalled();
     await expect(fs.stat(path.join(betaDir, "openclaw.json"))).resolves.toBeDefined();
-    expect(getFleetCell(env, "acme")).toBeDefined();
+    expect(await getFleetCell(env, "acme")).toBeDefined();
   });
 
   it("refuses a tenant-controlled config symlink during recreate", async () => {
@@ -283,7 +287,7 @@ describe("fleet service filesystem and removal", () => {
 
     expect(containers.run).toHaveBeenCalledTimes(runCount + 1);
     expect(containers.remove).toHaveBeenCalledWith("docker", "openclaw-cell-acme", true);
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
     await expect(fs.readFile(betaConfig, "utf8")).resolves.toBe(betaBefore);
   });
 
@@ -302,7 +306,7 @@ describe("fleet service filesystem and removal", () => {
     ).rejects.toThrow(/expected KEY=VAL/iu);
 
     expect(containers.run).toHaveBeenCalledTimes(runCount);
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
     await expect(fs.readFile(configPath, "utf8")).resolves.toBe(configBefore);
   });
 
@@ -318,7 +322,7 @@ describe("fleet service filesystem and removal", () => {
 
     expect(containers.remove).toHaveBeenCalledWith("docker", "openclaw-cell-acme", true);
     expect(containers.removeNetwork).toHaveBeenCalledWith("docker", "openclaw-cell-acme-net");
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
     await expect(fs.stat(path.join(root, "fleet", "cells", "acme"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -348,13 +352,13 @@ describe("fleet service filesystem and removal", () => {
     await expect(service.remove({ tenant: "acme", purgeData: true, force: true })).rejects.toThrow(
       /still in use/iu,
     );
-    expect(getFleetCell(env, "acme")).toBeDefined();
+    expect(await getFleetCell(env, "acme")).toBeDefined();
     await expect(fs.stat(path.join(root, "fleet", "cells", "acme"))).resolves.toBeDefined();
 
     await expect(
       service.remove({ tenant: "acme", purgeData: true, force: true }),
     ).resolves.toMatchObject({ tenant: "acme", dataPurged: true });
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
   });
 
   it("finishes purge when one exact tenant directory is already missing", async () => {
@@ -367,7 +371,7 @@ describe("fleet service filesystem and removal", () => {
       { tenant: "acme", action: "rm", dataPurged: true },
     );
 
-    expect(getFleetCell(env, "acme")).toBeUndefined();
+    expect(await getFleetCell(env, "acme")).toBeUndefined();
     await expect(fs.stat(cellAuthSecretDir(root, "acme"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -394,7 +398,7 @@ describe("fleet service filesystem and removal", () => {
     );
     expect(containers.remove).not.toHaveBeenCalled();
     expect(containers.removeNetwork).not.toHaveBeenCalled();
-    expect(getFleetCell(env, "acme")).toBeDefined();
+    expect(await getFleetCell(env, "acme")).toBeDefined();
   });
 
   it("refuses removal before mutation when an unexpected network peer is attached", async () => {
@@ -413,6 +417,6 @@ describe("fleet service filesystem and removal", () => {
     await expect(service.remove({ tenant: "acme" })).rejects.toThrow(/unexpected containers/iu);
     expect(containers.remove).not.toHaveBeenCalled();
     expect(containers.removeNetwork).not.toHaveBeenCalled();
-    expect(getFleetCell(env, "acme")).toBeDefined();
+    expect(await getFleetCell(env, "acme")).toBeDefined();
   });
 });

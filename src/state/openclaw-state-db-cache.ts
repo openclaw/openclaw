@@ -7,6 +7,7 @@ import {
 import {
   createSqliteLifecycleAggregateError,
   runWithSqliteCoordinator,
+  throwSqliteLifecycleErrors,
 } from "../infra/sqlite-coordinator.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
@@ -42,6 +43,7 @@ import {
   createStateDatabaseRetainer,
   type StateDatabaseBorrowers,
 } from "./openclaw-state-db-borrow.js";
+import type { StateDatabaseLifecycle } from "./openclaw-state-db-cache.types.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabase,
@@ -54,18 +56,6 @@ import { createOpenClawStateDatabaseRuntimeFailureOwner } from "./openclaw-state
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
-type StateDatabaseLifecycle = {
-  cachedDatabases: Map<string, OpenClawStateDatabase>;
-  retainedDatabaseHandles: Map<DatabaseSync, StateDatabaseHandle>;
-  unregisterRetainedExitClose?: () => void;
-  cachedDataVersionStatements: WeakMap<OpenClawStateDatabase, ReturnType<DatabaseSync["prepare"]>>;
-  cachedDataVersions: WeakMap<DatabaseSync, number>;
-  databaseIdentities: WeakMap<DatabaseSync, DatabasePathIdentity>;
-  borrowers: WeakMap<DatabaseSync, StateDatabaseBorrowers>;
-  databaseLifecycleListeners: Set<(event: OpenClawStateDatabaseLifecycleEvent) => void>;
-  terminalOpenLatch: ReturnType<typeof createSqliteTerminalOpenLatch>;
-  asyncResources: ReturnType<typeof createOpenClawStateDatabaseAsyncLifecycle>;
-};
 const stateDatabaseLifecycle = resolveGlobalSingleton<StateDatabaseLifecycle>(
   Symbol.for("openclaw.stateDatabaseLifecycle"),
   () => ({
@@ -103,7 +93,7 @@ const stateDatabaseLifecycle = resolveGlobalSingleton<StateDatabaseLifecycle>(
         } catch (notificationError) {
           errors.push(notificationError);
         }
-        throwStateDatabaseCleanupErrors(errors, "Terminal shared-state failure cleanup failed");
+        throwSqliteLifecycleErrors(errors, "Terminal shared-state failure cleanup failed");
       },
     }),
     asyncResources: createOpenClawStateDatabaseAsyncLifecycle(),
@@ -203,7 +193,10 @@ function closeUnpublishedOpenClawStateDatabaseHandle(database: StateDatabaseHand
 }
 
 /** Retain one exact canonical native owner; only the final reference retires its handle. */
-export const retainOpenClawStateDatabase = createStateDatabaseRetainer(stateDatabaseLifecycle, {
+export const {
+  retain: retainOpenClawStateDatabase,
+  borrowForRead: borrowOpenClawStateDatabaseForAsyncRead,
+} = createStateDatabaseRetainer(stateDatabaseLifecycle, {
   assertOpen: assertOpenClawStateDatabaseOpenAllowed,
   capture: (pathname) => asyncResources.capture(pathname),
   retire: retireOpenClawStateDatabaseHandle,
@@ -221,6 +214,19 @@ function closeOpenClawStateDatabaseHandle(
     const owner = borrowers.get(database.db);
     if (owner) {
       owner.retiring = true;
+      // Deferred native cleanup keeps this exact request, not the last read pin's scope.
+      owner.retirement = {
+        ordinary: true,
+        isCurrent: () => true,
+        retire: () => {
+          throwSqliteLifecycleErrors(
+            closeOpenClawStateDatabaseHandle(database, options),
+            `OpenClaw state database cleanup failed for ${database.path}.`,
+          );
+          owner.cleanupComplete = true;
+          borrowers.delete(database.db);
+        },
+      };
     }
     retainStateDatabaseClose(database);
     return [error];
@@ -335,7 +341,7 @@ function closeStaleCachedOpenClawStateDatabase(database: OpenClawStateDatabase):
   asyncResources.invalidate(database.path);
   const errors = closeOpenClawStateDatabaseHandle(database);
   notifyOpenClawStateDatabaseClosed(database);
-  throwStateDatabaseCleanupErrors(
+  throwSqliteLifecycleErrors(
     errors,
     `Stale OpenClaw state database cleanup failed for ${database.path}.`,
   );
@@ -471,7 +477,7 @@ function retireOpenClawStateDatabaseHandle(
           errors.push(error);
         }
       }
-      throwStateDatabaseCleanupErrors(
+      throwSqliteLifecycleErrors(
         errors,
         `OpenClaw state database cleanup failed for ${database.path}.`,
       );
@@ -489,15 +495,6 @@ function retireOpenClawStateDatabaseHandle(
   if (borrowedOwner) {
     borrowedOwner.cleanupComplete = true;
     borrowers.delete(database.db);
-  }
-}
-
-function throwStateDatabaseCleanupErrors(errors: unknown[], message: string): void {
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw createSqliteLifecycleAggregateError(errors, message, errors[0]);
   }
 }
 
@@ -528,7 +525,7 @@ function retireOpenClawStateDatabaseHandles(
       errors.push(error);
     }
   }
-  throwStateDatabaseCleanupErrors(errors, "OpenClaw state database cleanup failed.");
+  throwSqliteLifecycleErrors(errors, "OpenClaw state database cleanup failed.");
   return found;
 }
 

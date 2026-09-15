@@ -102,6 +102,28 @@ Classified database errors survive transport, and canonical close joins worker
 operations and native cleanup. Cold registry restoration and runtime-configuration
 preparation still retain their existing main-thread behavior.
 
+Fleet registry reads use a separate read-only worker and remain noncreating;
+listing cells does not join Gateway writable lifecycle admission. The existing
+read owner retains inherited snapshot and disposable-source scopes until the
+worker closes. Reads through a cached native writer use its asynchronous online
+backup, which copies the shared database and adds temporary disk and startup
+cost. Each read validates its selected snapshot. A copied-state error is returned
+to that reader without becoming a confirmed failure of the live cache; native
+access and transaction owners retain their own version checks, failure latching,
+and corruption eviction. Registry mutations and operation-lease changes run in
+the existing shared-state writer, preserving atomic port reservation and the
+five-minute lease. Fleet callers await checkpoints and drain timer and archive
+probes before releasing their operation lease or reporting completion.
+Cell mutations inside an operation retain its original worker scope and check
+the matching lease owner and expiry in the same transaction as the mutation.
+That scope spans lease acquisition through final renewal and release. Failed
+read cleanup remains registered for canonical retry; source snapshots and pins
+stay owned until worker termination is acknowledged. Maintenance scopes join
+admitted reads before their resource, reference, and handle cleanup phases.
+A cached reader records shared maintenance ownership only after the worker enters
+its schema-validated query callback, including when that query later fails.
+Startup and schema refusals do not transfer ownership.
+
 Model-context reads and session transcript preparation use the session-transcript
 worker with separate bounded queues. Background preparation cannot occupy the
 foreground context queue. Session exports read events, statistics, and session

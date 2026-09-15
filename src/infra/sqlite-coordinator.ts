@@ -37,6 +37,16 @@ export function createSqliteLifecycleAggregateError(
   return new AggregateError(errors, message, { cause });
 }
 
+/** Keep the first failure as the cause while retaining independent cleanup errors. */
+export function throwSqliteLifecycleErrors(errors: unknown[], message: string): void {
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw createSqliteLifecycleAggregateError(errors, message, errors[0]);
+  }
+}
+
 export function runWithSqliteCoordinator<T>(
   coordinator: { release: () => void },
   operationLabel: string,

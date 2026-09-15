@@ -151,7 +151,7 @@ export async function backupFleetCell(params: {
   stateDir: string;
   containers: FleetContainerRuntime;
   now: () => number;
-  checkpoint: () => void;
+  checkpoint: () => Promise<void>;
   out?: string;
   maxBytes?: number;
   maxEntries?: number;
@@ -238,6 +238,8 @@ export async function backupFleetCell(params: {
   let exceeded = false;
   let tooManyEntries = false;
   let leaseLost = false;
+  let pendingLeaseProbe: Promise<void> | undefined;
+  let archiveSettled = false;
   let unrestorablePath: string | undefined;
   let lastLeaseProbeMs = params.now();
   const maxBytes = params.maxBytes ?? DEFAULT_FLEET_BACKUP_MAX_BYTES;
@@ -245,21 +247,23 @@ export async function backupFleetCell(params: {
   try {
     await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
     const filter = (entryPath: string, stat: Stats | tar.ReadEntry): boolean => {
-      if (exceeded || tooManyEntries || leaseLost) {
+      if (archiveSettled || exceeded || tooManyEntries || leaseLost) {
         return false;
       }
       // Probe the mutation lease during long archive streams so a lost lease
       // (another operation could start the cell mid-read) aborts the backup
-      // instead of publishing a possibly-torn archive. node-tar filters run
-      // from async callbacks, so record the loss and throw after tar settles.
-      if (params.now() - lastLeaseProbeMs >= BACKUP_LEASE_PROBE_INTERVAL_MS) {
+      // instead of publishing a possibly-torn archive. The filter must return
+      // synchronously; settle its one pending probe before publication or cleanup.
+      if (!pendingLeaseProbe && params.now() - lastLeaseProbeMs >= BACKUP_LEASE_PROBE_INTERVAL_MS) {
         lastLeaseProbeMs = params.now();
-        try {
-          params.checkpoint();
-        } catch {
-          leaseLost = true;
-          return false;
-        }
+        pendingLeaseProbe = Promise.resolve()
+          .then(() => params.checkpoint())
+          .catch(() => {
+            leaseLost = true;
+          })
+          .finally(() => {
+            pendingLeaseProbe = undefined;
+          });
       }
       const type = "type" in stat ? stat.type : undefined;
       const isSymlink = "isSymbolicLink" in stat ? stat.isSymbolicLink() : type === "SymbolicLink";
@@ -317,8 +321,10 @@ export async function backupFleetCell(params: {
     // A single large file can stream past the lease TTL without a filter
     // callback, so validate lease ownership once more before the archive is
     // declared good; a lost lease means the cell may have run mid-read.
+    archiveSettled = true;
+    await pendingLeaseProbe;
     try {
-      params.checkpoint();
+      await params.checkpoint();
     } catch {
       leaseLost = true;
     }
@@ -370,6 +376,8 @@ export async function backupFleetCell(params: {
       note: "Archive contains tenant state and auth secrets; store it like a credential.",
     };
   } finally {
+    archiveSettled = true;
+    await pendingLeaseProbe;
     await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
@@ -437,7 +445,7 @@ export async function restoreFleetCell(params: {
   fetchImpl: typeof fetch;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
-  checkpoint: () => void;
+  checkpoint: () => Promise<void>;
   generateToken: () => string;
   generateAttemptId: () => string;
   hostIdentity: HostIdentity | undefined;
@@ -674,42 +682,48 @@ export async function restoreFleetCell(params: {
     );
 
     if (wasRunning) {
-      params.checkpoint();
       assertManagedInspection(
         params.record,
         await params.containers.inspect(params.record.runtime, params.record.containerName),
       );
+      await params.checkpoint();
       await params.containers.stop(params.record.runtime, params.record.containerName);
       stoppedForRestore = true;
     }
-    params.checkpoint();
     assertManagedInspection(
       params.record,
       await params.containers.inspect(params.record.runtime, params.record.containerName),
     );
+    await params.checkpoint();
     await params.containers.remove(params.record.runtime, params.record.containerName, false);
     containerRemoved = true;
-    params.checkpoint();
+    await params.checkpoint();
     previousDisplaced = true;
     if (dataTarget) {
       await fs.rename(dataTarget, path.join(replacedRoot, "data"));
     }
     if (authTarget) {
+      await params.checkpoint();
       await fs.rename(authTarget, path.join(replacedRoot, "auth"));
     }
+    await params.checkpoint();
     await fs.rename(extractedData, params.record.dataDir);
+    await params.checkpoint();
     await fs.rename(extractedAuth, authSecretDir);
     stateSwapped = true;
+    await params.checkpoint();
     await prepareCellDirectories(params.record, authSecretDir, imageOwner);
     if (imageOwner) {
+      await params.checkpoint();
       await Promise.all([
         chownTree(params.record.dataDir, imageOwner),
         chownTree(authSecretDir, imageOwner),
       ]);
     }
+    await params.checkpoint();
     await prepareCellConfig(params.record, imageOwner);
 
-    params.checkpoint();
+    await params.checkpoint();
     await params.containers.run(profile, wasRunning);
     if (wasRunning) {
       await verifyReplacementHealthy({
@@ -750,6 +764,7 @@ export async function restoreFleetCell(params: {
           current.labels[FLEET_ATTEMPT_LABEL] === replacementAttemptId &&
           current.running
         ) {
+          await params.checkpoint();
           await params.containers.stop(params.record.runtime, params.record.containerName);
           replacementNote =
             " The interrupted replacement container was stopped; retry fleet restore to rotate a fresh Gateway token.";
@@ -788,6 +803,7 @@ export async function restoreFleetCell(params: {
           !current.running &&
           current.labels[FLEET_ATTEMPT_LABEL] === inspection.labels[FLEET_ATTEMPT_LABEL]
         ) {
+          await params.checkpoint();
           await params.containers.start(params.record.runtime, params.record.containerName);
         }
       } catch {

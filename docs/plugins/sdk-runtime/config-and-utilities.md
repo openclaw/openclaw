@@ -86,6 +86,14 @@ Native command probes should use `runCommandWithTimeout` from
 before returning. For commands whose output is always UTF-8, such as JSON status
 probes, use `runUtf8CommandWithTimeout` from the same subpath.
 
+`WorkerTaskPool` from `openclaw/plugin-sdk/process-runtime` retains workers and
+unconsumed inputs when termination fails. Retry `close()` on that same pool;
+dispose dependent files only after closure is acknowledged. The optional
+`onRetirementFailure(error)` observer runs synchronously when termination fails.
+It may return `void` or `Promise<void>`; observer throws and rejections do not
+replace the termination error or release custody, and closure does not wait for
+the observer.
+
 When launching an isolated Gateway child that your plugin owns, remove
 `SUPERVISOR_HINT_ENV_VARS` from its environment after applying caller overrides.
 This list is exported from `openclaw/plugin-sdk/process-runtime`; inherited parent

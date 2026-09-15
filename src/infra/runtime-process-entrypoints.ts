@@ -4,6 +4,11 @@ const currentModuleUrl = import.meta.url;
 export const SQLITE_READONLY_CHILD_ARG = "--openclaw-sqlite-readonly-child";
 
 export const runtimeProcessEntrypoints = {
+  stateRead: {
+    currentModuleUrl,
+    sourceWorkerName: "../state/openclaw-state-read.worker",
+    distWorkerPath: "state/openclaw-state-read.worker.js",
+  },
   nativeHookRelayClient: {
     currentModuleUrl,
     sourceWorkerName: "../agents/harness/native-hook-relay-client.worker",

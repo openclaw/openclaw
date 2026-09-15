@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { decodeSqliteWorkerReplyError } from "../infra/sqlite-worker-broker-reply.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
+import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import {
@@ -335,6 +337,60 @@ describe("shared-state worker error transport", () => {
     }
   });
 
+  it("opts into complete ordinary graphs without promoting name-only classifications", () => {
+    const native = Object.assign(new Error("native read failed"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 11,
+      privateState: "fixture-not-for-transport",
+    });
+    const integrity = Object.assign(new Error("read refused", { cause: native }), {
+      name: "SqliteIntegrityError",
+    });
+    const imitation = Object.assign(new Error("name only"), { name: "SqliteSchemaVersionError" });
+    const original = new AggregateError([integrity, native, imitation], "read and cleanup", {
+      cause: integrity,
+    });
+    original.errors.push(original);
+    const options = { includeOrdinary: true };
+    const payload = encodeOpenClawStateWorkerError(original, options);
+    expect(payload).toBeDefined();
+    expect(JSON.stringify(payload)).not.toContain("fixture-not-for-transport");
+    const retained = new Error("remote error");
+    retainOpenClawStateWorkerErrorPayload(retained, structuredClone(payload));
+    expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
+
+    const decoded = hydrateOpenClawStateWorkerError(retained, options);
+    if (!(decoded instanceof AggregateError)) {
+      throw new Error("expected ordinary aggregate graph");
+    }
+    expect(decoded.cause).toBe(decoded.errors[0]);
+    expect(decoded.errors[0]).toMatchObject({ name: "SqliteIntegrityError" });
+    expect(decoded.errors[0].cause).toBe(decoded.errors[1]);
+    expect(decoded.errors[1]).toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 11 });
+    expect(decoded.errors[2]).not.toBeInstanceOf(SqliteSchemaVersionError);
+    expect(decoded.errors[3]).toBe(decoded);
+    expect(findStartupMaintenanceRequiredError(decoded)).toBeUndefined();
+    expect(hydrateOpenClawStateWorkerError(retained, options)).not.toBe(decoded);
+  });
+
+  it.each([
+    new SqliteCoordinatorError("admission refused", new Error("native cause")),
+    ...(["gateway-lifecycle", "state-lifecycle", "state-handles"] as const).map(
+      (family) => new StateDatabaseCoordinatorContentionError(family),
+    ),
+  ])("preserves coordinator classification for %s", (original) => {
+    const decoded = roundTrip(original);
+    expect(decoded).toBeInstanceOf(SqliteCoordinatorError);
+    expect(decoded).toMatchObject({ name: original.name, message: original.message });
+    if (original instanceof StateDatabaseCoordinatorContentionError) {
+      expect(decoded).toBeInstanceOf(StateDatabaseCoordinatorContentionError);
+      expect(decoded).toMatchObject({ family: original.family });
+    } else {
+      expect(decoded.cause).toBeInstanceOf(Error);
+      expect(decoded.cause).toMatchObject({ message: "native cause" });
+    }
+  });
+
   const validNode = {
     type: "maintenance",
     kind: "audit-events-v2",
@@ -351,6 +407,16 @@ describe("shared-state worker error transport", () => {
     { version: 1, root: 0, nodes: [{ ...validNode, cause: { ref: 1 } }] },
     { version: 1, root: 0, nodes: [{ ...validNode, cause: { value: {} } }] },
     { version: 1, root: 0, nodes: [{ ...validNode, code: {} }] },
+    { version: 1, root: 0, nodes: [{ ...validNode, errcode: -1 }] },
+    { version: 1, root: 0, nodes: [{ ...validNode, errcode: 0.5 }] },
+    { version: 1, root: 0, nodes: [{ ...validNode, errcode: 2 ** 31 }] },
+    {
+      version: 1,
+      root: 0,
+      nodes: [
+        { type: "coordinator-contention", name: "Error", message: "invalid", family: "other" },
+      ],
+    },
     { version: 1, root: 0, nodes: [{ ...validNode, stack: "not transported" }] },
     {
       version: 1,
@@ -379,5 +445,6 @@ describe("shared-state worker error transport", () => {
     const retained = new Error("ordinary transport failure");
     retainOpenClawStateWorkerErrorPayload(retained, payload);
     expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
+    expect(hydrateOpenClawStateWorkerError(retained, { includeOrdinary: true })).toBe(retained);
   });
 });

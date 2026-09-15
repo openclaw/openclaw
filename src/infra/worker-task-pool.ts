@@ -79,6 +79,8 @@ export class WorkerTaskPool<Input, Output> {
       idleTimeoutMs?: number;
       restartOnError?: boolean;
       validateResult?: (value: Output) => void;
+      /** Reports failed stops synchronously; returned rejections never delay retirement. */
+      onRetirementFailure?: (error: unknown) => void | Promise<void>;
     },
   ) {
     this.maxWorkers = options.maxWorkers ?? availableParallelism();
@@ -442,11 +444,21 @@ export class WorkerTaskPool<Input, Output> {
           yieldSignal: exchange.pressure.signal,
         });
       })
-      .then(async (response) => {
+      .then((response) => {
         if (task.done || slot.task !== task || slot.retiring) {
           // A slow host handler may settle after cancellation. Never feed a successor.
-          await slot.retiring;
-          response.onConsumed?.();
+          const release = () => {
+            try {
+              task.runInContext(() => response.onConsumed?.());
+            } catch {
+              // The closed task retains its original failure, as in the exchange catch below.
+            }
+          };
+          if (this.slots.has(slot)) {
+            (slot.completions ??= []).push(release);
+          } else {
+            release();
+          }
           return;
         }
         exchange.onConsumed = response.onConsumed;
@@ -490,11 +502,11 @@ export class WorkerTaskPool<Input, Output> {
       return;
     }
     if (this.options.restartOnError === false) {
-      void this.close(error);
+      void this.close(error).catch(() => undefined);
     } else if (slot.task) {
       this.finish(slot.task, error, undefined, true);
     } else {
-      void this.retire(slot);
+      void this.retire(slot).catch(() => undefined);
     }
   }
 
@@ -556,10 +568,10 @@ export class WorkerTaskPool<Input, Output> {
     if (slot) {
       slot.task = undefined;
       if (retire) {
-        // Keep the slot reserved and the caller pending until its execution actually stops.
+        // Keep input and capacity custody until execution stops, even if rejection is early.
         (slot.completions ??= []).push(complete);
         void this.retire(slot).catch((failure: unknown) => {
-          task.reject(failure);
+          task.reject(error ?? failure);
         });
         return;
       }
@@ -586,7 +598,7 @@ export class WorkerTaskPool<Input, Output> {
     const idleMs = this.options.idleTimeoutMs ?? 60_000;
     if (idleMs > 0) {
       slot.idleTimer = runInWorkerPoolContext(() =>
-        this.setTimeoutFn(() => void this.retire(slot), idleMs),
+        this.setTimeoutFn(() => void this.retire(slot).catch(() => undefined), idleMs),
       );
       slot.idleTimer.unref();
     }
@@ -598,6 +610,14 @@ export class WorkerTaskPool<Input, Output> {
     // Constructor observers can retire this slot before its Worker is assigned.
     return (slot.retiring ??= Promise.resolve()
       .then(() => slot.worker?.terminate())
+      .catch((error: unknown) => {
+        try {
+          void Promise.resolve(this.options.onRetirementFailure?.(error)).catch(() => undefined);
+        } catch {
+          // Observer failures cannot replace the termination failure or its retained custody.
+        }
+        throw error;
+      })
       .then(() => {
         const directory = slot.temporaryDirectory;
         if (directory) {

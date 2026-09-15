@@ -217,17 +217,17 @@ export async function executeOpenClawStateWorker<Key extends keyof OpenClawState
 export function runOpenClawStateWorkerOperation<T>(
   context: OpenClawStateWorkerContext,
   operation: (scope: DomainScope) => Promise<T>,
-  options: { existingOnly: true; assertCurrent?: () => void },
+  options: { existingOnly: true; assertCurrent?: (commandType?: PropertyKey) => void },
 ): Promise<T | undefined>;
 export function runOpenClawStateWorkerOperation<T>(
   context: OpenClawStateWorkerContext,
   operation: (scope: DomainScope) => Promise<T>,
-  options?: { existingOnly?: false; assertCurrent?: () => void },
+  options?: { existingOnly?: false; assertCurrent?: (commandType?: PropertyKey) => void },
 ): Promise<T>;
 export async function runOpenClawStateWorkerOperation<T>(
   context: OpenClawStateWorkerContext,
   operation: (scope: DomainScope) => Promise<T>,
-  options?: { existingOnly?: boolean; assertCurrent?: () => void },
+  options?: { existingOnly?: boolean; assertCurrent?: (commandType?: PropertyKey) => void },
 ): Promise<T | undefined> {
   const run = () => runAdmittedOpenClawStateWorkerOperation(context, operation, options);
   const maintenance = context.maintenanceScope;
@@ -237,7 +237,7 @@ export async function runOpenClawStateWorkerOperation<T>(
 async function runAdmittedOpenClawStateWorkerOperation<T>(
   context: OpenClawStateWorkerContext,
   operation: (scope: DomainScope) => Promise<T>,
-  options?: { existingOnly?: boolean; assertCurrent?: () => void },
+  options?: { existingOnly?: boolean; assertCurrent?: (commandType?: PropertyKey) => void },
 ): Promise<T | undefined> {
   try {
     context.admission.assertCurrent();
@@ -310,7 +310,7 @@ async function runWithOpenClawStateWorkerStore<T>(
   store: Store,
   context: OpenClawStateWorkerContext,
   operation: (scope: Pick<Store, "execute">) => Promise<T>,
-  assertCurrent?: () => void,
+  assertCurrent?: (commandType?: PropertyKey) => void,
 ): Promise<T> {
   const { admission } = context;
   try {
@@ -318,9 +318,9 @@ async function runWithOpenClawStateWorkerStore<T>(
       store,
       operation,
       context,
-      () => {
+      (commandType) => {
         admission.assertCurrent();
-        assertCurrent?.();
+        assertCurrent?.(commandType);
       },
     );
   } catch (error) {
