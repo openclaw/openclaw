@@ -67,6 +67,33 @@ describe("recent session prefetch", () => {
     }
   }
 
+  it.each(["pointerover", "focusin"])(
+    "prefetches the intended session after a short %s debounce instead of the idle delay",
+    async (eventType) => {
+      const key = "agent:main:intended";
+      const request = vi.fn(async () => historyResult(key));
+      updatePrefetch({
+        client: createTestGatewayClient(request),
+        listRevision: 1,
+        openSessionKeys: ["agent:main:foreground"],
+        rows: [row(key, NOW - 1)],
+      });
+      const navigationTarget = document.createElement("button");
+      navigationTarget.dataset.sessionKey = key;
+      fixture.shell.append(navigationTarget);
+
+      navigationTarget.dispatchEvent(new Event(eventType, { bubbles: true, composed: true }));
+      await settlePromises();
+      expect(request).not.toHaveBeenCalled();
+
+      await vi.advanceTimersToNextTimerAsync();
+      expect(Date.now()).toBe(NOW + 75);
+      await vi.advanceTimersToNextTimerAsync();
+      await settlePromises();
+      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([key]);
+    },
+  );
+
   it("does not repopulate a removed session from an in-flight prefetch before the next list revision", async () => {
     const key = "agent:main:deleted";
     const response = createDeferred<ReturnType<typeof historyResult>>();
