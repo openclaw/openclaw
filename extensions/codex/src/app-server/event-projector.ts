@@ -315,19 +315,25 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     }
   }
 
-  recordDynamicToolResult(params: {
-    callId: string;
-    tool: string;
-    asyncStarted?: boolean;
-    terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
-    success: boolean;
-    terminalType?: "blocked" | "completed" | "error";
-    sideEffectEvidence?: boolean;
-    contentItems: CodexDynamicToolCallOutputContentItem[];
-    details?: unknown;
-  }): void {
+  recordDynamicToolResult(
+    params: {
+      callId: string;
+      tool: string;
+      asyncStarted?: boolean;
+      terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
+      success: boolean;
+      terminalType?: "blocked" | "completed" | "error";
+      sideEffectEvidence?: boolean;
+      contentItems: CodexDynamicToolCallOutputContentItem[];
+      details?: unknown;
+    },
+    resultContentSource?: "network",
+  ): void {
     this.toolProgressProjection.recordDynamicToolResult(params);
-    const source = this.options.resolveDynamicToolResultContentSource?.(params.tool);
+    // Per-invocation provenance from the executed result wins over the static
+    // tool-level source: remote and local media must not share one label.
+    const source =
+      resultContentSource ?? this.options.resolveDynamicToolResultContentSource?.(params.tool);
     this.toolTranscriptProjection.recordDynamicToolResult(params, source);
   }
 

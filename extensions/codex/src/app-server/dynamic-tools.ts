@@ -80,6 +80,7 @@ import {
   createFailedDynamicToolResponse,
   type CodexDynamicToolRuntimeResponse,
   withDynamicToolExecutionState,
+  withDynamicToolResultContentSource,
   withDynamicToolTranscriptDetails,
 } from "./dynamic-tool-response-state.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
@@ -766,6 +767,10 @@ export function createCodexDynamicToolBridge(params: {
         ) {
           telemetry.sourceReplyDelivered = true;
         }
+        // Codex's protocol cannot carry host provenance. Preserve the source
+        // from this executed result locally so the mirrored transcript taints
+        // remote-only tools without over-tainting local media calls.
+        const resultContentSource = rawResult.resultContentSource ?? tool.resultContentSource;
         const telemetryRawResult = sanitizeToolResult(rawResult);
         const rawIsError = isToolResultError(rawResult);
         const rawResultFailureKind = resolveToolResultFailureKind(rawResult);
@@ -863,6 +868,7 @@ export function createCodexDynamicToolBridge(params: {
           },
           terminalType,
         );
+        withDynamicToolResultContentSource(response, resultContentSource);
         withDynamicToolTranscriptDetails(
           response,
           asOptionalRecord(sanitizeToolResult(result))?.details,
