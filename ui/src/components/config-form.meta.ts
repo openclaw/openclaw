@@ -2,7 +2,7 @@ import { t } from "../i18n/index.ts";
 
 type ConfigSectionMeta = {
   label: string;
-  description: string;
+  description?: string;
 };
 
 function createSectionMeta(key: string): ConfigSectionMeta {
@@ -48,6 +48,12 @@ export const SECTION_META: Record<string, ConfigSectionMeta> = {
   diagnostics: createSectionMeta("diagnostics"),
   cli: createSectionMeta("cli"),
   secrets: createSectionMeta("secrets"),
+  security: {
+    // This section already has page-owned copy; keep schema descriptions at their source.
+    get label() {
+      return t("quickSettings.security.title");
+    },
+  },
   acp: createSectionMeta("acp"),
   mcp: createSectionMeta("mcp"),
 };
