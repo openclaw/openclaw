@@ -2,7 +2,6 @@ import type { ServiceInspectionReason } from "./service-inspection-error.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 /** Shared daemon service argument, state, and command config contracts. */
 import type { GatewayServiceStagedFiles } from "./service-stage.js";
-import type { SystemdGatewayInstallation } from "./systemd-scope.js";
 
 /** Environment map passed to service renderers and platform supervisors. */
 export type GatewayServiceEnv = Record<string, string | undefined>;
@@ -124,6 +123,17 @@ export type SystemdServiceReadTarget = {
   unitName: string;
   unitPath: string;
 };
+
+/** Both installed scopes must remain visible so callers can diagnose competing supervisors. */
+export type SystemdGatewayInstallation =
+  | { kind: "none" }
+  | { kind: "user"; user: SystemdServiceReadTarget }
+  | { kind: "system"; system: SystemdServiceReadTarget }
+  | {
+      kind: "dueling";
+      user: SystemdServiceReadTarget;
+      system: SystemdServiceReadTarget;
+    };
 
 /** Bounded service inspection; strict reads reject unverified commands/environments and return null only for proven absence. */
 export type GatewayServiceReadOptions = {
