@@ -23,7 +23,12 @@ import { resolveClickClackAccount } from "./accounts.js";
 import { createClickClackClient, type ClickClackClient } from "./http-client.js";
 import { resolveChannelId, resolveWorkspaceId } from "./resolve.js";
 import { parseClickClackTarget } from "./target.js";
-import type { ClickClackMessage, ClickClackMessageProvenance, CoreConfig } from "./types.js";
+import type {
+  ClickClackMessage,
+  ClickClackMessageProvenance,
+  ClickClackQuestionSpec,
+  CoreConfig,
+} from "./types.js";
 
 const CLICKCLACK_MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
 
@@ -49,6 +54,7 @@ async function createTargetMessage(params: {
   replyToId?: string | number | null;
   provenance?: ClickClackMessageProvenance;
   nonce?: string;
+  question?: ClickClackQuestionSpec;
   onPlatformSendDispatch?: () => Promise<void>;
 }): Promise<ClickClackMessage> {
   const parsed = parseClickClackTarget(params.to);
@@ -62,6 +68,7 @@ async function createTargetMessage(params: {
     return await params.client.createThreadReply(rootId, params.text, {
       provenance: params.provenance,
       nonce: params.nonce,
+      question: params.question,
     });
   }
   if (parsed.kind === "dm") {
@@ -70,6 +77,7 @@ async function createTargetMessage(params: {
     return await params.client.createDirectMessage(dm.id, params.text, {
       quotedMessageId: replyToId || undefined,
       nonce: params.nonce,
+      question: params.question,
     });
   }
   const channelId = await resolveChannelId(params.client, params.workspaceId, parsed.id);
@@ -78,6 +86,7 @@ async function createTargetMessage(params: {
     provenance: params.provenance,
     quotedMessageId: replyToId || undefined,
     nonce: params.nonce,
+    question: params.question,
   });
 }
 
@@ -215,6 +224,37 @@ export async function sendClickClackText(params: {
     onPlatformSendDispatch: dispatch,
   });
   return message.id;
+}
+
+/**
+ * Sends a question card with its text fallback and returns the created message.
+ * Servers without question support store the text and omit `question`.
+ */
+export async function sendClickClackQuestionMessage(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  to: string;
+  text: string;
+  question: ClickClackQuestionSpec;
+  threadId?: string | number | null;
+  replyToId?: string | number | null;
+  correlationId?: string;
+  provenance?: ClickClackMessageProvenance;
+}): Promise<ClickClackMessage> {
+  const { account, client } = createOutboundContext(params);
+  const workspaceId = await resolveWorkspaceId(client, account.workspace);
+  return await createTargetMessage({
+    client,
+    workspaceId,
+    to: params.to,
+    text:
+      renderClickClackMarkdown(sanitizeAssistantVisibleText(params.text)) ||
+      (params.question.items[0]?.prompt ?? ""),
+    threadId: params.threadId,
+    replyToId: params.replyToId,
+    provenance: params.provenance,
+    question: params.question,
+  });
 }
 
 /** Resolves, uploads, sends, then attaches one file to a ClickClack message. */

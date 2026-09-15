@@ -2,6 +2,7 @@
  * Gateway loop for polling ClickClack backlog events, opening the realtime
  * websocket, and dispatching user messages into OpenClaw.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
@@ -20,8 +21,10 @@ import {
   normalizeClickClackCorrelationId,
 } from "./http-client.js";
 import { handleClickClackInbound } from "./inbound.js";
+import { forwardClickClackQuestionAnswer, reconcileClickClackQuestions } from "./questions.js";
 import { resolveWorkspaceId } from "./resolve.js";
 import type {
+  ClickClackAccountLifetime,
   ClickClackEvent,
   ClickClackMessage,
   CoreConfig,
@@ -64,16 +67,50 @@ function parseSocketEvent(data: RawData): ClickClackEvent | null {
   }
 }
 
+/**
+ * Starts forwarding a submitted question card without waiting for it. Agent turns
+ * hold the ordered event queue, and the turn that asked is waiting for this answer.
+ */
+function startQuestionAnswer(params: {
+  lifetime: ClickClackAccountLifetime;
+  event: ClickClackEvent;
+  log?: { warn?: (message: string) => void };
+}) {
+  const { lifetime } = params;
+  const messageId = payloadString(params.event, "message_id");
+  if (params.event.type !== "question.submitted" || !messageId || lifetime.abortSignal.aborted) {
+    return;
+  }
+  void forwardClickClackQuestionAnswer({ lifetime, messageId }).catch((error: unknown) => {
+    if (lifetime.abortSignal.aborted) {
+      return;
+    }
+    params.log?.warn?.(
+      `[${lifetime.account.accountId}] ClickClack question answer was not forwarded: ` +
+        `messageId=${messageId} error=${formatErrorMessage(error)}`,
+    );
+  });
+}
+
 async function processEvent(params: {
   abortSignal: AbortSignal;
   account: ResolvedClickClackAccount;
   config: CoreConfig;
+  questionLifetime: ClickClackAccountLifetime;
   client: ReturnType<typeof createClickClackClient>;
   event: ClickClackEvent;
   botUserId: string;
   buildContext?: typeof buildChannelInboundEventContext;
   log?: { info: (message: string) => void; warn?: (message: string) => void };
 }) {
+  if (params.event.type === "question.submitted") {
+    startQuestionAnswer({
+      lifetime: params.questionLifetime,
+      event: params.event,
+      log: params.log,
+    });
+    return;
+  }
   if (params.event.type !== "message.created" && params.event.type !== "thread.reply_created") {
     return;
   }
@@ -124,6 +161,7 @@ async function processEvent(params: {
   await handleClickClackInbound({
     account: params.account,
     config: params.config,
+    questionLifetime: params.questionLifetime,
     message,
     access,
     buildContext: params.buildContext,
@@ -184,11 +222,20 @@ export async function startClickClackGatewayAccount(
     botUserId: configuredAccount.botUserId ?? me.id,
     botHandle: me.handle,
   };
+  // Question card work outlives the event or turn that begins it. It runs in this
+  // account start's async context, not a turn's, and ends with this start's signal.
+  const questionLifetime: ClickClackAccountLifetime = {
+    cfg: ctx.cfg,
+    account,
+    abortSignal: ctx.abortSignal,
+    runInAccountContext: AsyncLocalStorage.snapshot(),
+  };
   const processIncomingEvent = (event: ClickClackEvent) =>
     processEvent({
       abortSignal: ctx.abortSignal,
       account,
       config: ctx.cfg,
+      questionLifetime,
       client,
       event,
       botUserId: account.botUserId,
@@ -196,6 +243,14 @@ export async function startClickClackGatewayAccount(
         .buildContext,
       log: ctx.log,
     });
+  // Settle cards left by a restart and move still-waiting cards to this start.
+  void reconcileClickClackQuestions({ lifetime: questionLifetime, log: ctx.log }).catch(
+    (error: unknown) => {
+      ctx.log?.warn?.(
+        `[${account.accountId}] ClickClack question reconciliation failed: ${formatErrorMessage(error)}`,
+      );
+    },
+  );
   if (account.commandMenu) {
     await syncClickClackCommandMenu({
       cfg: ctx.cfg,
@@ -298,13 +353,18 @@ export async function startClickClackGatewayAccount(
           if (closing || settled) {
             return;
           }
+          const event = parseSocketEvent(data);
+          // A card answer cannot wait behind the turn that asked the question.
+          // The queued copy below still commits its cursor in order.
+          if (event) {
+            startQuestionAnswer({ lifetime: questionLifetime, event, log: ctx.log });
+          }
           // Preserve server event order and commit each cursor only after its
           // handler succeeds, so reconnect backlog can retry a failed event.
           messageQueue = messageQueue.then(async () => {
             if (ctx.abortSignal.aborted) {
               return;
             }
-            const event = parseSocketEvent(data);
             if (!event) {
               ctx.log?.warn?.(
                 `[${account.accountId}] skipped malformed ClickClack websocket event`,

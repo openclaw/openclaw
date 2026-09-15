@@ -33,6 +33,8 @@ const mocks = vi.hoisted(() => ({
   handleClickClackInbound: vi.fn(),
   resolveClickClackInboundAccess: vi.fn(),
   resolveWorkspaceId: vi.fn(),
+  forwardClickClackQuestionAnswer: vi.fn(),
+  reconcileClickClackQuestions: vi.fn(),
 }));
 
 vi.mock("./access.js", () => ({
@@ -51,6 +53,11 @@ vi.mock("./http-client.js", async (importOriginal) => {
 
 vi.mock("./inbound.js", () => ({
   handleClickClackInbound: mocks.handleClickClackInbound,
+}));
+
+vi.mock("./questions.js", () => ({
+  forwardClickClackQuestionAnswer: mocks.forwardClickClackQuestionAnswer,
+  reconcileClickClackQuestions: mocks.reconcileClickClackQuestions,
 }));
 
 vi.mock("openclaw/plugin-sdk/native-command-registry", () => ({
@@ -128,6 +135,8 @@ function emitMessageEvent(
 describe("ClickClack gateway", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.forwardClickClackQuestionAnswer.mockResolvedValue(undefined);
+    mocks.reconcileClickClackQuestions.mockResolvedValue(undefined);
     mocks.createClickClackClient.mockReturnValue(mocks.client);
     mocks.client.me.mockResolvedValue({
       id: "bot-user",
@@ -577,6 +586,54 @@ describe("ClickClack gateway", () => {
       "[default] ClickClack event processing failed; reconnecting: message fetch failed",
     );
 
+    abort.abort();
+    await run;
+  });
+
+  it("forwards question answers while an inbound turn holds the event queue", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    const turn = createDeferred<void>();
+    mocks.handleClickClackInbound.mockImplementationOnce(() => turn.promise);
+    const abort = new AbortController();
+    const run = startClickClackGatewayAccount(createGatewayContext(abort.signal));
+
+    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledOnce());
+    // Card work belongs to this account start and ends with its signal.
+    const lifetime = expect.objectContaining({
+      account: expect.objectContaining({ botUserId: "bot-user" }),
+      abortSignal: abort.signal,
+      runInAccountContext: expect.any(Function),
+    });
+    expect(mocks.reconcileClickClackQuestions).toHaveBeenCalledWith(
+      expect.objectContaining({ lifetime }),
+    );
+    emitMessageEvent(socket, 1);
+    await waitForGatewayState(() =>
+      expect(mocks.handleClickClackInbound).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ questionLifetime: lifetime }),
+      ),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          ...createBacklogEvent(2, "question.submitted"),
+          payload: { message_id: "msg-card", responder_id: "human-1" },
+        }),
+      ),
+    );
+
+    // The turn that asked is still waiting; its answer must not queue behind it.
+    await waitForGatewayState(() =>
+      expect(mocks.forwardClickClackQuestionAnswer).toHaveBeenCalledWith({
+        lifetime,
+        messageId: "msg-card",
+      }),
+    );
+    expect(mocks.handleClickClackInbound).toHaveBeenCalledOnce();
+
+    turn.resolve();
     abort.abort();
     await run;
   });

@@ -20,8 +20,10 @@ import {
   createClickClackAgentProgressPublisher,
   type ClickClackItemEventPayload,
 } from "./progress.js";
+import { deliverClickClackQuestionPrompt } from "./questions.js";
 import { getClickClackRuntime } from "./runtime.js";
 import type {
+  ClickClackAccountLifetime,
   ClickClackMessage,
   ClickClackMessageProvenance,
   CoreConfig,
@@ -110,6 +112,8 @@ async function dispatchModelReply(params: {
 export async function handleClickClackInbound(params: {
   account: ResolvedClickClackAccount;
   config: CoreConfig;
+  /** The account start that owns question cards; without it ask_user prompts stay plain text. */
+  questionLifetime?: ClickClackAccountLifetime;
   message: ClickClackMessage;
   access?: ClickClackInboundAccess;
   correlationId?: string;
@@ -317,16 +321,28 @@ export async function handleClickClackInbound(params: {
           if (!text.trim()) {
             return;
           }
-          await sendClickClackText({
+          const reply = {
             cfg: params.config,
-            accountId: params.account.accountId,
             to: target,
             text,
             threadId: message.parent_message_id ? message.thread_root_id : undefined,
             replyToId: message.id,
             provenance: turnProvenance,
             correlationId: params.correlationId,
-          });
+          };
+          // ask_user prompts become answerable cards; the finalizer registered
+          // there must run inside this delivery's question context.
+          if (
+            params.questionLifetime &&
+            (await deliverClickClackQuestionPrompt({
+              ...reply,
+              lifetime: params.questionLifetime,
+              payload,
+            }))
+          ) {
+            return;
+          }
+          await sendClickClackText({ ...reply, accountId: params.account.accountId });
         },
         durable: (payload) => {
           if (!hasClickClackReplyMedia(payload)) {
