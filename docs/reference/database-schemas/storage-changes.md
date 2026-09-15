@@ -398,6 +398,15 @@ Full reindex publication attaches, replaces, and detaches the completed shadow
 inside one synchronous admitted operation. Manager close drains accepted syncs
 through provider preparation and final writes before releasing the borrow.
 
+Native hook relay bridge persistence runs in the shared-state worker. Publication
+and renewal request the live host's current-registration check inside their write
+transaction. The bridge retains accepted operations through native settlement;
+unregistering joins them before token-owned removal and listener closure. Pruning
+keeps PID liveness checks on the host, then compares each complete candidate with
+the authoritative row in the worker transaction before deletion. Reads retain
+existing-only admission, and all stages of a prune use the captured database
+context. The cold hook CLI retains its separate read-only locator worker.
+
 ### Preserve the data and concurrency contracts
 
 An adapter must make these contracts explicit and verify them against a real

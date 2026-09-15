@@ -7,6 +7,7 @@ function createExtensionCodexAppServerAttemptVitestConfig(
   return createScopedVitestConfig(["extensions/codex/src/app-server/run-attempt.test.ts"], {
     dir: "extensions",
     env,
+    pool: "forks",
     fileParallelism: false,
     name: "extension-codex-app-server-attempt",
     passWithNoTests: true,

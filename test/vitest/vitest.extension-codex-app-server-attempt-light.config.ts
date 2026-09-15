@@ -1,4 +1,5 @@
 // Vitest extension codex app server attempt light config wires the extension codex app server attempt light test shard.
+import { databaseWorkerExtensionTestFiles } from "./vitest.extension-database-workers-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createExtensionCodexAppServerAttemptLightVitestConfig(
@@ -18,6 +19,7 @@ export function createExtensionCodexAppServerAttemptLightVitestConfig(
     {
       dir: "extensions",
       env,
+      exclude: databaseWorkerExtensionTestFiles,
       fileParallelism: false,
       name: "extension-codex-app-server-attempt-light",
       passWithNoTests: true,
