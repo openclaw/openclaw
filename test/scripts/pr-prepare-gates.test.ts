@@ -34,7 +34,9 @@ function runGatesBash(
         `script_parent_dir='${repoRoot}/scripts'`,
         `source '${repoRoot}/scripts/pr-lib/common.sh'`,
         `source '${repoRoot}/scripts/pr-lib/gates.sh'`,
+        `source '${repoRoot}/scripts/pr-lib/review.sh'`,
         "mark_pr_operation_side_effects_started() { :; }",
+        "require_prepared_review() { :; }",
         ...(options.sourcePush
           ? [
               `source '${repoRoot}/scripts/pr-lib/worktree.sh'`,

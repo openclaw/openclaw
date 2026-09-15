@@ -364,6 +364,28 @@ describe("scripts/pr wrappers", () => {
     }
   });
 
+  itPosix("dispatches public correction commands to the explicit native owners", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    const ghPath = join(fixture.bin, "gh");
+    writeFileSync(ghPath, readFileSync(ghPath, "utf8").replace("not-main", "main"));
+    writeFileSync(
+      join(fixture.canonical, "scripts/pr-lib/prepare-core.sh"),
+      `prepare_init() { printf 'init <%s> <%s>\\n' "$1" "$2"; }\nprepare_correction_review_init() { printf 'review <%s>\\n' "$1"; }\n`,
+    );
+    for (const [command, expected] of [
+      ["prepare-correction-init", "init <123> <correction>"],
+      ["prepare-correction-review-init", "review <123>"],
+    ] as const) {
+      const result = spawnSync(join(fixture.canonical, "scripts/pr"), [command, "123"], {
+        cwd: fixture.canonical,
+        env: fixture.env,
+        encoding: "utf8",
+      });
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(expected);
+    }
+  });
+
   itPosix("resolves an explicit merge body from the caller before supervisor cwd changes", () => {
     const fixture = makeMismatchedWrapperRepo();
     const caller = join(fixture.canonical, "nested");
@@ -511,33 +533,35 @@ describe("scripts/pr wrappers", () => {
     expect(result.stderr).not.toContain("Refusing to silently substitute");
   });
 
-  it.each(["prepare-run", "merge-recover"])(
-    "routes mismatched %s to the canonical wrapper despite opt-in",
-    (command) => {
-      const fixture = makeMismatchedWrapperRepo();
-      const result = spawnSync(
-        join(fixture.linked, "scripts", "pr"),
-        [
-          "--dev-wrapper",
-          command,
-          "123",
-          ...(command === "merge-recover" ? ["a".repeat(40), "--confirmed-operator-recovery"] : []),
-        ],
-        { cwd: fixture.linked, encoding: "utf8", env: fixture.env },
-      );
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        `subcommand '${command}' is classified landing; dev-wrapper opt-in is unavailable.`,
-      );
-      expect(result.stderr).toContain(anchorSubstitutionNotice(fixture.canonical));
-      // The stubbed gh reports a non-main base: reaching this gate proves the
-      // canonical wrapper ran instead of the mismatched local one.
-      expect(result.stderr).toContain(
-        "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
-      );
-      expect(result.stdout).not.toContain("local wrapper executed");
-    },
-  );
+  it.each([
+    "prepare-run",
+    "prepare-correction-init",
+    "prepare-correction-review-init",
+    "merge-recover",
+  ])("routes mismatched %s to the canonical wrapper despite opt-in", (command) => {
+    const fixture = makeMismatchedWrapperRepo();
+    const result = spawnSync(
+      join(fixture.linked, "scripts", "pr"),
+      [
+        "--dev-wrapper",
+        command,
+        "123",
+        ...(command === "merge-recover" ? ["a".repeat(40), "--confirmed-operator-recovery"] : []),
+      ],
+      { cwd: fixture.linked, encoding: "utf8", env: fixture.env },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      `subcommand '${command}' is classified landing; dev-wrapper opt-in is unavailable.`,
+    );
+    expect(result.stderr).toContain(anchorSubstitutionNotice(fixture.canonical));
+    // The stubbed gh reports a non-main base: reaching this gate proves the
+    // canonical wrapper ran instead of the mismatched local one.
+    expect(result.stderr).toContain(
+      "scripts/pr prepare and merge commands only support PRs targeting main; PR #123 targets not-main.",
+    );
+    expect(result.stdout).not.toContain("local wrapper executed");
+  });
 
   it("substitutes the canonical wrapper for a stale-base worktree once main moves the wrapper", () => {
     const fixture = makeMismatchedWrapperRepo();
@@ -1180,11 +1204,23 @@ exit 99
   it("keeps prepare wrapper modes delegated to the main PR helper", () => {
     const script = readScript("scripts/pr-prepare");
 
-    expect(script).toContain("scripts/pr-prepare <init|validate-commit|gates|push|run> <PR>");
-    for (const mode of ["init", "validate-commit", "gates", "push", "run"]) {
+    expect(script).toContain(
+      "scripts/pr-prepare <init|correction-init|correction-review-init|validate-commit|gates|push|run> <PR>",
+    );
+    for (const mode of [
+      "init",
+      "correction-init",
+      "correction-review-init",
+      "validate-commit",
+      "gates",
+      "push",
+      "run",
+    ]) {
       expect(script).toContain(`${mode})`);
     }
     expect(script).toContain('exec "$base" prepare-init "$pr"');
+    expect(script).toContain('exec "$base" prepare-correction-init "$pr"');
+    expect(script).toContain('exec "$base" prepare-correction-review-init "$pr"');
     expect(script).toContain('exec "$base" prepare-validate-commit "$pr"');
     expect(script).toContain('exec "$base" prepare-gates "$pr"');
     expect(script).toContain('exec "$base" prepare-push "$pr"');

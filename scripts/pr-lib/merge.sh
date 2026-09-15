@@ -198,6 +198,13 @@ merge_verify() {
 
   require_artifact .local/prep.env || return 1
   require_artifact .local/gates.env || return 1
+  require_prepared_review "$pr" || return 1
+  local correction_authority correction_gate_oid=""
+  correction_authority=$(correction_review_snapshot "$pr") || return 1
+  if [ -n "$correction_authority" ]; then
+    require_correction_publication_gates "$pr" "$(git rev-parse HEAD)" || return 1
+    correction_gate_oid=$(git hash-object --no-filters .local/gates.env) || return 1
+  fi
   # shellcheck disable=SC1091
   source .local/gates.env || return 1
   # shellcheck disable=SC1091
@@ -348,6 +355,10 @@ merge_verify() {
     fi
   fi
 
+  verify_correction_review_snapshot "$pr" "$correction_authority" || return 1
+  if [ -n "$correction_authority" ]; then
+    [ "$correction_gate_oid" = "$(git hash-object --no-filters .local/gates.env)" ] || return 1
+  fi
   echo "merge-verify passed for PR #$pr"
 }
 
@@ -418,6 +429,20 @@ prepare_squash_merge_body() {
 # head's artifacts. Subshell isolation prevents sourced stamps from changing admission.
 verify_merge_replacement_artifacts() (
   local pr="$1" head="$2"
+  local PREP_REVIEW_MODE=""
+  source .local/prep-context.env || return 1
+  if [ "$PREP_REVIEW_MODE" = correction ]; then
+    # Incoming H remains the truthful NEEDS WORK identity. The correction
+    # owner verifies H -> local C; the publication receipt binds C -> hosted P.
+    require_prepared_review "$pr" || return 1
+    local PR_NUMBER="" PREP_HEAD_SHA="" LOCAL_PREP_HEAD_SHA=""
+    source .local/prep.env || return 1
+    [ "$PR_NUMBER" = "$pr" ] && [ "$PREP_HEAD_SHA" = "$head" ] &&
+      [ "$LOCAL_PREP_HEAD_SHA" = "$(git rev-parse HEAD)" ] &&
+      [ "$(git rev-parse "$LOCAL_PREP_HEAD_SHA^{tree}")" = "$(git rev-parse "$head^{tree}")" ] || return 1
+    require_correction_publication_gates "$pr" "$LOCAL_PREP_HEAD_SHA" || return 1
+    return 0
+  fi
   local PR_NUMBER="" PR_HEAD_SHA="" PR_HEAD_SHA_BEFORE=""
   local PREP_HEAD_SHA="" LOCAL_PREP_HEAD_SHA="" LAST_VERIFIED_HEAD_SHA="" GATES_MODE=""
   source .local/pr-meta.env || return 1
@@ -493,6 +518,14 @@ merge_run() {
     .local/prep.env
   )
   [ -z "$replacement_head" ] || required_artifacts+=(.local/prep-context.env .local/gates.env)
+  local correction_authority="" correction_gates_oid=""
+  correction_authority=$(correction_review_snapshot "$pr") || return 1
+  if [ -n "$correction_authority" ]; then
+    required_artifacts+=(.local/prep-context.env .local/gates.env
+      .local/correction-review.json .local/correction-review.md
+      .local/correction-incoming-review.json .local/correction-incoming-review.md)
+    correction_gates_oid=$(git hash-object --no-filters .local/gates.env) || return 1
+  fi
   for required in "${required_artifacts[@]}"; do
     require_artifact "$required" || return 1
   done
@@ -512,7 +545,7 @@ merge_run() {
     fi
   fi
   validate_review_artifact_data || return 1
-  require_ready_review_recommendation || return 1
+  require_prepared_review "$pr" || return 1
   merge_verify "$pr" "$replacement_head" || return 1
   # shellcheck disable=SC1091
   source .local/prep.env
@@ -695,6 +728,11 @@ merge_run() {
     [ "$merge_body_snapshot" != "$(snapshot_merge_body "$merge_body_file")" ]; then
     merge_outcome_stop "merge body changed during admission; no request was dispatched"
     return 1
+  fi
+  verify_correction_review_snapshot "$pr" "$correction_authority" || return 1
+  if [ -n "$correction_authority" ]; then
+    [ "$correction_gates_oid" = "$(git hash-object --no-filters .local/gates.env)" ] || return 1
+    require_correction_publication_gates "$pr" "$(git rev-parse HEAD)" || return 1
   fi
   local intent attempt
   attempt=$(node -e 'process.stdout.write(require("node:crypto").randomUUID())') || return 1

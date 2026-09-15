@@ -121,9 +121,12 @@ set -euo pipefail
 source "$SCRIPTS/pr-lib/common.sh"
 source "$SCRIPTS/pr-lib/changelog.sh"
 source "$SCRIPTS/pr-lib/gates.sh"
+source "$SCRIPTS/pr-lib/review.sh"
 enter_worktree() { PR_MAIN_SHA="$MAIN_SHA"; }
 refresh_prep_branch_for_reviewed_head() { :; }
 checkout_prep_branch() { :; }
+# Review authority is covered by the preparation fixtures; this isolates release classification.
+require_prepared_review() { :; }
 run_quiet_logged() { printf 'gate:%s\\n' "$1"; }
 prepare_gates 42
 `,
