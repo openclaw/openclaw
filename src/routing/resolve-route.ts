@@ -355,13 +355,6 @@ function peerLookupKey(kind: ChatType, id: string): string {
   return `${kind === "channel" ? "group" : kind}:${id}`;
 }
 
-function getPeerIndexedBindings(
-  index: EvaluatedBindingsIndex,
-  peer: RoutePeer | null,
-): EvaluatedBinding[] {
-  return peer ? (index.byPeer.get(peerLookupKey(peer.kind, peer.id)) ?? []) : [];
-}
-
 function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBindingsIndex {
   const byPeer = new Map<string, EvaluatedBinding[]>();
   const byPeerWildcard: EvaluatedBinding[] = [];
@@ -715,87 +708,48 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       );
     }
   }
-  // Thread parent inheritance: if peer (thread) didn't match, check parent peer binding
-  const baseScope = {
+  const scope: BindingScope = {
+    peer,
     guildId,
     teamId,
     memberRoleIds: memberRoleIdSet,
   };
-
-  const tiers: Array<{
-    matchedBy: Exclude<ResolvedAgentRoute["matchedBy"], "default">;
-    enabled: boolean;
-    scopePeer: RoutePeer | null;
-    candidates: EvaluatedBinding[];
-  }> = [
-    {
-      matchedBy: "binding.peer",
-      enabled: Boolean(peer),
-      scopePeer: peer,
-      candidates: getPeerIndexedBindings(bindingsIndex, peer),
-    },
-    {
-      matchedBy: "binding.peer.parent",
-      enabled: Boolean(parentPeer && parentPeer.id),
-      scopePeer: parentPeer && parentPeer.id ? parentPeer : null,
-      candidates: getPeerIndexedBindings(bindingsIndex, parentPeer),
-    },
-    {
-      matchedBy: "binding.peer.wildcard",
-      enabled: Boolean(peer),
-      scopePeer: peer,
-      candidates: bindingsIndex.byPeerWildcard,
-    },
-    {
-      matchedBy: "binding.guild+roles",
-      enabled: Boolean(guildId && memberRoleIds.length > 0),
-      scopePeer: peer,
-      candidates: guildId ? (bindingsIndex.byGuildWithRoles.get(guildId) ?? []) : [],
-    },
-    {
-      matchedBy: "binding.guild",
-      enabled: Boolean(guildId),
-      scopePeer: peer,
-      candidates: guildId ? (bindingsIndex.byGuild.get(guildId) ?? []) : [],
-    },
-    {
-      matchedBy: "binding.team",
-      enabled: Boolean(teamId),
-      scopePeer: peer,
-      candidates: teamId ? (bindingsIndex.byTeam.get(teamId) ?? []) : [],
-    },
-    {
-      matchedBy: "binding.account",
-      enabled: true,
-      scopePeer: peer,
-      candidates: bindingsIndex.byAccount,
-    },
-    {
-      matchedBy: "binding.channel",
-      enabled: true,
-      scopePeer: peer,
-      candidates: bindingsIndex.byChannel,
-    },
-  ];
-
-  for (const tier of tiers) {
-    if (!tier.enabled) {
-      continue;
-    }
-    // Index buckets already enforce tier membership; only route scope still
-    // needs validation against this inbound peer, guild, team, and roles.
-    const matched = tier.candidates.find((candidate) =>
-      matchesBindingScope(candidate.match, {
-        ...baseScope,
-        peer: tier.scopePeer,
-      }),
+  const chooseFrom = (
+    candidates: EvaluatedBinding[] | undefined,
+    matchedBy: Exclude<ResolvedAgentRoute["matchedBy"], "default">,
+    bindingScope = scope,
+  ) => {
+    // Index buckets enforce tier membership; compound scope constraints still apply.
+    const matched = candidates?.find((candidate) =>
+      matchesBindingScope(candidate.match, bindingScope),
     );
-    if (matched) {
-      if (shouldLogDebug) {
-        logDebug(`[routing] match: matchedBy=${tier.matchedBy} agentId=${matched.binding.agentId}`);
-      }
-      return choose(matched.binding.agentId, tier.matchedBy, matched.binding.session);
+    if (!matched) {
+      return undefined;
     }
+    if (shouldLogDebug) {
+      logDebug(`[routing] match: matchedBy=${matchedBy} agentId=${matched.binding.agentId}`);
+    }
+    return choose(matched.binding.agentId, matchedBy, matched.binding.session);
+  };
+  const route =
+    (peer &&
+      chooseFrom(bindingsIndex.byPeer.get(peerLookupKey(peer.kind, peer.id)), "binding.peer")) ||
+    (parentPeer?.id &&
+      chooseFrom(
+        bindingsIndex.byPeer.get(peerLookupKey(parentPeer.kind, parentPeer.id)),
+        "binding.peer.parent",
+        { ...scope, peer: parentPeer },
+      )) ||
+    (peer && chooseFrom(bindingsIndex.byPeerWildcard, "binding.peer.wildcard")) ||
+    (guildId &&
+      memberRoleIds.length > 0 &&
+      chooseFrom(bindingsIndex.byGuildWithRoles.get(guildId), "binding.guild+roles")) ||
+    (guildId && chooseFrom(bindingsIndex.byGuild.get(guildId), "binding.guild")) ||
+    (teamId && chooseFrom(bindingsIndex.byTeam.get(teamId), "binding.team")) ||
+    chooseFrom(bindingsIndex.byAccount, "binding.account") ||
+    chooseFrom(bindingsIndex.byChannel, "binding.channel");
+  if (route) {
+    return route;
   }
 
   const unboundAgentId = defaultAgentId || tryResolveLegacyCompatibilityAgentId(input.cfg);
