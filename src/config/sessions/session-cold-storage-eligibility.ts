@@ -1,16 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   hasSessionPendingInputsSchema,
   hasPendingInputConsumptionColumn,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
-import {
-  parseSessionEntryJson,
-  sessionEntryMetadataJson,
-} from "./session-accessor.sqlite-status.js";
+import { sessionEntryMetadataJson } from "./session-accessor.sqlite-status.js";
 import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
+import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 
 /** Cold storage preserves logical owners; only activity and explicit cross-generation references protect bytes. */
 export function readSessionColdStorageProtection(
@@ -20,7 +18,8 @@ export function readSessionColdStorageProtection(
   const db = getNodeSqliteKysely<DB>(database.db);
   const protectedIds = new Set<string>();
   const busyKeys = new Set<string>();
-  for (const row of executeSqliteQuerySync(
+  // Keep only protection facts, not a second store-wide array of serialized metadata.
+  for (const row of iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("session_nodes")
@@ -33,9 +32,9 @@ export function readSessionColdStorageProtection(
         "last_interaction_at",
         sessionEntryMetadataJson,
       ]),
-  ).rows) {
-    const entry = parseSessionEntryJson(row);
+  )) {
     const record = parseSqliteSessionEntryRecord(row);
+    const entry = record ? projectCanonicalSessionEntryShape(record) : null;
     const recovery = record?.mainRestartRecovery;
     const recoveryPending =
       entry?.restartRecoveryBeforeAgentReplyState === "admitted" ||
@@ -69,12 +68,23 @@ export function readSessionColdStorageProtection(
       protectedIds.add(checkpoint.postCompaction.sessionId);
     }
   }
-  for (const row of executeSqliteQuerySync(
+  for (const row of iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("session_windows")
-      .select(["session_id", "session_key", "updated_at", "transcript_updated_at", "status"]),
-  ).rows) {
+      .select(["session_id", "session_key", "updated_at", "transcript_updated_at", "status"])
+      // Recovery or unreadable nodes protect all their generations. Otherwise, leave
+      // old idle windows in SQLite instead of hydrating them just to reject them.
+      .$if(busyKeys.size === 0, (query) =>
+        query.where((eb) =>
+          eb.or([
+            eb("status", "=", "running"),
+            eb("updated_at", ">=", beforeMs),
+            eb(eb.fn.coalesce("transcript_updated_at", eb.val(0)), ">=", beforeMs),
+          ]),
+        ),
+      ),
+  )) {
     if (
       busyKeys.has(row.session_key) ||
       row.status === "running" ||
@@ -84,7 +94,7 @@ export function readSessionColdStorageProtection(
     }
   }
   if (hasSessionPendingInputsSchema(database.db)) {
-    for (const row of executeSqliteQuerySync(
+    for (const row of iterateSqliteQuerySync(
       database.db,
       db
         .selectFrom("session_pending_inputs")
@@ -93,7 +103,7 @@ export function readSessionColdStorageProtection(
         .$if(hasPendingInputConsumptionColumn(database.db), (query) =>
           query.where("consumed_event_id", "is", null),
         ),
-    ).rows) {
+    )) {
       protectedIds.add(row.session_id);
     }
   }
