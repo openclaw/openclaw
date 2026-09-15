@@ -83,12 +83,12 @@ function stringifyObjectValue(
   }
   const record = value as Record<string, unknown>;
   if (normalizeString === preserveString) {
-    const fields: string[] = [];
     // oxlint-disable-next-line unicorn/no-array-sort -- Object.keys creates a private array.
-    for (const key of Object.keys(record).sort()) {
-      fields.push(
-        `${JSON.stringify(key)}:${stringifyStableValue(record[key], stack, normalizeString)}`,
-      );
+    const fields = Object.keys(record).sort();
+    let fieldIndex = 0;
+    for (const key of fields) {
+      fields[fieldIndex++] =
+        `${JSON.stringify(key)}:${stringifyStableValue(record[key], stack, normalizeString)}`;
     }
     return `{${fields.join(",")}}`;
   }
