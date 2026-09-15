@@ -128,4 +128,39 @@ describe("resolveTransientCronRetryDecision", () => {
       reason: "transient retry",
     });
   });
+
+  it("keeps timeouts retryable instead of treating an unsettled original run as terminal", () => {
+    // #137215: a timed-out job may still be running after cleanup was requested.
+    // Overlap is prevented by the run-receipt settlement fence, not by dropping
+    // retry eligibility: a timeout that retries is documented behavior, and
+    // suppressing it would permanently disable one-shot jobs on a transient
+    // cleanup failure.
+    const error = "cron webhook delivery timed out: the job exceeded its timeout";
+    const errorClassification = { kind: "reason", reason: "timeout" } as const;
+
+    expect(
+      resolveTransientCronRetryDecision({
+        error,
+        errorClassification,
+        consecutiveErrors: 1,
+      }),
+    ).toMatchObject({
+      retryable: true,
+      reason: "transient retry",
+    });
+
+    // Execution already started: still retryable, while the caller keeps the
+    // replay hazard attributed through `executionStarted`.
+    expect(
+      resolveTransientCronRetryDecision({
+        error,
+        errorClassification,
+        executionStarted: true,
+        consecutiveErrors: 1,
+      }),
+    ).toMatchObject({
+      retryable: true,
+      reason: "transient retry",
+    });
+  });
 });

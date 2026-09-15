@@ -210,7 +210,13 @@ export function createCronAgentWatchdog(params: {
   };
 }
 
-/** Runs timeout cleanup with a guard so stuck cleanup cannot block the cron lane. */
+/**
+ * Runs timeout cleanup with a guard so stuck cleanup cannot block the cron lane.
+ *
+ * The guard only bounds how long the lane waits. Completing this request never
+ * proves the original execution stopped: the settlement owner (run receipt) is
+ * what reports the run settled, and it keeps the job fenced until then.
+ */
 export async function cleanupTimedOutCronAgentRun(
   state: CronServiceState,
   job: CronJob,
@@ -220,18 +226,45 @@ export async function cleanupTimedOutCronAgentRun(
   if (!state.deps.cleanupTimedOutAgentRun) {
     return;
   }
+  // Record the timeout with execution context: the original run may still be
+  // executing while the lane moves on (#137215).
+  state.deps.log.warn(
+    {
+      jobId: job.id,
+      jobName: job.name,
+      timeoutMs,
+      executionPhase: execution?.phase,
+      executionProvider: execution?.provider,
+      executionModel: execution?.model,
+    },
+    "cron: job timed out; requesting cancellation of the original execution",
+  );
   let settleTimer: NodeJS.Timeout | undefined;
-  const cleanupPromise = state.deps.cleanupTimedOutAgentRun({ job, timeoutMs, execution });
-  const settleTimeout = new Promise<void>((resolve) => {
-    settleTimer = setTimeout(resolve, CRON_TIMEOUT_CLEANUP_GUARD_MS);
+  const cleanupOutcome = state.deps.cleanupTimedOutAgentRun({ job, timeoutMs, execution }).then(
+    () => "cleanup-finished" as const,
+    (err: unknown) => ({ kind: "cleanup-failed", err }) as const,
+  );
+  const settleTimeout = new Promise<"guard-elapsed">((resolve) => {
+    settleTimer = setTimeout(() => resolve("guard-elapsed"), CRON_TIMEOUT_CLEANUP_GUARD_MS);
   });
   try {
-    await Promise.race([cleanupPromise, settleTimeout]);
-  } catch (err) {
-    state.deps.log.warn(
-      { jobId: job.id, err: String(err) },
-      "cron: timed-out agent cleanup failed",
-    );
+    const outcome = await Promise.race([cleanupOutcome, settleTimeout]);
+    if (outcome === "guard-elapsed") {
+      state.deps.log.warn(
+        { jobId: job.id, jobName: job.name, guardMs: CRON_TIMEOUT_CLEANUP_GUARD_MS },
+        "cron: timeout cleanup is still running after its guard timeout; the cron lane continues without waiting",
+      );
+    } else if (typeof outcome === "object") {
+      state.deps.log.warn(
+        { jobId: job.id, jobName: job.name, err: String(outcome.err) },
+        "cron: timed-out agent cleanup failed",
+      );
+    } else {
+      state.deps.log.info(
+        { jobId: job.id, jobName: job.name },
+        "cron: timeout cleanup request finished",
+      );
+    }
   } finally {
     if (settleTimer) {
       clearTimeout(settleTimer);
