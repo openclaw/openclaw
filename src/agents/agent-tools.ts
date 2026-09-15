@@ -271,6 +271,8 @@ type OpenClawCodingToolsOptions = {
   config?: OpenClawConfig;
   /** Explicitly distinguishes live Gateway session policy from a pinned run override. */
   sessionConfigSource?: "runtime" | "pinned";
+  /** Host-bound target for auxiliary history/search, separate from execution identity. */
+  sessionReadScopeKey?: string;
   abortSignal?: AbortSignal;
   /** Disable hook-owned diagnostics when an outer runtime owns tool diagnostics. */
   emitBeforeToolCallDiagnostics?: boolean;
@@ -424,7 +426,9 @@ type OpenClawCodingToolsOptions = {
   scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
 
-function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
+export function createOpenClawCodingToolsInternal(
+  options?: OpenClawCodingToolsOptions,
+): AnyAgentTool[] {
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const isMemoryFlushRun = options?.trigger === "memory";
   if (isMemoryFlushRun && !options?.memoryFlushWritePath) {
@@ -923,6 +927,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             sandboxed: Boolean(sandbox),
             config: options?.config,
             sessionConfigSource: options?.sessionConfigSource,
+            sessionReadScopeKey: options?.sessionReadScopeKey,
             webFetchHostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
             webSearchEnabled: options?.webSearchEnabled,
             clientCaps: options?.clientCaps,
@@ -1164,8 +1169,10 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   }).map((tool) => wrapToolWithGatewayCallerIdentity(tool, toolCallerIdentity));
 }
 
-/** Build the runtime tool list exposed through the public agent harness SDK. */
-export function createOpenClawCodingTools(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
+/** Build the SDK tool list without exposing core-only auxiliary read scope. */
+export function createOpenClawCodingTools(
+  options?: Omit<OpenClawCodingToolsOptions, "sessionReadScopeKey">,
+): AnyAgentTool[] {
   return createOpenClawCodingToolsInternal(options);
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

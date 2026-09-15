@@ -341,6 +341,7 @@ function matchSearchHitCandidate(params: {
 export function createSessionsSearchTool(opts?: {
   agentId?: string;
   agentSessionKey?: string;
+  sessionReadScopeKey?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
@@ -369,7 +370,10 @@ export function createSessionsSearchTool(opts?: {
         readPositiveIntegerParam(params, "limit", {
           max: SESSIONS_SEARCH_MAX_LIMIT,
         }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
-      const requestedSessionKey = readToolStringParam(params, "sessionKey");
+      // The host-bound scope is already the complete search universe. Reuse the
+      // targeted authorization path instead of listing every session to filter it back down.
+      const requestedSessionKey =
+        readToolStringParam(params, "sessionKey") || opts?.sessionReadScopeKey;
       const {
         cfg,
         mainKey,
@@ -468,6 +472,7 @@ export function createSessionsSearchTool(opts?: {
           displayAction: "search",
           requesterAgentId,
           requesterSessionKey: effectiveRequesterKey,
+          sessionReadScopeKey: opts?.sessionReadScopeKey ? effectiveRequesterKey : undefined,
           mainSessionKey,
           authorizationTargetSessionKey,
           targetAgentId: agentId,

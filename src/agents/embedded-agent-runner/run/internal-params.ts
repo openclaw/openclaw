@@ -34,6 +34,10 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** Keep a bounded auxiliary tool set directly visible after runtime admission. */
+  disableToolSearch?: true;
+  /** Restrict history/search to an explicitly observed session, not this run's store key. */
+  sessionReadScopeKey?: string;
   /** Candidate producers have already resolved the model against their captured metadata. */
   requestedRouteResolution?: ModelFallbackRouteResolution;
   onCompactionRequestBudget?: (budget: CompactionRequestBudget | undefined) => void;

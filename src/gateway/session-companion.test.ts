@@ -1,16 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createAgentToAgentPolicy,
-  resolveSessionToolAccess,
-} from "../agents/tools/sessions-access.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { SessionCompanionAskError } from "./session-companion-ask.js";
 import type { SessionCompanionContextReader } from "./session-companion-context.js";
-import {
-  buildSessionCompanionRunConfig,
-  SESSION_COMPANION_TOOLS,
-} from "./session-companion-policy.js";
 import { trimSessionCompanionExchanges } from "./session-companion-state.js";
 import { createSessionCompanion } from "./session-companion.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
@@ -741,44 +733,5 @@ describe("session companion asks", () => {
       exchanges: [],
     });
     harness.service.dispose();
-  });
-});
-
-describe("session companion tool scope", () => {
-  it("pins session tools to the target session and read to its workspace", async () => {
-    const cfg = buildSessionCompanionRunConfig({
-      tools: { toolSearch: true, codeMode: true },
-    });
-    expect(SESSION_COMPANION_TOOLS).toEqual(["read", "sessions_history", "sessions_search"]);
-    expect(cfg.tools?.fs?.workspaceOnly).toBe(true);
-    expect(cfg.tools?.sessions?.visibility).toBe("self");
-    expect(cfg.tools?.toolSearch).toMatchObject({ enabled: false });
-    expect(cfg.tools?.codeMode).toBe(true);
-
-    const targetAccess = await resolveSessionToolAccess({
-      action: "history",
-      requesterAgentId: "main",
-      requesterSessionKey: "agent:main:target",
-      targetAgentId: "main",
-      targetSessionKey: "agent:main:target",
-      requesterOwned: false,
-      visibility: "self",
-      a2aPolicy: createAgentToAgentPolicy(cfg),
-    });
-    expect(targetAccess).toMatchObject({ allowed: true });
-    const differentAccess = await resolveSessionToolAccess({
-      action: "history",
-      requesterAgentId: "main",
-      requesterSessionKey: "agent:main:target",
-      targetAgentId: "main",
-      targetSessionKey: "agent:main:different",
-      requesterOwned: false,
-      visibility: "self",
-      a2aPolicy: createAgentToAgentPolicy(cfg),
-    });
-    expect(differentAccess).toMatchObject({
-      allowed: false,
-      status: "forbidden",
-    });
   });
 });

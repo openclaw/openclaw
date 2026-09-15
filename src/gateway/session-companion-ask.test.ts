@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+import type { RunEmbeddedAgentInternalParams } from "../agents/embedded-agent-runner/run/internal-params.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -7,7 +7,7 @@ import { createSessionCompanion } from "./session-companion.js";
 
 const runEmbeddedAgent = vi.hoisted(() =>
   vi.fn<
-    (params: RunEmbeddedAgentParams) => Promise<{
+    (params: RunEmbeddedAgentInternalParams) => Promise<{
       meta: { durationMs: number; finalAssistantVisibleText: string };
     }>
   >(),
@@ -83,6 +83,7 @@ describe("session companion embedded invocation", () => {
         modelId: invocation.model,
         model: { compat: { codeMode: "preferred" } },
         codeModeOverride: invocation.codeModeOverride,
+        disableToolSearch: invocation.disableToolSearch,
         toolsAllow: invocation.toolsAllow,
         modelToolsEnabled: true,
         executeTool: async () => ({ content: [], details: {} }),

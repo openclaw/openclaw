@@ -444,6 +444,7 @@ function resolveSessionsHistoryPaginationMetadata(params: {
 
 export function createSessionsHistoryTool(opts?: {
   agentSessionKey?: string;
+  sessionReadScopeKey?: string;
   requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
@@ -563,6 +564,7 @@ export function createSessionsHistoryTool(opts?: {
         action: "history",
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        sessionReadScopeKey: opts?.sessionReadScopeKey ? effectiveRequesterKey : undefined,
         mainSessionKey,
         authorizationTargetSessionKey: authorizationKey,
         targetAgentId,
