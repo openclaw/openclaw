@@ -443,8 +443,12 @@ export function validateExplicitPluginConfig(params: {
         });
       }
     }
+    // A first-write privacy default is written by the config writer, not the user,
+    // so it must not be reported back as authored plugin configuration. The registry
+    // entry above is normalized and gains optional keys, so match the raw entry.
     const suppressDisabledConfigWarning =
-      ensureCompatPluginIds().has(pluginId) && !ensureOverriddenPluginIds().has(pluginId);
+      (ensureCompatPluginIds().has(pluginId) && !ensureOverriddenPluginIds().has(pluginId)) ||
+      isNativeSessionCatalogOptOutOnly(pluginId, entries?.[pluginId]);
     if (!enabled && entryHasConfig && !suppressDisabledConfigWarning) {
       warnings.push({
         path: `plugins.entries.${pluginId}`,

@@ -104,11 +104,45 @@ describe("applyPluginAutoEnable core", () => {
       env,
       manifestRegistry: makeRegistry([
         { id: "anthropic", channels: [] },
-        { id: "codex", channels: [] },
+        // Codex declares tools and a sessionCatalog schema key. That is the shape
+        // that read the seeded privacy default as authored tool configuration.
+        {
+          id: "codex",
+          channels: [],
+          contracts: { tools: ["codex_threads"] },
+          configSchema: {
+            properties: { sessionCatalog: { type: "object" }, appServer: { type: "object" } },
+          },
+        },
       ]),
     });
     expect(result.config).toEqual(config);
     expect(result.changes).toEqual([]);
+  });
+
+  it("still auto-enables a tool plugin carrying authored config beside a catalog opt-out", () => {
+    const config = initializeNativeSessionCatalogPreferences({
+      plugins: {
+        allow: ["existing"],
+        entries: { codex: { config: { appServer: { url: "ws://127.0.0.1:1" } } } },
+      },
+    });
+    const result = applyPluginAutoEnable({
+      config,
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "codex",
+          channels: [],
+          contracts: { tools: ["codex_threads"] },
+          configSchema: {
+            properties: { sessionCatalog: { type: "object" }, appServer: { type: "object" } },
+          },
+        },
+      ]),
+    });
+    expect(result.config.plugins?.allow).toEqual(["existing", "codex"]);
+    expect(result.config.plugins?.entries?.codex).toMatchObject({ enabled: true });
   });
 
   it("retains explicit plugin selection alongside a first-write catalog opt-out", () => {

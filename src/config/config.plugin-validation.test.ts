@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { validateConfigObjectWithPlugins as validateConfigObjectWithPluginsRaw } from "./validation.js";
@@ -1992,6 +1993,39 @@ describe("config plugin validation", () => {
     expectPathMessage(
       res.warnings,
       "plugins.entries.diffs",
+      "plugin disabled (bundled (disabled by default)) but config is present",
+    );
+  });
+
+  it("does not warn about a first-write privacy default for a disabled bundled catalog plugin", () => {
+    const res = validateInSuite(initializeNativeSessionCatalogPreferences({}));
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    // The config writer seeds this entry itself, so it carries no user intent.
+    expectNoPath(res.warnings, "plugins.entries.codex");
+  });
+
+  it("still warns when a disabled bundled catalog plugin carries authored config", () => {
+    const res = validateInSuite({
+      plugins: {
+        entries: {
+          codex: {
+            config: { sessionCatalog: { enabled: false }, codexDynamicToolsLoading: "searchable" },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expectPathMessage(
+      res.warnings,
+      "plugins.entries.codex",
       "plugin disabled (bundled (disabled by default)) but config is present",
     );
   });
