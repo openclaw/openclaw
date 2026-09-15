@@ -42,8 +42,9 @@ import {
 } from "./session-canonical-row.js";
 import { deferCanonicalSessionValidation } from "./session-canonical-validation-deferral.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-export { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-row.js";
 import type { SessionEntry } from "./types.js";
+
+export { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-row.js";
 
 type CanonicalSessionDatabase = Pick<
   OpenClawAgentKyselyDatabase,

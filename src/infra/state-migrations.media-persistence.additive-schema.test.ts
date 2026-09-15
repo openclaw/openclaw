@@ -5,6 +5,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
@@ -23,6 +24,7 @@ function createV17AdditiveFixture(
 
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(databasePath);
+  removeCanonicalValidationFromHistoricalAgentFixture(database);
   database.exec(`
     DROP TABLE session_participants;
     DROP TRIGGER session_conversations_route_context_invalidate_after_update;
@@ -61,7 +63,7 @@ describe("legacy media persistence additive schema repair", () => {
     cleanupTempDirs(tempDirs);
   });
 
-  it("repairs same-version additive session schema before media validation", async () => {
+  it("repairs schema-19 additive session schema before media validation", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-current-additive-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const opened = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -82,7 +84,11 @@ describe("legacy media persistence additive schema repair", () => {
 
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);
+    removeCanonicalValidationFromHistoricalAgentFixture(database);
     database.exec(`
+      DROP TABLE session_transcript_cold_archives;
+      PRAGMA user_version = 19;
+      UPDATE schema_meta SET schema_version = 19 WHERE meta_key = 'primary';
       DROP TRIGGER session_nodes_entry_valid_after_insert;
       DROP TRIGGER session_nodes_entry_valid_after_entry_update;
       DROP TRIGGER session_nodes_entry_valid_after_identity_update;

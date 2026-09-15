@@ -54,8 +54,12 @@ function tableInventory(database, table) {
     JSON.stringify(
       columns.map((column) => row[column]),
       (_key, value) => {
-        if (typeof value === "bigint") return { integer: value.toString() };
-        if (value instanceof Uint8Array) return { blob: Buffer.from(value).toString("base64") };
+        if (typeof value === "bigint") {
+          return { integer: value.toString() };
+        }
+        if (value instanceof Uint8Array) {
+          return { blob: Buffer.from(value).toString("base64") };
+        }
         return value;
       },
     ),
@@ -64,13 +68,17 @@ function tableInventory(database, table) {
   // SQLite's physical layout and backup VACUUM page order.
   rows.sort();
   const hash = createHash("sha256");
-  for (const row of rows) hash.update(`${row}\n`);
+  for (const row of rows) {
+    hash.update(`${row}\n`);
+  }
   return { table, columns, rows: rows.length, sha256: hash.digest("hex") };
 }
 
 function databaseInventory(stateDir, specimen) {
   const file = containedPath(stateDir, specimen.relative);
-  if (!fs.existsSync(file)) return { ...specimen, present: false };
+  if (!fs.existsSync(file)) {
+    return { ...specimen, present: false };
+  }
   // This observer cannot initialize or migrate the database it is measuring.
   const database = new DatabaseSync(file, { readOnly: true });
   try {
@@ -84,14 +92,16 @@ function databaseInventory(stateDir, specimen) {
       ? database
           .prepare("SELECT role, schema_version, agent_id FROM schema_meta ORDER BY meta_key")
           .all()
-          .map((row) => ({ ...row }))
+          .map((row) => Object.assign({}, row))
       : [];
     let contentVersion = userVersion;
     if (specimen.kind === "state" && tables.includes("config_machine_state")) {
       const row = database
         .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
         .get("state.schema.contentVersion");
-      if (row) contentVersion = Math.max(userVersion, JSON.parse(row.value_json));
+      if (row) {
+        contentVersion = Math.max(userVersion, JSON.parse(row.value_json));
+      }
     }
     const logicalTables =
       specimen.kind === "agent"
@@ -118,7 +128,7 @@ function databaseInventory(stateDir, specimen) {
             // and retained windows whose entry no longer has a session ID.
             .filter((row) => !/^agent:[^:]+:internal-session-effects:/u.test(row.key))
             .map((row) => ({ key: row.key, sessionId: row.sessionId }))
-            .sort(compareSessionKeys)
+            .toSorted(compareSessionKeys)
         : [];
     return {
       ...specimen,
@@ -198,9 +208,11 @@ function capture(schemaFile, packageRoot, entry, runtimeRoot, resultFile) {
   const specimens = schema.databases.map(({ kind, relative }) => ({ kind, relative }));
   for (const agent of schema.agents) {
     const existing = specimens.find((specimen) => specimen.relative === agent.databaseRelative);
-    if (existing) existing.agentId = agent.agentId;
-    else
+    if (existing) {
+      existing.agentId = agent.agentId;
+    } else {
       specimens.push({ kind: "agent", relative: agent.databaseRelative, agentId: agent.agentId });
+    }
   }
   const files = schema.agents
     .flatMap((agent) => agent.files)
@@ -294,7 +306,9 @@ function capture(schemaFile, packageRoot, entry, runtimeRoot, resultFile) {
 
 function verify(resultFile, candidateSchemaFile) {
   const proof = readJson(resultFile);
-  if (proof.status === "not-applicable") return "not-applicable";
+  if (proof.status === "not-applicable") {
+    return "not-applicable";
+  }
   assert.equal(proof.status, "captured", "baseline backup capture is incomplete");
   const candidate = readJson(candidateSchemaFile);
   assert.equal(
@@ -378,7 +392,9 @@ function verify(resultFile, candidateSchemaFile) {
   );
   const preflights = [];
   for (const database of proof.before.databases) {
-    if (database.kind !== "agent" || !database.present) continue;
+    if (database.kind !== "agent" || !database.present) {
+      continue;
+    }
     const output = path.join(artifacts, `backup-rollback-preflight-${database.agentId}.json`);
     const preflight = runBaseline(
       proof.runtime,
@@ -443,7 +459,9 @@ function verify(resultFile, candidateSchemaFile) {
   });
   const sessionReads = [];
   for (const database of proof.before.databases) {
-    if (database.kind !== "agent" || !database.present) continue;
+    if (database.kind !== "agent" || !database.present) {
+      continue;
+    }
     const databasePath = containedPath(stateDir, database.relative);
     const output = path.join(artifacts, `backup-rollback-sessions-${database.agentId}.json`);
     // v2026.9.4 sessions.ts uses listSessionEntriesReadOnly for this explicit
@@ -478,7 +496,7 @@ function verify(resultFile, candidateSchemaFile) {
     assert.equal(listing.limitApplied, null, "baseline session consumer applied a limit");
     const identities = listing.sessions
       .map(({ key, sessionId }) => ({ key, sessionId }))
-      .sort(compareSessionKeys);
+      .toSorted(compareSessionKeys);
     assert.deepEqual(
       identities,
       database.sessions,

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { constants, DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -229,6 +230,7 @@ describe("canonical validation schema admission", () => {
       withDatabase((database) => {
         assertCanonicalSessionValidationSchema(database);
         const cookie = database.prepare("PRAGMA schema_version").get()?.schema_version;
+        assert(typeof cookie === "number");
         if (action === "close") {
           database.close();
         } else {
@@ -250,6 +252,7 @@ describe("canonical validation schema admission", () => {
       withDatabase((database) => {
         assertCanonicalSessionValidationSchema(database);
         const cookie = database.prepare("PRAGMA schema_version").get()?.schema_version;
+        assert(typeof cookie === "number");
         const replacement = new DatabaseSync(":memory:");
         try {
           replacement.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL));
