@@ -32,6 +32,10 @@ import {
 } from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
 import { parseDocsDocument, resolveDocsFragment } from "../lib/docs-markdown.mjs";
 import { collectMirroredDocsRoutes } from "../lib/docs-published-routes.mts";
+import {
+  collectChannelMaturityInventory,
+  MATURITY_CHANNEL_COHORT_SURFACE_IDS,
+} from "./maturity-inventory.mts";
 
 const DEFAULT_TAXONOMY_PATH = "taxonomy.yaml";
 const DEFAULT_SCORES_PATH = "qa/maturity-scores.yaml";
@@ -217,12 +221,28 @@ const legacySurfaceAnchors: Readonly<Record<string, readonly string[]>> = {
   "app-sdk": ["openclaw-app-sdk"],
   automation: ["automation-cron-hooks-tasks-polling"],
   containers: ["docker-and-podman-hosting"],
+  "community-channels": ["mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat"],
   "control-ui": ["gateway-web-app"],
   "imessage-bluebubbles": ["imessage-and-bluebubbles"],
   "session-memory": ["session-memory-and-context-engine"],
   "small-linux": ["raspberry-pi-and-small-linux-devices"],
   "windows-app": ["native-windows-companion-app"],
+  "regional-channels": ["feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels"],
 };
+
+function renderCatalogMembers(surfaceId: string): string[] {
+  if (!MATURITY_CHANNEL_COHORT_SURFACE_IDS.has(surfaceId)) {
+    return [];
+  }
+  const members = collectChannelMaturityInventory().membersBySurface.get(surfaceId) ?? [];
+  if (members.length === 0) {
+    return [];
+  }
+  return [
+    `**Current catalog members:** ${members.map((member) => `[${markdownEscape(member.label)}](${member.docsPath})`).join(", ")}`,
+    "",
+  ];
+}
 
 function normalizeRoutePath(route: string): string {
   return route.replace(/^\/+/, "").replace(/\/+$/, "");
@@ -1366,6 +1386,7 @@ function renderTaxonomy({
         "",
         `    ${markdownEscape(surface.rationale ?? "")}`,
         "",
+        ...indentMarkdown(renderCatalogMembers(surface.id), 4),
         ...indentMarkdown(
           [
             `<div className="maturity-surface-rollup"><span>Coverage ${scoreLabel(coverage.surfaces.get(surface.id))}</span><span>Quality ${scoreLabel(scoreSurface?.scores?.quality)}</span><span>Completeness ${scoreLabel(scoreSurface?.scores?.completeness)}</span><span>${maturityLtsBadge(scoreSurface?.lts)}</span></div>`,

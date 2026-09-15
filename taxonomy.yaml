@@ -9564,7 +9564,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: community-channels
-    name: Mattermost, LINE, IRC, Nextcloud Talk, Nostr, Twitch, Tlon, Synology Chat
+    name: Community channel cohort
     family: channel
     level: alpha
     level_code: M2
@@ -9626,7 +9626,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: regional-channels
-    name: Feishu, QQ Bot, WeChat, Yuanbao, Zalo, Zalo Personal, regional channels
+    name: Regional channel cohort
     family: channel
     level: alpha
     level_code: M2

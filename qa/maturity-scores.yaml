@@ -3478,7 +3478,7 @@ surfaces:
           reason: none
           human_override: false
   - id: community-channels
-    name: Mattermost, LINE, IRC, Nextcloud Talk, Nostr, Twitch, Tlon, Synology Chat
+    name: Community channel cohort
     family: channel
     level:
       id: alpha
@@ -3547,7 +3547,7 @@ surfaces:
           reason: none
           human_override: false
   - id: regional-channels
-    name: Feishu, QQ Bot, WeChat, Yuanbao, Zalo, Zalo Personal, regional channels
+    name: Regional channel cohort
     family: channel
     level:
       id: alpha
