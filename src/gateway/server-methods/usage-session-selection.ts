@@ -203,10 +203,11 @@ export async function selectUsageSessions(params: {
   } = params;
   // Load session store for named sessions only on a result-cache miss.
   const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
-  const { store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(
-    config,
-    sessionStoreOpts,
-  );
+  // Usage exposes saved prompt reports as context weight, including its availability flag.
+  const { store, targetsBySessionKey } = loadCombinedSessionStoreForGatewayCore(config, {
+    ...sessionStoreOpts,
+    projection: "full",
+  });
   const scopedStore = Object.fromEntries(
     Object.entries(store).filter(
       ([key, entry]) =>
