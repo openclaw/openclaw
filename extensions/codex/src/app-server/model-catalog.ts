@@ -108,7 +108,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       const ownsLocalProcess =
         options.start.transport === "stdio" && !isCodexAppServerProxyLaunch(options.start.args);
       const authProfileStore =
-        ownsLocalProcess && configured.appServer?.homeScope === undefined
+        ownsLocalProcess && options.start.homeScope === "agent"
           ? resolveCodexAppServerAuthProfileStore({
               agentDir: params.agentDir,
               config: params.config,
@@ -117,20 +117,12 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       const authProfileId = authProfileStore
         ? resolveCodexAppServerAuthProfileId({ store: authProfileStore, config: params.config })
         : undefined;
-      const usesNativeHome =
-        ownsLocalProcess && configured.appServer?.homeScope !== "agent" && !authProfileId;
+      const usesNativeHome = ownsLocalProcess && options.start.homeScope === "user";
       const native = usesNativeHome ? await probeCodexNativeAuth({ pluginConfig }) : undefined;
       if ((usesNativeHome && !native) || disposed || observations.get(key) !== observation) {
         return [];
       }
-      const { start } = usesNativeHome
-        ? resolveCodexAppServerRuntimeOptions({
-            pluginConfig: {
-              ...configured,
-              appServer: { ...configured.appServer, homeScope: "user" },
-            },
-          })
-        : options;
+      const { start } = options;
       const timeoutMs = discovery?.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
       const result = await withCodexAppServerJsonClient(
         {

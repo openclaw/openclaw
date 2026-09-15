@@ -96,7 +96,7 @@ export async function stageCodexCandidate(
               appServer: {
                 ...appServer,
                 transport: "stdio",
-                homeScope: credential ? "agent" : "user",
+                ...(credential ? { homeScope: "agent" } : {}),
               },
             },
           },
