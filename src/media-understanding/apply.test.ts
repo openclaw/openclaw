@@ -2735,27 +2735,39 @@ describe("applyMediaUnderstanding", () => {
   });
 
   describe("renderInboundDocumentContext", () => {
-    it("renders a document attachment without mutating ctx", async () => {
-      const { renderInboundDocumentContext } = await import("./file-context.js");
-      const mediaPath = await createTempMediaFile({
-        fileName: "steer-note.txt",
-        content: "document body for the steered run",
-      });
-      const ctx: MsgContext = {
-        Body: "see attached",
-        media: [{ path: mediaPath, contentType: "text/plain" }],
-      };
+    it.each([undefined, 13])(
+      "renders a document attachment without mutating ctx (maxChars=%s)",
+      async (maxChars) => {
+        const { renderInboundDocumentContext } = await import("./file-context.js");
+        const mediaPath = await createTempMediaFile({
+          fileName: "steer-note.txt",
+          content: "document body for the steered run",
+        });
+        const ctx: MsgContext = {
+          Body: "see attached",
+          media: [{ path: mediaPath, contentType: "text/plain" }],
+        };
 
-      const context = await renderInboundDocumentContext({ ctx, cfg: {} as OpenClawConfig });
+        const context = await renderInboundDocumentContext({ ctx, cfg: {}, maxChars });
 
-      expect(context?.text).toContain('<file name="steer-note.txt" mime="text/plain">');
-      expect(context?.text).toContain("document body for the steered run");
-      expect(context?.images).toEqual([]);
-      // Read-only on ctx: a rejected steer falls back to reply dispatch, which
-      // must extract exactly once through the full pipeline.
-      expect(ctx.Body).toBe("see attached");
-      expect(ctx.media?.[0]?.path).toBe(mediaPath);
-    });
+        expect(context?.text).toContain('<file name="steer-note.txt" mime="text/plain">');
+        expect(context.text).toContain("document body for the steered run".slice(0, maxChars));
+        if (maxChars === undefined) {
+          expect(context.text).not.toContain("[Partial document:");
+        } else {
+          expect(context.text).toContain("[Partial document: text truncated.]");
+          expect(context.text).not.toContain("for the steered run");
+          expect(context.text.indexOf("[Partial document:")).toBeLessThan(
+            context.text.indexOf("<<<EXTERNAL_UNTRUSTED_CONTENT"),
+          );
+        }
+        expect(context?.images).toEqual([]);
+        // Read-only on ctx: a rejected steer falls back to reply dispatch, which
+        // must extract exactly once through the full pipeline.
+        expect(ctx.Body).toBe("see attached");
+        expect(ctx.media?.[0]?.path).toBe(mediaPath);
+      },
+    );
 
     it("returns empty for image attachments owned by the injected images channel", async () => {
       const { renderInboundDocumentContext } = await import("./file-context.js");

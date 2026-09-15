@@ -77,9 +77,21 @@ export async function extractPdfContent(
       maxTextChars: MAX_EXTRACTED_TEXT_CHARS,
     });
     const text = textResult.text;
+    const metadata = {
+      pages: {
+        processed: textResult.pagesProcessed,
+        total: pdf.pageCount,
+        selection: request.pageNumbers ? ("explicit" as const) : ("automatic" as const),
+        truncated: request.pageNumbers
+          ? request.pageNumbers.length > (pages?.length ?? 0)
+          : pdf.pageCount > request.maxPages,
+      },
+      textTruncated: textResult.truncated.text,
+      imagesTruncated: false,
+    };
 
     if (text.trim().length >= request.minTextChars) {
-      return { text, images: [] };
+      return { text, images: [], metadata };
     }
 
     // clawpdf's image render budget (maxPixels) is shared across every page in one
@@ -92,6 +104,7 @@ export async function extractPdfContent(
     try {
       const images: DocumentExtractedImage[] = [];
       let remainingPixels = request.maxPixels;
+      let renderedPages = 0;
       for (const [index, pageNumber] of imagePages.entries()) {
         if (remainingPixels <= 0) {
           break;
@@ -107,18 +120,22 @@ export async function extractPdfContent(
             forms: true,
           },
         });
+        renderedPages += 1;
+        metadata.imagesTruncated ||= imageResult.truncated.images;
         for (const image of imageResult.images) {
           images.push(toDocumentImage(image));
           remainingPixels -= image.width * image.height;
         }
       }
-      return { text, images };
+      metadata.imagesTruncated ||= renderedPages < imagePages.length;
+      return { text, images, metadata };
     } catch (err) {
+      metadata.imagesTruncated = true;
       request.onImageExtractionError?.(err);
       if (!text.trim()) {
         throw new Error("PDF image extraction failed with no extractable text.", { cause: err });
       }
-      return { text, images: [] };
+      return { text, images: [], metadata };
     }
   } finally {
     pdf.destroy();

@@ -35,6 +35,50 @@ const request = {
 };
 
 describe("PDF document extractor worker", () => {
+  const completenessFixture = createPdfFixture(
+    Array.from(
+      { length: 21 },
+      (_, index) =>
+        `BT /F1 12 Tf 72 720 Td (PAGE ${index + 1}${index === 20 ? " CORRECTION: REJECTED" : ""}) Tj ET`,
+    ),
+  );
+
+  it("reports pages omitted by the automatic page budget", async () => {
+    const result = await createPdfDocumentExtractor().extract({
+      ...request,
+      buffer: completenessFixture,
+      maxPages: 20,
+    });
+    expect(result).toMatchObject({
+      text: expect.not.stringContaining("CORRECTION: REJECTED"),
+      metadata: {
+        pages: {
+          processed: Array.from({ length: 20 }, (_, index) => index + 1),
+          total: 21,
+          selection: "automatic",
+          truncated: true,
+        },
+        textTruncated: false,
+      },
+    });
+  });
+
+  it("extracts page 21 when the page budget is one selected page", async () => {
+    const result = await createPdfDocumentExtractor().extract({
+      ...request,
+      buffer: completenessFixture,
+      pageNumbers: [21],
+      maxPages: 1,
+    });
+    expect(result).toMatchObject({
+      text: "PAGE 21 CORRECTION: REJECTED",
+      metadata: {
+        pages: { processed: [21], total: 21, selection: "explicit", truncated: false },
+        textTruncated: false,
+      },
+    });
+  });
+
   it("extracts selected pages through the public plugin and preserves the caller's buffer", async () => {
     const extractor = createPdfDocumentExtractor();
     expect(extractor).toMatchObject({ id: "pdf", mimeTypes: ["application/pdf"] });
