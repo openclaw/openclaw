@@ -7,6 +7,14 @@
   "enabledByDefault": true,
   "name": "CUA Computer",
   "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts.",
+  "configGroups": [
+    {
+      "id": "legacy-settings",
+      "title": "Legacy settings",
+      "order": 10,
+      "properties": ["driverPath"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

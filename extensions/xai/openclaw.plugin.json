@@ -320,6 +320,26 @@
       ]
     }
   },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    },
+    {
+      "id": "x-search",
+      "title": "X search",
+      "order": 20,
+      "properties": ["xSearch"]
+    },
+    {
+      "id": "code-execution",
+      "title": "Code execution",
+      "order": 30,
+      "properties": ["codeExecution"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

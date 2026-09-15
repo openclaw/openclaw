@@ -10,6 +10,44 @@
       "team-reports"
     ]
   },
+  "configGroups": [
+    {
+      "id": "report-display",
+      "title": "Report display",
+      "order": 10,
+      "properties": ["basePath", "displayTimezone"]
+    },
+    {
+      "id": "activity-sources",
+      "title": "Activity sources",
+      "order": 20,
+      "properties": ["github", "discord"]
+    },
+    {
+      "id": "team-members",
+      "title": "Team members",
+      "order": 30,
+      "properties": ["people", "peopleFile"]
+    },
+    {
+      "id": "summaries",
+      "title": "Summaries",
+      "order": 40,
+      "properties": ["summaries"]
+    },
+    {
+      "id": "schedule",
+      "title": "Schedule",
+      "order": 50,
+      "properties": ["schedule"]
+    },
+    {
+      "id": "retention",
+      "title": "Retention",
+      "order": 60,
+      "properties": ["retention"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "properties": {
