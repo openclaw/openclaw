@@ -2,10 +2,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureCodexComputerUseServiceApp } from "./computer-use-service.js";
 import { resolveMacOSDesktopCodexComputerUseServiceAppCandidates } from "./desktop-app-paths.js";
+import { createCodexDesktopGenerationOwner } from "./desktop-generation-owner.js";
+import { waitForCodexDesktopGeneration } from "./desktop-generation.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
+
+vi.mock("./desktop-generation.js", () => ({
+  waitForCodexDesktopGeneration: vi.fn(),
+}));
 
 const CLIENT_RELATIVE_PATH = path.join(
   "Contents",
@@ -42,6 +48,10 @@ const UNEXPECTED_IDENTITY = serviceIdentity({
 
 describe("Codex Computer Use native service", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  beforeEach(() => {
+    vi.mocked(waitForCodexDesktopGeneration).mockReset().mockResolvedValue(undefined);
+  });
 
   it("creates a fresh agent tree and installs beneath the isolated Codex home", async () => {
     const root = tempDirs.make("openclaw-computer-use-service-");
@@ -594,6 +604,60 @@ describe("Codex Computer Use native service", () => {
     ]);
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
   });
+
+  it.each([false, true])(
+    "reconciles copy notifications before publishing a service (desktop changed: %s)",
+    async (desktopChanged) => {
+      const root = tempDirs.make("openclaw-computer-use-service-notifications-");
+      const sourcePath = path.join(root, "source", "Codex Computer Use.app");
+      const codexHome = path.join(root, "agent", "codex-home");
+      const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
+      await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
+      await writeServiceFixture(targetPath, STALE_IDENTITY);
+      const selectedGeneration = { epoch: 1, fingerprint: "desktop-original" };
+      let fingerprint = selectedGeneration.fingerprint;
+      const owner = createCodexDesktopGenerationOwner({
+        initialGeneration: selectedGeneration,
+        readFingerprint: async () => fingerprint,
+      });
+      vi.mocked(waitForCodexDesktopGeneration).mockImplementation(async () => {
+        expect(owner.isCurrent(selectedGeneration)).toBe(false);
+        // Reconciliation must finish before the old signed service is moved.
+        await expect(inspectServiceFixture(targetPath)).resolves.toEqual(STALE_IDENTITY);
+        return await owner.wait();
+      });
+
+      const install = ensureCodexComputerUseServiceApp({
+        codexHome,
+        platform: "darwin",
+        sourceAppCandidates: [sourcePath],
+        copyServiceApp: async (source, target) => {
+          await copyServiceFixture(source, target);
+          if (desktopChanged) {
+            fingerprint = "desktop-replaced";
+          }
+          owner.markDirty();
+        },
+        inspectServiceApp: inspectServiceFixture,
+        assertCurrent: () => {
+          if (!owner.isCurrent(selectedGeneration)) {
+            throw new Error("desktop generation is stale");
+          }
+        },
+      });
+      if (desktopChanged) {
+        await expect(install).rejects.toThrow("desktop generation is stale");
+      } else {
+        await expect(install).resolves.toMatchObject({ status: "refreshed", changed: true });
+      }
+      expect(waitForCodexDesktopGeneration).toHaveBeenCalledOnce();
+      expect(owner.isCurrent(selectedGeneration)).toBe(!desktopChanged);
+      await expect(inspectServiceFixture(targetPath)).resolves.toEqual(
+        desktopChanged ? STALE_IDENTITY : CURRENT_IDENTITY,
+      );
+      await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
+    },
+  );
 
   it("leaves the prior service intact when its generation becomes stale before publication", async () => {
     const root = tempDirs.make("openclaw-computer-use-service-stale-");

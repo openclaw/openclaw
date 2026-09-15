@@ -16,6 +16,7 @@ import {
   readRealDirectoryIdentity,
 } from "./computer-use-service-path.js";
 import { resolveMacOSDesktopCodexComputerUseServiceAppCandidates } from "./desktop-app-paths.js";
+import { waitForCodexDesktopGeneration } from "./desktop-generation.js";
 
 const SERVICE_APP_NAME = "Codex Computer Use.app";
 const SERVICE_BUNDLE_ID = "com.openai.sky.CUAService";
@@ -201,7 +202,14 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
     }
     const stagedSnapshot = await readServiceAppSnapshot(stagedPath, inspectServiceApp);
     const currentSourceIdentity = await inspectServiceApp(sourcePath);
+    // ditto can notify the source watcher without changing its generation. Settle
+    // those events before the original generation's synchronous publication guard.
+    await waitForCodexDesktopGeneration();
     await assertOwnedServiceParentStable(ownedParent);
+    await assertDirectoryIdentityStable(
+      stagingRootIdentity,
+      "Computer Use service staging directory",
+    );
     if (!currentSourceIdentity || !identitiesMatch(currentSourceIdentity, sourceIdentity)) {
       throw new Error("Selected Computer Use service source changed during refresh.");
     }

@@ -1,13 +1,23 @@
 // Codex tests cover Computer Use shared plugin cache reconciliation.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
 import type { ResolvedCodexComputerUseConfig } from "./config.js";
+import { createCodexDesktopGenerationOwner } from "./desktop-generation-owner.js";
+import { waitForCodexDesktopGeneration } from "./desktop-generation.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
+
+vi.mock("./desktop-generation.js", () => ({
+  waitForCodexDesktopGeneration: vi.fn(),
+}));
 
 describe("Codex Computer Use shared plugin cache", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  beforeEach(() => {
+    vi.mocked(waitForCodexDesktopGeneration).mockReset().mockResolvedValue(undefined);
+  });
 
   it("prefers the current ChatGPT.app bundled marketplace when both desktop app candidates exist", async () => {
     const root = tempDirs.make("openclaw-computer-use-cache-");
@@ -209,6 +219,76 @@ describe("Codex Computer Use shared plugin cache", () => {
       "generation-y",
     );
   });
+
+  it.each([false, true])(
+    "reconciles copy notifications before publishing a cache (desktop changed: %s)",
+    async (desktopChanged) => {
+      const root = tempDirs.make("openclaw-computer-use-cache-notifications-");
+      const bundledMarketplacePath = path.join(root, "Codex.app", "plugins", "openai-bundled");
+      const sourcePluginRoot = path.join(bundledMarketplacePath, "plugins", "computer-use");
+      await writeBundledComputerUsePlugin(bundledMarketplacePath, "1.0.857");
+      await fs.writeFile(path.join(sourcePluginRoot, "generation.txt"), "new-cache");
+      const codexHome = path.join(root, "agent", "codex-home");
+      const cachePath = path.join(
+        codexHome,
+        "plugins",
+        "cache",
+        "openai-bundled",
+        "computer-use",
+        "1.0.857",
+      );
+      await fs.cp(sourcePluginRoot, cachePath, { recursive: true });
+      await fs.writeFile(path.join(cachePath, "generation.txt"), "old-cache");
+      const selectedGeneration = { epoch: 1, fingerprint: "desktop-original" };
+      let fingerprint = selectedGeneration.fingerprint;
+      const owner = createCodexDesktopGenerationOwner({
+        initialGeneration: selectedGeneration,
+        readFingerprint: async () => fingerprint,
+      });
+      vi.mocked(waitForCodexDesktopGeneration).mockImplementation(async () => {
+        expect(owner.isCurrent(selectedGeneration)).toBe(false);
+        // Reconciliation must finish before the previous cache is moved.
+        await expect(fs.readFile(path.join(cachePath, "generation.txt"), "utf8")).resolves.toBe(
+          "old-cache",
+        );
+        return await owner.wait();
+      });
+      const copy = fs.cp.bind(fs);
+      const copySpy = vi.spyOn(fs, "cp").mockImplementation(async (...args) => {
+        await copy(...args);
+        if (desktopChanged) {
+          fingerprint = "desktop-replaced";
+        }
+        owner.markDirty();
+      });
+      try {
+        const install = ensureCodexComputerUseSharedPluginCache({
+          codexHome,
+          bundledMarketplacePath,
+          config: computerUseConfig(),
+          forceRefresh: true,
+          assertCurrent: () => {
+            if (!owner.isCurrent(selectedGeneration)) {
+              throw new Error("desktop generation is stale");
+            }
+          },
+        });
+        if (desktopChanged) {
+          await expect(install).rejects.toThrow("desktop generation is stale");
+        } else {
+          await expect(install).resolves.toMatchObject({ status: "shared", changed: true });
+        }
+        expect(waitForCodexDesktopGeneration).toHaveBeenCalledOnce();
+        expect(owner.isCurrent(selectedGeneration)).toBe(!desktopChanged);
+        await expect(fs.readFile(path.join(cachePath, "generation.txt"), "utf8")).resolves.toBe(
+          desktopChanged ? "old-cache" : "new-cache",
+        );
+        expect(await fs.readdir(path.dirname(cachePath))).toEqual(["1.0.857"]);
+      } finally {
+        copySpy.mockRestore();
+      }
+    },
+  );
 
   it("leaves same-version cache bytes intact when the generation is stale before publication", async () => {
     const root = tempDirs.make("openclaw-computer-use-cache-stale-");
