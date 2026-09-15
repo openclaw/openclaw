@@ -496,7 +496,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const questionFailure =
     replyAdmission?.status === "skipped" &&
     (replyAdmission.reason === "question-response-indeterminate" ||
-      replyAdmission.reason === "question-response-refused")
+      replyAdmission.reason === "question-response-refused" ||
+      replyAdmission.reason === "question-response-rejected")
       ? replyAdmission.reason
       : undefined;
   const preRunRejection =

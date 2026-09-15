@@ -1,5 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
+import {
+  createAgentQuestionAnswerAuthority,
+  withAgentQuestionAnswerAuthority,
+} from "../../agents/harness/host-private-capabilities.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
@@ -204,6 +208,108 @@ describe("dispatch input custody after a question response", () => {
         }),
       );
       expect(fixture.cancel).not.toHaveBeenCalled();
+    } finally {
+      question.dispose();
+      fixture.operation.complete();
+    }
+  });
+
+  it("reports an incomplete multi-question answer and keeps the question open", async () => {
+    const fixture = createQuestionDispatch("incomplete-answer");
+    const dispatcher = createDispatcher();
+    const resolves: unknown[] = [];
+    // Mirrors QuestionManager.validateAnswers: an unanswered question is
+    // rejected with QUESTION_INVALID_ANSWER before the resolve commits.
+    const gatewayCall = {
+      version: 2 as const,
+      call: async (request: { method: string; params?: unknown }) => {
+        if (request.method !== "question.resolve") {
+          return {};
+        }
+        resolves.push(request.params);
+        const answers = (request.params as { answers: { answers: Record<string, string[]> } })
+          .answers.answers;
+        const unanswered = Object.keys(answers).find((id) => answers[id]?.length === 0);
+        if (unanswered) {
+          const rejection = new Error(`question '${unanswered}' requires an answer`);
+          rejection.name = "GatewayClientRequestError";
+          throw Object.assign(rejection, {
+            gatewayCode: "INVALID_REQUEST",
+            details: { reason: "QUESTION_INVALID_ANSWER" },
+            retryable: false,
+          });
+        }
+        return {};
+      },
+    };
+    // The creator authority the source-bound claim path requires; this fixture
+    // accepts any caller so the test exercises answer validation, not policy.
+    const authority = createAgentQuestionAnswerAuthority({
+      sessionKey: fixture.operation.key,
+      fingerprint: "question-custody-fixture",
+      project: () => "question-custody-fixture",
+      assertActive: () => {},
+    });
+    const question = withAgentQuestionAnswerAuthority(authority, () =>
+      registerPendingAgentQuestion({
+        sessionKey: fixture.operation.key,
+        questionId: "ask_incomplete_answer",
+        questions: [
+          { id: "destination", header: "Where", question: "Where to?" },
+          { id: "budget", header: "Budget", question: "How much?" },
+        ],
+        gatewayCall,
+        answer: Promise.resolve({ status: "pending" }),
+      }),
+    );
+    question.attachRegistration(Promise.resolve());
+    try {
+      // One unkeyed line for two questions: the second question stays empty and
+      // the gateway rejects the whole answer before it is committed.
+      await dispatchReplyFromConfig({
+        ctx: fixture.ctx,
+        cfg: { ...automaticDirectReplyConfig, diagnostics: { enabled: true } },
+        dispatcher,
+        replyOptions: { turnAdoptionLifecycle: { onAdopted: async () => {} } },
+        replyResolver: async (ctx, opts) => {
+          const result = await runReplyQuestionInput({
+            commandBody: "Lisbon",
+            followupRun: createQueueTestRun({ prompt: "Lisbon" }),
+            sessionKey: fixture.operation.key,
+            sessionCtx: ctx,
+            opts,
+          });
+          expect(result.handled).toBe(true);
+          return result.handled ? result.payload : undefined;
+        },
+      });
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringContaining("The answer was not accepted: question 'budget'"),
+          isError: true,
+        }),
+      );
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining("still open") }),
+      );
+      expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "error", reason: "question-response-rejected" }),
+      );
+      expect(question.isResolving()).toBe(false);
+      expect(fixture.cancel).not.toHaveBeenCalled();
+
+      // The question survived the rejection, so a complete answer still lands.
+      const retry = await runReplyQuestionInput({
+        commandBody: "Lisbon\n2000",
+        followupRun: createQueueTestRun({ prompt: "Lisbon\n2000" }),
+        sessionKey: fixture.operation.key,
+        sessionCtx: fixture.ctx,
+      });
+      expect(retry).toEqual({ handled: true, payload: undefined });
+      expect(resolves).toHaveLength(2);
+      expect(resolves[1]).toMatchObject({
+        answers: { answers: { destination: ["Lisbon"], budget: ["2000"] } },
+      });
     } finally {
       question.dispose();
       fixture.operation.complete();

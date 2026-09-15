@@ -2,6 +2,7 @@ import {
   QuestionAnswerUnconfirmedError,
   QuestionDispatchRefusedError,
 } from "../../agents/harness/gateway-question-dispatch.js";
+import { readQuestionAnswerRejection } from "../../agents/harness/gateway-question-rejection.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../../agents/harness/gateway-question.js";
 import { logVerbose } from "../../globals.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
@@ -93,6 +94,28 @@ export async function runReplyQuestionInput(
         handled: true,
         payload: markReplyPayloadForSourceSuppressionDelivery({
           text: `The answer was not sent: ${error.message}. Use the question controls in the Control UI, or check the active run and your permissions before retrying.`,
+          isError: true,
+        }),
+      };
+    }
+    // A rejected answer never reached commitment, so the question is still
+    // pending for a corrected reply. Report it on the same channel: rethrowing
+    // here fails the whole dispatch, and the ingress then retries the identical
+    // answer into the identical rejection until the question times out, without
+    // the sender ever learning that anything was wrong.
+    const rejection = readQuestionAnswerRejection(error);
+    if (rejection) {
+      if (state) {
+        state.admission = { status: "skipped", reason: "question-response-rejected" };
+      }
+      return {
+        handled: true,
+        payload: markReplyPayloadForSourceSuppressionDelivery({
+          text: `${
+            rejection.detail
+              ? `The answer was not accepted: ${rejection.detail}.`
+              : "The answer was not accepted because a question is still unanswered."
+          } The question is still open, so reply again and answer every question by number or question id.`,
           isError: true,
         }),
       };

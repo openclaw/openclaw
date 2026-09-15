@@ -17,7 +17,8 @@ type ReplyOperationAdmissionSnapshot =
         | "lifecycle-invalidated"
         | "queue-cap"
         | "question-response-indeterminate"
-        | "question-response-refused";
+        | "question-response-refused"
+        | "question-response-rejected";
     };
 
 // Rejection diagnostics carry owner-selected codes, never user-facing error text.
