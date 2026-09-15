@@ -137,6 +137,12 @@ async preparation share the same instruction cache; only delivered pins load
 manifests. Immutable bundle verification and current turn-authority checks remain
 with resource preparation, and ordinary library list/read and selection mutation
 keep their existing owners.
+Embedded-run lazy entry loading also prepares pinned descriptions through this
+read owner. Each uncached load captures its library state context before workspace
+preparation and publishes its combined entries only after both preparations and
+current-owner checks finish. Workspace filtering still precedes appended library
+pins; workspace-only loads omit them. Workspace plugin discovery retains its
+existing synchronous metadata path.
 
 Model-context reads and session transcript preparation use the session-transcript
 worker with separate bounded queues. Background preparation cannot occupy the

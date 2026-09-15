@@ -5,6 +5,8 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import * as librarySelectionModule from "../library/selection.js";
 import * as skillsLoaderModule from "../loading/workspace-skill-loader.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { SkillEntry, SkillSnapshot } from "../types.js";
@@ -228,5 +230,127 @@ describe("resolveEmbeddedRunSkillEntries", () => {
     expect(await result.loadSkillEntries()).toBe(loadedEntries);
     expect(await result.loadSkillEntries()).toBe(loadedEntries);
     expect(prepareWorkspaceSkillsSpy).toHaveBeenCalledOnce();
+  });
+});
+
+describe("embedded library cache publication", () => {
+  const workspace = vi.spyOn(skillsLoaderModule, "prepareWorkspaceSkills");
+  const library = vi.spyOn(librarySelectionModule, "prepareSkillLibrarySelection");
+  const entry = (name: string): SkillEntry => ({
+    skill: createCanonicalFixtureSkill({
+      name,
+      description: name,
+      filePath: `/synthetic/${name}/SKILL.md`,
+      baseDir: `/synthetic/${name}`,
+      source: "test",
+    }),
+    frontmatter: {},
+  });
+  const workspaceEntries = [entry("workspace")];
+  const libraryEntries = [entry("library")];
+  const snapshot: SkillSnapshot = {
+    prompt: "cached prompt",
+    skills: [],
+    resolvedSkills: [],
+    librarySelections: [
+      { skillId: "library", revision: "0".repeat(64), name: "library", ownerProfileId: null },
+    ],
+    skillFilter: ["workspace"],
+  };
+  const resolve = (options: { assertCurrent?: () => void; workspaceOnly?: boolean } = {}) =>
+    resolveEmbeddedRunSkillEntries({
+      workspaceDir: "/synthetic/workspace",
+      config: { plugins: { enabled: false } },
+      skillsSnapshot: snapshot,
+      ...options,
+    });
+
+  beforeEach(() => {
+    clearRuntimeConfigSnapshot();
+    workspace.mockReset().mockResolvedValue(workspaceEntries);
+    library.mockReset().mockResolvedValue(libraryEntries);
+  });
+
+  it("keeps concurrent lazy reads private until complete and preserves append order", async () => {
+    const gate = createDeferredCore<SkillEntry[]>();
+    const entered = createDeferredCore();
+    library.mockImplementation(() => {
+      entered.resolve();
+      return gate.promise;
+    });
+    const result = await resolve();
+    expect(workspace).not.toHaveBeenCalled();
+    expect(library).not.toHaveBeenCalled();
+    const completedNames: string[][] = [];
+    const captureCompletion = (entries: SkillEntry[]) => {
+      completedNames.push(entries.map(({ skill }) => skill.name));
+      return entries;
+    };
+    const first = result.loadSkillEntries().then(captureCompletion);
+    await entered.promise;
+    const second = result.loadSkillEntries().then(captureCompletion);
+    gate.resolve(libraryEntries);
+    const results = await Promise.all([first, second]);
+    expect(completedNames).toEqual([
+      ["workspace", "library"],
+      ["workspace", "library"],
+    ]);
+    expect(results).toContain(await result.loadSkillEntries());
+    expect(workspaceEntries.map(({ skill }) => skill.name)).toEqual(["workspace"]);
+  });
+
+  it.each(["workspace", "library"] as const)(
+    "retries complete loading after a rejected %s stage",
+    async (stage) => {
+      const failure = new Error(`Synthetic ${stage} rejection`);
+      (stage === "workspace" ? workspace : library).mockRejectedValueOnce(failure);
+      const result = await resolve();
+      await expect(result.loadSkillEntries()).rejects.toBe(failure);
+      expect((await result.loadSkillEntries()).map(({ skill }) => skill.name)).toEqual([
+        "workspace",
+        "library",
+      ]);
+      expect(workspaceEntries).toHaveLength(1);
+    },
+  );
+
+  it.each(["workspace", "library"] as const)(
+    "rejects an obsolete owner after awaiting %s without publishing its entries",
+    async (stage) => {
+      const gate = createDeferredCore<SkillEntry[]>();
+      const entered = createDeferredCore();
+      (stage === "workspace" ? workspace : library).mockImplementationOnce(() => {
+        entered.resolve();
+        return gate.promise;
+      });
+      const failure = new Error("Synthetic embedded owner closed");
+      let current = true;
+      const result = await resolve({
+        assertCurrent() {
+          if (!current) {
+            throw failure;
+          }
+        },
+      });
+      const pending = result.loadSkillEntries();
+      const rejected = expect(pending).rejects.toBe(failure);
+      await entered.promise;
+      current = false;
+      gate.resolve(stage === "workspace" ? workspaceEntries : libraryEntries);
+      await rejected;
+      current = true;
+      expect((await result.loadSkillEntries()).map(({ skill }) => skill.name)).toEqual([
+        "workspace",
+        "library",
+      ]);
+      expect(workspaceEntries).toHaveLength(1);
+    },
+  );
+
+  it("excludes pinned libraries from workspace-only loads and retains workspace array identity", async () => {
+    const result = await resolve({ workspaceOnly: true });
+    expect(await result.loadSkillEntries()).toBe(workspaceEntries);
+    expect(await result.loadSkillEntries()).toBe(workspaceEntries);
+    expect(library).not.toHaveBeenCalled();
   });
 });

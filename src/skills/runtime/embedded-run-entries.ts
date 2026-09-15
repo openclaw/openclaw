@@ -1,6 +1,7 @@
 // Embedded run entry helpers serialize runtime skill metadata for agent run records.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadSkillLibrarySelection } from "../library/selection.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { prepareSkillLibrarySelection } from "../library/selection.js";
 import { resolveSkillRuntimeConfig } from "../loading/runtime-config.js";
 import { prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
@@ -48,6 +49,12 @@ export async function resolveEmbeddedRunSkillEntries(params: {
     if (cachedSkillEntries) {
       return cachedSkillEntries;
     }
+    params.assertCurrent?.();
+    const librarySelections =
+      params.workspaceOnly !== true ? params.skillsSnapshot?.librarySelections : undefined;
+    const libraryCaller = librarySelections?.length
+      ? { context: captureOpenClawStateWorkerContext(), assertCurrent: params.assertCurrent }
+      : undefined;
     const options = {
       config,
       agentId: params.agentId,
@@ -60,7 +67,7 @@ export async function resolveEmbeddedRunSkillEntries(params: {
         : {}),
       ...(params.workspaceOnly === true ? { workspaceOnly: true } : {}),
     };
-    cachedSkillEntries = await prepareWorkspaceSkills(
+    const workspaceEntries = await prepareWorkspaceSkills(
       skillRoots.agentWorkspaceDir,
       {
         ...options,
@@ -68,11 +75,18 @@ export async function resolveEmbeddedRunSkillEntries(params: {
       },
       params.assertCurrent,
     );
-    if (params.skillsSnapshot?.librarySelections?.length && params.workspaceOnly !== true) {
-      cachedSkillEntries.push(
-        ...loadSkillLibrarySelection(params.skillsSnapshot.librarySelections),
-      );
-    }
+    params.assertCurrent?.();
+    const libraryEntries = libraryCaller
+      ? await prepareSkillLibrarySelection(
+          librarySelections!,
+          { env: libraryCaller.context.environment },
+          libraryCaller,
+        )
+      : undefined;
+    params.assertCurrent?.();
+    cachedSkillEntries = libraryEntries
+      ? [...workspaceEntries, ...libraryEntries]
+      : workspaceEntries;
     return cachedSkillEntries;
   };
   return {
