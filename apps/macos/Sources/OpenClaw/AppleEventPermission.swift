@@ -12,13 +12,170 @@ enum AppleEventPermissionState: Equatable, Sendable {
     case failed(OSStatus)
 }
 
+/// Runs the blocking Apple Event permission check off the Swift cooperative
+/// thread pool, coalesces concurrent callers onto one in-flight probe, and
+/// keeps that probe tracked until the native call really returns.
+///
+/// `AEDeterminePermissionToAutomateTarget` blocks the calling thread until the
+/// target app answers (and, when asking, until the user answers tccd). Running
+/// it from `Task.detached` pinned a cooperative-pool thread for that whole time.
+/// Node refreshes fire from several notifications, so one unanswered probe let
+/// later probes stack up until the pool was exhausted; every other async task in
+/// the app (gateway websocket receive, status item, node commands) then stalled
+/// until the process was killed.
+///
+/// The native call now runs on a private dispatch queue, so a hung probe costs
+/// one queue thread instead of a pool thread. Callers of the same kind share the
+/// in-flight operation, and passive callers give up after a deadline measured
+/// from the operation's start. The operation itself stays in `inFlight` until it
+/// returns, so a timed-out caller never enqueues a second native call behind the
+/// hung one; later passive callers answer immediately with `errAETimeout` until
+/// the target finally replies, after which the next probe runs fresh.
+actor AppleEventPermissionProbeCoordinator {
+    typealias DeterminePermission = AppleEventPermissionProbe.DeterminePermission
+
+    static let shared = AppleEventPermissionProbeCoordinator()
+
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "AppleEventPermissionProbe")
+
+    private struct Operation {
+        let id: UUID
+        let task: Task<OSStatus, Never>
+        let startedAt: ContinuousClock.Instant
+    }
+
+    /// Concurrent so an interactive prompt is not queued behind a hung passive check.
+    private let queue = DispatchQueue(
+        label: "ai.openclaw.apple-event-permission",
+        qos: .userInitiated,
+        attributes: .concurrent)
+    private var inFlight: [Bool: Operation] = [:]
+    private var waiters: [Bool: Int] = [:]
+
+    init() {}
+
+    func status(
+        askUserIfNeeded: Bool,
+        timeout: Duration?,
+        determinePermission: @escaping DeterminePermission) async -> OSStatus
+    {
+        let operation = self.operation(askUserIfNeeded: askUserIfNeeded, determinePermission: determinePermission)
+        self.waiters[askUserIfNeeded, default: 0] += 1
+        defer { self.waiters[askUserIfNeeded, default: 0] -= 1 }
+        guard let timeout else {
+            return await operation.task.value
+        }
+        let remaining = timeout - (ContinuousClock.now - operation.startedAt)
+        guard remaining > .zero else {
+            return AppleEventPermissionProbe.timedOutStatus
+        }
+        let status = await Self.value(of: operation.task, within: remaining)
+        if status == AppleEventPermissionProbe.timedOutStatus, self.inFlight[askUserIfNeeded]?.id == operation.id {
+            Self.logger.error(
+                "probe ask=\(askUserIfNeeded) timed out after \(timeout, privacy: .public); operation retained")
+        }
+        return status
+    }
+
+    /// Callers currently parked on the in-flight probe of this kind.
+    func waiterCount(askUserIfNeeded: Bool) -> Int {
+        self.waiters[askUserIfNeeded] ?? 0
+    }
+
+    /// Whether a native probe of this kind is still running, timed-out callers included.
+    func isProbeInFlight(askUserIfNeeded: Bool) -> Bool {
+        self.inFlight[askUserIfNeeded] != nil
+    }
+
+    private func operation(
+        askUserIfNeeded: Bool,
+        determinePermission: @escaping DeterminePermission) -> Operation
+    {
+        if let pending = self.inFlight[askUserIfNeeded] {
+            return pending
+        }
+        let id = UUID()
+        let queue = self.queue
+        let task = Task<OSStatus, Never>.detached(priority: .userInitiated) {
+            let status = await withCheckedContinuation { (continuation: CheckedContinuation<OSStatus, Never>) in
+                queue.async {
+                    continuation.resume(returning: determinePermission(askUserIfNeeded))
+                }
+            }
+            await self.finish(id: id, askUserIfNeeded: askUserIfNeeded, status: status)
+            return status
+        }
+        let operation = Operation(id: id, task: task, startedAt: .now)
+        self.inFlight[askUserIfNeeded] = operation
+        return operation
+    }
+
+    private func finish(id: UUID, askUserIfNeeded: Bool, status: OSStatus) {
+        guard let operation = self.inFlight[askUserIfNeeded], operation.id == id else { return }
+        self.inFlight[askUserIfNeeded] = nil
+        let elapsed = ContinuousClock.now - operation.startedAt
+        Self.logger.info(
+            "probe ask=\(askUserIfNeeded) returned \(status) after \(elapsed, privacy: .public)")
+    }
+
+    /// Resolves to the task's value or to `timedOutStatus`, whichever comes first.
+    /// The task keeps running either way; only the waiting is bounded.
+    private static func value(of task: Task<OSStatus, Never>, within timeout: Duration) async -> OSStatus {
+        let box = ResumeOnce()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<OSStatus, Never>) in
+            box.attach(continuation)
+            let deadline = Task {
+                try? await Task.sleep(for: timeout)
+                guard !Task.isCancelled else { return }
+                box.resume(with: AppleEventPermissionProbe.timedOutStatus)
+            }
+            Task {
+                let status = await task.value
+                deadline.cancel()
+                box.resume(with: status)
+            }
+        }
+    }
+
+    private final class ResumeOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<OSStatus, Never>?
+
+        func attach(_ continuation: CheckedContinuation<OSStatus, Never>) {
+            self.lock.withLock { self.continuation = continuation }
+        }
+
+        func resume(with status: OSStatus) {
+            let continuation = self.lock.withLock {
+                defer { self.continuation = nil }
+                return self.continuation
+            }
+            continuation?.resume(returning: status)
+        }
+    }
+}
+
 struct AppleEventPermissionProbe: Sendable {
     typealias DeterminePermission = @Sendable (_ askUserIfNeeded: Bool) -> OSStatus
 
-    private let determinePermission: DeterminePermission
+    /// Passive (non-prompting) checks should answer well within this; a target
+    /// app that does not service Apple Events for longer is reported as
+    /// `.failed(errAETimeout)`, which the capability layer maps to `.unknown`.
+    static let defaultPassiveTimeout: Duration = .seconds(10)
+    static let timedOutStatus = OSStatus(errAETimeout)
 
-    init(determinePermission: @escaping DeterminePermission) {
+    private let determinePermission: DeterminePermission
+    private let passiveTimeout: Duration?
+    private let coordinator: AppleEventPermissionProbeCoordinator
+
+    init(
+        determinePermission: @escaping DeterminePermission,
+        passiveTimeout: Duration? = Self.defaultPassiveTimeout,
+        coordinator: AppleEventPermissionProbeCoordinator = .shared)
+    {
         self.determinePermission = determinePermission
+        self.passiveTimeout = passiveTimeout
+        self.coordinator = coordinator
     }
 
     static var live: Self {
@@ -28,10 +185,11 @@ struct AppleEventPermissionProbe: Sendable {
     }
 
     func state(askUserIfNeeded: Bool) async -> AppleEventPermissionState {
-        let determinePermission = self.determinePermission
-        let status = await Task.detached(priority: .userInitiated) {
-            determinePermission(askUserIfNeeded)
-        }.value
+        // Prompting waits on the user; only passive checks are bounded.
+        let status = await self.coordinator.status(
+            askUserIfNeeded: askUserIfNeeded,
+            timeout: askUserIfNeeded ? nil : self.passiveTimeout,
+            determinePermission: self.determinePermission)
         return Self.state(for: status)
     }
 
