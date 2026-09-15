@@ -510,7 +510,8 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     selectionKnown,
   );
   const hasResolvableModel =
-    managedCatalog.status === "ready" &&
+    managedCatalog.hasSnapshot &&
+    (managedCatalog.status === "ready" || managedCatalog.status === "error") &&
     activeModelOption?.disabled !== true &&
     modelOptions.some((option) => !option.disabled);
   const busy =
