@@ -2272,54 +2272,60 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.preflightRecovery).toBeUndefined();
   });
 
-  it("preserves pipeline history when owning context engine assembly mutates then fails", async () => {
-    let sawPrompt = false;
-    let preassemblyMessages: AgentMessage[] = [];
-    let providerMessages: AgentMessage[] = [];
-    const hugeHistory = "large raw history ".repeat(2_000);
+  it.each(["throws", "returns malformed context"] as const)(
+    "preserves pipeline history when owning context engine assembly mutates then %s",
+    async (failure) => {
+      let sawPrompt = false;
+      let preassemblyMessages: AgentMessage[] = [];
+      let providerMessages: AgentMessage[] = [];
+      const hugeHistory = "large raw history ".repeat(2_000);
 
-    const result = await createContextEngineAttemptRunner({
-      contextEngine: createTestContextEngine({
-        info: {
-          id: "test-context-engine",
-          name: "Test Context Engine",
-          version: "0.0.1",
-          ownsCompaction: true,
+      const result = await createContextEngineAttemptRunner({
+        contextEngine: createTestContextEngine({
+          info: {
+            id: "test-context-engine",
+            name: "Test Context Engine",
+            version: "0.0.1",
+            ownsCompaction: true,
+          },
+          assemble: async ({ messages }) => {
+            preassemblyMessages = messages.slice();
+            messages.reverse();
+            messages.pop();
+            if (failure === "throws") {
+              throw new Error("assembly failed");
+            }
+            return { estimatedTokens: 0 } as never;
+          },
+        }),
+        sessionKey,
+        tempPaths,
+        sessionMessages: [{ role: "user", content: hugeHistory, timestamp: 1 }] as AgentMessage[],
+        attemptOverrides: {
+          contextTokenBudget: 500,
         },
-        assemble: async ({ messages }) => {
-          preassemblyMessages = messages.slice();
-          messages.reverse();
-          messages.pop();
-          throw new Error("assembly failed");
+        sessionPrompt: async (session) => {
+          sawPrompt = true;
+          providerMessages = session.messages.slice() as AgentMessage[];
+          session.messages = [
+            ...session.messages,
+            { role: "assistant", content: "done", timestamp: 2 },
+          ];
         },
-      }),
-      sessionKey,
-      tempPaths,
-      sessionMessages: [{ role: "user", content: hugeHistory, timestamp: 1 }] as AgentMessage[],
-      attemptOverrides: {
-        contextTokenBudget: 500,
-      },
-      sessionPrompt: async (session) => {
-        sawPrompt = true;
-        providerMessages = session.messages.slice() as AgentMessage[];
-        session.messages = [
-          ...session.messages,
-          { role: "assistant", content: "done", timestamp: 2 },
-        ];
-      },
-    });
+      });
 
-    expect(sawPrompt).toBe(true);
-    expect(providerMessages).toEqual(preassemblyMessages);
-    for (const [index, message] of providerMessages.entries()) {
-      expect(message).toBe(preassemblyMessages[index]);
-    }
-    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
-    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
-    expect(result.preflightRecovery).toBeUndefined();
-    expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
-    expect(hoisted.preemptiveCompactionCalls.at(-1)?.unwindowedMessages).toBeUndefined();
-  });
+      expect(sawPrompt).toBe(true);
+      expect(providerMessages).toEqual(preassemblyMessages);
+      for (const [index, message] of providerMessages.entries()) {
+        expect(message).toBe(preassemblyMessages[index]);
+      }
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
+      expect(result.preflightRecovery).toBeUndefined();
+      expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
+      expect(hoisted.preemptiveCompactionCalls.at(-1)?.unwindowedMessages).toBeUndefined();
+    },
+  );
 
   it("repairs tool-result pairing after context engine assembly", async () => {
     let promptMessages: AgentMessage[] = [];

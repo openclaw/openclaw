@@ -1541,6 +1541,98 @@ describe("installContextEngineLoopHook", () => {
     }
   });
 
+  it.each([
+    "afterTurn throws",
+    "assemble throws",
+    "assemble returns null",
+    "assemble omits messages",
+    "assemble returns non-array messages",
+  ] as const)("restores hook-mutated history and retries when %s", async (failure) => {
+    const agent = makeGuardableAgent();
+    const original = [
+      makeUser("preserve instruction"),
+      makeToolResult("call_1", "preserve result"),
+    ];
+    const messages = original.slice();
+    let fail = true;
+    const engine = makeMockEngine({
+      afterTurn: async ({ messages: history }) => {
+        if (!fail) {
+          return;
+        }
+        history.splice(0, history.length, makeUser("mutated history"));
+        if (failure === "afterTurn throws") {
+          throw new Error("failed after mutation");
+        }
+      },
+      assemble: async ({ messages: history }) => {
+        if (!fail) {
+          return { messages: history, estimatedTokens: 1 };
+        }
+        if (failure === "assemble throws") {
+          throw new Error("assembly failed after mutation");
+        }
+        if (failure === "assemble returns null") {
+          return null as never;
+        }
+        return (
+          failure === "assemble omits messages"
+            ? { estimatedTokens: 0 }
+            : { messages: "malformed", estimatedTokens: 0 }
+        ) as never;
+      },
+    });
+    installHook(agent, engine, 1);
+
+    expect(await callTransform(agent, messages)).toBe(messages);
+    expect(messages).toEqual(original);
+    original.forEach((message, index) => expect(messages[index]).toBe(message));
+    fail = false;
+    expect(await callTransform(agent, messages)).toEqual(original);
+    expect(engine.afterTurn).toHaveBeenCalledTimes(2);
+    expect(recordMockArg(engine.afterTurn, 1).prePromptMessageCount).toBe(1);
+    expect(await callTransform(agent, messages)).toEqual(original);
+    expect(engine.afterTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("restores hook-mutated history before propagating cancellation", async () => {
+    const agent = makeGuardableAgent();
+    const controller = new AbortController();
+    const cancellation = new Error("cancelled during hook");
+    const original = [makeUser("instruction"), makeToolResult("call_1", "result")];
+    const messages = original.slice();
+    const engine = makeMockEngine({
+      afterTurn: async ({ messages: history }) => {
+        history.length = 0;
+        controller.abort(cancellation);
+      },
+    });
+    installHook(agent, engine, 1);
+    const transform = expectDefined(agent.transformContext, "installed transform");
+
+    await expect(transform(messages, controller.signal)).rejects.toBe(cancellation);
+    expect(messages).toEqual(original);
+    expect(engine.assemble).not.toHaveBeenCalled();
+  });
+
+  it("keeps successful in-place hook windowing and caches its assembled view", async () => {
+    const agent = makeGuardableAgent();
+    const result = makeToolResult("call_1", "result");
+    const messages = [makeUser("instruction"), result];
+    const engine = makeMockEngine({
+      afterTurn: async ({ messages: history }) => {
+        history.splice(0, 1);
+      },
+    });
+    installHook(agent, engine, 1);
+
+    const assembled = await callTransform(agent, messages);
+    expect(assembled).toEqual([result]);
+    expect(messages).toEqual([result]);
+    expect(await callTransform(agent, messages)).toBe(assembled);
+    expect(engine.afterTurn).toHaveBeenCalledOnce();
+  });
+
   it("invokes any pre-existing transformContext before the engine sees messages", async () => {
     const upstream = vi.fn(async (messages: AgentMessage[]) => [...messages, makeUser("appended")]);
     const agent = makeGuardableAgent(upstream);
