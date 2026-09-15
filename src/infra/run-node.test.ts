@@ -470,6 +470,51 @@ async function expectManifestId(tmp: string, relativePath: string, id: string) {
 }
 
 describe("run-node script", () => {
+  it.for([
+    { args: ["qa", "mantis", "run"], mantis: true },
+    { args: ["--dev", "qa", "mantis", "run"], mantis: true },
+    { args: ["--profile", "ci", "qa", "mantis", "run"], mantis: true },
+    { args: ["--profile=ci", "qa", "mantis", "run"], mantis: true },
+    { args: ["--no-color", "--log-level", "debug", "qa", "mantis", "run"], mantis: true },
+    { args: ["qa", "--profile", "ci", "mantis", "run"], mantis: true },
+    { args: ["--profile", "qa", "mantis", "run"], mantis: false },
+    { args: ["--profile", "ci", "qa", "suite"], mantis: false },
+    { args: ["status", "qa", "mantis", "run"], mantis: false },
+  ])(
+    "grants Mantis lifecycle IPC only to the parsed command: %j",
+    async ({ args, mantis }, { tmp }) => {
+      await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+      const fakeProcess = Object.assign(createFakeProcess(), { stdin: { isTTY: true } });
+      const child = Object.assign(new EventEmitter(), { kill: vi.fn(() => true) });
+      const spawn = vi.fn((_cmd: string, childArgs: string[], _options: unknown) =>
+        childArgs.includes("openclaw.mjs") ? child : createExitedProcess(0),
+      );
+      const outcome = runNodeCommand(tmp, {
+        args,
+        process: fakeProcess,
+        spawn,
+        runRuntimePostBuild: skipRuntimePostBuild,
+      });
+      await vi.waitFor(() => expect(child.listenerCount("exit")).toBe(1));
+      try {
+        vi.useFakeTimers();
+        child.emit("message", { type: "openclaw:shutdown-grace", graceMs: 120_000 });
+        fakeProcess.emit("SIGTERM");
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(child.kill.mock.calls).toEqual(mantis ? [["SIGTERM"]] : [["SIGTERM"], ["SIGKILL"]]);
+        if (mantis) {
+          await vi.advanceTimersByTimeAsync(115_000);
+          expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+        }
+      } finally {
+        child.emit("exit", 0, null);
+        await outcome;
+        vi.useRealTimers();
+      }
+      expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+    },
+  );
+
   it("starts the CLI only after the canonical runtime build completes", async ({ tmp }) => {
     const build = new EventEmitter();
     const spawn = vi.fn((_cmd: string, args: string[]) =>
