@@ -891,6 +891,7 @@ export async function runExecProcess({
         env: backendExecSpec.env,
         cwd: backendExecSpec.cwd,
         stdinMode: backendExecSpec.stdinMode,
+        exactEnv: true as const,
       };
     }
     const { shell, args: shellArgs } = getShellConfig();
@@ -921,6 +922,7 @@ export async function runExecProcess({
       env: shellRuntimeEnv,
       cwd: opts.workdir,
       stdinMode: opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
+      exactEnv: undefined,
     };
   };
 
@@ -990,6 +992,7 @@ export async function runExecProcess({
         mode: "child",
         argv: spawnSpec.argv,
         stdinMode: spawnSpec.stdinMode,
+        ...(spawnSpec.exactEnv ? { exactEnv: true as const } : {}),
       });
     }
   } catch (error) {
