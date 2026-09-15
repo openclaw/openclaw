@@ -252,6 +252,29 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect((availableTools as Set<string>).has("memory_search")).toBe(false);
   });
 
+  it.each(["alice-id", "bob-id", undefined])(
+    "passes request sender %s to context assembly without a shared fallback",
+    async (senderId) => {
+      const contextEngine = createContextEngineBootstrapAndAssemble();
+
+      await createContextEngineAttemptRunner({
+        contextEngine,
+        sessionKey,
+        tempPaths,
+        attemptOverrides: { senderId },
+      });
+
+      const assembled = mockParams(contextEngine.assemble, 0, "assemble params");
+      if (senderId) {
+        expect(requireRecord(assembled.runtimeContext, "assemble runtime context").senderId).toBe(
+          senderId,
+        );
+      } else {
+        expect(assembled.runtimeContext).toBeUndefined();
+      }
+    },
+  );
+
   it("defaults local-model lean embedded runs to Tool Search controls", async () => {
     await createContextEngineAttemptRunner({
       contextEngine: {
