@@ -402,11 +402,21 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
               provider: providerOverride,
               model: modelOverride,
             });
-          let candidateThinkingCatalog = thinkingCatalog;
+          const changedCandidate =
+            providerOverride !== params.modelSelection.provider ||
+            modelOverride !== params.modelSelection.model;
+          let candidateThinkingCatalog = changedCandidate
+            ? (params.modelSelection.loadDeferredThinkingCatalog?.() ?? thinkingCatalog)
+            : thinkingCatalog;
           if (
             pluginsEnabled &&
             candidateConfiguredThinkLevel !== "off" &&
-            needsThinkHydration(thinkingCatalog, providerOverride, modelOverride, candidateRuntime)
+            needsThinkHydration(
+              candidateThinkingCatalog,
+              providerOverride,
+              modelOverride,
+              candidateRuntime,
+            )
           ) {
             const { loadProviderScopedThinkingCatalog } =
               await import("../model-catalog.runtime.js");
