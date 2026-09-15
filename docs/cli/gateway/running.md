@@ -33,57 +33,91 @@ openclaw gateway run   # equivalent, explicit form
 
 ### Options
 
+<a id="param-port"></a>
+
 <ParamField path="--port <port>" type="number">
   WebSocket port (default from config/env; usually `18789`).
 </ParamField>
+<a id="param-bind"></a>
+
 <ParamField path="--bind <mode>" type="string">
   Bind mode: `loopback` (default), `lan`, `tailnet`, `auto`, `custom`.
 </ParamField>
+<a id="param-token"></a>
+
 <ParamField path="--token <token>" type="string">
   Shared token for `connect.params.auth.token`. Defaults to `OPENCLAW_GATEWAY_TOKEN` when set.
 </ParamField>
+<a id="param-auth"></a>
+
 <ParamField path="--auth <mode>" type="string">
   Auth mode: `none`, `token`, `password`, `trusted-proxy`.
 </ParamField>
+<a id="param-password"></a>
+
 <ParamField path="--password <password>" type="string">
   Password for `--auth password`.
 </ParamField>
 <ParamField path="--password-file <path>" type="string">
   Read the Gateway password from a file.
 </ParamField>
+<a id="param-tailscale"></a>
+
 <ParamField path="--tailscale <mode>" type="string">
   Tailscale exposure: `off`, `serve`, `funnel`.
 </ParamField>
+<a id="param-allow-unconfigured"></a>
+
 <ParamField path="--allow-unconfigured" type="boolean">
   Start without enforcing `gateway.mode=local`. Ad-hoc/dev bootstrap only; does not persist or repair config.
 </ParamField>
+<a id="param-dev"></a>
+
 <ParamField path="--dev" type="boolean">
   Create a dev config + workspace if missing (skips `BOOTSTRAP.md`).
 </ParamField>
+<a id="param-ambient-channels"></a>
+
 <ParamField path="--ambient-channels" type="boolean">
   Allow the Gateway to auto-configure channels from ambient environment variables. By default, channels require an explicit `channels.<id>` config block.
 </ParamField>
+<a id="param-dev-ambient-channels"></a>
+
 <ParamField path="--dev-ambient-channels" type="boolean">
   Deprecated alias for `--ambient-channels`.
 </ParamField>
+<a id="param-reset"></a>
+
 <ParamField path="--reset" type="boolean">
   Reset dev config, credentials, sessions, and workspace. Requires `--dev`.
 </ParamField>
+<a id="param-force"></a>
+
 <ParamField path="--force" type="boolean">
   Kill any existing listener on the target port before starting. In a non-interactive shell, this refuses to kill a verified Gateway listener; use `--dev` or an isolated `--profile` with a free port instead.
 </ParamField>
+<a id="param-verbose"></a>
+
 <ParamField path="--verbose" type="boolean">
   Verbose logging to stdout/stderr.
 </ParamField>
+<a id="param-cli-backend-logs"></a>
+
 <ParamField path="--cli-backend-logs" type="boolean">
   Only show CLI backend logs in the console (also enables stdout/stderr).
 </ParamField>
+<a id="param-ws-log"></a>
+
 <ParamField path="--ws-log <style>" type="string" default="auto">
   WebSocket log style: `auto`, `full`, `compact`.
 </ParamField>
+<a id="param-compact"></a>
+
 <ParamField path="--compact" type="boolean">
   Alias for `--ws-log compact`.
 </ParamField>
+<a id="param-raw-stream"></a>
+
 <ParamField path="--raw-stream" type="boolean">
   Log raw model stream events to JSONL.
 </ParamField>
