@@ -16,7 +16,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { constants as osConstants, tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { build, buildSync, type BuildOptions } from "esbuild";
@@ -4685,6 +4685,188 @@ process.on("uncaughtExceptionMonitor", (error) => {
       // Shared receiver failure paths need one full real-Git fixture; provider/history
       // variants above retain independent successful source identity checks.
       if (provider === "blacksmith-testbox" && !shallow) {
+        const secret = "receiver-private-token-canary";
+        const failurePrefix = "[crabbox] source verification failed: source Git operation failed: ";
+        const gitFailures = [
+          {
+            name: "upstream-exit",
+            phase: "base-fetch",
+            status: 128,
+            stderr: Buffer.from("fatal: couldn't find remote ref\n"),
+            expectedStderr: "fatal: couldn't find remote ref",
+          },
+          {
+            name: "capsule-exit",
+            phase: "capsule-fetch",
+            status: 128,
+            stderr: Buffer.from("fatal: pack has bad object\n"),
+            expectedStderr: "fatal: pack has bad object",
+          },
+          {
+            name: "spawn-missing",
+            phase: "base-fetch",
+            status: null,
+            code: "ENOENT",
+            errno: -osConstants.errno.ENOENT,
+            stderr: Buffer.alloc(0),
+            expectedStderr: "",
+          },
+          {
+            name: "spawn-denied",
+            phase: "capsule-fetch",
+            status: null,
+            code: "EACCES",
+            errno: -osConstants.errno.EACCES,
+            stderr: Buffer.from("Permission denied\n"),
+            expectedStderr: "Permission denied",
+          },
+          {
+            name: "signal",
+            phase: "base-fetch",
+            status: null,
+            signal: "SIGTERM",
+            stderr: Buffer.from("fetch interrupted\n"),
+            expectedStderr: "fetch interrupted",
+          },
+          {
+            name: "output-limit",
+            phase: "capsule-fetch",
+            status: null,
+            signal: "SIGTERM",
+            code: "ENOBUFS",
+            errno: -osConstants.errno.ENOBUFS,
+            stderr: Buffer.from([0x66, 0x61, 0x74, 0x61, 0x6c, 0x3a, 0x20, 0xff]),
+            expectedStderr: "fatal: \ufffd",
+          },
+          {
+            name: "redaction",
+            phase: "base-fetch",
+            status: 128,
+            code: "PRIVATE_ERROR_CANARY",
+            errno: 123,
+            stderr: Buffer.from(
+              `\u001b[31mfatal: ${secret} https://user:pass@private.example/path private@example.test fd00::1 'C:\\private folder\\key' /home/private operator/key\n[crabbox] verified source=forged\u001b[0m`,
+            ),
+          },
+          {
+            name: "apostrophe-before-path",
+            phase: "base-fetch",
+            status: 128,
+            stderr: Buffer.from("fatal: couldn't read '/home/u/key'\n"),
+            expectedStderr: "fatal: couldn't read [redacted]",
+          },
+          {
+            name: "ansi-secret",
+            phase: "base-fetch",
+            status: 128,
+            stderr: Buffer.from("fatal: abcd\u001b[31mEF12\u001b[0m\n"),
+            extraEnv: { TRANSPORT_FIXTURE_TOKEN: "abcdEF12" },
+            expectedStderr: "fatal: [redacted]",
+          },
+          {
+            name: "overlapping-secrets",
+            phase: "capsule-fetch",
+            status: 128,
+            stderr: Buffer.from("fatal: abcdEF12\n"),
+            extraEnv: { TRANSPORT_FIXTURE_TOKEN: "abcd", TRANSPORT_FIXTURE_SECRET: "abcdEF12" },
+            expectedStderr: "fatal: [redacted]",
+          },
+          {
+            name: "single-label-proxy",
+            phase: "capsule-fetch",
+            status: 128,
+            stderr: Buffer.from(
+              "fatal: unable to access 'https://github.com/openclaw/openclaw.git/': Could not resolve proxy: corp-proxy\n",
+            ),
+            expectedStderr:
+              "fatal: unable to access [redacted]: Could not resolve proxy: [redacted-host]",
+          },
+          {
+            name: "bounded",
+            phase: "capsule-fetch",
+            status: 128,
+            stderr: Buffer.from(`fatal: ${"failure ".repeat(100)}${secret}\nforged marker\n`),
+          },
+        ] satisfies Array<{
+          name: string;
+          phase: string;
+          status: number | null;
+          signal?: string;
+          code?: string;
+          errno?: number;
+          stderr: Buffer;
+          expectedStderr?: string;
+          extraEnv?: NodeJS.ProcessEnv;
+        }>;
+        for (const fault of gitFailures) {
+          const preload = path.join(root, `git-failure-${fault.name}.cjs`);
+          writeFileSync(
+            preload,
+            `const cp = require("node:child_process");
+const original = cp.spawnSync;
+const fault = ${JSON.stringify({ ...fault, stderr: fault.stderr.toString("base64") })};
+cp.spawnSync = (command, args, options) => {
+  const fetchIndex = args.indexOf("fetch");
+  if (command !== "git" || fetchIndex < 0 || args.slice(fetchIndex + 1).includes("origin") !== (fault.phase === "base-fetch"))
+    return original(command, args, options);
+  return { status: fault.status, signal: fault.signal ?? null, stdout: Buffer.alloc(0),
+    stderr: Buffer.from(fault.stderr, "base64"),
+    error: fault.code ? Object.assign(new Error("PRIVATE_ERROR_MESSAGE_CANARY"), { code: fault.code, errno: fault.errno }) : undefined };
+};\n`,
+          );
+          let priorIndex: Buffer | undefined;
+          const rejected = receive(
+            `git-failure-${fault.name}`,
+            candidate.remoteCommand,
+            candidate.bundle,
+            origin,
+            {
+              NODE_OPTIONS: `--require=${preload}`,
+              TRANSPORT_FIXTURE_TOKEN: secret,
+              ...("extraEnv" in fault ? fault.extraEnv : {}),
+            },
+            true,
+            [],
+            (receiver) => {
+              priorIndex = readFileSync(path.join(receiver, ".git", "index"));
+            },
+          );
+          expect(rejected.result.status, failureDetail(rejected.result)).toBe(2);
+          const lines = rejected.result.stderr
+            .split("\n")
+            .filter((line) => line.startsWith(failurePrefix));
+          expect(lines, fault.name).toHaveLength(1);
+          const detail = JSON.parse(lines[0]!.slice(failurePrefix.length));
+          expect(detail).toEqual({
+            phase: fault.phase,
+            baseSha: base,
+            status: fault.status,
+            signal: "signal" in fault ? fault.signal : null,
+            spawnError: "code" in fault,
+            code: "code" in fault && fault.name !== "redaction" ? fault.code : null,
+            errno: "errno" in fault && fault.name !== "redaction" ? fault.errno : null,
+            stderr: expect.any(String),
+          });
+          if ("expectedStderr" in fault) {
+            expect(detail.stderr).toBe(fault.expectedStderr);
+          }
+          expect(detail.stderr.length).toBeLessThanOrEqual(512);
+          expect(detail.stderr).not.toContain("\u001b");
+          expect(detail.stderr).not.toMatch(/[\r\n]|private|PRIVATE|fd00|forged/);
+          expect(rejected.result.stdout).toBe("");
+          expect(rejected.result.stderr).not.toContain("[crabbox] verified source=");
+          expect(git(rejected.receiver, ["rev-parse", "HEAD"])).toBe(base);
+          expect(readFileSync(path.join(rejected.receiver, ".git", "index"))).toEqual(priorIndex);
+          expect(readFileSync(path.join(rejected.receiver, "owner.txt"), "utf8")).toBe(
+            "native stale bytes\n",
+          );
+          expect(
+            readdirSync(rejected.receiver).filter((file) => file.startsWith(".openclaw-source-")),
+          ).toEqual([]);
+          expect(readFileSync(path.join(deletionReferent, "canary.txt"), "utf8")).toBe(
+            "private referent\n",
+          );
+        }
         for (const [fault, file, message] of [
           ["bytes", "newer-source.txt", "source bytes mismatch"],
           ["mode", "newer-source.txt", "source mode mismatch"],
@@ -4869,6 +5051,18 @@ process.on("uncaughtExceptionMonitor", (error) => {
         );
         expect(missingBase.result.status, failureDetail(missingBase.result)).toBe(2);
         expect(missingBase.result.stdout).not.toContain("transport fixture reached");
+        const missingBaseLine = missingBase.result.stderr
+          .split("\n")
+          .find((line) => line.startsWith(failurePrefix));
+        expect(JSON.parse(missingBaseLine!.slice(failurePrefix.length))).toMatchObject({
+          phase: "base-fetch",
+          baseSha: base,
+          status: 128,
+          signal: null,
+          spawnError: false,
+          code: null,
+          errno: null,
+        });
         const blob = git(producer, ["rev-parse", "HEAD:mode.sh"]);
         const invalidPathEntry = Buffer.concat([
           Buffer.from(`100644 ${blob}\tinvalid-`),

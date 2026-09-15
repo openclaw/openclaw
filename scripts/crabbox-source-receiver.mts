@@ -8,6 +8,7 @@ const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { isUtf8 } = require("node:buffer");
 const { spawnSync } = require("node:child_process");
+const { getSystemErrorMap, stripVTControlCharacters } = require("node:util");
 const expected = JSON.parse(process.argv[1]);
 const syncRoot = process.cwd();
 const cwd = process.argv[2] ?? syncRoot;
@@ -37,6 +38,30 @@ function hashFile(file, algorithm, blob = false) {
     return hash.digest("hex");
   } finally { fs.closeSync(fd); }
 }
+function gitStderr(stderr) {
+  const normalize = value => stripVTControlCharacters(value).replace(/\p{Cf}/gu, "");
+  let text = normalize(Buffer.isBuffer(stderr) ? stderr.toString("utf8") : "");
+  // This receiver runs before source verification: keep diagnostics Node-only,
+  // and redact before clipping so a truncated credential never escapes masking.
+  const secrets = Object.entries(process.env)
+    .filter(([key, value]) => value && /token|password|secret|credential|auth|key/i.test(key))
+    .map(([, value]) => normalize(value)).filter(value => value.length >= 4)
+    .sort((left, right) => right.length - left.length);
+  for (const value of secrets) text = text.replaceAll(value, "[redacted]");
+  text = (text.split(/[\r\n\u2028\u2029]/u).find(line => line.trim()) ?? "")
+    .replace(/[\p{Cc}\p{Cf}]/gu, " ")
+    .replace(/(?:^|(?<=[\s=(:[]))(["'\x60])[^"'\x60]*\1/gu, "[redacted]")
+    .replace(/\b[a-z][a-z\d+.-]*:\/\/\S+/giu, "[redacted-url]")
+    .replace(/\b[\w.%+-]+@[\w.-]+(?::\S+)?/gu, "[redacted-address]")
+    .replace(/\b(?:[\w-]+\.)+[\w-]+\b/gu, "[redacted-host]")
+    .replace(/(?:[a-f\d]{0,4}:){2,}[a-f\d:]{0,4}(?:%[\w.-]+)?/giu, "[redacted-address]")
+    .replace(/(\b(?:resolve (?:host|proxy)\s*:|connect to)\s*)\S+/giu, "$1[redacted-host]")
+    .replace(/\b(?:authorization|password|token|secret|credential)\s*[:=].*/giu, "[redacted]")
+    .replace(/\b[A-Za-z0-9_+\/=.-]{24,}\b/gu, "[redacted]")
+    .replace(/(?:^|(?<=[\s=(:[]))(?:~[\\/]|[A-Za-z]:[\\/]|\/+|\\+).*/gu, "[redacted-path]")
+    .trim();
+  return text.slice(0, 512).replace(/[\uD800-\uDBFF]$/u, "");
+}
 try {
   if (process.argv[2] && (cwd === syncRoot || cwd.startsWith(syncRoot + path.sep) || syncRoot.startsWith(cwd + path.sep)))
     fail("Testbox execution and sync workspaces overlap; stop this lease and warm a fresh one");
@@ -58,10 +83,22 @@ try {
   delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
   delete env.GIT_SHALLOW_FILE;
   function git(args, options = {}) {
-    const { encoding, ...spawnOptions } = options;
+    const { encoding, phase = args[0], ...spawnOptions } = options;
     const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args],
       { cwd, env, maxBuffer: 64 * 1024 * 1024, ...spawnOptions });
-    if (result.status !== 0) fail("source Git operation failed: " + args[0]);
+    if (result.status !== 0) {
+      const errors = getSystemErrorMap();
+      const code = result.error?.code;
+      // A spawn/output-limit error and a terminating signal can coexist. Keep
+      // both facts; argv, stdout and Error.message may contain private values.
+      fail("source Git operation failed: " + JSON.stringify({
+        phase, baseSha: expected.baseSha, status: result.status, signal: result.signal,
+        spawnError: Boolean(result.error),
+        code: [...errors.values()].some(([name]) => name === code) ? code : null,
+        errno: errors.has(result.error?.errno) ? result.error.errno : null,
+        stderr: gitStderr(result.stderr),
+      }));
+    }
     if (encoding === "buffer") return result.stdout;
     if (result.stdout === null) return "";
     if (!isUtf8(result.stdout)) fail("unsupported non-UTF-8 Git metadata");
@@ -69,10 +106,10 @@ try {
   }
   git(["init", "-q"]);
   git(["remote", "add", "origin", "https://github.com/openclaw/openclaw.git"]);
-  git(["fetch", "-q", "--depth=2", "origin", expected.baseSha + ":refs/remotes/origin/main"]);
+  git(["fetch", "-q", "--depth=2", "origin", expected.baseSha + ":refs/remotes/origin/main"], { phase: "base-fetch" });
   if (git(["rev-parse", "refs/remotes/origin/main"]).trim() !== expected.baseSha)
     fail("source base mismatch");
-  git(["fetch", "-q", bundle, "refs/openclaw/source-capsule:refs/heads/openclaw-source"]);
+  git(["fetch", "-q", bundle, "refs/openclaw/source-capsule:refs/heads/openclaw-source"], { phase: "capsule-fetch" });
   for (const [ref, value] of [
     ["refs/heads/openclaw-source", expected.carrier],
     ["refs/heads/openclaw-source^{tree}", expected.tree],
