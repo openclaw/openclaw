@@ -26,7 +26,6 @@ const publications: Record<string, string | symbol> = {
   "src/agents/command/attempt-execution.helpers.ts": Symbol.for(
     "openclaw.attemptExecutionHelpersTestApi",
   ),
-  "src/agents/compaction.ts": Symbol.for("openclaw.compactionTestApi"),
   "src/agents/embedded-agent-runner/context-engine-maintenance.ts": Symbol.for(
     "openclaw.contextEngineMaintenanceTestApi",
   ),
