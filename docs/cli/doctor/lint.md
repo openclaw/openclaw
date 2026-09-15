@@ -88,6 +88,31 @@ The check uses the configured agent directories and actual filesystem paths even
 when lint reads a private state snapshot. Correctly placed Workshop targets do
 not need relocation merely because lint uses a temporary directory.
 
+### Tailscale pairing preflight
+
+Run the focused, read-only preflight before generating another mobile setup code:
+
+```bash
+openclaw doctor --lint --only core/doctor/tailscale-pairing --json
+```
+
+This opt-in check compares the configured mobile endpoint with a point-in-time
+Tailscale Serve snapshot, the local Gateway listener, immediate proxy trust,
+and the Control UI browser origin. It then checks the exact published
+`/healthz` path without following redirects and performs a bounded, no-detail
+Gateway WebSocket probe. It does not create setup codes or pairing requests,
+load stored device authentication, edit config, or change Tailscale routes.
+
+The findings keep configuration consistency, HTTP liveness, Gateway
+reachability, and authenticated readiness separate. A valid `/healthz`
+response alone does not mean the WebSocket can authenticate. A successful
+host-side check also cannot prove that the phone has Tailscale enabled or can
+reach the tailnet; verify the Android connection separately.
+
+The check is excluded from plain `doctor --lint`, bare `doctor --json`, and the
+ordinary guided Doctor flow because it starts Tailscale subprocesses and makes
+network requests. `doctor --lint --all` includes it.
+
 ## Check selection
 
 ```bash
