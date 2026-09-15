@@ -3119,7 +3119,8 @@ describe("gateway hot reload model state", () => {
 
 describe("managed gateway reload context", () => {
   it("starts channel replacements outside the config writer's async context", async () => {
-    vi.useFakeTimers();
+    // Real timers retain the writer's async context; advancing fake timers
+    // outside it would hide the context leak this regression checks.
     const initialConfig: OpenClawConfig = {
       channels: { telegram: { accounts: { default: { name: "Before" } } } },
     };
@@ -3134,9 +3135,10 @@ describe("managed gateway reload context", () => {
     const writerContext = new AsyncLocalStorage<string>();
     const writerWork = new AsyncWorkScope();
     const writeListenerRef = createConfigWriteListenerRef();
+    const channelContexts: Array<[string | undefined, AbortSignal | undefined]> = [];
+    const logReloadError = vi.fn<(message: string) => void>();
     const startChannel = vi.fn(async () => {
-      expect(writerContext.getStore()).toBeUndefined();
-      expect(getAsyncWorkSignal()).toBeUndefined();
+      channelContexts.push([writerContext.getStore(), getAsyncWorkSignal()]);
       return new Map();
     });
     const startupWork = new AsyncWorkScope();
@@ -3146,6 +3148,7 @@ describe("managed gateway reload context", () => {
         readSnapshot: async () => createValidConfigSnapshot(nextConfig, "profile-change"),
         subscribeToWrites: captureConfigWriteListener(writeListenerRef),
         startChannel,
+        logReload: { info: vi.fn(), warn: vi.fn(), error: logReloadError },
       }),
     );
     await reloader.ready;
@@ -3173,10 +3176,14 @@ describe("managed gateway reload context", () => {
         }),
       );
       await writerWork.drain();
-      await vi.advanceTimersByTimeAsync(1_000);
 
-      await expect(application.result).resolves.toBe("applied");
+      const status = await application.result;
+      expect(status, logReloadError.mock.calls.flat().join("\n")).toBe("applied");
       expect(startChannel).toHaveBeenCalled();
+      for (const [context, signal] of channelContexts) {
+        expect(context).toBeUndefined();
+        expect(signal).toBeUndefined();
+      }
     } finally {
       await reloader.stop();
     }
