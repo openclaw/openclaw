@@ -280,6 +280,25 @@ describe("formatUpdateOneLiner", () => {
 
     expect(formatUpdateOneLiner(update)).toBe("Update: npm · npm latest unknown · deps missing");
   });
+
+  it("renders an unavailable update probe without implying a package install", () => {
+    const update = buildUpdate({
+      git: {
+        root: "",
+        sha: null,
+        tag: null,
+        branch: null,
+        upstream: null,
+        dirty: null,
+        ahead: null,
+        behind: null,
+        fetchOk: null,
+        error: "git discovery timed out",
+      },
+    });
+
+    expect(formatUpdateOneLiner(update)).toBe("Update: unavailable (git discovery timed out)");
+  });
 });
 
 describe("formatUpdateAvailableHint", () => {

@@ -117,6 +117,10 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
 
 /** Formats a compact one-line update summary for overview rows. */
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {
+  if (update.installKind === "unknown" && update.git?.error) {
+    return `Update: unavailable (${update.git.error})`;
+  }
+
   const parts: string[] = [];
 
   const appendRegistryUpdateSummary = () => {

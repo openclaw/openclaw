@@ -285,6 +285,31 @@ describe("scanStatus", () => {
     ]);
   });
 
+  it("still reports status when the optional git update probe times out", async () => {
+    const cfg = createStatusScanConfig();
+    configureScanStatus({
+      hasConfiguredChannels: true,
+      sourceConfig: cfg,
+      resolvedConfig: cfg,
+    });
+    mocks.getUpdateCheckResult.mockRejectedValue(
+      new Error(
+        "git rev-parse --show-toplevel failed (timed out after 2.5 seconds):\n/tmp/openclaw\nGit did not finish within its 2.5s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).",
+      ),
+    );
+
+    const result = await scanStatus({});
+
+    expect(result.update).toEqual({
+      root: null,
+      installKind: "unknown",
+      packageManager: "unknown",
+      git: expect.objectContaining({ error: "git discovery timed out" }),
+    });
+    expect(mocks.probeGateway).toHaveBeenCalled();
+    expect(mocks.buildChannelsTable).toHaveBeenCalledOnce();
+  });
+
   it("skips gateway and update probes on cold-start status paths", async () => {
     configureScanStatus({
       sourceConfig: createStatusScanConfig({

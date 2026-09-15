@@ -368,4 +368,23 @@ describe("scanStatusJsonFast", () => {
     );
     expect(mocks.probeGateway).toHaveBeenCalled();
   });
+
+  it("still reports JSON status when the optional git update probe times out", async () => {
+    mocks.hasConfiguredChannels.mockReturnValue(true);
+    mocks.getUpdateCheckResult.mockRejectedValue(
+      new Error(
+        "git rev-parse --show-toplevel failed (timed out after 2.5 seconds):\n/tmp/openclaw\nGit did not finish within its 2.5s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).",
+      ),
+    );
+
+    const result = await scanStatusJsonFast({}, {} as never);
+
+    expect(result.update).toEqual({
+      root: null,
+      installKind: "unknown",
+      packageManager: "unknown",
+      git: expect.objectContaining({ error: "git discovery timed out" }),
+    });
+    expect(mocks.probeGateway).toHaveBeenCalled();
+  });
 });

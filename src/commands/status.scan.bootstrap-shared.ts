@@ -3,6 +3,7 @@
 
 import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { runExec } from "../process/exec.js";
 import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
@@ -14,6 +15,34 @@ function buildColdStartUpdateResult(): UpdateCheckResult {
     root: null,
     installKind: "unknown",
     packageManager: "unknown",
+  };
+}
+
+function describeStatusUpdateProbeFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/timed out after|did not finish within its/i.test(message)) {
+    return "git discovery timed out";
+  }
+  return "update check failed";
+}
+
+function buildUnavailableUpdateResult(error: unknown): UpdateCheckResult {
+  return {
+    root: null,
+    installKind: "unknown",
+    packageManager: "unknown",
+    git: {
+      root: "",
+      sha: null,
+      tag: null,
+      branch: null,
+      upstream: null,
+      dirty: null,
+      ahead: null,
+      behind: null,
+      fetchOk: null,
+      error: describeStatusUpdateProbeFailure(error),
+    },
   };
 }
 
@@ -109,14 +138,22 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
           .catch(() => null);
   const skipNetworkUpdate = skipColdStartNetworkChecks || params.skipUpdateCheck === true;
   // Update checks can hit git/registry, so cold-start status uses a synthetic unknown result.
+  // Keep the rest of the report when this optional probe times out or fails.
   const updatePromise = skipNetworkUpdate
     ? Promise.resolve(buildColdStartUpdateResult())
-    : params.getUpdateCheckResult({
-        timeoutMs: updateTimeoutMs,
-        fetchGit: params.fetchGitUpdate ?? true,
-        includeRegistry: params.includeRegistryUpdate ?? true,
-        updateConfigChannel: params.cfg.update?.channel ?? null,
-      });
+    : params
+        .getUpdateCheckResult({
+          timeoutMs: updateTimeoutMs,
+          fetchGit: params.fetchGitUpdate ?? true,
+          includeRegistry: params.includeRegistryUpdate ?? true,
+          updateConfigChannel: params.cfg.update?.channel ?? null,
+        })
+        .catch((error: unknown) => {
+          if (isAbortError(error)) {
+            throw error;
+          }
+          return buildUnavailableUpdateResult(error);
+        });
   const agentStatusPromise = skipColdStartNetworkChecks
     ? Promise.resolve(buildColdStartAgentLocalStatuses() as TAgentStatus)
     : params.getAgentLocalStatuses(params.cfg);

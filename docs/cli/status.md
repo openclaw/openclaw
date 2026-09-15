@@ -62,7 +62,11 @@ to separate the Gateway response from local report collection. Gateway
 setup; a slow CLI can finish without a slow Gateway handler.
 
 For Git installs, plain status compares cached remote-tracking refs without a
-network fetch. If the latest recorded update fetch failed and no later update
+network fetch. If local Git discovery exceeds the status update budget (2.5s, or
+6.5s with `--all`), the rest of the report still prints. The Update row shows
+`unavailable (git discovery timed out)` instead of failing the command. JSON
+keeps `update.installKind` as `unknown` and puts the reason on
+`update.git.error`. If the latest recorded update fetch failed and no later update
 run records a completed fetch, the Update row shows
 `update check stale: last update fetch failed 5m ago (network error)` instead of
 `up to date`, with ahead/behind counts labeled `cached`. JSON exposes this under
