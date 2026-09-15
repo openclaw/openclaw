@@ -323,21 +323,36 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     service: { id: string },
     kind: "service" | "gateway discovery service",
   ) => {
-    const id = service.id.trim();
-    const registrations =
-      kind === "service" ? registry.services : registry.gatewayDiscoveryServices;
-    const existing = id ? registrations.find((entry) => entry.service.id.trim() === id) : undefined;
-    if (id && !existing) {
-      return id;
-    }
-    // Snapshot and activating loads can both register the same owner; keep the first.
-    if (existing?.pluginId !== record.id) {
-      reportRegistrationError(
-        record,
-        existing
-          ? `${kind} already registered: ${id} (${existing.pluginId})`
-          : `${kind} registration missing id`,
-      );
+    try {
+      const rawId = service.id;
+      const id = rawId.trim();
+      if (id && rawId !== id) {
+        // Normalize the received object in place: copies lose private fields and callback receivers.
+        service.id = id;
+        if (service.id !== id) {
+          throw new Error("service registration id normalization was ignored");
+        }
+      }
+      const registrations =
+        kind === "service" ? registry.services : registry.gatewayDiscoveryServices;
+      const existing = id
+        ? registrations.find((entry) => entry.service.id.trim() === id)
+        : undefined;
+      if (id && !existing) {
+        return id;
+      }
+      // Snapshot and activating loads can both register the same owner; keep the first.
+      if (existing?.pluginId !== record.id) {
+        reportRegistrationError(
+          record,
+          existing
+            ? `${kind} already registered: ${id} (${existing.pluginId})`
+            : `${kind} registration missing id`,
+        );
+      }
+    } catch {
+      // Plugin accessors can throw sensitive values; report only the boundary failure.
+      reportRegistrationError(record, `${kind} registration id cannot be normalized`);
     }
     return undefined;
   };
