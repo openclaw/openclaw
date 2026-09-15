@@ -7,6 +7,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createChannelIngressMonitor } from "../channels/message/ingress-monitor.js";
+import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { ChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
 import type {
   ChannelAccountLinkState,
@@ -633,6 +635,55 @@ describe("server-channels auto restart", () => {
     );
 
     // Health must name this dead inbound rather than one more anonymous crash.
+    expect(healthOf(readAccount())).toEqual({
+      healthy: false,
+      reason: "ingress-unavailable",
+    });
+  });
+
+  it("records dead ingress when a channel start reuses its stopped ingress monitor", async () => {
+    // Real monitor composition instead of a stubbed error: the plugin start path stops
+    // its ingress monitor and then starts it again. The guard must reach operator status
+    // as dead inbound so health can rebuild the channel, never a silent no-op that keeps
+    // routing transport events into a stopped ingress (#148793).
+    const stateDir = channelTempDirs.make("openclaw-channel-ingress-restart-");
+    const startAccount = vi.fn(async () => {
+      const queue = createChannelIngressQueue<{ id: string }>({
+        channelId: "discord",
+        accountId: DEFAULT_ACCOUNT_ID,
+        stateDir,
+      });
+      const monitor = createChannelIngressMonitor<{ id: string }, string, { id: string }>({
+        queue,
+        inspect: (raw) => ({ eventId: raw.id, laneKey: "lane" }),
+        payload: {
+          storage: "raw-event",
+          version: 1,
+          serialize: (raw) => JSON.stringify(raw),
+          deserialize: (body) => JSON.parse(body) as { id: string },
+          createClaimError: (kind) => new Error(kind),
+        },
+        deliver: async () => {},
+        pollIntervalMs: 60_000,
+        retention: { pruneIntervalMs: 60_000 },
+        drain: { adoptionStallTimeoutMs: 1_000, retryPolicy: { baseMs: 1, maxMs: 1 } },
+      });
+      monitor.start();
+      await monitor.stop();
+      monitor.start();
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+    const readAccount = () =>
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+
+    await manager.startChannels();
+    await advanceTimersUntil(
+      () => readAccount()?.ingressUnavailable === true,
+      "expected the stopped-monitor restart to be recorded as dead ingress",
+      { stepMs: 10, maxMs: 500 },
+    );
+
     expect(healthOf(readAccount())).toEqual({
       healthy: false,
       reason: "ingress-unavailable",
