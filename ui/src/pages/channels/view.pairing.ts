@@ -88,9 +88,34 @@ function renderFilters(props: ChannelsProps) {
   `;
 }
 
+function pairingPendingKind(
+  requestId: string,
+  props: ChannelsProps,
+): ChannelsProps["pairingBusyKind"] {
+  return props.pairingBusyRequestId === requestId ? props.pairingBusyKind : null;
+}
+
+function pairingConfirmLabel(
+  approving: boolean,
+  pendingKind: ChannelsProps["pairingBusyKind"],
+): string {
+  if (pendingKind === "approve") {
+    return t("channels.pairing.approving");
+  }
+  if (pendingKind === "dismiss") {
+    return t("channels.pairing.dismissing");
+  }
+  return approving ? t("channels.pairing.approve") : t("channels.pairing.dismiss");
+}
+
 function renderRequest(request: ChannelsPairingRequest, props: ChannelsProps) {
   const busy = Boolean(props.pairingBusyRequestId);
-  const thisRequestBusy = props.pairingBusyRequestId === request.requestId;
+  const pendingKind = pairingPendingKind(request.requestId, props);
+  const identity = {
+    sender: request.senderId,
+    channel: request.channelLabel,
+    account: requestAccountName(request),
+  };
   const metadata = Object.entries(request.metadata ?? {});
   return html`
     <div class="settings-row settings-row--stacked channels-pairing-request">
@@ -111,27 +136,35 @@ function renderRequest(request: ChannelsPairingRequest, props: ChannelsProps) {
             type="button"
             class="btn btn--sm primary"
             ?disabled=${busy || !props.canManagePairing}
-            aria-label=${t("channels.pairing.approveAria", {
-              sender: request.senderId,
-              channel: request.channelLabel,
-              account: requestAccountName(request),
-            })}
+            aria-label=${
+              pendingKind === "approve"
+                ? t("channels.pairing.approvingAria", identity)
+                : t("channels.pairing.approveAria", identity)
+            }
             @click=${() => props.onPairingApprove(request)}
           >
-            ${thisRequestBusy ? t("common.loading") : t("channels.pairing.approve")}
+            ${
+              pendingKind === "approve"
+                ? t("channels.pairing.approving")
+                : t("channels.pairing.approve")
+            }
           </button>
           <button
             type="button"
             class="btn btn--sm"
             ?disabled=${busy || !props.canManagePairing}
-            aria-label=${t("channels.pairing.dismissAria", {
-              sender: request.senderId,
-              channel: request.channelLabel,
-              account: requestAccountName(request),
-            })}
+            aria-label=${
+              pendingKind === "dismiss"
+                ? t("channels.pairing.dismissingAria", identity)
+                : t("channels.pairing.dismissAria", identity)
+            }
             @click=${() => props.onPairingDismiss(request)}
           >
-            ${t("channels.pairing.dismiss")}
+            ${
+              pendingKind === "dismiss"
+                ? t("channels.pairing.dismissing")
+                : t("channels.pairing.dismiss")
+            }
           </button>
         </div>
       </div>
@@ -289,6 +322,7 @@ export function renderChannelPairingPrompt(props: ChannelsProps) {
   }
   const request = prompt.request;
   const busy = props.pairingBusyRequestId === request.requestId;
+  const pendingKind = busy ? (props.pairingBusyKind ?? prompt.kind) : null;
   const approving = prompt.kind === "approve";
   const ownerMissing = props.pairingSnapshot?.commandOwnerConfigured === false;
   const dialogTitle = approving
@@ -367,7 +401,7 @@ export function renderChannelPairingPrompt(props: ChannelsProps) {
             ?disabled=${busy}
             @click=${props.onPairingPromptConfirm}
           >
-            ${approving ? t("channels.pairing.approve") : t("channels.pairing.dismiss")}
+            ${pairingConfirmLabel(approving, pendingKind)}
           </button>
           <button type="button" class="btn" ?disabled=${busy} @click=${props.onPairingPromptCancel}>
             ${t("common.cancel")}

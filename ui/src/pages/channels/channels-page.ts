@@ -663,6 +663,7 @@ class ChannelsPage extends OpenClawLightDomElement {
           pairingError: channels.pairingError,
           pairingLastSuccessAt: channels.pairingLastSuccess,
           pairingBusyRequestId: channels.pairingBusyRequestId,
+          pairingBusyKind: channels.pairingBusyKind,
           pairingChannelFilter: this.pairingChannelFilter,
           pairingAccountFilter: this.pairingAccountFilter,
           pairingPrompt: this.pairingPrompt,

@@ -41,6 +41,7 @@ export type ChannelsProps = {
   pairingError: string | null;
   pairingLastSuccessAt: number | null;
   pairingBusyRequestId: string | null;
+  pairingBusyKind: ChannelPairingPrompt["kind"] | null;
   pairingChannelFilter: string | null;
   pairingAccountFilter: string | null;
   pairingPrompt: ChannelPairingPrompt | null;
