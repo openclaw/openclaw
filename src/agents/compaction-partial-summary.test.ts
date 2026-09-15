@@ -40,11 +40,11 @@ vi.mock("../infra/retry.js", async () => {
   };
 });
 
-let summarizeWithFallback: typeof import("./compaction.test-support.js").summarizeWithFallback;
+let summarizeInStages: typeof import("./compaction.js").summarizeInStages;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ summarizeWithFallback } = await import("./compaction.test-support.js"));
+  ({ summarizeInStages } = await import("./compaction.js"));
 });
 
 describe("summarizeChunks partial summary preservation (#82952)", () => {
@@ -64,7 +64,8 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
   ];
 
   function callSummarize(messages = twoChunkMessages) {
-    return summarizeWithFallback({
+    return summarizeInStages({
+      parts: 1,
       messages,
       model: testModel,
       apiKey: "test-key", // pragma: allowlist secret
@@ -110,7 +111,8 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
     controller.abort();
 
     await expect(
-      summarizeWithFallback({
+      summarizeInStages({
+        parts: 1,
         messages: twoChunkMessages,
         model: testModel,
         apiKey: "test-key", // pragma: allowlist secret
@@ -186,7 +188,7 @@ describe("summarizeChunks partial summary preservation (#82952)", () => {
 
   it("tries oversized-message retry before falling back to partial summary", async () => {
     // Scenario: chunk 1 (small) succeeds, chunk 2 (has oversized message) fails.
-    // summarizeWithFallback should try the non-oversized retry, which may
+    // summarizeInStages should try the non-oversized retry, which may
     // recover more content than the partial summary alone.
     const mixedMessages: AgentMessage[] = [
       // Small message (chunk 1)

@@ -98,6 +98,29 @@ beforeEach(() => {
 });
 
 describe("retryAsync", () => {
+  it("applies exponential backoff without jitter", async () => {
+    vi.useFakeTimers();
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Error 1"))
+      .mockRejectedValueOnce(new Error("Error 2"))
+      .mockResolvedValueOnce("Success on 3rd attempt");
+    const delays: number[] = [];
+
+    const promise = retryAsync(fn, {
+      attempts: 3,
+      minDelayMs: 500,
+      maxDelayMs: 5000,
+      jitter: 0,
+      onRetry: (info) => delays.push(info.delayMs),
+    });
+    await vi.runAllTimersAsync();
+
+    await expect(promise).resolves.toBe("Success on 3rd attempt");
+    expect(fn).toHaveBeenCalledTimes(3);
+    expect(delays).toEqual([500, 1000]);
+  });
+
   it.each<NumberRetryCase>([
     {
       name: "returns on first success",

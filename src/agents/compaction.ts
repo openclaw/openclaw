@@ -393,10 +393,3 @@ export function resolveContextWindowTokens(model?: ExtensionContext["model"]): n
     (model as { contextTokens?: number } | undefined)?.contextTokens ?? model?.contextWindow;
   return Math.max(1, Math.floor(effective ?? DEFAULT_CONTEXT_TOKENS));
 }
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.compactionTestApi")] = {
-    buildCompactionSummarizationInstructions,
-    summarizeWithFallback,
-  };
-}

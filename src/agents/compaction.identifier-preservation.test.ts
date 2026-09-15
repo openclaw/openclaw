@@ -2,8 +2,7 @@
 // compaction summarization paths.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { retryAsync } from "../infra/retry.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as agentSessions from "./sessions/index.js";
 
 vi.mock("./sessions/index.js", async () => {
@@ -31,7 +30,6 @@ const summarizeBase: Omit<SummarizeInStagesInput, "messages"> = {
   signal: new AbortController().signal,
 };
 
-const { buildCompactionSummarizationInstructions } = await import("./compaction.test-support.js");
 const { summarizeInStages } = await import("./compaction.js");
 
 function makeMessage(index: number, size = 1200): AgentMessage {
@@ -62,11 +60,11 @@ describe("compaction identifier-preservation instructions", () => {
     mockGenerateSummary.mockResolvedValue("summary");
   });
 
-  function summaryCall(index: number): unknown[] | undefined {
+  function summaryCall(index: number) {
     return mockGenerateSummary.mock.calls[index];
   }
 
-  function latestSummaryCall(): unknown[] | undefined {
+  function latestSummaryCall() {
     return mockGenerateSummary.mock.calls[mockGenerateSummary.mock.calls.length - 1];
   }
 
@@ -141,39 +139,40 @@ describe("compaction identifier-preservation instructions", () => {
   });
 });
 
-function extractSummaryInstructions(call: unknown[] | undefined): string {
-  // generateSummary has compatibility parameters; scan from the tail so the
-  // instruction argument is found across old and new call shapes.
-  if (!call) {
-    return "";
+function extractSummaryInstructions(
+  call: Parameters<typeof agentSessions.generateSummary> | undefined,
+): string {
+  const instructions = call?.[6];
+  if (typeof instructions !== "string") {
+    throw new Error("Expected string instructions in the compaction summary call");
   }
-  for (let index = call.length - 1; index >= 4; index -= 1) {
-    const arg = call[index];
-    if (
-      typeof arg === "string" &&
-      (arg.includes("Preserve all opaque identifiers exactly as written") ||
-        arg.includes("Merge these partial summaries into a single cohesive summary.") ||
-        arg.includes("Additional focus:"))
-    ) {
-      return arg;
-    }
-  }
-  return "";
+  return instructions;
+}
+
+async function summarizeInstructions(
+  customInstructions?: SummarizeInStagesInput["customInstructions"],
+  summarizationInstructions?: SummarizeInStagesInput["summarizationInstructions"],
+) {
+  mockGenerateSummary.mockReset();
+  mockGenerateSummary.mockResolvedValue("summary");
+  await runSummary(2, { customInstructions, summarizationInstructions });
+  expect(mockGenerateSummary).toHaveBeenCalledTimes(1);
+  return mockGenerateSummary.mock.calls[0]?.[6];
 }
 
 describe("buildCompactionSummarizationInstructions", () => {
-  it("returns base instructions when no custom text is provided", () => {
-    const result = buildCompactionSummarizationInstructions();
+  it("returns base instructions when no custom text is provided", async () => {
+    const result = await summarizeInstructions();
     expect(result).toContain("Preserve all opaque identifiers exactly as written");
     expect(result).not.toContain("Additional focus:");
     expect(result).not.toContain("tokens");
     expect(result).not.toContain("API keys");
   });
 
-  it("appends custom instructions in a stable format", () => {
+  it("appends custom instructions in a stable format", async () => {
     // Stable formatting matters because staged merge prompts append this block
     // again if duplicate headers are not guarded.
-    const result = buildCompactionSummarizationInstructions("Keep deployment details.");
+    const result = await summarizeInstructions("Keep deployment details.");
     expect(result).toContain("Preserve all opaque identifiers exactly as written");
     expect(result).toContain("Additional focus:");
     expect(result).toContain("Keep deployment details.");
@@ -181,22 +180,20 @@ describe("buildCompactionSummarizationInstructions", () => {
 });
 
 describe("compaction identifier policy", () => {
-  it("defaults to strict identifier preservation", () => {
-    const built = buildCompactionSummarizationInstructions();
+  it("defaults to strict identifier preservation", async () => {
+    const built = await summarizeInstructions();
     expect(built).toContain("Preserve all opaque identifiers exactly as written");
     expect(built).toContain("UUIDs");
     expect(built).not.toContain("tokens");
     expect(built).not.toContain("API keys");
   });
 
-  it("can disable identifier preservation with off policy", () => {
-    expect(
-      buildCompactionSummarizationInstructions(undefined, { identifierPolicy: "off" }),
-    ).toBeUndefined();
+  it("can disable identifier preservation with off policy", async () => {
+    expect(await summarizeInstructions(undefined, { identifierPolicy: "off" })).toBeUndefined();
   });
 
-  it("supports custom identifier instructions", () => {
-    const built = buildCompactionSummarizationInstructions(undefined, {
+  it("supports custom identifier instructions", async () => {
+    const built = await summarizeInstructions(undefined, {
       identifierPolicy: "custom",
       identifierInstructions: "Keep ticket IDs unchanged.",
     });
@@ -205,120 +202,20 @@ describe("compaction identifier policy", () => {
     expect(built).not.toContain("Preserve all opaque identifiers exactly as written");
   });
 
-  it("falls back to strict text when custom policy is missing instructions", () => {
-    const built = buildCompactionSummarizationInstructions(undefined, {
+  it("falls back to strict text when custom policy is missing instructions", async () => {
+    const built = await summarizeInstructions(undefined, {
       identifierPolicy: "custom",
       identifierInstructions: "   ",
     });
     expect(built).toContain("Preserve all opaque identifiers exactly as written");
   });
 
-  it("keeps custom focus text when identifier policy is off", () => {
+  it("keeps custom focus text when identifier policy is off", async () => {
     expect(
-      buildCompactionSummarizationInstructions("Track release blockers.", {
+      await summarizeInstructions("Track release blockers.", {
         identifierPolicy: "off",
       }),
     ).toBe("Additional focus:\nTrack release blockers.");
-  });
-});
-
-describe("compaction retry integration", () => {
-  const invokeGenerateSummary = (signal = new AbortController().signal) =>
-    mockGenerateSummary([], testModel, 1000, "test-key", undefined, signal);
-  const runSummaryRetry = (options: Parameters<typeof retryAsync>[1]) =>
-    retryAsync(() => invokeGenerateSummary(), options);
-
-  beforeEach(() => {
-    mockGenerateSummary.mockReset();
-  });
-
-  afterEach(() => {
-    vi.clearAllTimers();
-    vi.useRealTimers();
-  });
-
-  it("should successfully call generateSummary with retry wrapper", async () => {
-    mockGenerateSummary.mockResolvedValueOnce("Test summary");
-
-    await expect(
-      runSummaryRetry({
-        attempts: 3,
-        minDelayMs: 500,
-        maxDelayMs: 5000,
-        jitter: 0.2,
-        label: "compaction/generateSummary",
-      }),
-    ).resolves.toBe("Test summary");
-    expect(mockGenerateSummary).toHaveBeenCalledTimes(1);
-  });
-
-  it("should retry on transient error and succeed", async () => {
-    mockGenerateSummary
-      .mockRejectedValueOnce(new Error("Network timeout"))
-      .mockResolvedValueOnce("Success after retry");
-
-    await expect(
-      runSummaryRetry({
-        attempts: 3,
-        minDelayMs: 0,
-        maxDelayMs: 0,
-        label: "compaction/generateSummary",
-      }),
-    ).resolves.toBe("Success after retry");
-    expect(mockGenerateSummary).toHaveBeenCalledTimes(2);
-  });
-
-  it("should NOT retry on user abort", async () => {
-    const abortError = new Error("aborted", { cause: { source: "user" } });
-    abortError.name = "AbortError";
-    mockGenerateSummary.mockRejectedValueOnce(abortError);
-
-    await expect(
-      retryAsync(() => invokeGenerateSummary(), {
-        attempts: 3,
-        minDelayMs: 0,
-        label: "compaction/generateSummary",
-        shouldRetry: (error) => !(error instanceof Error && error.name === "AbortError"),
-      }),
-    ).rejects.toThrow("aborted");
-    expect(mockGenerateSummary).toHaveBeenCalledTimes(1);
-  });
-
-  it("should retry up to 3 times and then fail", async () => {
-    mockGenerateSummary.mockRejectedValue(new Error("Persistent API error"));
-
-    await expect(
-      runSummaryRetry({
-        attempts: 3,
-        minDelayMs: 0,
-        maxDelayMs: 0,
-        label: "compaction/generateSummary",
-      }),
-    ).rejects.toThrow("Persistent API error");
-    expect(mockGenerateSummary).toHaveBeenCalledTimes(3);
-  });
-
-  it("should apply exponential backoff", async () => {
-    vi.useFakeTimers();
-    mockGenerateSummary
-      .mockRejectedValueOnce(new Error("Error 1"))
-      .mockRejectedValueOnce(new Error("Error 2"))
-      .mockResolvedValueOnce("Success on 3rd attempt");
-    const delays: number[] = [];
-
-    const promise = runSummaryRetry({
-      attempts: 3,
-      minDelayMs: 500,
-      maxDelayMs: 5000,
-      jitter: 0,
-      label: "compaction/generateSummary",
-      onRetry: (info) => delays.push(info.delayMs),
-    });
-    await vi.runAllTimersAsync();
-
-    await expect(promise).resolves.toBe("Success on 3rd attempt");
-    expect(mockGenerateSummary).toHaveBeenCalledTimes(3);
-    expect(delays).toEqual([500, 1000]);
   });
 });
 
