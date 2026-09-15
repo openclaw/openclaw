@@ -128,8 +128,15 @@ function extractComparableText(
     ? stripTrailingCliImageMentions(joined)
     : { text: joined, stripped: false };
   const normalizeText = (value: string) => {
+    // Assistant turns delivered through the claude-cli provider are persisted twice:
+    // the imported claude-cli JSONL record keeps the raw `MEDIA:<path>` directive line,
+    // while the committed message has it stripped and the image attached as an artifact.
+    // Strip the directive here so both records compare equal and dedupe (otherwise image
+    // turns render twice on WebChat while text turns collapse correctly).
+    const withoutMedia =
+      role === "assistant" ? value.replace(/(?:^|\n)[^\S\n]*MEDIA:[^\n]*/gi, " ") : value;
     const visible = stripInlineDirectiveTagsForDisplay(
-      role === "user" ? stripInboundMetadata(value) : value,
+      role === "user" ? stripInboundMetadata(withoutMedia) : withoutMedia,
     ).text;
     return visible.replace(/\s+/g, " ").trim();
   };
