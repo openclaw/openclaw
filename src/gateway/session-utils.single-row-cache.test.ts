@@ -512,7 +512,7 @@ describe("single gateway session row child projections", () => {
   });
 
   test.each(["main", "worker"])(
-    "removes deleted runtime-only children from exact rows (%s)",
+    "keeps runtime-only child reads compact and removes deleted children (%s)",
     async (agentId) => {
       await withSingleRowCacheStore(
         "openclaw-canonical-child-",
@@ -521,16 +521,36 @@ describe("single gateway session row child projections", () => {
           const parentKey = "agent:main:parent";
           const childKey = `agent:${agentId}:subagent:child`;
           const childStorePath = resolveSessionStorePathCore(undefined, { agentId });
+          const childPrompt = "unused registry child prompt ".repeat(2048);
           await seedSessionEntries(storePath, { [parentKey]: parentSession("parent", now) });
           await replaceSessionEntry(
             { agentId, storePath: childStorePath, sessionKey: childKey },
             {
               sessionId: "child",
               updatedAt: now,
+              skillsSnapshot: { prompt: childPrompt, skills: [] },
+              systemPromptReport: {
+                source: "run",
+                generatedAt: now,
+                systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+                injectedWorkspaceFiles: [],
+                skills: { promptChars: childPrompt.length, entries: [] },
+                tools: { listChars: 0, schemaChars: 0, entries: [] },
+              },
             },
           );
           setSubagentControllerRun(childKey, parentKey, now);
-          expect(loadGatewaySessionRow(parentKey, { now })?.childSessions).toEqual([childKey]);
+          const parsed = vi.spyOn(JSON, "parse");
+          try {
+            expect(loadGatewaySessionRow(parentKey, { now })?.childSessions).toEqual([childKey]);
+            expect(
+              parsed.mock.calls.some(
+                ([value]) => value.includes(childPrompt) || value.includes('"systemPromptReport"'),
+              ),
+            ).toBe(false);
+          } finally {
+            parsed.mockRestore();
+          }
 
           await deleteSessionEntryLifecycle({
             agentId,

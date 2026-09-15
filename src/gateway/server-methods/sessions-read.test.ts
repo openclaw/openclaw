@@ -357,12 +357,14 @@ test("sessions.resolve short IDs retain archived child-owner selection", async (
   }
 });
 
-test("sessions.describe retains full target and child metadata without decoding unrelated prompts", async () => {
+test("sessions.describe retains full target and child metadata without decoding child or unrelated prompts", async () => {
   const agentId = "main";
   const sessionKey = "agent:main:describe-target";
   const storePath = resolveStorePath(undefined, { agentId });
   const updatedAt = Date.now();
   const skillsSnapshot = { prompt: "complete target prompt", skills: [] };
+  const childPrompt = "unused describe child skill prompt ".repeat(2048);
+  const childReportMarker = "unused describe child prompt report";
   await upsertSessionEntryCore(
     { agentId, sessionKey, storePath },
     { sessionId: "describe-target", updatedAt, label: "Target", skillsSnapshot },
@@ -373,7 +375,33 @@ test("sessions.describe retains full target and child metadata without decoding 
   ] as const) {
     await upsertSessionEntryCore(
       { agentId, sessionKey: `agent:main:${name}`, storePath },
-      { sessionId: name, updatedAt, status: "running", [relation]: sessionKey },
+      {
+        sessionId: name,
+        updatedAt,
+        status: "running",
+        [relation]: sessionKey,
+        skillsSnapshot: { prompt: childPrompt, skills: [] },
+        systemPromptReport: {
+          source: "run",
+          generatedAt: updatedAt,
+          systemPrompt: {
+            chars: childPrompt.length,
+            projectContextChars: 0,
+            nonProjectContextChars: childPrompt.length,
+          },
+          injectedWorkspaceFiles: [],
+          skills: { promptChars: childPrompt.length, entries: [] },
+          tools: {
+            listChars: 0,
+            schemaChars: 256,
+            entries: Array.from({ length: 256 }, (_, index) => ({
+              name: `${childReportMarker}-${name}-${index}`,
+              summaryChars: 0,
+              schemaChars: 1,
+            })),
+          },
+        },
+      },
     );
   }
   const unrelatedPrompt = "unrelated describe prompt".repeat(512);
@@ -390,9 +418,19 @@ test("sessions.describe retains full target and child metadata without decoding 
   await directSessionReq("sessions.describe", { key: sessionKey });
   const parse = JSON.parse;
   let unrelatedDecodes = 0;
+  let childPromptDecodes = 0;
+  let childReportDecodes = 0;
   const parsed = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
-    if (typeof value === "string" && value.includes(unrelatedPrompt)) {
-      unrelatedDecodes++;
+    if (typeof value === "string") {
+      if (value.includes(unrelatedPrompt)) {
+        unrelatedDecodes++;
+      }
+      if (value.includes(childPrompt)) {
+        childPromptDecodes++;
+      }
+      if (value.includes(childReportMarker)) {
+        childReportDecodes++;
+      }
     }
     return parse(value, reviver);
   });
@@ -417,6 +455,10 @@ test("sessions.describe retains full target and child metadata without decoding 
       }),
     );
     expect(unrelatedDecodes).toBe(0);
+    expect({ childPromptDecodes, childReportDecodes }).toEqual({
+      childPromptDecodes: 0,
+      childReportDecodes: 0,
+    });
   } finally {
     projected.mockRestore();
     parsed.mockRestore();
