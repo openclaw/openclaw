@@ -3,9 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { ensureAbsoluteDirectory } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
-import { runCommandBuffered } from "../process/exec.js";
+import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { tryReadDiskSpace } from "./disk-space.js";
 import { hasNodeErrorCode } from "./path-guards.js";
@@ -268,7 +269,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         env: workerEnv,
       },
       async (signal) => {
-        const result = await runCommandBuffered(
+        const result = await runUtf8CommandWithTimeout(
           [
             params.nodeRunner ?? process.execPath,
             ...resolveRuntimeWorkerArgv(
@@ -296,16 +297,24 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
             baseEnv: workerEnv,
             signal,
             killGraceMs: 500,
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
             maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
+            terminateOnOutputLimit: true,
           },
         );
+        if (result.cleanup === "uncertain") {
+          throw Object.assign(new Error("Update snapshot worker settlement is uncertain"), {
+            cleanup: result.cleanup,
+          });
+        }
         signal.throwIfAborted();
-        if (result.code !== 0) {
+        if (result.code !== 0 || result.termination !== "exit" || result.outputLimitExceeded) {
           throw new Error(
-            `Update state snapshot failed (${result.termination}): ${redactSupportString(result.stderr.toString("utf8"), { env: params.env, stateDir: params.stateDir }, { maxLength: 20_000 })}`,
+            `Update state snapshot failed (${result.outputLimitExceeded ? "output-limit" : result.termination}): ${redactSupportString(result.stderr, { env: params.env, stateDir: params.stateDir }, { maxLength: 20_000 })}`,
           );
         }
-        return JSON.parse(result.stdout.toString("utf8")) as unknown;
+        return JSON.parse(result.stdout) as unknown;
       },
     );
   };
@@ -336,6 +345,15 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
       cleanupDirectories: cleanupDirectories(),
     };
   } catch (error) {
+    if (isRecord(error) && error.cleanup === "uncertain") {
+      throw Object.assign(
+        new Error(
+          `Update snapshot cleanup could not be confirmed; retained scratch: ${cleanupDirectories().join(", ")}`,
+          { cause: error },
+        ),
+        { cleanup: "uncertain" },
+      );
+    }
     for (const ownedDirectory of cleanupDirectories()) {
       await fs.rm(ownedDirectory, { recursive: true, force: true });
     }
