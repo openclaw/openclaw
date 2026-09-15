@@ -680,6 +680,7 @@ extension DashboardWindowSmokeTests {
         #expect(!chromeScript.source.contains("max-width: 1100px"))
         #expect(chromeScript.source.contains("openclaw-native-web-chrome"))
         #expect(!chromeScript.source.contains("openclaw-native-nav"))
+        #expect(!chromeScript.source.contains("__OPENCLAW_NATIVE_EMBED__"))
         #expect(chromeScript.injectionTime == .atDocumentEnd)
         #expect(chromeScript.isForMainFrameOnly)
     }
@@ -695,12 +696,16 @@ extension DashboardWindowSmokeTests {
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
+        // The cache-policy capability is document-start; the styling script
+        // above intentionally remains a separate document-end user script.
         let capabilityScript = try #require(controller._testUserScripts.first {
             $0.source.contains("__OPENCLAW_NATIVE_WEB_CHROME__")
         })
 
         #expect(capabilityScript.injectionTime == .atDocumentStart)
         #expect(capabilityScript.isForMainFrameOnly)
+        #expect(capabilityScript.source.contains("__OPENCLAW_NATIVE_CONTROL_UI_CACHE_POLICY__"))
+        #expect(!capabilityScript.source.contains("__OPENCLAW_NATIVE_EMBED__"))
         #expect(controller.window?.titlebarAccessoryViewControllers.isEmpty == true)
         #expect(controller._testAllowsBackForwardGestures)
     }

@@ -483,7 +483,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         dashboardWindowLogger
             .debug("dashboard load \(GatewayEndpointStore.diagnosticURLString(for: url), privacy: .public)")
         guard let browserSessionLease else {
-            self.webView.load(URLRequest(url: url))
+            self.webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
             return
         }
         let generation = self.loadGeneration
@@ -493,7 +493,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
                 try await browserSessionLease.prepare(for: url, in: contentController)
                 guard let self, self.loadGeneration == generation, self.window != nil else { return }
                 self.pendingLoad = nil
-                self.webView.load(URLRequest(url: url))
+                self.webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
             } catch {
                 guard !Task.isCancelled, let self, self.loadGeneration == generation else { return }
                 self.pendingLoad = nil
@@ -806,6 +806,7 @@ extension DashboardWindowController {
         // toggles plus back/forward gestures and the Cmd-[/] menu items.
         let capabilityScript = """
         window.__OPENCLAW_NATIVE_WEB_CHROME__ = true;
+        window.__OPENCLAW_NATIVE_CONTROL_UI_CACHE_POLICY__ = 'reload';
         window.addEventListener('openclaw:native-commands-state', () => {
           window.webkit.messageHandlers.openclawCommands.postMessage({type: 'commands-state'});
         });
