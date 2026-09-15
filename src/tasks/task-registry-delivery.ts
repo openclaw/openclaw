@@ -31,13 +31,13 @@ import { cloneTaskRecord, pickPreferredRunIdTask } from "./task-registry-records
 import { loadTaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
 import {
   ensureTaskRegistryReady,
-  getTasksByRunId,
   withTaskRegistryMutation,
   taskRegistryLog,
   taskDeliveryStates,
   tasks,
   tasksWithPendingDelivery,
 } from "./task-registry-state.js";
+import { getTasksByRunId } from "./task-registry.process-state.js";
 import type {
   TaskDeliveryState,
   TaskDeliveryStatus,

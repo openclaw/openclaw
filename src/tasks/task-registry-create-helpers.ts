@@ -11,7 +11,8 @@ import {
 } from "./task-registry-flow-link.js";
 import { updateTask, upsertTaskDeliveryState } from "./task-registry-mutation.js";
 import { cloneTaskRecord } from "./task-registry-records.js";
-import { getTasksByRunId, taskDeliveryStates } from "./task-registry-state.js";
+import { taskDeliveryStates } from "./task-registry-state.js";
+import { getTasksByRunId } from "./task-registry.process-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 export function findExistingTaskForCreate(

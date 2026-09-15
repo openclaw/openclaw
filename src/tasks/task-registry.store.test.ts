@@ -421,28 +421,42 @@ describe("task-registry store runtime", () => {
       },
     });
 
-    const pending = listFreshTasksForOwnerKey("agent:main:main");
+    const pending = listFreshTasksForOwnerKey(
+      captureOpenClawStateWorkerContext(),
+      "agent:main:main",
+    );
     lookup.resolve([storedTask]);
     const tasks = await pending;
 
     expect(tasks.map((task) => task.taskId)).toEqual(["task-restored"]);
-    expect(listTasksForOwnerKey).toHaveBeenCalledWith("agent:main:main");
+    expect(listTasksForOwnerKey).toHaveBeenCalledWith(
+      expect.objectContaining({ admission: expect.any(Object) }),
+      "agent:main:main",
+    );
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("uses the current memory snapshot when a delayed owner lookup fails", async () => {
     const storedTask = createStoredTask();
     const lookup = createDeferred<TaskRecord[]>();
+    const started = createDeferred();
     configureTaskRegistryRuntime({
       store: {
         ...createInMemoryTaskRegistryStore({
           tasks: new Map([[storedTask.taskId, storedTask]]),
           deliveryStates: new Map(),
         }),
-        listTasksForOwnerKey: () => lookup.promise,
+        listTasksForOwnerKey: () => {
+          started.resolve();
+          return lookup.promise;
+        },
       },
     });
-    const pending = listFreshTasksForOwnerKey(storedTask.ownerKey);
+    const pending = listFreshTasksForOwnerKey(
+      captureOpenClawStateWorkerContext(),
+      storedTask.ownerKey,
+    );
+    await started.promise;
     updateTaskNotifyPolicyById({ taskId: storedTask.taskId, notifyPolicy: "silent" });
     lookup.reject(new Error("owner lookup unavailable"));
     expect(await pending).toMatchObject([{ taskId: storedTask.taskId, notifyPolicy: "silent" }]);
@@ -993,9 +1007,11 @@ describe("task-registry store runtime", () => {
           deliveryStatus: "not_applicable",
           notifyPolicy: "silent",
         });
-        expect((await listFreshTasksForOwnerKey(ownerKey)).map((task) => task.taskId)).toContain(
-          target.taskId,
-        );
+        expect(
+          (await listFreshTasksForOwnerKey(captureOpenClawStateWorkerContext(), ownerKey)).map(
+            (task) => task.taskId,
+          ),
+        ).toContain(target.taskId);
 
         const database = openOpenClawStateDatabase();
         createUnsafeTaskOwnerIndex(database.db);
@@ -1017,9 +1033,11 @@ describe("task-registry store runtime", () => {
         expect(() => loadTaskRegistryStateFromSqlite()).toThrow(
           /integrity_check failed.*idx_task_runs_owner_key/iu,
         );
-        expect((await listFreshTasksForOwnerKey(ownerKey)).map((task) => task.taskId)).toContain(
-          target.taskId,
-        );
+        expect(
+          (await listFreshTasksForOwnerKey(captureOpenClawStateWorkerContext(), ownerKey)).map(
+            (task) => task.taskId,
+          ),
+        ).toContain(target.taskId);
 
         resetTaskRegistryForTests({ persist: false });
       },
@@ -1666,7 +1684,7 @@ describe("task-registry store runtime", () => {
       const deleteTaskWithDeliveryState = vi.fn((taskId: string) => {
         sqliteState.delete(taskId);
       });
-      const listTasksForOwnerKey = vi.fn(async (key: string) =>
+      const listTasksForOwnerKey = vi.fn(async (_context, key: string) =>
         [...sqliteState.values()].filter((task) => task.ownerKey === key),
       );
 
@@ -1689,7 +1707,10 @@ describe("task-registry store runtime", () => {
         },
       });
 
-      const initial = await listFreshTasksForOwnerKey(ownerKey);
+      const initial = await listFreshTasksForOwnerKey(
+        captureOpenClawStateWorkerContext(),
+        ownerKey,
+      );
       expect(initial.find((task) => task.taskId === "task-diverge")?.status).toBe("running");
 
       failUpsert = true;
@@ -1712,7 +1733,7 @@ describe("task-registry store runtime", () => {
       failUpsert = false;
       expect(getTaskById("task-diverge")?.status).toBe("running");
 
-      const after = await listFreshTasksForOwnerKey(ownerKey);
+      const after = await listFreshTasksForOwnerKey(captureOpenClawStateWorkerContext(), ownerKey);
       const seen = after.find((task) => task.taskId === "task-diverge");
       expect(seen?.status).toBe("running");
     },

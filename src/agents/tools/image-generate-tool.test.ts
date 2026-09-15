@@ -11,7 +11,7 @@ const taskRuntimeInternalMocks = vi.hoisted(() => {
     listTasksForOwnerKey: vi.fn(),
     listFreshTasksForOwnerKey: vi.fn(),
   };
-  mocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+  mocks.listFreshTasksForOwnerKey.mockImplementation((_context, ownerKey) =>
     mocks.listTasksForOwnerKey(ownerKey),
   );
   return mocks;
@@ -404,7 +404,7 @@ describe("createImageGenerateTool", () => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
     taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
-    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((_context, ownerKey) =>
       taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
     );
     resetRecentMediaGenerationDuplicateGuardsForTests();
@@ -1044,6 +1044,7 @@ describe("createImageGenerateTool", () => {
 
     const pending = tool.execute("call-image-lookup", { prompt: "an image" }, controller.signal);
     expect(taskRuntimeInternalMocks.listFreshTasksForOwnerKey).toHaveBeenCalledWith(
+      expect.any(Object),
       agentSessionKey,
     );
     expect(acquireProviders).not.toHaveBeenCalled();

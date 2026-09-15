@@ -13,13 +13,12 @@ import { shouldAutoDeliverTaskStateChange } from "./task-executor-policy.js";
 import { canDeliverToRequesterOrigin, resolveTaskDeliveryOwner } from "./task-registry-delivery.js";
 import { loadTaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
 import {
-  getTasksByRunId,
   tasks,
   taskProgressBatches,
   taskRegistryLog,
   withTaskRegistryMutation,
 } from "./task-registry-state.js";
-import type { TaskProgressBatch } from "./task-registry.process-state.js";
+import { getTasksByRunId, type TaskProgressBatch } from "./task-registry.process-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
 import { formatTaskStatusTitleText, sanitizeTaskStatusText } from "./task-status.js";
 

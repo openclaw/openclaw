@@ -7,6 +7,7 @@ import {
   createTaskFlowForTask as createTaskFlowForTaskOrNull,
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   deleteTaskFlowRecordById,
+  ensureTaskFlowRegistryReadyAsync,
   getTaskFlowRegistryRestoreFailure,
   failFlow,
   getTaskFlowById,
@@ -250,6 +251,44 @@ describe("task-flow-registry", () => {
     expect(events[1]?.flow?.flowId).toBe(created.flowId);
     expect(events[2]?.kind).toBe("deleted");
     expect(events[2]?.flowId).toBe(created.flowId);
+  });
+
+  it("publishes a fully ready flow owner before an observer reenters its synchronous update", async () => {
+    await withFlowRegistryTempDir(async () => {
+      const flow: TaskFlowRecord = {
+        flowId: "restored-flow",
+        syncMode: "managed",
+        controllerId: "tests/restore",
+        ownerKey: "agent:main:restore",
+        goal: "Synthetic flow",
+        revision: 0,
+        status: "running",
+        notifyPolicy: "silent",
+        createdAt: 10,
+        updatedAt: 10,
+      };
+      const store = createInMemoryTaskFlowRegistryStore({ flows: new Map([[flow.flowId, flow]]) });
+      const events: string[] = [];
+      configureTaskFlowRegistryRuntime({
+        store: {
+          ...store,
+          loadSnapshot: () => {
+            throw new Error("unexpected synchronous restore");
+          },
+        },
+        observers: {
+          onEvent(event) {
+            events.push(event.kind);
+            if (event.kind === "restored") {
+              setFlowWaiting({ flowId: flow.flowId, expectedRevision: 0, currentStep: "observer" });
+            }
+          },
+        },
+      });
+      await ensureTaskFlowRegistryReadyAsync(captureOpenClawStateWorkerContext());
+      expect(events).toEqual(["restored", "upserted"]);
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({ revision: 1, currentStep: "observer" });
+    });
   });
 
   it("keeps restore failures sticky until an explicit reload succeeds", async () => {

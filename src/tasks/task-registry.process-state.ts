@@ -118,6 +118,16 @@ export function clearTaskProgressBatches(): void {
 
 const indexState = getTaskRegistryProcessState();
 
+export function getTasksByRunId(runId: string): TaskRecord[] {
+  const ids = indexState.taskIdsByRunId.get(runId.trim());
+  if (!ids || ids.size === 0) {
+    return [];
+  }
+  return [...ids]
+    .map((taskId) => indexState.tasks.get(taskId))
+    .filter((task): task is TaskRecord => Boolean(task));
+}
+
 export function addRunIdIndex(taskId: string, runId?: string) {
   const trimmed = runId?.trim();
   if (!trimmed) {

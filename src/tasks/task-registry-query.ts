@@ -2,6 +2,7 @@ import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { clearTaskActivity } from "./task-registry-activity.js";
 import { isActiveTaskStatus } from "./task-registry-common.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
@@ -30,7 +31,8 @@ import {
   clearTaskRegistryMemory,
   emitTaskRegistryObserverEvent,
   ensureTaskRegistryReady,
-  getTasksByRunId,
+  prepareTaskRegistryProjectionAsync,
+  assertTaskRegistryOwnerCurrent,
   taskRegistryLog,
   readTaskRegistryRevision,
   resetTaskRegistryListenerState,
@@ -47,6 +49,7 @@ import {
   deleteRelatedSessionKeyIndex,
   rebuildRunIdIndex,
   getTaskRegistryProcessState,
+  getTasksByRunId,
 } from "./task-registry.process-state.js";
 import {
   tryPersistTaskDelete,
@@ -355,17 +358,22 @@ export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
   return listTasksFromIndex(tasks, taskIdsByOwnerKey, key);
 }
 
-export async function listFreshTasksForOwnerKey(ownerKey: string): Promise<TaskRecord[]> {
-  ensureTaskRegistryReady();
+export async function listFreshTasksForOwnerKey(
+  context: OpenClawStateWorkerContext,
+  ownerKey: string,
+): Promise<TaskRecord[]> {
+  const store = getTaskRegistryStore();
+  await prepareTaskRegistryProjectionAsync(context, store);
   const key = normalizeOptionalString(ownerKey);
   if (!key) {
     return [];
   }
-  const store = getTaskRegistryStore();
   if (store.listTasksForOwnerKey) {
     try {
       const merged = new Map<string, TaskRecord>();
-      for (const task of await store.listTasksForOwnerKey(key)) {
+      const records = await store.listTasksForOwnerKey(context, key);
+      assertTaskRegistryOwnerCurrent(context, store);
+      for (const task of records) {
         merged.set(task.taskId, cloneTaskRecord(normalizeTaskTimestamps(task)));
       }
       return [...merged.values()]
@@ -373,6 +381,7 @@ export async function listFreshTasksForOwnerKey(ownerKey: string): Promise<TaskR
         .toSorted(compareTasksNewestFirst)
         .map(({ insertionIndex: _insertionIndex, ...task }) => task);
     } catch (error) {
+      assertTaskRegistryOwnerCurrent(context, store);
       taskRegistryLog.warn("Failed to read fresh owner task registry records", {
         ownerKey: key,
         error,
@@ -380,6 +389,7 @@ export async function listFreshTasksForOwnerKey(ownerKey: string): Promise<TaskR
     }
   }
 
+  assertTaskRegistryOwnerCurrent(context, store);
   return listTasksFromIndex(tasks, taskIdsByOwnerKey, key);
 }
 

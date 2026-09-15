@@ -37,6 +37,7 @@ import {
   addRelatedSessionKeyIndex,
   deleteRelatedSessionKeyIndex,
   getTaskRegistryProcessState,
+  getTasksByRunId,
   clearTaskProgressBatches,
   type PendingTaskRegistryMutation,
 } from "./task-registry.process-state.js";
@@ -146,16 +147,6 @@ export function clearTaskRegistryMemory(): void {
   taskIdsByOwnerKey.clear();
   taskIdsByParentFlowId.clear();
   taskIdsByRelatedSessionKey.clear();
-}
-
-export function getTasksByRunId(runId: string): TaskRecord[] {
-  const ids = taskIdsByRunId.get(runId.trim());
-  if (!ids || ids.size === 0) {
-    return [];
-  }
-  return [...ids]
-    .map((taskId) => tasks.get(taskId))
-    .filter((task): task is TaskRecord => Boolean(task));
 }
 
 export function getTasksByRunScope(params: {
@@ -378,6 +369,45 @@ export const ensureTaskRegistryReadyAsync = createAsyncRegistryRestore<
   },
   fail: failTaskRegistryRestore,
 });
+
+export function assertTaskRegistryOwnerCurrent(
+  context: OpenClawStateWorkerContext,
+  store: TaskRegistryStore,
+): void {
+  context.admission.assertCurrent();
+  if (getTaskRegistryStore() !== store || !isCurrentTaskRegistryDatabase(context.admission)) {
+    throw new Error("Task registry read owner is no longer current.");
+  }
+}
+
+export async function prepareTaskRegistryProjectionAsync(
+  context: OpenClawStateWorkerContext,
+  store: TaskRegistryStore,
+): Promise<void> {
+  assertTaskRegistryOwnerCurrent(context, store);
+  await ensureTaskRegistryReadyAsync(context);
+  assertTaskRegistryOwnerCurrent(context, store);
+  while (projection.mutationDepth === 0 && (projection.dirty || dirtyScopes.size > 0)) {
+    const epoch = projection.epoch;
+    const scopes = projection.dirty ? [undefined] : [...dirtyScopes];
+    const snapshots = await Promise.all(
+      scopes.map(async (scope) => ({
+        scope,
+        snapshot: await store.loadMutationSnapshotAsync(context, scope),
+      })),
+    );
+    assertTaskRegistryOwnerCurrent(context, store);
+    if (epoch !== projection.epoch) {
+      continue;
+    }
+    for (const { snapshot, scope } of snapshots) {
+      installSnapshot(snapshot, scope);
+    }
+    // In-flight mutations retain their publication obligations after this read.
+    markTaskRegistryProjectionRestored();
+    return;
+  }
+}
 
 function failTaskRegistryRestore(
   error: unknown,

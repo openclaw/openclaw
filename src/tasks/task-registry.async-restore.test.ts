@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  listActiveImageGenerationTasksForSession,
+  findDuplicateGuardImageGenerationTaskForSession,
+  IMAGE_GENERATION_TASK_KIND,
+} from "../agents/media-generation-task-status.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { serializeAgentSchemaInspectionError } from "../state/openclaw-agent-schema-inspection-response.js";
@@ -30,11 +35,13 @@ import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
 import { upsertTaskFlowRegistryRecordToSqlite } from "./task-flow-registry.store.sqlite.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskDeliveryState, upsertTaskDeliveryState } from "./task-registry-mutation.js";
+import { listFreshTasksForOwnerKey } from "./task-registry-query.js";
 import type { TaskRegistryRestoreResult } from "./task-registry-restore.worker.js";
 import {
   ensureTaskRegistryReadyAsync,
   reloadTaskRegistryFromStoreAsync,
   tasksWithPendingDelivery,
+  runTaskRegistryWorkerMutation,
 } from "./task-registry-state.js";
 import {
   getTaskById,
@@ -207,7 +214,14 @@ describe("asynchronous registry restoration", () => {
   it("restores complete task and flow state before observers without parent SQLite through close", async () => {
     upsertTaskFlowRegistryRecordToSqlite({ ...flow, flowId: "flow-a", stateJson: { cursor: 3 } });
     upsertTaskWithDeliveryStateToSqlite({
-      task: { ...task, taskId: "retained", parentFlowId: "flow-a" },
+      task: {
+        ...task,
+        taskId: "retained",
+        parentFlowId: "flow-a",
+        taskKind: IMAGE_GENERATION_TASK_KIND,
+        sourceId: "image_generate:synthetic",
+        detail: { nested: { retained: true } },
+      },
       deliveryState: { taskId: "retained", lastNotifiedEventAt: 50 },
     });
     for (const [flowId, revision, stale] of [
@@ -275,9 +289,170 @@ describe("asynchronous registry restoration", () => {
         expect(persisted?.waitJson).toBe(flowId === "legacy-mirror" ? undefined : null);
       }
     }
+    const mutationDone = createDeferred();
+    const scope = { taskId: "retained", flowId: "flow-a", runId: task.runId };
+    const store = getTaskRegistryStore();
+    const complete = await store.loadMutationSnapshotAsync(context);
+    expect([...complete.tasks.keys()]).toEqual(["legacy-mirror", "retained", "stale-mirror"]);
+    expect(complete.deliveryStates.get("retained")?.lastNotifiedEventAt).toBe(50);
+    const pendingMutation = runTaskRegistryWorkerMutation(
+      { admission: context.admission, scope },
+      () => mutationDone.promise,
+      () => store.loadMutationSnapshotAsync(context, scope),
+    );
+    try {
+      const fresh = await listFreshTasksForOwnerKey(context, ownerKey);
+      expect(fresh.map((entry) => entry.taskId)).toEqual([
+        "stale-mirror",
+        "retained",
+        "legacy-mirror",
+      ]);
+      expect(fresh.find((entry) => entry.taskId === "retained")?.detail).toEqual({
+        nested: { retained: true },
+      });
+      expect(
+        (await listActiveImageGenerationTasksForSession(ownerKey)).map((entry) => entry.taskId),
+      ).toEqual(["retained"]);
+      expect((await findDuplicateGuardImageGenerationTaskForSession(ownerKey))?.taskId).toBe(
+        "retained",
+      );
+    } finally {
+      mutationDone.resolve();
+      await pendingMutation;
+    }
     await closeOpenClawStateDatabaseAsync();
     expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
   });
+
+  it.each(["snapshot-first", "mutation-first"] as const)(
+    "refreshes a dirty projection with %s settlement without losing newer state or publication",
+    async (order) => {
+      const store = createInMemoryTaskRegistryStore({
+        tasks: new Map([
+          ["z-first", { ...task, taskId: "z-first" }],
+          ["a-second", { ...task, taskId: "a-second" }],
+        ]),
+        deliveryStates: new Map([["z-first", { taskId: "z-first", lastNotifiedEventAt: 12 }]]),
+      });
+      const readStarted = createDeferred();
+      const releaseRead = createDeferred();
+      let readCount = 0;
+      const observed: string[] = [];
+      const configured = {
+        ...store,
+        async loadMutationSnapshotAsync() {
+          const snapshot = store.loadSnapshot();
+          snapshot.tasks = new Map([...snapshot.tasks].toReversed());
+          readCount += 1;
+          if (readCount === 1) {
+            readStarted.resolve();
+            await releaseRead.promise;
+          }
+          return snapshot;
+        },
+      };
+      configureTaskRegistryRuntime({
+        store: configured,
+        observers: {
+          onEvent: (event) => {
+            if (event.kind === "upserted") {
+              observed.push(event.task.notifyPolicy);
+            }
+          },
+        },
+      });
+      const context = captureOpenClawStateWorkerContext();
+      await ensureTaskRegistryReadyAsync(context);
+      const finishMutation = createDeferred();
+      const mutation = runTaskRegistryWorkerMutation(
+        {
+          admission: context.admission,
+          scope: { taskId: "z-first", flowId: "flow-a", runId: task.runId },
+        },
+        async () => {
+          await finishMutation.promise;
+          store.upsertTaskWithDeliveryState({
+            task: { ...task, taskId: "z-first", notifyPolicy: "state_changes" },
+            deliveryState: { taskId: "z-first", lastNotifiedEventAt: 12 },
+          });
+        },
+        async () => store.loadSnapshot(),
+      );
+      const fresh = listFreshTasksForOwnerKey(context, ownerKey);
+      await readStarted.promise;
+      try {
+        if (order === "snapshot-first") {
+          releaseRead.resolve();
+          expect((await fresh).find((entry) => entry.taskId === "z-first")?.notifyPolicy).toBe(
+            "silent",
+          );
+          finishMutation.resolve();
+          await mutation;
+        } else {
+          finishMutation.resolve();
+          await mutation;
+          releaseRead.resolve();
+          expect((await fresh).find((entry) => entry.taskId === "z-first")?.notifyPolicy).toBe(
+            "state_changes",
+          );
+        }
+      } finally {
+        releaseRead.resolve();
+        finishMutation.resolve();
+        await Promise.all([fresh, mutation]);
+      }
+      expect(listTasksForOwnerKey(ownerKey).map((entry) => entry.taskId)).toEqual([
+        "a-second",
+        "z-first",
+      ]);
+      expect(getTaskById("z-first")?.notifyPolicy).toBe("state_changes");
+      expect(getTaskDeliveryState("z-first")?.lastNotifiedEventAt).toBe(12);
+      expect(observed).toEqual(["state_changes"]);
+    },
+  );
+
+  it.each([
+    ["root", "success"],
+    ["store", "success"],
+    ["admission", "success"],
+    ["root", "failure"],
+  ] as const)(
+    "rejects a fresh lookup after %s replacement and %s settlement",
+    async (replacement, outcome) => {
+      const fixture = identityRestoreFixture("task");
+      const started = createDeferred();
+      const lookup = createDeferred<TaskRecord[]>();
+      configureTaskRegistryRuntime({
+        store: {
+          ...getTaskRegistryStore(),
+          listTasksForOwnerKey: () => {
+            started.resolve();
+            return lookup.promise;
+          },
+        },
+      });
+      const fresh = listFreshTasksForOwnerKey(fixture.first, ownerKey);
+      const rejected = expect(fresh).rejects.toThrow(
+        replacement === "admission" ? "retired" : "no longer current",
+      );
+      await started.promise;
+      if (replacement === "root") {
+        fixture.select(fixture.second);
+      } else if (replacement === "store") {
+        configureTaskRegistryRuntime({ store: taskStore() });
+      } else {
+        vi.spyOn(fixture.first.admission, "assertCurrent").mockImplementation(() => {
+          throw new Error("retired");
+        });
+      }
+      if (outcome === "success") {
+        lookup.resolve([task]);
+      } else {
+        lookup.reject(new Error("owner lookup unavailable"));
+      }
+      await rejected;
+    },
+  );
 
   it("coalesces restoration through current flow reconciliation before observers without clearing delivery work", async () => {
     const store = taskStore();
@@ -736,29 +911,6 @@ describe("asynchronous registry restoration", () => {
     },
   );
 
-  it("publishes a fully ready flow owner before an observer reenters its synchronous update", async () => {
-    const store = createInMemoryTaskFlowRegistryStore({ flows: new Map([[flow.flowId, flow]]) });
-    const events: string[] = [];
-    configureTaskFlowRegistryRuntime({
-      store: {
-        ...store,
-        loadSnapshot: () => {
-          throw new Error("unexpected synchronous restore");
-        },
-      },
-      observers: {
-        onEvent(event) {
-          events.push(event.kind);
-          if (event.kind === "restored") {
-            setFlowWaiting({ flowId: flow.flowId, expectedRevision: 0, currentStep: "observer" });
-          }
-        },
-      },
-    });
-    await ensureTaskFlowRegistryReadyAsync(captureOpenClawStateWorkerContext());
-    expect(events).toEqual(["restored", "upserted"]);
-    expect(getTaskFlowById(flow.flowId)).toMatchObject({ revision: 1, currentStep: "observer" });
-  });
   describe.each(["task", "flow"] as const)("%s database identity", (kind) => {
     it.each(["async", "sync"] as const)(
       "refreshes ready state after same-identity admission retirement through %s reads",

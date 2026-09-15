@@ -338,8 +338,8 @@ describe.each(["image", "music", "video"] as const)(
             const readTasks = taskRuntime.listFreshTasksForOwnerKey;
             let lookups = 0;
             vi.spyOn(taskRuntime, "listFreshTasksForOwnerKey").mockImplementation(
-              async (ownerKey) => {
-                const tasks = await readTasks(ownerKey);
+              async (context, ownerKey) => {
+                const tasks = await readTasks(context, ownerKey);
                 if (
                   pause !== "reference loading" &&
                   ++lookups === (pause === "request lookup" ? 1 : 2)

@@ -13,6 +13,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfig } from "../config/config.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { listFreshTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -361,7 +362,10 @@ async function listActiveMediaGenerationTasksForSession(params: {
   if (!sessionKey) {
     return [];
   }
-  return selectActiveMediaGenerationTasks(params, await listFreshTasksForOwnerKey(sessionKey));
+  return selectActiveMediaGenerationTasks(
+    params,
+    await listFreshTasksForOwnerKey(captureOpenClawStateWorkerContext(), sessionKey),
+  );
 }
 
 function selectActiveMediaGenerationTasks(
@@ -416,7 +420,7 @@ async function findDuplicateGuardMediaGenerationTaskForSession(params: {
   if (!sessionKey) {
     return undefined;
   }
-  const tasks = await listFreshTasksForOwnerKey(sessionKey);
+  const tasks = await listFreshTasksForOwnerKey(captureOpenClawStateWorkerContext(), sessionKey);
   return (
     findRecentStartedMediaGenerationTaskForSession({ ...params, sessionKey, tasks }) ??
     selectActiveMediaGenerationTasks(params, tasks)[0]

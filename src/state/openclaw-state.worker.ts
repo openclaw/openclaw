@@ -50,10 +50,12 @@ import {
 } from "../tasks/task-registry-restore.worker.js";
 import {
   findTaskRecordByRunIdForViewInDatabase,
+  listTaskRecordsByOwnerKeyInDatabase,
   listTaskRecordsForFlowReadInDatabase,
   listTaskRecordsForOwnerReadInDatabase,
   readTaskViewRecordInDatabase,
   readTaskRegistryMutationSnapshotInDatabase,
+  readTaskRegistrySnapshot,
   summarizeTaskRecordsForFlowInDatabase,
 } from "../tasks/task-registry.store.kernel.js";
 import { readTaskRegistryStatusSnapshot } from "../tasks/task-registry.store.status.js";
@@ -380,11 +382,15 @@ function createSharedStateWorkerBackend(
           case "flows.snapshot":
             return readTaskFlowRegistrySnapshot(db);
           case "tasks.mutationSnapshot":
-            return readTaskRegistryMutationSnapshotInDatabase(db, command.input);
+            return command.input === undefined
+              ? readTaskRegistrySnapshot(database)
+              : readTaskRegistryMutationSnapshotInDatabase(db, command.input);
           case "tasks.get":
             return readTaskViewRecordInDatabase(db, command.input.taskId);
           case "tasks.list":
-            return listTaskRecordsForOwnerReadInDatabase(db, command.input.ownerKey);
+            return command.input.mode === "full-record"
+              ? listTaskRecordsByOwnerKeyInDatabase(db, command.input.ownerKey)
+              : listTaskRecordsForOwnerReadInDatabase(db, command.input.ownerKey);
           case "tasks.resolve": {
             const { ownerKey, token } = command.input;
             return {

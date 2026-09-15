@@ -18,6 +18,7 @@ import type {
   TaskRegistryRestoreResult,
 } from "../tasks/task-registry-restore.worker.js";
 import type { TaskRegistryStore, TaskRegistryStoreSnapshot } from "../tasks/task-registry.store.js";
+import type { TaskRegistryMutationScope } from "../tasks/task-registry.store.types.js";
 
 type TaskFlowRegistryStore = ReturnType<typeof getTaskFlowRegistryStore>;
 
@@ -118,6 +119,33 @@ export function createInMemoryTaskRegistryStore(
       return syncRestoredTaskFlow(this, flowStore, params);
     },
     loadSnapshot: () => structuredClone(state),
+    async loadMutationSnapshotAsync(
+      this: TaskRegistryStore,
+      _context: OpenClawStateWorkerContext,
+      scope?: TaskRegistryMutationScope,
+    ): Promise<TaskRegistryStoreSnapshot> {
+      const projectionSnapshot = structuredClone(this.loadSnapshot());
+      if (!scope) {
+        return projectionSnapshot;
+      }
+      const tasks = new Map(
+        [...projectionSnapshot.tasks].filter(
+          ([taskId, task]) =>
+            taskId === scope.taskId ||
+            Boolean(scope.runId?.trim() && task.runId?.trim() === scope.runId.trim()) ||
+            Boolean(
+              scope.childSessionKey?.trim() &&
+              task.childSessionKey?.trim() === scope.childSessionKey.trim(),
+            ),
+        ),
+      );
+      return {
+        tasks,
+        deliveryStates: new Map(
+          [...projectionSnapshot.deliveryStates].filter(([taskId]) => tasks.has(taskId)),
+        ),
+      };
+    },
     upsertTaskWithDeliveryState: ({ task, deliveryState }) => {
       const nextTask = structuredClone(task);
       const nextDeliveryState = deliveryState ? structuredClone(deliveryState) : undefined;

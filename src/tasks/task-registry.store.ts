@@ -11,7 +11,6 @@ import {
   deleteTaskAndDeliveryStateFromSqlite,
   loadTaskRegistryStateFromSqlite,
   loadTaskRegistryMutationStateFromSqlite,
-  listTaskRegistryRecordsByOwnerKeyFromSqlite,
   upsertTaskWithDeliveryStateToSqlite,
   upsertTaskDeliveryStateToSqlite,
   withTaskRegistrySqliteMutation,
@@ -34,8 +33,15 @@ export type TaskRegistryStore = TaskExecutionRestoreStore & {
     context: OpenClawStateWorkerContext,
     params: { taskId: string; expectedParentFlowId?: string },
   ) => Promise<TaskMirroredFlowSyncOutcome>;
+  loadMutationSnapshotAsync: (
+    context: OpenClawStateWorkerContext,
+    scope?: TaskRegistryMutationScope,
+  ) => Promise<TaskRegistryStoreSnapshot>;
   loadMutationSnapshot?: (scope: TaskRegistryMutationScope) => TaskRegistryStoreSnapshot;
-  listTasksForOwnerKey?: (ownerKey: string) => Promise<TaskRecord[]>;
+  listTasksForOwnerKey?: (
+    context: OpenClawStateWorkerContext,
+    ownerKey: string,
+  ) => Promise<TaskRecord[]>;
   deleteTaskWithDeliveryState: (taskId: string) => void;
   upsertDeliveryState: (state: TaskDeliveryState) => void;
   close?: () => void;
@@ -81,9 +87,23 @@ const defaultTaskRegistryStore: TaskRegistryStore = {
     );
   },
   loadSnapshot: loadTaskRegistryStateFromSqlite,
+  async loadMutationSnapshotAsync(context, scope) {
+    const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
+    return executeOpenClawStateWorker(context, { type: "tasks.mutationSnapshot", input: scope });
+  },
   loadMutationSnapshot: loadTaskRegistryMutationStateFromSqlite,
   withMutation: withTaskRegistrySqliteMutation,
-  listTasksForOwnerKey: listTaskRegistryRecordsByOwnerKeyFromSqlite,
+  async listTasksForOwnerKey(context, ownerKey) {
+    const key = ownerKey.trim();
+    if (!key) {
+      return [];
+    }
+    const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
+    return executeOpenClawStateWorker(context, {
+      type: "tasks.list",
+      input: { ownerKey: key, mode: "full-record" },
+    });
+  },
   upsertTaskWithDeliveryState: upsertTaskWithDeliveryStateToSqlite,
   deleteTaskWithDeliveryState: deleteTaskAndDeliveryStateFromSqlite,
   upsertDeliveryState: upsertTaskDeliveryStateToSqlite,
