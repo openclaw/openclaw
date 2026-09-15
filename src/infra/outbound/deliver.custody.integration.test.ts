@@ -10,13 +10,14 @@ import type { ChannelMessageSendTextContext } from "../../channels/message/types
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import * as stateDatabase from "../../state/openclaw-state-db.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
 import { createQueuedDeliveryOwner } from "./deliver-queue-state.js";
+import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { drainMatrixReconnect } from "./deliver.queue-integration.test-support.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import * as queueStorage from "./delivery-queue-storage.js";
@@ -208,9 +209,10 @@ describe("retired caller delivery settlement", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  function installHeldAdapter() {
+  function installHeldAdapter(failPreparationOnce = false) {
     const prepared = createDeferred();
     const release = createDeferred();
+    let preparationFailurePending = failPreparationOnce;
     const send = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
       await ctx.onPlatformSendDispatch?.();
       return {
@@ -236,6 +238,15 @@ describe("retired caller delivery settlement", () => {
                   beforeSendAttempt: async () => {
                     prepared.resolve();
                     await release.promise;
+                    if (preparationFailurePending) {
+                      preparationFailurePending = false;
+                      throw new PlatformMessageNotDispatchedError(
+                        "sender preparation unavailable",
+                        {
+                          cause: new Error("sender runtime unavailable"),
+                        },
+                      );
+                    }
                   },
                 },
                 text: send,
@@ -301,10 +312,97 @@ describe("retired caller delivery settlement", () => {
         expect(adapter.send).not.toHaveBeenCalled();
         expect(terminals).toEqual([]);
         compaction.mockRestore();
-        closeOpenClawStateDatabaseForTest();
+        stateDatabase.closeOpenClawStateDatabaseForTest();
         await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
         expect(await queueStorage.loadUnfinishedDelivery(queueId, stateDir)).toBeNull();
         expect(adapter.send).not.toHaveBeenCalled();
+        expect(terminals).toEqual(["failed"]);
+      } finally {
+        caller.abort();
+        adapter.release();
+        await outcome;
+        unsubscribe();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "does not replay a rejected handoff when its first settlement write fails (bestEffort: %s)",
+    async (bestEffort) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const stateDir = fixtures.tmpDir();
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const adapter = installHeldAdapter(true);
+      const caller = new AbortController();
+      const queueIdReady = createDeferred<string>();
+      const terminals: string[] = [];
+      const unsubscribe = onTrustedMessageAuditEvent((event) => {
+        if (event.action === "message.outbound.finished") {
+          terminals.push(event.outcome);
+        }
+      });
+      const outcome = deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "retired restart notice" }],
+        queuePolicy: "required",
+        bestEffort,
+        deliveryIntentId: `main-session-restart-recovery:first-write-${bestEffort}`,
+        completionRetention: {
+          idPrefix: "main-session-restart-recovery:",
+          maxAgeMs: 24 * 60 * 60_000,
+          maxEntries: 2_000,
+        },
+        reusePendingDeliveryIntent: true,
+        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+        onDeliveryIntent: ({ id }) => queueIdReady.resolve(id),
+      }).then(
+        (results) => ({ results }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        const queueId = await Promise.race([
+          queueIdReady.promise,
+          outcome.then((result) => {
+            throw new Error(`Delivery settled before queue admission: ${JSON.stringify(result)}`);
+          }),
+        ]);
+        await Promise.race([adapter.prepared, outcome]);
+        const firstWrite = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
+        const stage = queueStorage.stageDeliveryFailureSettlement;
+        const staging = vi
+          .spyOn(queueStorage, "stageDeliveryFailureSettlement")
+          .mockImplementationOnce((...args) => {
+            firstWrite.mockImplementationOnce(() => {
+              throw new Error("first settlement write interrupted");
+            });
+            return stage(...args);
+          });
+        caller.abort(new Error("message caller retired"));
+        adapter.release();
+        expect(await outcome).toMatchObject(
+          bestEffort
+            ? { results: [] }
+            : { error: { message: expect.stringContaining("message caller retired") } },
+        );
+        expect(staging).toHaveBeenCalledOnce();
+        expect(staging.mock.calls[0]?.[0].recoveryState).toBe("producer_claimed");
+        expect(staging.mock.calls[0]?.[0].platformSendAttemptId).toBeUndefined();
+        expect(staging.mock.calls[0]?.[0].platformSendStartedAt).toBeUndefined();
+        expect(staging.mock.calls[0]?.[0].deliveryCompletion).toBeUndefined();
+        expect(firstWrite.mock.results.filter((result) => result.type === "throw")).toHaveLength(1);
+        expect(adapter.send).not.toHaveBeenCalled();
+        firstWrite.mockRestore();
+        staging.mockRestore();
+        stateDatabase.closeOpenClawStateDatabaseForTest();
+        vi.setSystemTime(Date.now() + 60_001);
+        await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
+        expect(adapter.send).not.toHaveBeenCalled();
+        expect(getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir)).toBe(
+          "failed",
+        );
+        expect(await queueStorage.loadUnfinishedDelivery(queueId, stateDir)).toBeNull();
         expect(terminals).toEqual(["failed"]);
       } finally {
         caller.abort();

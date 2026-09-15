@@ -26,10 +26,12 @@ import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 export function retireUnsentDelivery(
   params: Parameters<typeof retireUnsentDeliveryInDatabase>[1],
   context?: DeliveryQueueStateContext,
+  terminalOutcome?: "failed",
 ): (() => Promise<void>) | undefined {
   const stateDir = context?.stateDir ?? params.stateDir;
   const retired = runOpenClawStateWriteTransaction(
-    (database) => retireUnsentDeliveryInDatabase(database, { ...params, stateDir }),
+    (database) =>
+      retireUnsentDeliveryInDatabase(database, { ...params, stateDir }, terminalOutcome),
     { env: resolveDeliveryQueueStateEnv(stateDir, context) },
     { operationLabel: `mutate owned ${OUTBOUND_DELIVERY_QUEUE_NAME} delivery platform send` },
   );

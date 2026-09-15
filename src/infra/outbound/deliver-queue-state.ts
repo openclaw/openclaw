@@ -80,7 +80,7 @@ export function createQueuedDeliveryOwner(
       failure.queueCustody = custody;
       return failure;
     },
-    retireUnsent(): ReturnType<typeof retireUnsentDelivery> {
+    retireUnsent(terminalOutcome?: "failed"): ReturnType<typeof retireUnsentDelivery> {
       owner.signal?.throwIfAborted();
       if (!owner.claimId) {
         return undefined;
@@ -92,6 +92,7 @@ export function createQueuedDeliveryOwner(
           stateDir: owner.stateDir,
         },
         context,
+        terminalOutcome,
       );
       // Cleanup is returned only after the exact unsent claim has been retired.
       if (release) {
@@ -202,13 +203,30 @@ export async function rejectQueuedDelivery(
     if (!pending || !owner.claimId) {
       return false;
     }
-    const entry = await stageDeliveryFailureSettlement(
-      pending,
-      { outcome: "failed", error: rejection.message, rejectionError: rejection.message, terminals },
-      owner.stateDir,
-      owner.claimId,
-      params.deliveryQueueStateContext,
-    );
+    let entry: QueuedDelivery | undefined;
+    try {
+      entry = await stageDeliveryFailureSettlement(
+        pending,
+        {
+          outcome: "failed",
+          error: rejection.message,
+          rejectionError: rejection.message,
+          terminals,
+        },
+        owner.stateDir,
+        owner.claimId,
+        params.deliveryQueueStateContext,
+      );
+    } catch (error) {
+      // A staging failure may leave only the unsent claim. Its owner can retain
+      // a failed receipt without bypassing send evidence or completion recovery.
+      const release = owner.retireUnsent("failed");
+      if (!release) {
+        throw error;
+      }
+      await release();
+      return true;
+    }
     if (!entry) {
       return false;
     }
