@@ -2873,7 +2873,8 @@ describe("Codex plugin binding recovery", () => {
     await startOrResumeThread(common);
 
     expect(build).toHaveBeenNthCalledWith(1);
-    expect(build).toHaveBeenNthCalledWith(2, { threadId: "thread-current-policy" });
+    expect(build).toHaveBeenNthCalledWith(2);
+    expect(build).toHaveBeenNthCalledWith(3, { threadId: "thread-current-policy" });
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
   });
 
@@ -2884,6 +2885,9 @@ describe("Codex plugin binding recovery", () => {
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start" || method === "thread/resume") {
         return threadStartResult("thread-settled-transition");
+      }
+      if (method === "thread/unsubscribe") {
+        return { status: "unsubscribed" };
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -2948,6 +2952,8 @@ describe("Codex plugin binding recovery", () => {
     expect(build).toHaveBeenCalledTimes(2);
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
+      "thread/resume",
+      "thread/unsubscribe",
       "thread/start",
       "thread/resume",
     ]);
