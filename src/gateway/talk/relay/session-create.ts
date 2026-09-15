@@ -13,6 +13,7 @@ import type { TalkEventInput } from "../../../talk/talk-session-controller.js";
 import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../../../talk/voice-transcript.js";
 import { createTalkClientAgentConsultRunner } from "../client-agent-consult.js";
 import { createTalkRealtimeRunControlOwner } from "../realtime-run-control.js";
+import { closeExpiredTalkRelaySessions } from "../relay-session-lifecycle.js";
 import { markTalkVoiceSessionReady } from "../voice-selection.js";
 import { bindTalkRealtimeRelayAgentConsult } from "./agent-consult.js";
 import {
@@ -30,7 +31,6 @@ import {
   adoptTalkRealtimeRelaySession,
   cancelTalkRealtimeRelayProviderToolCall,
   closeRelaySession,
-  enforceRelaySessionLimits,
   pruneInactiveRelayAgentRuns,
   registerTalkRealtimeRelayAgentRun,
   resetTalkRealtimeRelayContinuity,
@@ -41,6 +41,7 @@ import {
   RELAY_SESSION_TTL_MS,
   RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS,
   adoptRelayProviderToolCallId,
+  assertRelaySessionCapacity,
   broadcastToOwner,
   ensureRelayTurn,
   relaySessions,
@@ -64,7 +65,11 @@ const RELAY_OUTPUT_AUDIO_FRAME_BYTES = 960;
 export function createTalkRealtimeRelaySession(
   params: CreateTalkRealtimeRelaySessionParams,
 ): TalkRealtimeRelaySessionResult {
-  enforceRelaySessionLimits(params.connId);
+  closeExpiredTalkRelaySessions({
+    sessions: relaySessions.values(),
+    closeSession: (session) => void closeRelaySession(session, "completed"),
+  });
+  assertRelaySessionCapacity(params.connId);
   const { publicModel, publicError, voice, ...voiceSelection } =
     resolveTalkRealtimeRelayPresentation(params);
   const relaySessionId = randomUUID();

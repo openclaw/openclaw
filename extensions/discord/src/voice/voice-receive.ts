@@ -568,6 +568,7 @@ export class DiscordVoiceReceive {
       runtime: this.params.runtime,
       context: currentContext,
       toolsAllow,
+      voiceSelection: params.voiceSelection,
       ...(params.signal ? { signal: params.signal } : {}),
       admissionAllowFrom: this.params.admissionAllowFrom,
       fetchGuildName: async (guildId) => {

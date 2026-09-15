@@ -21,19 +21,14 @@ import {
 import { captureRealtimeTalkVideoFrame } from "./video.ts";
 import {
   RealtimeTalkWebRtcOfferExchange,
+  realtimeTalkCompletedToolCalls,
   realtimeTalkTranscriptItem,
   RealtimeTalkResponseOutcomeOwner,
   realtimeTalkDataChannelMaxMessageSize,
   realtimeTalkImageEvent,
   type RealtimeServerEvent,
+  type RealtimeTalkCompletedToolCall,
 } from "./webrtc-support.ts";
-
-type CompletedToolCall = {
-  itemId?: string;
-  name: string;
-  callId: string;
-  args: string;
-};
 
 const MAX_REALTIME_TOOL_ARGUMENT_BYTES = 256_000;
 // Realtime defines no replay window, so evicting terminal IDs could execute a
@@ -59,6 +54,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly offerExchange = new RealtimeTalkWebRtcOfferExchange();
   private readonly camera: RealtimeTalkCameraController;
   private readonly consultAbortControllers = new Set<AbortController>();
+  private readonly controlAbortController = new AbortController();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
   private starting = false;
   private startupError: Error | null = null;
@@ -67,7 +63,12 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     private readonly session: RealtimeTalkWebRtcSdpSessionResult,
     private readonly ctx: RealtimeTalkTransportContext,
   ) {
-    this.emitTalkEvent = createRealtimeTalkEventEmitter(ctx, session);
+    const emitTalkEvent = createRealtimeTalkEventEmitter(ctx, session);
+    this.emitTalkEvent = (event) => {
+      if (!this.closed || event.type === "session.closed") {
+        emitTalkEvent(event);
+      }
+    };
     this.camera = new RealtimeTalkCameraController({
       acquire: (deviceId, signal) => openRealtimeTalkCamera(deviceId, { signal }),
       getDeviceId: () => this.ctx.videoDeviceId,
@@ -120,6 +121,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     if (this.ctx.callbacks.onInputLevel) {
       this.inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
       this.inputMeter.start(media);
+    }
+    if (!this.isCurrentPeer(peer)) {
+      return this.cancelledStart();
     }
     // Camera frames travel only as explicit describe_view data-channel events.
     // Keeping video off the peer prevents unintended continuous camera upload.
@@ -238,6 +242,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
 
   private releaseResources(): void {
     this.starting = false;
+    this.controlAbortController.abort();
     this.input.stop();
     this.offerExchange.abort();
     this.channel?.close();
@@ -530,25 +535,8 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private handleCompletedResponse(event: RealtimeServerEvent): void {
-    const response: unknown = event.response;
-    if (!isRecord(response) || response.status !== "completed" || !Array.isArray(response.output)) {
-      return;
-    }
-    for (const output of response.output) {
-      if (
-        !isRecord(output) ||
-        output.type !== "function_call" ||
-        (output.status !== undefined && output.status !== "completed")
-      ) {
-        continue;
-      }
-      const itemId = typeof output.id === "string" ? output.id.trim() || undefined : undefined;
-      const callId = typeof output.call_id === "string" ? output.call_id.trim() : "";
-      const name = typeof output.name === "string" ? output.name.trim() : "";
-      const args = typeof output.arguments === "string" ? output.arguments : "";
-      if (!callId || !name || !args.trim()) {
-        continue;
-      }
+    for (const call of realtimeTalkCompletedToolCalls(event)) {
+      const { itemId, callId, name, args } = call;
       if (
         name !== REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME &&
         name !== REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME &&
@@ -576,19 +564,20 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         });
         continue;
       }
-      void this.handleToolCall({ itemId, callId, name, args }).catch((error: unknown) => {
+      void this.handleToolCall(call).catch((error: unknown) => {
         this.reportToolResultSubmissionError(error);
       });
     }
   }
 
-  private async handleToolCall(call: CompletedToolCall): Promise<void> {
+  private async handleToolCall(call: RealtimeTalkCompletedToolCall): Promise<void> {
     const { itemId, callId, name, args } = call;
     if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
       await submitRealtimeTalkAgentControl({
         ctx: this.ctx,
         callId,
         args,
+        signal: this.controlAbortController.signal,
         emitTalkEvent: this.emitTalkEvent,
         submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
       });

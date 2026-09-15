@@ -106,6 +106,8 @@ describe("chat realtime actions", () => {
         order: 0,
       });
       old.callbacks.onTranscript?.({ role: "assistant", text: "Still speaking", final: false });
+      state.realtimeTalkVideoStream = {} as MediaStream;
+      state.realtimeTalkCameraDevices = [{ deviceId: "old-camera", label: "Old camera" }];
       for (const listener of listeners) {
         listener({
           type: "event",
@@ -122,6 +124,8 @@ describe("chat realtime actions", () => {
       await vi.waitFor(() => expect(creates).toBe(2));
       expect(state.sessionKey).toBe("main");
       expect(state.realtimeTalkSession).not.toBe(oldSession);
+      expect(state.realtimeTalkVideoStream).toBeNull();
+      expect(state.realtimeTalkCameraDevices).toEqual([]);
       expect(inspectSession(state).options).toMatchObject({
         voice: "spruce",
         voiceChangeId: "change-1",

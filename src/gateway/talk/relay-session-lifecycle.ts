@@ -40,23 +40,34 @@ export function closeExpiredTalkRelaySessions<TSession extends TalkRelayLifecycl
 }
 
 /** Closes every relay session owned by a disconnected gateway connection. */
-export function closeTalkRelaySessionsForConnection<
+export async function closeTalkRelaySessionsForConnection<
   TSession extends TalkRelayLifecycleSession,
 >(params: {
   sessions: Iterable<TSession>;
   connId: string;
-  closeSession: CloseTalkRelaySession<TSession>;
+  closeSession: (session: TSession) => void | Promise<void>;
   onCloseError: (error: unknown, session: TSession) => void;
-}): void {
+}): Promise<void> {
+  const pending: Promise<void>[] = [];
   for (const session of params.sessions) {
     if (session.connId !== params.connId) {
       continue;
     }
     try {
-      params.closeSession(session);
+      const completion = params.closeSession(session);
+      if (completion) {
+        pending.push(completion);
+      }
     } catch (error) {
       params.onCloseError(error, session);
     }
+  }
+  const results = await Promise.allSettled(pending);
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length > 0) {
+    throw new AggregateError(failures, "Talk relay cleanup did not complete");
   }
 }
 
@@ -69,18 +80,12 @@ export function requireActiveTalkRelaySession<TSession extends TalkRelayLifecycl
   unknownSessionMessage: string;
 }): TSession {
   const session = params.sessions.get(params.sessionId);
+  if (!session || session.connId !== params.connId) {
+    throw new Error(params.unknownSessionMessage);
+  }
   const nowMs = asDateTimestampMs(Date.now());
-  if (
-    !session ||
-    session.connId !== params.connId ||
-    nowMs === undefined ||
-    isExpiredTalkRelaySession(session, nowMs)
-  ) {
-    // A stale or cross-connection id is closed before throwing so callers do
-    // not leave provider sessions alive after ownership checks fail.
-    if (session) {
-      params.closeSession(session);
-    }
+  if (nowMs === undefined || isExpiredTalkRelaySession(session, nowMs)) {
+    params.closeSession(session);
     throw new Error(params.unknownSessionMessage);
   }
   return session;

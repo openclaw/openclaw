@@ -170,7 +170,10 @@ export class RealtimeTalkSession {
       if (providerVideoCapable) {
         capabilities.push("camera-frame");
       }
-      const session = await this.createSession({ ...this.options, capabilities });
+      const session = await this.createSession(
+        { ...this.options, capabilities },
+        lifecycleGeneration,
+      );
       const transport = resolveRealtimeTalkTransport(session);
       // Managed-room stays unsupported here and carries no voice bookkeeping;
       // reject it before the voice-session requirement produces a misleading error.
@@ -334,6 +337,7 @@ export class RealtimeTalkSession {
     options: RealtimeTalkLaunchOptions & {
       capabilities?: Array<"camera-frame" | "voice-transcript" | "voice-selection">;
     },
+    lifecycleGeneration: number,
   ): Promise<RealtimeTalkSessionResult> {
     const launchOptions = { ...options };
     if (launchOptions.voiceChangeId && launchOptions.transport === "gateway-relay") {
@@ -349,7 +353,11 @@ export class RealtimeTalkSession {
         { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
       );
     } catch (error) {
-      if (launchOptions.voiceChangeId) {
+      if (
+        launchOptions.voiceChangeId ||
+        this.closed ||
+        this.lifecycleGeneration !== lifecycleGeneration
+      ) {
         throw error;
       }
       let transport = launchOptions.transport;
@@ -375,7 +383,11 @@ export class RealtimeTalkSession {
           }
         }
       }
-      if (transport && transport !== "gateway-relay") {
+      if (
+        this.closed ||
+        this.lifecycleGeneration !== lifecycleGeneration ||
+        (transport && transport !== "gateway-relay")
+      ) {
         throw error;
       }
       try {
@@ -514,15 +526,13 @@ export class RealtimeTalkSession {
     return {
       ...this.callbacks,
       onTalkEvent: (event) => {
+        if (!isCurrent()) {
+          return;
+        }
         try {
           // A transport's terminal event owns cleanup, even while its error stays
           // visible. Retired transports cannot close a newer call.
-          if (
-            event.type === "session.closed" &&
-            this.transportGeneration === owningGeneration &&
-            this.voiceSessionId === owningVoiceSessionId &&
-            this.acceptingTranscripts
-          ) {
+          if (event.type === "session.closed") {
             this.retireTransport();
           }
         } finally {

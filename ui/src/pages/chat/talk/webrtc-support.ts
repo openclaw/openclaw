@@ -1,4 +1,5 @@
 // Control UI chat module owns low-level WebRTC offer and media-message helpers.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeRealtimeVoiceResponseOutcome } from "../../../../../src/talk/provider-types.js";
 import { readResponseTextWithLimit } from "../../../lib/response-body.ts";
 import type { RealtimeTalkTranscriptItem, RealtimeTalkWebRtcSdpSessionResult } from "./shared.ts";
@@ -39,6 +40,38 @@ export type RealtimeServerEvent = {
     transcript?: string;
   };
 };
+
+export type RealtimeTalkCompletedToolCall = {
+  itemId?: string;
+  name: string;
+  callId: string;
+  args: string;
+};
+
+export function* realtimeTalkCompletedToolCalls(
+  event: RealtimeServerEvent,
+): Generator<RealtimeTalkCompletedToolCall> {
+  const response: unknown = event.response;
+  if (!isRecord(response) || response.status !== "completed" || !Array.isArray(response.output)) {
+    return;
+  }
+  for (const output of response.output) {
+    if (
+      !isRecord(output) ||
+      output.type !== "function_call" ||
+      (output.status !== undefined && output.status !== "completed")
+    ) {
+      continue;
+    }
+    const itemId = typeof output.id === "string" ? output.id.trim() || undefined : undefined;
+    const callId = typeof output.call_id === "string" ? output.call_id.trim() : "";
+    const name = typeof output.name === "string" ? output.name.trim() : "";
+    const args = typeof output.arguments === "string" ? output.arguments : "";
+    if (callId && name && args.trim()) {
+      yield { itemId, callId, name, args };
+    }
+  }
+}
 
 export function realtimeTalkTranscriptItem(
   event: RealtimeServerEvent,

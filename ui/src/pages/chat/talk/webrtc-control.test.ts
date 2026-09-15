@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../../src/talk/describe-view-tool.js";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
 import {
@@ -201,6 +202,41 @@ describe("WebRtcSdpRealtimeTalkTransport control tool", () => {
     });
     transport.stop();
   });
+
+  it.each(["resolved", "rejected"])(
+    "discards a pending control %s after its transport stops and a replacement starts",
+    async (outcome) => {
+      const pending = createDeferred<unknown>();
+      const request = vi.fn(() => pending.promise);
+      const onTalkEvent = vi.fn();
+      const transport = await createOpenAiTransport({ request }, { onTalkEvent });
+      await transport.start();
+      const previousPeer = FakePeerConnection.instances[0];
+      dispatchControlToolCall(previousPeer, { text: "status", mode: "status" });
+      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+      transport.stop();
+      const replacement = await createOpenAiTransport({ request }, { onTalkEvent });
+      await replacement.start();
+      const replacementPeer = FakePeerConnection.instances[1];
+      onTalkEvent.mockClear();
+      if (outcome === "resolved") {
+        pending.resolve({ ok: true, mode: "status", message: "Old call finished." });
+      } else {
+        pending.reject(new Error("Old control failed"));
+      }
+      await pending.promise.catch(() => undefined);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+
+      expect(onTalkEvent).not.toHaveBeenCalled();
+      expect(sentRealtimeEvents(previousPeer)).toEqual([]);
+      expect(sentRealtimeEvents(replacementPeer)).toEqual([]);
+      expect(replacementPeer?.connectionState).not.toBe("closed");
+      replacement.stop();
+    },
+  );
 
   it("executes completed calls once and ignores provisional events", async () => {
     const request = vi.fn(async (method: string) => {

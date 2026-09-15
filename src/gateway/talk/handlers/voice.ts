@@ -5,6 +5,7 @@ import {
   type TalkVoiceGetParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { resolveClientVoiceRunBinding } from "../../../talk/client-voice-session.js";
+import { resolveRealtimeVoiceSelectionRun } from "../../../talk/voice-selection-control.js";
 import { respondUnavailable } from "../../server-methods/response.js";
 import type {
   GatewayRequestHandlerOptions,
@@ -43,15 +44,55 @@ function resolveVoiceCaller(options: GatewayRequestHandlerOptions, target: TalkV
     }
     if (
       identity &&
-      (context.validateAgentRuntimeApprovalAuthority?.(identity) !== true ||
-        !binding ||
+      (context.validateAgentRuntimeApprovalAuthority?.(identity) !== true || !identity.sessionKey)
+    ) {
+      throw new Error("The agent no longer owns this voice call");
+    }
+  };
+  assertCallerCurrent();
+  const managed = identity
+    ? resolveRealtimeVoiceSelectionRun(identity.operationalRunInstance.runId)
+    : undefined;
+  if (managed && identity) {
+    if (
+      managed.agentId !== identity.agentId ||
+      managed.sessionKey !== identity.sessionKey ||
+      (target.voiceSessionId && target.voiceSessionId !== managed.voiceSessionId) ||
+      (target.sessionKey && target.sessionKey !== managed.sessionKey)
+    ) {
+      throw new Error("The agent may only select the voice of its own call");
+    }
+    const authorization = resolveSessionMutationAuthorization({
+      client,
+      context,
+      method: "talk.voice.set",
+      requestParams: { agentId: managed.agentId, sessionKey: managed.sessionKey },
+    });
+    if (authorization.error) {
+      throw new Error(authorization.error.message);
+    }
+    return {
+      kind: "managed" as const,
+      managed,
+      assertCurrent: () => {
+        assertCallerCurrent();
+        managed.assertCurrent();
+        authorization.authorization?.assertCurrent();
+      },
+    };
+  }
+  const assertBrowserBindingCurrent = () => {
+    assertCallerCurrent();
+    if (
+      identity &&
+      (!binding ||
         resolveClientVoiceRunBinding(identity.operationalRunInstance.runId) !== binding ||
         binding.agentId !== identity.agentId)
     ) {
       throw new Error("The agent no longer owns this voice call");
     }
   };
-  assertCallerCurrent();
+  assertBrowserBindingCurrent();
   const session = resolveTalkVoiceSession(
     identity && binding ? { kind: "run", ...binding } : { kind: "client", connId, ...target },
   );
@@ -86,10 +127,11 @@ function resolveVoiceCaller(options: GatewayRequestHandlerOptions, target: TalkV
     throw new Error(authorization.error.message);
   }
   return {
+    kind: "browser" as const,
     session,
     connId,
     assertCurrent: () => {
-      assertCallerCurrent();
+      assertBrowserBindingCurrent();
       assertTalkSessionStorageTarget(context.getRuntimeConfig(), session.sessionTarget);
       authorization.authorization?.assertCurrent();
     },
@@ -105,7 +147,9 @@ export const talkVoiceHandlers: GatewayRequestHandlers = {
     try {
       const caller = resolveVoiceCaller(options, params);
       caller.assertCurrent();
-      respond(true, readTalkVoiceSelection(caller.session), undefined);
+      const selection =
+        caller.kind === "managed" ? caller.managed.read() : readTalkVoiceSelection(caller.session);
+      respond(true, selection, undefined);
     } catch (error) {
       respondUnavailable(respond, error);
     }
@@ -117,6 +161,14 @@ export const talkVoiceHandlers: GatewayRequestHandlers = {
     }
     try {
       const caller = resolveVoiceCaller(options, params);
+      if (caller.kind === "managed") {
+        const result = await caller.managed.changeVoice(params.voice, {
+          assertCurrent: caller.assertCurrent,
+          signal: options.signal,
+        });
+        respond(true, result, undefined);
+        return;
+      }
       const result = await requestTalkVoiceChange({
         ...caller,
         voice: params.voice,

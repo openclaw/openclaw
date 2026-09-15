@@ -21,7 +21,11 @@ class FakePeerConnection extends EventTarget {
 
   connectionState: RTCPeerConnectionState = "new";
   readonly channel = new FakeDataChannel();
-  readonly addTrack = vi.fn();
+  readonly addTrack = vi.fn(() => {
+    if (this.connectionState === "closed") {
+      throw new DOMException("Cannot add a track to a closed peer", "InvalidStateError");
+    }
+  });
   localDescription: RTCSessionDescriptionInit | null = null;
   remoteDescription: RTCSessionDescriptionInit | null = null;
 

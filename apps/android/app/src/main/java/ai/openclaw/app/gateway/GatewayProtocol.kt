@@ -558,9 +558,6 @@ enum class GatewayMethod(
   WizardCancel("wizard.cancel"),
   WizardStatus("wizard.status"),
   TalkCatalog("talk.catalog"),
-  TalkVoiceGet("talk.voice.get"),
-  TalkVoiceSet("talk.voice.set"),
-  TalkVoiceComplete("talk.voice.complete"),
   TalkConfig("talk.config"),
   TalkClientCreate("talk.client.create"),
   TalkClientTranscript("talk.client.transcript"),
@@ -952,6 +949,9 @@ enum class GatewayMethod(
   SessionsActivitySummaryEnsure("sessions.activitySummary.ensure"),
   ControlUiSessionPullRequestsChecks("controlUi.sessionPullRequests.checks"),
   DiagnosticsCpuProfile("diagnostics.cpuProfile"),
+  TalkVoiceGet("talk.voice.get"),
+  TalkVoiceSet("talk.voice.set"),
+  TalkVoiceComplete("talk.voice.complete"),
 }
 
 enum class GatewayEvent(

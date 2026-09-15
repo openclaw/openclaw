@@ -116,6 +116,7 @@ export function submitFinalProviderToolResult(params: {
       // The browser already considers this final submitted while it waits behind
       // the provider's working-result acknowledgement. Finish the cancelled call
       // here so the provider is not left waiting for a terminal result.
+      const cancellationEpoch = params.session.toolResultEpoch;
       await params.session.bridge.submitToolResult(
         providerCallId,
         buildRealtimeVoiceAgentCancelProviderResult(
@@ -123,6 +124,12 @@ export function submitFinalProviderToolResult(params: {
         ),
         suppressedToolResultOptions(params.session),
       );
+      if (
+        relaySessions.get(params.session.id) !== params.session ||
+        params.session.toolResultEpoch !== cancellationEpoch
+      ) {
+        return false;
+      }
       if (
         !params.session.toolCalls.markProviderCompleted([providerCallId]) ||
         !params.session.toolCalls.markAgentCompleted([params.callId])

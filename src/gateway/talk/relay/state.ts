@@ -260,16 +260,27 @@ export const relaySessions = new Map<string, RelaySession>();
 // provider finalization and durable close settle. Session limits count both sets.
 export const drainingRelaySessions = new Set<RelaySession>();
 
+export function assertRelaySessionCapacity(connId: string): void {
+  const sessions = [...relaySessions.values(), ...drainingRelaySessions];
+  if (sessions.length >= MAX_RELAY_SESSIONS_GLOBAL) {
+    throw new Error("Too many active realtime relay sessions");
+  }
+  const connectionCount = sessions.filter((session) => session.connId === connId).length;
+  if (connectionCount >= MAX_RELAY_SESSIONS_PER_CONN) {
+    throw new Error("Too many active realtime relay sessions for this connection");
+  }
+}
+
 export function adoptRelayProviderToolCallId(
   session: RelaySession,
   providerCallId: string,
 ): string | undefined {
+  if (session.toolCalls.isProviderCompleted(providerCallId)) {
+    return undefined;
+  }
   const current = session.relayToolCallIdsByProviderId.get(providerCallId);
   if (current) {
-    if (
-      session.toolCalls.isAgentCompleted(current) ||
-      session.toolCalls.isProviderCompleted(providerCallId)
-    ) {
+    if (session.toolCalls.isAgentCompleted(current)) {
       return undefined;
     }
     return current;
@@ -282,7 +293,6 @@ export function adoptRelayProviderToolCallId(
   if (!session.toolCalls.tryAdmit([providerCallId, relayCallId])) {
     return undefined;
   }
-  session.toolCalls.deleteProviderCompleted(providerCallId);
   session.toolCalls.deleteAgentCompleted(relayCallId);
   session.providerToolCallIds.set(relayCallId, providerCallId);
   session.relayToolCallIdsByProviderId.set(providerCallId, relayCallId);

@@ -339,9 +339,11 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
               this.stop();
               return;
             }
+            if (this.activeOutputTurnId !== turnId || !this.outputQueue.isPlaying) {
+              this.speechFramesDuringPlayback = 0;
+            }
             this.activeOutputTurnId = turnId;
             this.cancelRequestedForPlayback = false;
-            this.speechFramesDuringPlayback = 0;
             this.playPcm16(event.audioBase64);
           }
           return;
@@ -421,7 +423,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.outputQueue.stop(this.outputContext);
     this.speechFramesDuringPlayback = 0;
     if (options.releaseDelayedToolResults ?? true) {
-      this.flushDelayedToolResults();
+      this.rescheduleDelayedToolResults();
     }
   }
 
@@ -589,16 +591,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     );
   }
 
-  private flushDelayedToolResults(): void {
+  private rescheduleDelayedToolResults(): void {
     for (const pending of this.delayedToolResults) {
-      this.discardDelayedToolResult(pending);
-      if (!this.closed) {
-        void this.sendToolResultNow(pending.callId, pending.result, pending.options).catch(
-          (error: unknown) => {
-            this.reportToolResultSubmissionError(error);
-          },
-        );
-      }
+      this.rescheduleDelayedToolResult(pending);
     }
   }
 
@@ -719,7 +714,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         }
         this.pendingOutputCancellations -= 1;
         if (this.pendingOutputCancellations === 0) {
-          this.flushDelayedToolResults();
+          this.rescheduleDelayedToolResults();
         }
       })
       .catch((error: unknown) => {

@@ -211,6 +211,8 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
       const previous = state.realtimeTalkSession;
       state.realtimeTalkSession = null;
       previous?.stop();
+      state.realtimeTalkVideoStream = null;
+      state.realtimeTalkCameraDevices = [];
       state.realtimeTalkConversationState = continueRealtimeTalkConversation(
         state.realtimeTalkConversationState,
       );

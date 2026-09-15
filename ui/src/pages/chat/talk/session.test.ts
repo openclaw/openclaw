@@ -836,6 +836,76 @@ describe("RealtimeTalkSession", () => {
     expect(relayStart).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { pendingMethod: "talk.client.create", restart: false },
+    { pendingMethod: "talk.client.create", restart: true },
+    { pendingMethod: "talk.config", restart: false },
+    { pendingMethod: "talk.config", restart: true },
+  ])(
+    "does not allocate a fallback after Stop during $pendingMethod (restart: $restart)",
+    async ({ pendingMethod, restart }) => {
+      const pending = createDeferred<unknown>();
+      const clientError = new Error("browser session unavailable");
+      let creates = 0;
+      const request = vi.fn(async (method: string) => {
+        if (method === "talk.client.create") {
+          creates += 1;
+          if (creates === 1) {
+            if (pendingMethod === method) {
+              return await pending.promise;
+            }
+            throw clientError;
+          }
+          return {
+            provider: "openai",
+            transport: "webrtc",
+            voiceSessionId: "replacement",
+            clientSecret: "test-session",
+          };
+        }
+        if (method === "talk.config") {
+          return await pending.promise;
+        }
+        if (method === "talk.session.create") {
+          return {
+            provider: "example",
+            transport: "gateway-relay",
+            relaySessionId: "unexpected-relay",
+          };
+        }
+        return { ok: true };
+      });
+      const session = new RealtimeTalkSession(
+        { request } as never,
+        "main",
+        {},
+        pendingMethod === "talk.client.create" ? { transport: "gateway-relay" } : {},
+      );
+      const starting = session.start().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await vi.waitFor(() =>
+        expect(request.mock.calls.some(([method]) => method === pendingMethod)).toBe(true),
+      );
+      session.stop();
+      if (restart) {
+        await session.start();
+      }
+      if (pendingMethod === "talk.client.create") {
+        pending.reject(clientError);
+      } else {
+        pending.resolve({ config: { talk: { realtime: { transport: "gateway-relay" } } } });
+      }
+      const error = await starting;
+
+      expect(request.mock.calls.some(([method]) => method === "talk.session.create")).toBe(false);
+      expect(error).toBe(clientError);
+      expect(session.getVoiceSessionId()).toBe(restart ? "replacement" : undefined);
+      session.stop();
+    },
+  );
+
   it("falls back to Gateway relay when a successful config read resolves Auto", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "talk.client.create") {

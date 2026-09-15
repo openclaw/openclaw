@@ -113,11 +113,6 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           sessionKey: params.sessionKey,
           origin: "client",
         });
-      // Pin the resolved id to this connection so a legacy client's later consults
-      // reuse one record instead of forking a new never-closed session each time.
-      if (connId && !relaySessionId) {
-        rememberLegacyVoiceBinding({ connId, sessionKey: params.sessionKey, voiceSessionId });
-      }
       if (relaySessionId && connId) {
         await ensureClientVoiceAgentSessionEntry({
           agentId,
@@ -148,6 +143,10 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           voiceSessionId,
           confirmationId: parsedArgs.confirmationId,
         });
+      }
+      // Only validated calls may replace the legacy client's connection binding.
+      if (connId && !relaySessionId) {
+        rememberLegacyVoiceBinding({ connId, sessionKey: params.sessionKey, voiceSessionId });
       }
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));

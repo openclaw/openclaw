@@ -667,7 +667,7 @@ export class DiscordVoiceSessions {
           void entry.stop("realtime terminal error");
         }
       },
-      runAgentTurn: ({ context, message, toolsAllow, userId, isCurrent, signal }) =>
+      runAgentTurn: ({ context, message, toolsAllow, userId, isCurrent, signal, voiceSelection }) =>
         this.params.receive.runDiscordRealtimeAgentTurn({
           context,
           entry,
@@ -676,6 +676,7 @@ export class DiscordVoiceSessions {
           userId,
           isCurrent,
           ...(signal ? { signal } : {}),
+          voiceSelection,
         }),
       resolveSpeakerContext: (userId) =>
         this.params.receive.resolveDiscordVoiceIngressContext(entry, userId),

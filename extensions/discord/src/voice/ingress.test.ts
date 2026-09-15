@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type MockIngressInput = {
   accountId?: string;
@@ -22,6 +22,48 @@ vi.mock("../runtime.js", () => ({
 import { runDiscordVoiceAgentTurn } from "./ingress.js";
 
 describe("Discord voice ingress execution correlation", () => {
+  beforeEach(() => mocks.agentCommandFromIngress.mockClear());
+  it.each([false, true])(
+    "binds an owner voice command for its lifetime, including failure=%s",
+    async (fail) => {
+      const release = vi.fn();
+      const bindRun = vi.fn(() => release);
+      const entry = {
+        captureOnly: false,
+        sessionLifecycle: { status: "active" },
+        route: { agentId: "main", sessionKey: "agent:main:discord:voice:room" },
+      };
+      mocks.agentCommandFromIngress.mockImplementationOnce(async (input) => {
+        expect(bindRun).toHaveBeenCalledWith(expect.objectContaining({ runId: input.runId }));
+        expect(input.runId).toEqual(expect.any(String));
+        expect(release).not.toHaveBeenCalled();
+        if (fail) {
+          throw new Error("Agent turn failed");
+        }
+        return { payloads: [{ text: "Voice changed." }] };
+      });
+      const turn = runDiscordVoiceAgentTurn({
+        entry: entry as never,
+        accountId: "work",
+        userId: "owner",
+        message: "Change your voice",
+        cfg: {},
+        discordConfig: {},
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        context: { senderIsOwner: true, speakerLabel: "Owner" },
+        voiceSelection: { bindRun, unregister: vi.fn() },
+        fetchGuildName: vi.fn(async () => "Guild"),
+        speakerContext: {} as never,
+      });
+      if (fail) {
+        await expect(turn).rejects.toThrow("Agent turn failed");
+      } else {
+        await expect(turn).resolves.toMatchObject({ text: "Voice changed." });
+      }
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
+
   it("admits sequential same-session turns without inventing a public run id", async () => {
     const entry = {
       guildId: "guild-1",
@@ -38,6 +80,7 @@ describe("Discord voice ingress execution correlation", () => {
       discordConfig: {} as never,
       runtime: { log: vi.fn(), error: vi.fn() } as never,
       context: { senderIsOwner: false, speakerLabel: "Guest" },
+      voiceSelection: { bindRun: vi.fn(() => () => {}), unregister: vi.fn() },
       fetchGuildName: vi.fn(async () => "Guild"),
       speakerContext: {} as never,
     };
@@ -56,6 +99,7 @@ describe("Discord voice ingress execution correlation", () => {
     for (const input of inputs) {
       expect(input).not.toHaveProperty("runId");
     }
+    expect(shared.voiceSelection.bindRun).not.toHaveBeenCalled();
   });
 
   it.each([

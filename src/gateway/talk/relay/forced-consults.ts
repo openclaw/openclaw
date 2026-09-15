@@ -375,9 +375,10 @@ export function submitForcedTalkRealtimeRelayToolResult(
     });
     return trackAgentFinalToolResult(session, params.callId, completion?.finally(clearTerminal));
   }
+  const suppressResponse = params.options?.suppressResponse === true;
   const final = params.options?.willContinue !== true;
   if (!final) {
-    if (isWorkingToolResult(params.result)) {
+    if (!suppressResponse && isWorkingToolResult(params.result)) {
       session.bridge.sendUserMessage(buildForcedConsultCheckingPrompt());
     }
     broadcastToolResultToOwner(session, {
@@ -418,7 +419,7 @@ export function submitForcedTalkRealtimeRelayToolResult(
       return;
     }
     const hasNativeCalls = session.harness.forcedConsults.nativeCallIds(forcedConsult).length > 0;
-    if (text && (!hasNativeCalls || providerOptions)) {
+    if (!suppressResponse && text && (!hasNativeCalls || providerOptions)) {
       session.bridge.sendUserMessage(buildForcedConsultSpeechPrompt(text));
     }
     broadcastToolResultToOwner(session, {

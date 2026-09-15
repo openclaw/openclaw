@@ -12,8 +12,8 @@ import { createDirectChatContext } from "./server-chat.agent-events.test-helpers
 import { handleGatewayRequest } from "./server-methods.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
-import { talkModeHandlers } from "./server-methods/talk-mode.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
+import { talkModeHandlers } from "./talk/handlers/mode.js";
 
 function createPendingProfileClient() {
   return {

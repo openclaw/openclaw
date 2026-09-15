@@ -18,41 +18,53 @@ function expectBridgeRequest(
 }
 
 describe("realtime voice bridge session runtime", () => {
-  it("binds native delegation to the session and rejects late results after close", async () => {
-    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
-    let complete!: (result: { text: string }) => void;
-    const consult = vi.fn(
-      () =>
-        new Promise<{ text: string }>((resolve) => {
-          complete = resolve;
-        }),
-    );
-    const session = createRealtimeVoiceBridgeSession({
-      provider: {
-        id: "test",
-        label: "Test",
-        isConfigured: () => true,
-        createBridge: (request) => {
-          callbacks = request;
-          return makeBridge();
+  it.each(["abort", "detach", "cancelled-detach"] as const)(
+    "settles accepted native delegation after %s while rejecting new work",
+    async (ending) => {
+      let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+      let complete!: (result: { text: string }) => void;
+      const consult = vi.fn(
+        () =>
+          new Promise<{ text: string }>((resolve) => {
+            complete = resolve;
+          }),
+      );
+      const session = createRealtimeVoiceBridgeSession({
+        provider: {
+          id: "test",
+          label: "Test",
+          isConfigured: () => true,
+          createBridge: (request) => {
+            callbacks = request;
+            return makeBridge();
+          },
         },
-      },
-      providerConfig: {},
-      audioSink: { sendAudio: vi.fn() },
-      runAgentConsult: consult,
-    });
-    const runner = expectBridgeRequest(callbacks).runAgentConsult;
-    expect(runner).toBeTypeOf("function");
-    const signal = new AbortController().signal;
-    const pending = runner!({ prompt: "Check the agenda", signal });
-    expect(consult).toHaveBeenCalledExactlyOnceWith({ prompt: "Check the agenda", signal });
-    const rejected = expect(pending).rejects.toThrow("session is closed");
-    await session.close();
-    complete({ text: "Late answer" });
-    await rejected;
-    await expect(runner!({ prompt: "Another task" })).rejects.toThrow("session is closed");
-    expect(consult).toHaveBeenCalledOnce();
-  });
+        providerConfig: {},
+        audioSink: { sendAudio: vi.fn() },
+        runAgentConsult: consult,
+      });
+      const runner = expectBridgeRequest(callbacks).runAgentConsult;
+      expect(runner).toBeTypeOf("function");
+      const controller = new AbortController();
+      const signal = controller.signal;
+      const pending = runner!({ prompt: "Check the agenda", signal });
+      expect(consult).toHaveBeenCalledExactlyOnceWith({ prompt: "Check the agenda", signal });
+      const settled =
+        ending === "detach"
+          ? expect(pending).resolves.toEqual({ text: "Late answer" })
+          : expect(pending).rejects.toThrow(
+              ending === "abort" ? "session is closed" : "Call cancelled",
+            );
+      await session.close({ disposition: ending === "abort" ? "abort" : "detach" });
+      if (ending === "cancelled-detach") {
+        controller.abort(new Error("Call cancelled"));
+      }
+      complete({ text: "Late answer" });
+      await settled;
+      await expect(runner!({ prompt: "Another task" })).rejects.toThrow("session is closed");
+      expect(consult).toHaveBeenCalledOnce();
+    },
+  );
 
   it("does not start a cancelled native delegation", async () => {
     let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;

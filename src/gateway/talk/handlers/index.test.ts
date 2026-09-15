@@ -3157,6 +3157,59 @@ describe("talk.client.toolCall handler", () => {
     expectRespondOk(respond, { runId: "run-voice-1" });
   });
 
+  it.each(["missing", "closed", "relay"] as const)(
+    "keeps legacy consults usable after rejecting an explicit %s voice record",
+    async (kind) => {
+      const connId = `conn-rejected-voice-${kind}`;
+      const rejectedVoiceSessionId = `voice-rejected-${kind}`;
+      onTestFinished(() => {
+        forgetLegacyVoiceBinding(connId, "main", "voice-test");
+        forgetLegacyVoiceBinding(connId, "main", rejectedVoiceSessionId);
+      });
+      const consult = async (voiceSessionId?: string) => {
+        const respond = vi.fn();
+        await callTalkHandler("talk.client.toolCall", {
+          params: {
+            sessionKey: "main",
+            voiceSessionId,
+            callId: `call-${voiceSessionId ?? "legacy"}`,
+            name: "openclaw_agent_consult",
+            args: { question: "Continue the call" },
+          },
+          client: { connId },
+          respond,
+          context: { getRuntimeConfig: () => ({}) },
+        });
+        return respond;
+      };
+      await mocks.assertClientVoiceSessionOpen.withImplementation(
+        ({ voiceSessionId }: { voiceSessionId: string }) => {
+          if (voiceSessionId !== rejectedVoiceSessionId) {
+            return "client";
+          }
+          if (kind === "relay") {
+            return "relay";
+          }
+          throw new Error(
+            kind === "missing" ? "voice session not found" : "voice session is closed",
+          );
+        },
+        async () => {
+          expectRespondOk(await consult("voice-test"), { runId: "run-voice-1" });
+          expectRespondError(await consult(rejectedVoiceSessionId), {
+            code: ErrorCodes.INVALID_REQUEST,
+          });
+          expect(mocks.chatSend).toHaveBeenCalledOnce();
+          expectRespondOk(await consult(), { runId: "run-voice-1" });
+          expect(mocks.registerClientVoiceConsultRun).toHaveBeenLastCalledWith(
+            expect.objectContaining({ voiceSessionId: "voice-test", runId: "run-voice-1" }),
+          );
+          expect(mocks.chatSend).toHaveBeenCalledTimes(2);
+        },
+      );
+    },
+  );
+
   it("requires relay connection ownership for relay-origin voice records", async () => {
     mocks.assertClientVoiceSessionOpen.mockReturnValueOnce("relay");
     const respond = vi.fn();

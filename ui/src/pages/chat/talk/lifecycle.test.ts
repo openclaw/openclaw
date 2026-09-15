@@ -861,7 +861,7 @@ describe("RealtimeTalkSession lifecycle", () => {
     expect(request.mock.calls.some(([method]) => method === "talk.client.transcript")).toBe(false);
   });
 
-  it("drops a previous transport's delayed transcript after stop and restart", async () => {
+  it("drops a previous transport's delayed transcript and tool events after stop and restart", async () => {
     let createCount = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "talk.client.create") {
@@ -876,23 +876,41 @@ describe("RealtimeTalkSession lifecycle", () => {
       return { ok: true };
     });
     const onTranscript = vi.fn();
+    const onTalkEvent = vi.fn();
     const session = new RealtimeTalkSession({ request } as never, "agent:main:main", {
       onTranscript,
+      onTalkEvent,
     });
     await session.start();
     const previousContext = transcriptContext(transportMock.webRtcContexts);
 
     session.stop();
     await session.start();
+    onTalkEvent.mockClear();
     previousContext.callbacks.onTranscript?.({
       role: "user",
       text: "stale transcript",
       final: true,
     });
+    previousContext.callbacks.onTalkEvent?.({
+      id: "old-control-result",
+      type: "tool.progress",
+      sessionId: "voice-1",
+      seq: 1,
+      timestamp: new Date().toISOString(),
+      mode: "realtime",
+      transport: "webrtc",
+      brain: "agent-consult",
+      final: true,
+      payload: { name: "openclaw_agent_control", result: { mode: "status" } },
+    });
     await Promise.resolve();
 
     expect(onTranscript).not.toHaveBeenCalled();
+    expect(onTalkEvent).not.toHaveBeenCalled();
+    expect(session.getVoiceSessionId()).toBe("voice-2");
     expect(request.mock.calls.some(([method]) => method === "talk.client.transcript")).toBe(false);
+    session.stop();
   });
 
   it("does not report Gateway relay transcripts through the client RPC", async () => {

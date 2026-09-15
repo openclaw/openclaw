@@ -214,8 +214,8 @@ function closeTranscriptionSession(
 }
 
 /** Releases every transcription relay owned by a disconnected gateway connection. */
-function closeTalkTranscriptionRelaySessionsForConnection(connId: string): void {
-  closeTalkRelaySessionsForConnection({
+function closeTalkTranscriptionRelaySessionsForConnection(connId: string): Promise<void> {
+  return closeTalkRelaySessionsForConnection({
     sessions: transcriptionSessions.values(),
     connId,
     closeSession: (session) => closeTranscriptionSession(session, "completed"),
@@ -375,9 +375,9 @@ export function createTalkTranscriptionRelaySession(
   relayRef.current = relay;
   relay.cleanupTimer.unref?.();
   transcriptionSessions.set(transcriptionSessionId, relay);
-  registerTalkConnectionCleanup(params.connId, "transcription-relay", () => {
-    closeTalkTranscriptionRelaySessionsForConnection(params.connId);
-  });
+  registerTalkConnectionCleanup(params.connId, "transcription-relay", () =>
+    closeTalkTranscriptionRelaySessionsForConnection(params.connId),
+  );
   sttSession
     .connect()
     .then(() => {

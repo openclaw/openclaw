@@ -577,41 +577,50 @@ export function createTalkClientGatewayControlOwner(params: {
           params.sessionTarget.agentId,
         );
       acceptingProviderTranscripts = !options?.skipProvider && closeProvider !== undefined;
+      // Disconnect and restart must still join retired transports while teardown drains.
+      pendingOwners.add(owner);
       // Fence admission synchronously, then defer teardown so provider callbacks
       // can re-enter close after the closing promise has been assigned.
-      closing = Promise.resolve().then(async () => {
-        pendingOwners.delete(owner);
-        harness.close();
-        if (owners.get(params.voiceSessionId) === owner) {
-          owners.delete(params.voiceSessionId);
-        }
-        if (!preserveRuns) {
-          for (const { controller, closeDisposition } of consultControllers.values()) {
-            if (closeDisposition === "abort") {
-              controller.abort(new Error("Realtime voice session closed"));
+      closing = Promise.resolve()
+        .then(async () => {
+          harness.close();
+          if (owners.get(params.voiceSessionId) === owner) {
+            owners.delete(params.voiceSessionId);
+          }
+          if (!preserveRuns) {
+            for (const { controller, closeDisposition } of consultControllers.values()) {
+              if (closeDisposition === "abort") {
+                controller.abort(new Error("Realtime voice session closed"));
+              }
             }
           }
-        }
-        consultQueue.seal();
-        const providerClose = Promise.resolve()
-          .then(() => (options?.skipProvider ? undefined : closeProvider?.()))
-          .finally(() => {
-            acceptingProviderTranscripts = false;
-          });
-        const controlCleanup = Promise.allSettled([runControl.close(), consultQueue.flush()]);
-        const [providerResult] = await Promise.allSettled([providerClose, controlCleanup]);
-        // Provider shutdown can append final speech; its complete write prefix owns this barrier.
-        const [transcriptResult] = await Promise.allSettled([params.flushTranscript()]);
-        if (!options?.preserveLogicalSession) {
-          await params.closeLogicalSession();
-        }
-        if (providerResult?.status === "rejected") {
-          throw providerResult.reason;
-        }
-        if (transcriptResult?.status === "rejected") {
-          throw transcriptResult.reason;
-        }
-      });
+          consultQueue.seal();
+          const providerClose = Promise.resolve()
+            .then(() => (options?.skipProvider ? undefined : closeProvider?.()))
+            .finally(() => {
+              acceptingProviderTranscripts = false;
+            });
+          // A voice-change consult awaits its replacement; its own run admission keeps it alive.
+          const controlCleanup = Promise.allSettled([
+            runControl.close(),
+            preserveRuns ? undefined : consultQueue.flush(),
+          ]);
+          const [providerResult] = await Promise.allSettled([providerClose, controlCleanup]);
+          // Provider shutdown can append final speech; its complete write prefix owns this barrier.
+          const [transcriptResult] = await Promise.allSettled([params.flushTranscript()]);
+          if (!options?.preserveLogicalSession) {
+            await params.closeLogicalSession();
+          }
+          if (providerResult?.status === "rejected") {
+            throw providerResult.reason;
+          }
+          if (transcriptResult?.status === "rejected") {
+            throw transcriptResult.reason;
+          }
+        })
+        .finally(() => {
+          pendingOwners.delete(owner);
+        });
       // preserveRuns keeps accepted work alive, not a retired transport's presentation authority.
       params.runAgentConsult.revokeRequesterFinal?.();
       lifetime.abort(new Error("Realtime voice session closed"));

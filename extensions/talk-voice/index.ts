@@ -127,7 +127,7 @@ export default definePluginEntry({
       name: "talk_voice",
       label: "Talk Voice",
       description:
-        "List or change the voice of the active Talk call in this conversation. Use list to see its provider, model, current voice, available voice IDs, and whether it can change. Use set with an available voice ID to reconnect the active call, preserving chat and captions. Success means the replacement call is ready. Settings Talk controls the default for future calls.",
+        "List or change the voice of the active browser Talk or realtime Discord voice call in this conversation. Use list to see its provider, model, current voice, available voice IDs, and whether it can change. Use set with an available voice ID to reconnect the active call, preserving conversation and ongoing agent work. Success means the replacement call is ready. Saved voice defaults stay unchanged.",
       parameters: {
         type: "object",
         properties: {

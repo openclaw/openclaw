@@ -883,7 +883,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
   });
 
   it.each([true, false, undefined, "unavailable"] as const)(
-    "respects host barge-in support %s during playback",
+    "respects host barge-in support %s while assistant audio interleaves microphone frames",
     async (supportsBargeIn) => {
       const client = createClient(
         typeof supportsBargeIn === "boolean" ? supportsBargeIn : undefined,
@@ -905,8 +905,13 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       });
       pumpMicrophone(speech);
       expect(requestCallsFor(client, "talk.session.cancelOutput")).toHaveLength(0);
-
+      emitTalkEvent({
+        relaySessionId: "relay-1",
+        type: "audio",
+        audioBase64: "AAAA",
+      });
       pumpMicrophone(speech);
+      expect(requestCallsFor(client, "talk.session.cancelOutput")).toHaveLength(autoCancel ? 1 : 0);
       pumpMicrophone(speech);
 
       const cancelCalls = vi
@@ -1274,7 +1279,7 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     transport.stop();
   });
 
-  it("holds final tool results until overlapping playback cancellations succeed", async () => {
+  it("holds final tool results until overlapping cancellations and newer playback finish", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const client = createClient();
@@ -1368,6 +1373,12 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     );
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
 
+    emitTalkEvent({
+      relaySessionId: "relay-1",
+      type: "audio",
+      audioBase64: zeroPcmBase64(24000),
+      talkEvent: { turnId: "turn-2" },
+    });
     resolveCancellations[1]?.({ ok: true, status: "applied", turnId: "turn-1" });
     await vi.advanceTimersByTimeAsync(0);
     pumpMicrophone(speech);
@@ -1376,6 +1387,9 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       appendCountBeforeClear + 1,
     );
 
+    expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
+    audioCurrentTime = 1;
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(requestCallsFor(client, "talk.session.submitToolResult")).toEqual([
       [
         "talk.session.submitToolResult",

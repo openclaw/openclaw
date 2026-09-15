@@ -573,6 +573,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private async sendVideoFrame(): Promise<void> {
+    const video = this.camera.video;
     if (!this.camera.hasLiveTrack()) {
       this.stopVideoFrames();
       return;
@@ -583,11 +584,11 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     }
     try {
       const frame = await captureRealtimeTalkVideoFrame(
-        this.camera.video,
+        video,
         GOOGLE_LIVE_VIDEO_MESSAGE_MAX_BYTES,
         googleLiveVideoMessage,
       );
-      if (!this.videoFramesActive || this.closed) {
+      if (!this.videoFramesActive || this.closed || this.camera.video !== video) {
         return;
       }
       if (!this.send(googleLiveVideoMessage(frame))) {
@@ -595,13 +596,15 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       }
       this.hasSentVideoFrame = true;
     } catch (error) {
-      if (!this.closed) {
+      if (!this.closed && this.camera.video === video) {
         this.videoFramesActive = false;
         this.reportToolResultSubmissionError(error);
       }
       return;
     }
-    this.scheduleVideoFrame(GOOGLE_LIVE_VIDEO_FRAME_INTERVAL_MS);
+    if (this.camera.video === video) {
+      this.scheduleVideoFrame(GOOGLE_LIVE_VIDEO_FRAME_INTERVAL_MS);
+    }
   }
 
   private stopVideoFrames(): void {

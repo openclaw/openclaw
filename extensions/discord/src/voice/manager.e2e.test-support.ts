@@ -19,6 +19,7 @@ export type TestRealtimeBridgeParams = {
   cfg?: unknown;
   instructions?: string;
   interruptResponseOnInputAudio?: boolean;
+  providerConfig: RealtimeVoiceBridgeCreateRequest["providerConfig"];
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
   onClose?: RealtimeVoiceBridgeCreateRequest["onClose"];
   onReady?: () => void;

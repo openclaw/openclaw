@@ -105,10 +105,6 @@ export class RelayToolCallLedger {
     });
   }
 
-  deleteProviderCompleted(callId: string): void {
-    delete this.entries.get(callId)?.providerCompleted;
-  }
-
   clearProviderCompleted(): void {
     for (const entry of this.entries.values()) {
       delete entry.providerCompleted;

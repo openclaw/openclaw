@@ -16,7 +16,6 @@ import { abortChatRunById } from "../../chat-abort.js";
 import { formatError } from "../../server-utils.js";
 import { decodeTalkRelayAudioBase64 } from "../relay-audio-base64.js";
 import {
-  closeExpiredTalkRelaySessions,
   closeTalkRelaySessionsForConnection,
   requireActiveTalkRelaySession,
 } from "../relay-session-lifecycle.js";
@@ -43,8 +42,6 @@ import {
 } from "./provider-results.js";
 import {
   MAX_AUDIO_BASE64_BYTES,
-  MAX_RELAY_SESSIONS_GLOBAL,
-  MAX_RELAY_SESSIONS_PER_CONN,
   broadcastRelaySessionClosed,
   broadcastToOwner,
   cancelRelayTurn,
@@ -189,33 +186,17 @@ export function closeRelaySession(
 }
 
 /** Releases every realtime relay session owned by a disconnected gateway connection. */
-function closeTalkRealtimeRelaySessionsForConnection(connId: string): void {
-  closeTalkRelaySessionsForConnection({
-    sessions: relaySessions.values(),
+function closeTalkRealtimeRelaySessionsForConnection(connId: string): Promise<void> {
+  return closeTalkRelaySessionsForConnection({
+    sessions: [...relaySessions.values(), ...drainingRelaySessions],
     connId,
-    closeSession: (session) =>
-      void closeRelaySession(session, "completed", { disposition: "detach" }),
+    closeSession: (session) => closeRelaySession(session, "completed", { disposition: "detach" }),
     onCloseError: (error, session) => {
       session.context.logGateway.warn(
         `failed to close realtime relay session after connection disconnect: ${formatError(error)}`,
       );
     },
   });
-}
-
-export function enforceRelaySessionLimits(connId: string): void {
-  closeExpiredTalkRelaySessions({
-    sessions: relaySessions.values(),
-    closeSession: (session) => void closeRelaySession(session, "completed"),
-  });
-  const sessions = [...relaySessions.values(), ...drainingRelaySessions];
-  if (sessions.length >= MAX_RELAY_SESSIONS_GLOBAL) {
-    throw new Error("Too many active realtime relay sessions");
-  }
-  const connectionCount = sessions.filter((session) => session.connId === connId).length;
-  if (connectionCount >= MAX_RELAY_SESSIONS_PER_CONN) {
-    throw new Error("Too many active realtime relay sessions for this connection");
-  }
 }
 
 function getRelaySession(relaySessionId: string, connId: string): RelaySession {
@@ -308,11 +289,18 @@ export function submitTalkRealtimeRelayToolResult(params: {
   }
 
   if (cancelledAgentCall) {
+    const cancellationEpoch = session.toolResultEpoch;
     const providerResult = buildRealtimeVoiceAgentCancelProviderResult(
       "OpenClaw cancelled this consult before completion. Do not restart it.",
     );
-    const submitCancellation = () =>
-      submitFinalProviderToolResult({
+    const submitCancellation = () => {
+      if (
+        relaySessions.get(session.id) !== session ||
+        session.toolResultEpoch !== cancellationEpoch
+      ) {
+        return;
+      }
+      return submitFinalProviderToolResult({
         session,
         callId: params.callId,
         result: providerResult,
@@ -322,6 +310,7 @@ export function submitTalkRealtimeRelayToolResult(params: {
           session.toolCalls.markAgentCompleted([params.callId]);
         },
       });
+    };
     const pendingProvider = session.pendingProviderToolResults.get(params.callId);
     const completion = pendingProvider
       ? pendingProvider.then(submitCancellation, submitCancellation)
@@ -403,9 +392,12 @@ export function registerTalkRealtimeRelayAgentRun(params: {
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
   const callId = params.callId?.trim();
-  if (callId && session.toolCalls.isAgentCompleted(callId)) {
-    // Provider cancellation can win while chat.send is still acknowledging. Abort
-    // the late run before it can escape the relay's call-ownership tombstone.
+  if (
+    callId &&
+    (session.toolCalls.isAgentCompleted(callId) || session.toolCalls.hasCancelled(callId))
+  ) {
+    // Cancellation can win while chat.send or provider result acceptance is pending.
+    // Abort the late run before it can escape the relay's call-ownership tombstone.
     abortChatRunById(session.context, {
       runId: params.runId,
       sessionKey: params.sessionKey,
@@ -627,18 +619,23 @@ export async function cancelTalkRealtimeRelayTurn(params: {
     handle,
     nativeCallIds: session.harness.forcedConsults.nativeCallIds(handle),
   }));
+  const forcedNativeCallIds = new Set(forcedConsults.flatMap(({ nativeCallIds }) => nativeCallIds));
   const rootCallIds = new Set([
     ...session.activeAgentToolCalls.keys(),
     ...forcedConsults.map(({ handle }) => handle.id),
   ]);
+  for (const [callId, providerCallId] of session.providerToolCallIds) {
+    if (
+      !forcedNativeCallIds.has(providerCallId) &&
+      !session.toolCalls.isAgentCompleted(callId) &&
+      !session.toolCalls.isProviderCompleted(providerCallId)
+    ) {
+      rootCallIds.add(callId);
+    }
+  }
   const terminalEpoch = ++session.toolResultEpoch;
   session.forcedTerminalProviderResults.clear();
-  if (
-    !session.toolCalls.markCancelled(
-      [...rootCallIds, ...forcedConsults.flatMap(({ nativeCallIds }) => nativeCallIds)],
-      turnId,
-    )
-  ) {
+  if (!session.toolCalls.markCancelled([...rootCallIds, ...forcedNativeCallIds], turnId)) {
     throw new Error("Realtime relay cancellation could not record tool state");
   }
   for (const { handle, nativeCallIds } of forcedConsults) {

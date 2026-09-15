@@ -17,7 +17,11 @@ and supported voice IDs for the call in the current conversation. Setting a
 voice reconnects that call while preserving its chat and captions. The assistant
 reports success only after the replacement call is ready; unsupported changes or
 connection failures return an error. **Settings → Talk** sets the voice default
-for future calls.
+for future calls. In a Discord realtime voice channel, ask the agent to list or
+change voices using the same tool. The change applies to that connected room,
+including subsequent speakers, and leaves its saved Discord voice configuration
+unchanged. The Discord connection and agent conversation remain active while the
+provider connection is replaced.
 
 For Talk TTS playback, after setting `talk.provider` and the matching `talk.providers.<provider>` configuration, use `/voice status` to inspect the active provider and voice, `/voice list [limit]` to list its available voices, and `/voice set <voiceId|name>` to save a provider-scoped selection. Discord exposes the same command natively as `/talkvoice`.
 
