@@ -77,6 +77,9 @@ export function readSessionMessageIdentity(
   const persistedRunId = normalizeSessionProjectionRunId(idempotencyKey);
   const envelopeRunId = normalizeSessionProjectionRunId(envelope?.runId);
   const metadataRunId = normalizeSessionProjectionRunId(metadata?.runId);
+  const fallbackRunId = normalizeSessionProjectionRunId(
+    readRecord(record.openclawStreamFallback)?.runId,
+  );
   const mirroredMessage = readSessionProjectionString(metadata?.mirrorOrigin) !== null;
   // CLI persistence namespaces assistant send keys; the suffix is the
   // originating Gateway run identity consumed by every projection layer.
@@ -90,6 +93,7 @@ export function readSessionMessageIdentity(
     role === "assistant"
       ? (metadataRunId ??
         envelopeRunId ??
+        fallbackRunId ??
         (isCliAssistant || !mirroredMessage ? canonicalPersistedRunId : null))
       : (metadataRunId ?? canonicalPersistedRunId ?? envelopeRunId);
   return {
@@ -127,4 +131,59 @@ export function readAssistantStreamSegmentIdentity(
     readSessionProjectionString(record?.runId) ??
     readSessionProjectionString(fallback?.runId);
   return { itemId, ...(runId ? { runId } : {}) };
+}
+
+/** A saved occurrence can enrich its live projection, never another durable row. */
+export function sameAssistantPersistenceReceipt(
+  left: SessionMessageIdentity | null,
+  right: SessionMessageIdentity | null,
+): boolean {
+  return Boolean(
+    left?.role === "assistant" &&
+    right?.role === "assistant" &&
+    !left.isImported &&
+    !right.isImported &&
+    left.idempotencyKey &&
+    left.idempotencyKey === right.idempotencyKey &&
+    ((!left.id && left.sequence === null) || (!right.id && right.sequence === null)),
+  );
+}
+
+/** Local turns have no durable transcript metadata beyond their own optional send key. */
+export function isLocallyOptimisticSessionMessage(message: unknown): boolean {
+  const record = readRecord(message);
+  const role = readSessionProjectionString(record?.role)?.toLowerCase();
+  if (role !== "user" && role !== "assistant") {
+    return false;
+  }
+  if (readRecord(record?.openclawStreamFallback)) {
+    return false;
+  }
+  const metadata = readRecord(record?.["__openclaw"]);
+  return !metadata || Object.keys(metadata).every((key) => key === "idempotencyKey");
+}
+
+export function sameTranscriptIdentity(
+  left: SessionMessageIdentity | null,
+  right: SessionMessageIdentity | null,
+): boolean {
+  if (!left || !right || left.role !== right.role) {
+    return false;
+  }
+  if (left.isImported || right.isImported) {
+    if (!left.isImported || !right.isImported) {
+      return false;
+    }
+    if (left.externalSource || right.externalSource) {
+      return Boolean(left.externalSource && left.externalSource === right.externalSource);
+    }
+    // Partial provider IDs are unsafe, but a same-scope persisted sequence is authoritative.
+    return left.sequence !== null && right.sequence !== null && left.sequence === right.sequence;
+  }
+  if (left.id || right.id) {
+    // A missing durable ID cannot adopt another canonical row by sequence alone.
+    return Boolean(left.id && right.id && left.id === right.id);
+  }
+  // A run can publish several durable messages; its ID identifies ownership, not a row.
+  return left.sequence !== null && right.sequence !== null && left.sequence === right.sequence;
 }

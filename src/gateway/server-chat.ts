@@ -1,6 +1,7 @@
 // Gateway chat runtime projects agent events into chat/session subscriber
 // streams, lifecycle persistence, heartbeat visibility, and live UI updates.
 import { performance } from "node:perf_hooks";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Value } from "typebox/value";
 import {
   ChatStatusEventSchema,
@@ -803,6 +804,9 @@ export function createAgentEventHandler({
               abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
               yielded: yieldedWaiting ? true : undefined,
               errorObservation: evt.data?.errorObservation,
+              assistantTranscriptIdempotencyKey: readStringValue(
+                evt.data?.assistantTranscriptIdempotencyKey,
+              ),
             },
           );
         }
@@ -1206,6 +1210,7 @@ export function createAgentEventHandler({
       abortErrorMessage?: string;
       yielded?: true;
       errorObservation?: unknown;
+      assistantTranscriptIdempotencyKey?: string;
       isHeartbeat?: boolean;
     },
   ) => {
@@ -1250,6 +1255,14 @@ export function createAgentEventHandler({
                   role: "assistant",
                   content: text ? [{ type: "text", text }] : [],
                   timestamp: Date.now(),
+                  ...(opts?.assistantTranscriptIdempotencyKey
+                    ? {
+                        __openclaw: {
+                          runId: clientRunId,
+                          idempotencyKey: opts.assistantTranscriptIdempotencyKey,
+                        },
+                      }
+                    : {}),
                 },
                 canvasBlocks,
               )
@@ -1270,6 +1283,22 @@ export function createAgentEventHandler({
       ...(spawnedBy && { spawnedBy }),
       seq,
       state: "error" as const,
+      ...(opts?.assistantTranscriptIdempotencyKey && text && !shouldSuppressSilent
+        ? {
+            message: appendChatCanvasBlocksToMessage(
+              {
+                role: "assistant",
+                content: [{ type: "text", text }],
+                timestamp: Date.now(),
+                __openclaw: {
+                  runId: clientRunId,
+                  idempotencyKey: opts.assistantTranscriptIdempotencyKey,
+                },
+              },
+              chatRunState.runs.get(clientRunId)?.canvasBlocks ?? [],
+            ),
+          }
+        : {}),
       errorMessage: error ? formatForLog(error) : undefined,
       ...(errorKind && { errorKind }),
       ...(errorDetail ? { errorDetail } : {}),

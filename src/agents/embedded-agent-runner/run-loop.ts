@@ -145,12 +145,10 @@ export async function runPreparedEmbeddedLoop(
     } = preparedRuntime.snapshot());
   };
   const traceAttempts: TraceAttempt[] = [];
-  const resolveRuntimeFallbackReason = (): string | null => {
-    const fallbackAttempt = traceAttempts.findLast(
+  const resolveRuntimeFallbackReason = (): string | null =>
+    traceAttempts.findLast(
       (attempt) => attempt.result === "fallback_model" && typeof attempt.reason === "string",
-    );
-    return fallbackAttempt?.reason ?? lastRetryFailoverReason ?? null;
-  };
+    )?.reason ?? lastRetryFailoverReason;
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
@@ -333,6 +331,7 @@ export async function runPreparedEmbeddedLoop(
       }
       params.assistantErrorTranscript?.clear();
       beginRunAttempt(runRetryBudget);
+      params.onAttemptStart?.();
       const runtimeAuthRetry: boolean = authRetryPending;
       authRetryPending = false;
       attemptedThinking.add(thinkLevel);

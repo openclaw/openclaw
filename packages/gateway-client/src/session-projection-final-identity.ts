@@ -8,6 +8,7 @@ import {
 } from "./session-projection-message-content.js";
 import {
   readSessionMessageIdentity,
+  sameAssistantPersistenceReceipt,
   type SessionMessageIdentity,
 } from "./session-projection-message-identity.js";
 
@@ -47,6 +48,9 @@ function readPersistedFinalIdentity(message: unknown): string | null {
   if (identity?.sequence !== null && identity?.sequence !== undefined) {
     return `seq:${identity.role}:${identity.sequence}`;
   }
+  if (identity?.role === "assistant" && !identity.isImported && identity.idempotencyKey) {
+    return `key:assistant:${identity.idempotencyKey}`;
+  }
   return null;
 }
 
@@ -68,6 +72,9 @@ function hasCompatiblePersistedFinalIdentity(currentMessage: unknown, incomingMe
       incoming.sequence !== null &&
       current.sequence === incoming.sequence
     );
+  }
+  if (sameAssistantPersistenceReceipt(current, incoming)) {
+    return true;
   }
   if (current.id && incoming.id) {
     return current.id === incoming.id;

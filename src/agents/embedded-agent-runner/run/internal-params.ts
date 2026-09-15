@@ -34,6 +34,8 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** Reset deferred terminal facts when the host admits a new attempt, before preparation. */
+  onAttemptStart?: () => void;
   /** Candidate producers have already resolved the model against their captured metadata. */
   requestedRouteResolution?: ModelFallbackRouteResolution;
   onCompactionRequestBudget?: (budget: CompactionRequestBudget | undefined) => void;

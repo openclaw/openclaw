@@ -6026,6 +6026,47 @@ describe("agent event handler", () => {
     expect(agentRunSeq.has("run-chat-send")).toBe(false);
   });
 
+  it("publishes the selected saved partial with its terminal error and retains the backstop diagnostic", () => {
+    const { broadcast, chatRunState, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-saved-error",
+    });
+    const runId = "run-saved-error";
+    registerChatRun(chatRunState, runId, "session-saved-error", runId);
+    registerAgentRunContext(runId, { sessionKey: "session-saved-error" });
+    emitAgentEvent(handler, runId, "assistant", { itemId: "earlier", text: "Earlier candidate" });
+    emitAgentEvent(handler, runId, "assistant", { itemId: "later", text: "Saved partial" });
+    emitAgentEvent(handler, runId, "assistant", {
+      text: "Saved partial",
+      itemId: "saved-partial",
+      replace: true,
+      replaceable: true,
+    });
+    emitAgentEvent(handler, runId, "lifecycle", {
+      phase: "finishing",
+      error: "client closed",
+      assistantTranscriptIdempotencyKey: "saved-partial",
+    });
+    expect(
+      chatBroadcastCalls(broadcast).filter(([, payload]) => payload.state === "error"),
+    ).toHaveLength(0);
+    emitAgentEvent(handler, runId, "lifecycle", {
+      phase: "error",
+      executionSettled: true,
+      error: "client closed",
+      assistantTranscriptIdempotencyKey: "saved-partial",
+    });
+    const errors = chatBroadcastCalls(broadcast).filter(([, payload]) => payload.state === "error");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.[1]).toMatchObject({
+      errorMessage: "client closed",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Saved partial" }],
+        __openclaw: { runId, idempotencyKey: "saved-partial" },
+      },
+    });
+  });
+
   it("emits lifecycle chat errors for active chat.send runs with a chat run link", () => {
     vi.useFakeTimers();
     const { broadcast, chatRunState, clearAgentRunContext, agentRunSeq, handler } = createHarness({

@@ -38,6 +38,7 @@ const DEFERRED_TERMINAL_METADATA_KEYS = [
   "livenessState",
   "replayInvalid",
   "errorObservation",
+  "assistantTranscriptIdempotencyKey",
 ] as const;
 
 export function resolveAgentLifecycleTerminalMetadata(meta: unknown): Record<string, unknown> {

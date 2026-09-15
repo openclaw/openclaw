@@ -87,12 +87,62 @@ describe("direct embedded retry lifecycle", () => {
     }
   });
 
+  it("clears a failed attempt receipt before a retry fails ahead of lifecycle start", async () => {
+    const onAgentEvent = vi.fn();
+    const onAttemptStart = vi.fn();
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (params) => {
+        const assistant = makeAssistantMessageFixture({
+          provider: "mock",
+          model: "model",
+          stopReason: "error",
+          content: [],
+          errorMessage: "provider failure",
+        });
+        await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+        await params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: {
+            phase: "finishing",
+            error: "provider failure",
+            assistantTranscriptIdempotencyKey: "saved-A",
+          },
+        });
+        return makeAttemptResult({
+          assistantTexts: [],
+          lastAssistant: assistant,
+          currentAttemptAssistant: assistant,
+          assistantTranscriptIdempotencyKey: "saved-A",
+        });
+      })
+      .mockImplementationOnce(async (params) => {
+        expect(params).not.toHaveProperty("onAttemptStart");
+        throw new Error("preparation B failed");
+      });
+    await expect(
+      run({ ...session.runParams, provider: "mock", model: "model", onAgentEvent, onAttemptStart }),
+    ).rejects.toThrow("preparation B failed");
+    expect(onAttemptStart).toHaveBeenCalledTimes(2);
+    const terminals = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter(
+        (event) => event.stream === "lifecycle" && ["end", "error"].includes(event.data.phase),
+      );
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0].data).toMatchObject({
+      error: "preparation B failed",
+      executionSettled: true,
+    });
+    expect(terminals[0].data.assistantTranscriptIdempotencyKey).toBeUndefined();
+  });
+
   it.each(["recovered", "exhausted", "caller-deferred"] as const)(
     "publishes only the owning terminal after %s attempts",
     async (outcome) => {
       let attempts = 0;
       const onAgentEvent = vi.fn();
       mockedRunEmbeddedAttempt.mockImplementation(async (params) => {
+        expect(params).not.toHaveProperty("onAttemptStart");
         const failed = ++attempts === 1 || outcome === "exhausted";
         const assistant = makeAssistantMessageFixture({
           provider: "mock",
@@ -108,12 +158,14 @@ describe("direct embedded retry lifecycle", () => {
           data: {
             phase: params.deferTerminalLifecycle ? "finishing" : failed ? "error" : "end",
             ...(failed ? { error: "provider failure" } : {}),
+            assistantTranscriptIdempotencyKey: `saved-${attempts}`,
           },
         });
         return makeAttemptResult({
           assistantTexts: failed ? [] : ["Recovered reply"],
           lastAssistant: assistant,
           currentAttemptAssistant: assistant,
+          assistantTranscriptIdempotencyKey: `saved-${attempts}`,
         });
       });
       await run({
@@ -138,6 +190,7 @@ describe("direct embedded retry lifecycle", () => {
                 data: expect.objectContaining({
                   phase: outcome === "exhausted" ? "error" : "end",
                   executionSettled: true,
+                  assistantTranscriptIdempotencyKey: `saved-${attempts}`,
                 }),
               }),
             ],

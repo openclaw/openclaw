@@ -171,6 +171,7 @@ export function prepareEmbeddedRunTerminal(input: {
         responseModel,
       },
       successfulToolNames: resolveSuccessfulToolNames(attempt),
+      assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
       sourceReplyDelivered: attempt.sourceReplyDelivered,
       rerouted: isProviderModelRerouted(
         { provider: input.provider, model: input.model },

@@ -72,3 +72,27 @@ export function recordTurnAttempt(
     yieldAborted: false,
   });
 }
+
+export function makeResult(params: {
+  provider: string;
+  model: string;
+  classification?: "empty";
+  meta?: Partial<EmbeddedAgentRunResult["meta"]>;
+}): EmbeddedAgentRunResult {
+  return {
+    payloads: params.classification ? [] : [{ text: "recovered" }],
+    meta: {
+      durationMs: 10,
+      aborted: false,
+      providerStarted: true,
+      stopReason: "completed",
+      agentHarnessResultClassification: params.classification,
+      agentMeta: {
+        sessionId: "session-1",
+        provider: params.provider,
+        model: params.model,
+      },
+      ...params.meta,
+    },
+  };
+}

@@ -10,12 +10,12 @@ import {
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import { runEmbeddedAgentEntry } from "./run-entry.js";
 import {
+  makeResult,
   recordTurnAttempt,
   initialAttemptOptions,
   fallbackAttemptOptions,
   type FallbackRunnerParams,
 } from "./run-entry.test-support.js";
-import type { EmbeddedAgentRunResult } from "./types.js";
 
 const state = vi.hoisted(() => ({
   runWithModelFallback: vi.fn(),
@@ -51,30 +51,6 @@ vi.mock("../harness/runtime-plugin.js", () => ({
 vi.mock("../harness/selection.js", () => ({
   selectAgentHarness: (params: { provider: string }) => state.selectAgentHarness(params),
 }));
-
-function makeResult(params: {
-  provider: string;
-  model: string;
-  classification?: "empty";
-  meta?: Partial<EmbeddedAgentRunResult["meta"]>;
-}): EmbeddedAgentRunResult {
-  return {
-    payloads: params.classification ? [] : [{ text: "recovered" }],
-    meta: {
-      durationMs: 10,
-      aborted: false,
-      providerStarted: true,
-      stopReason: "completed",
-      agentHarnessResultClassification: params.classification,
-      agentMeta: {
-        sessionId: "session-1",
-        provider: params.provider,
-        model: params.model,
-      },
-      ...params.meta,
-    },
-  };
-}
 
 function createDirectHarness() {
   return {
@@ -288,6 +264,7 @@ describe("runEmbeddedAgentEntry", () => {
                       runId: "run-shared-fallback",
                       sessionId: "session-1",
                       turnId: "turn-1",
+                      assistantTranscriptIdempotencyKey: "selected-saved-reply",
                       requested: { provider, model },
                       effective: { provider, model, responseModel: "producer-model" },
                       successfulToolNames: [],
@@ -344,6 +321,9 @@ describe("runEmbeddedAgentEntry", () => {
       },
       rerouted: true,
     });
+    expect(channel.result.terminal.metadata.assistantTranscriptIdempotencyKey).toBe(
+      "selected-saved-reply",
+    );
     expect(channel.result.terminal.metadata.terminalReceipt).toMatchObject({
       requested: { provider: "primary-provider", model: "primary-model" },
       effective: {
@@ -630,7 +610,7 @@ describe("runEmbeddedAgentEntry", () => {
         attempts: [],
       };
     });
-    await runEmbeddedAgentEntry({
+    const result = await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "provider", model: "model" },
       identity: { runId: "settle-exhausted", agentId: "main", sessionId: "session-1" },
       harness: createDirectHarness(),
@@ -638,10 +618,36 @@ describe("runEmbeddedAgentEntry", () => {
       sessionOverride: { kind: "preserve" },
       runCandidate: async (provider, model, options) => {
         recordTurnAttempt(options.onContextEngineTurnCandidate, provider);
-        return makeResult({ provider, model, classification: "empty" });
+        return makeResult({
+          provider,
+          model,
+          classification: "empty",
+          meta: {
+            error: { kind: "incomplete_turn", message: `${provider} failed` },
+            agentMeta: {
+              sessionId: "session-1",
+              provider,
+              model,
+              terminalReceipt: {
+                runId: "settle-exhausted",
+                sessionId: "session-1",
+                turnId: provider,
+                requested: { provider, model },
+                effective: { provider, model, responseModel: model },
+                successfulToolNames: [],
+                rerouted: false,
+                assistantTranscriptIdempotencyKey: `saved-${provider}`,
+              },
+            },
+          },
+        });
       },
     });
 
+    expect(result.result.meta.error?.message).toBe("provider failed");
+    expect(result.terminal.metadata.assistantTranscriptIdempotencyKey).toBe(
+      "saved-fallback-provider",
+    );
     expect(state.finalizedAttempts).toEqual([]);
     expect(state.discardedAttempts).toEqual(["fallback-provider"]);
   });

@@ -665,31 +665,37 @@ export async function finalizeCodexAttempt(
     const terminalAssistantText = collectTerminalAssistantText(result);
     if (
       terminalAssistantText &&
-      (!streamState.eventEmitted || streamState.needsTerminalSnapshot) &&
-      !finalAborted &&
-      !finalPromptError
+      (assistantTranscriptIdempotencyKey ||
+        ((!streamState.eventEmitted || streamState.needsTerminalSnapshot) &&
+          !finalAborted &&
+          !finalPromptError))
     ) {
       void emitCodexAppServerEvent(params, {
         stream: "assistant",
-        data: { text: terminalAssistantText },
+        data: {
+          text: terminalAssistantText,
+          // The receipt identifies the selected persisted occurrence, which can
+          // exclude candidates streamed before a native tool or sleep boundary.
+          ...(assistantTranscriptIdempotencyKey
+            ? {
+                itemId: assistantTranscriptIdempotencyKey,
+                replace: true,
+                replaceable: true,
+              }
+            : {}),
+        },
       });
     }
-    emitLifecycleTerminal(
-      finalPromptError
-        ? {
-            phase: "error",
-            error: formatErrorMessage(finalPromptError),
-            ...buildLifecycleTerminalMeta({ aborted: finalAborted, timedOut: effectiveTimedOut }),
-          }
-        : {
-            phase: "end",
-            ...buildLifecycleTerminalMeta({
-              aborted: finalAborted,
-              timedOut: effectiveTimedOut,
-              yielded: toolState.yieldDetected,
-            }),
-          },
-    );
+    emitLifecycleTerminal({
+      phase: finalPromptError ? "error" : "end",
+      ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
+      ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
+      ...buildLifecycleTerminalMeta({
+        aborted: finalAborted,
+        timedOut: effectiveTimedOut,
+        yielded: finalPromptError ? undefined : toolState.yieldDetected,
+      }),
+    });
     // Preserve the exact result identity carrying host-issued TTS delivery provenance.
     const finalizedResult: EmbeddedRunAttemptResult = Object.assign(result, {
       ...(runtimeModelSelection ? { runtimeModelSelection } : {}),
