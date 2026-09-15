@@ -13,13 +13,17 @@ import {
 import { isMissingPathError } from "../../infra/errors.js";
 import { removeTemporaryArtifacts } from "../../infra/temp-artifact-cleanup.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   prepareSkillBundle,
   readSkillBundleTree,
+  readSkillLibraryManifestTree,
+  skillLibraryRevisionDir,
   SkillTreeDirectoryError,
 } from "../library/bundle.js";
 import { SkillLibraryError } from "../library/errors.js";
-import { loadSkillLibrarySelection, readSelectedSkillLibraryFiles } from "../library/selection.js";
+import { readSkillLibrarySelectionManifests } from "../library/selection-read.js";
+import { prepareSkillLibrarySelection } from "../library/selection.js";
 import { loadSingleSkillDirectory } from "../loading/local-loader.js";
 import { createSyntheticSourceInfo } from "../loading/skill-contract.js";
 import { shouldSyncSkillPath } from "../loading/skill-paths.js";
@@ -67,7 +71,20 @@ export async function prepareSkillResourceDelivery(
   const skills: SkillResourceDelivery["skills"] = [];
   let total = 0;
   const candidates = [...(snapshot.resolvedSkills ?? [])];
-  for (const entry of loadSkillLibrarySelection(snapshot.librarySelections ?? [])) {
+  const libraryCaller = snapshot.librarySelections?.length
+    ? { context: captureOpenClawStateWorkerContext(), assertCurrent }
+    : undefined;
+  const libraryEntries = libraryCaller
+    ? await prepareSkillLibrarySelection(
+        snapshot.librarySelections ?? [],
+        { env: libraryCaller.context.environment },
+        libraryCaller,
+      )
+    : [];
+  if (libraryCaller) {
+    assertCurrent();
+  }
+  for (const entry of libraryEntries) {
     if (
       snapshot.skills.some((skill) => skill.name === entry.skill.name) &&
       !candidates.some((skill) => skill.name === entry.skill.name)
@@ -112,6 +129,17 @@ export async function prepareSkillResourceDelivery(
     }
     candidates.push(loaded.skill);
   }
+  const pins = [
+    ...new Set(
+      candidates.flatMap((skill) => {
+        const pin =
+          !skill.filePath.startsWith("node://") &&
+          snapshot.librarySelections?.find((selection) => selection.name === skill.name);
+        return pin ? [pin] : [];
+      }),
+    ),
+  ];
+  let manifests: Awaited<ReturnType<typeof readSkillLibrarySelectionManifests>>;
   for (const skill of candidates) {
     if (skill.filePath.startsWith("node://")) {
       continue;
@@ -122,11 +150,25 @@ export async function prepareSkillResourceDelivery(
     );
     let files: Awaited<ReturnType<typeof readSkillBundleTree>>;
     try {
-      files = pin
-        ? await readSelectedSkillLibraryFiles(pin)
-        : await readSkillBundleTree(skill.baseDir, shouldSyncSkillPath, {
-            symlinks: "follow-within-root",
-          });
+      if (pin) {
+        if (!manifests && libraryCaller) {
+          manifests = await readSkillLibrarySelectionManifests(pins, libraryCaller);
+          assertCurrent();
+        }
+        const manifest = manifests?.[pins.indexOf(pin)];
+        if (!manifest) {
+          throw new SkillLibraryError("NOT_FOUND", "Selected skill revision is unavailable.");
+        }
+        files = await readSkillLibraryManifestTree(
+          skillLibraryRevisionDir(pin.skillId, pin.revision, libraryCaller?.context.environment),
+          manifest.files_json,
+          pin.revision,
+        );
+      } else {
+        files = await readSkillBundleTree(skill.baseDir, shouldSyncSkillPath, {
+          symlinks: "follow-within-root",
+        });
+      }
     } catch (error) {
       // Only a vanished catalog root is stale discovery state. Nested disappearance, explicit
       // selection, permissions, integrity failures, and unsafe entries remain fail-closed.

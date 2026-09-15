@@ -3,6 +3,7 @@ import type { McpOAuthReadOnlyOperations } from "../agents/mcp-oauth-store.kerne
 import type { FleetCellRecord } from "../fleet/registry.types.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
+import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
 
@@ -17,15 +18,17 @@ export type OpenClawStateReadAuthority = {
   assertCurrent(this: void): void;
 };
 
+type OpenClawStateReadOperations = McpOAuthReadOnlyOperations & SkillLibraryReadOnlyOperations;
+
 export type OpenClawStateReadCommand =
   | { type: "fleet.list" }
   | { type: "fleet.get"; tenantId: string }
   | {
-      [Kind in keyof McpOAuthReadOnlyOperations]: {
+      [Kind in keyof OpenClawStateReadOperations]: {
         type: Kind;
-        input: McpOAuthReadOnlyOperations[Kind]["input"];
+        input: OpenClawStateReadOperations[Kind]["input"];
       };
-    }[keyof McpOAuthReadOnlyOperations];
+    }[keyof OpenClawStateReadOperations];
 export type OpenClawStateReadRequest = {
   context: SqliteWorkerStateContext;
   databasePath: string;
@@ -38,13 +41,13 @@ export type OpenClawStateReadReply =
   | { ok: true; type: "fleet.list"; sourceAdmitted: true; cells: FleetCellRecord[] }
   | { ok: true; type: "fleet.get"; sourceAdmitted: true; cell: FleetCellRecord | undefined }
   | {
-      [Kind in keyof McpOAuthReadOnlyOperations]: {
+      [Kind in keyof OpenClawStateReadOperations]: {
         ok: true;
         type: Kind;
         sourceAdmitted: true;
-        value: McpOAuthReadOnlyOperations[Kind]["output"];
+        value: OpenClawStateReadOperations[Kind]["output"];
       };
-    }[keyof McpOAuthReadOnlyOperations]
+    }[keyof OpenClawStateReadOperations]
   | {
       ok: false;
       sourceAdmitted?: true;
