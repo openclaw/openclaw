@@ -384,6 +384,13 @@ See [Configuration reference](/gateway/configuration-reference#plugins) for the 
 
 ## Notes
 
+- `contextEngineIds` optionally declares a nonempty list of registered engine IDs
+  for a `kind: "context-engine"` plugin. IDs are case-sensitive, nonblank, and
+  cannot be `legacy` or `none`. This metadata connects the engine selected in
+  `plugins.slots.contextEngine` to its plugin before runtime loading. A single
+  engine can be selected automatically during installation; multiple engines
+  require an explicit choice. See [Plugin and engine IDs](/concepts/context-engine#plugin-and-engine-ids).
+
 - The manifest is **required for native OpenClaw plugins**, including local filesystem loads. Runtime still loads the plugin module separately; the manifest is only for discovery + validation.
 - Native manifests are parsed with JSON5, so comments, trailing commas, and unquoted keys are accepted as long as the final value is still an object.
 - Only documented manifest fields are read by the manifest loader. Avoid custom top-level keys.

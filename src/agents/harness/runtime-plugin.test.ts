@@ -628,8 +628,22 @@ describe("harness runtime plugins", () => {
   });
 
   it("includes and enables the context-engine owner in the prepared load plan", () => {
+    const metadataSnapshot = createMemoryPlanMetadataSnapshot();
+    const template = metadataSnapshot.registryIndex.plugins[0];
+    if (!template) {
+      throw new Error("Missing installed-plugin fixture");
+    }
     const plan = resolveAgentRuntimePluginLoadPlan({
-      metadataSnapshot: createMemoryPlanMetadataSnapshot(),
+      metadataSnapshot: {
+        ...metadataSnapshot,
+        registryIndex: {
+          ...metadataSnapshot.registryIndex,
+          plugins: [
+            ...metadataSnapshot.registryIndex.plugins,
+            { ...template, ...installedProviderRecord("custom-context-engine") },
+          ],
+        },
+      },
       config: { plugins: { slots: { contextEngine: "custom-context-engine" } } },
       workspaceDir: "/tmp/workspace",
       basePluginIds: [],
@@ -673,6 +687,32 @@ describe("harness runtime plugins", () => {
       expect(plan.config?.plugins?.slots).toEqual(config.plugins?.slots);
     },
   );
+  it("loads only the declared owner for a differently named engine", () => {
+    const originalSnapshot = createMemoryPlanMetadataSnapshot();
+    const index = originalSnapshot.registryIndex;
+    const template = index.plugins[0];
+    if (!template) {
+      throw new Error("Missing installed-plugin fixture");
+    }
+    const registryIndex = {
+      ...index,
+      plugins: [
+        ...index.plugins,
+        { ...template, pluginId: "vendor-plugin", contextEngineIds: ["Canonical-Engine"] },
+      ],
+    };
+    const plan = resolveAgentRuntimePluginLoadPlan({
+      metadataSnapshot: { ...originalSnapshot, registryIndex },
+      config: {
+        plugins: { allow: ["vendor-plugin"], slots: { contextEngine: "Canonical-Engine" } },
+      },
+      workspaceDir: "/tmp/workspace",
+      basePluginIds: [],
+      selections: [],
+    });
+    expect(plan.pluginIds).toEqual(["vendor-plugin"]);
+    expect(plan.config?.plugins?.entries?.["vendor-plugin"]).toEqual({ enabled: true });
+  });
 
   const memorySelectionCases: Array<{
     name: string;

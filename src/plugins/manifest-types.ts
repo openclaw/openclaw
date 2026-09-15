@@ -395,6 +395,8 @@ export type PluginManifest = {
   /** Provider ids that should auto-enable this plugin when referenced in auth/config/models. */
   autoEnableWhenConfiguredProviders?: string[];
   kind?: PluginKind | PluginKind[];
+  /** Context engine registration IDs owned by this plugin before runtime loading. */
+  contextEngineIds?: string[];
   channels?: string[];
   /** Account-key selection rules available before channel runtime loads. */
   channelAccountKeyPolicies?: Record<string, ChannelAccountKeyPolicy>;

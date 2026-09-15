@@ -10,6 +10,7 @@ import { applyExclusiveSlotSelection } from "./slots.js";
 type SlotSelectionPlugin = {
   id: string;
   kind?: PluginKind | PluginKind[];
+  contextEngineIds?: readonly string[];
 };
 
 type SlotSelectionRegistry = {
@@ -73,6 +74,7 @@ export async function applySlotSelectionForPlugin(
           config,
           selectedId: runtimePlugin?.kind ? runtimePlugin.id : plugin.id,
           selectedKind: runtimePlugin?.kind ?? plugin.kind,
+          contextEngineIds: plugin.contextEngineIds,
           registry: runtimePlugin?.kind ? mergeRuntimeKinds(report, runtimeReport) : report,
         });
         return { config: result.config, warnings: result.warnings };
@@ -84,6 +86,7 @@ export async function applySlotSelectionForPlugin(
     config,
     selectedId: plugin.id,
     selectedKind: plugin.kind,
+    contextEngineIds: plugin.contextEngineIds,
     registry: report,
   });
   return { config: result.config, warnings: result.warnings };

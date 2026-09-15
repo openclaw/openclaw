@@ -327,6 +327,7 @@ function createInstalledPluginRecordFixture(
   const memory = hasPluginKind(record, "memory");
   return {
     pluginId: record.id,
+    contextEngineIds: record.contextEngineIds,
     manifestPath: record.manifestPath,
     manifestHash: `test-${record.id}`,
     source: record.source,
@@ -2550,6 +2551,34 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
       }),
       expected: ["demo-channel", "browser", "memory-core", "lossless-claw"],
     });
+  });
+
+  it("resolves declared context engine ownership through metadata scope and startup", () => {
+    const registry = createManifestRegistryFixture();
+    registry.plugins.find((plugin) => plugin.id === "lossless-claw")!.contextEngineIds = [
+      "Canonical-Engine",
+    ];
+    const index = createInstalledPluginIndexFixture(registry);
+    const config = createStartupConfig({
+      enabledPluginIds: ["lossless-claw"],
+      allowPluginIds: ["lossless-claw"],
+      contextEngine: "Canonical-Engine",
+    });
+    expect(
+      resolveGatewayStartupPluginPlanFromRegistry({
+        config,
+        env: createPluginPlanningTestEnv(),
+        index,
+        manifestRegistry: registry,
+      }).pluginIds,
+    ).toContain("lossless-claw");
+    const scope = resolveGatewayStartupMetadataPluginIds({
+      config,
+      env: createPluginPlanningTestEnv(),
+      index,
+    });
+    expect(scope).toContain("lossless-claw");
+    expect(scope).not.toContain("Canonical-Engine");
   });
 
   it("does not include context-engine plugins not selected via the slot", () => {

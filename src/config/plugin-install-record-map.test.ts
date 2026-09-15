@@ -29,6 +29,18 @@ describe("plugin install record maps", () => {
     expect(Object.getPrototypeOf(records)).toBeNull();
   });
 
+  it("validates retained context-engine ownership as structured install metadata", () => {
+    const value = {
+      demo: { source: "npm", contextEngineIdsByPlugin: { child: ["canonical-engine"] } },
+    };
+    expect(parsePluginInstallRecordMap(value)).toEqual(value);
+    expect(
+      parsePluginInstallRecordMap({
+        demo: { source: "npm", contextEngineIdsByPlugin: { child: [42] } },
+      }),
+    ).toBeNull();
+  });
+
   it("distinguishes missing maps from invalid maps", () => {
     expect(inspectPluginInstallRecordMap(undefined)).toEqual({ status: "missing" });
     expect(inspectPluginInstallRecordMap({ demo: { source: "bogus" } })).toEqual({

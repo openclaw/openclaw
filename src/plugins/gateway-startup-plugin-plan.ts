@@ -12,7 +12,7 @@ import {
   normalizePluginsConfigWithResolverCore,
   type NormalizePluginId,
 } from "./config-normalization-shared.js";
-import { resolveEffectivePluginActivationState } from "./config-state.js";
+import { resolveEffectivePluginActivationState, withContextEngineOwner } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import { canStartGatewayStartupPlugin } from "./gateway-startup-plugin-activation.js";
@@ -75,15 +75,21 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const normalizePluginId =
     params.normalizePluginId ??
     createPluginRegistryIdNormalizer(params.index, { manifestRegistry: params.manifestRegistry });
-  const pluginsConfig = normalizePluginsConfigWithResolverCore(
-    params.config.plugins,
+  const contextEngineOwners = params.index.plugins.map((plugin) => ({
+    id: plugin.pluginId,
+    contextEngineIds: plugin.contextEngineIds,
+  }));
+  const pluginsConfig = withContextEngineOwner(
+    normalizePluginsConfigWithResolverCore(params.config.plugins, normalizePluginId),
+    contextEngineOwners,
     normalizePluginId,
   );
   // Startup must classify allowlist exceptions against the raw config snapshot,
   // not the auto-enabled effective snapshot, or configured-only channels can be
   // misclassified as explicit enablement.
-  const activationSourcePlugins = normalizePluginsConfigWithResolverCore(
-    activationSourceConfig.plugins,
+  const activationSourcePlugins = withContextEngineOwner(
+    normalizePluginsConfigWithResolverCore(activationSourceConfig.plugins, normalizePluginId),
+    contextEngineOwners,
     normalizePluginId,
   );
   const activationSource = {
@@ -130,6 +136,10 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     platform: params.platform,
   });
   const contextEngineSlotStartupPluginId = resolveContextEngineSlotStartupPluginId({
+    records: params.index.plugins.map((plugin) => ({
+      id: plugin.pluginId,
+      contextEngineIds: plugin.contextEngineIds,
+    })),
     activationSourceConfig,
     activationSourcePlugins,
     normalizePluginId,

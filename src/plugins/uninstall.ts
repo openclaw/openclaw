@@ -16,7 +16,7 @@ import {
   resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { defaultSlotIdForKey, resolveRetainedContextEngineIds } from "./slots.js";
 import {
   isUninstallPathInsideOrEqual,
   resolveComparableUninstallPath,
@@ -365,7 +365,12 @@ type UninstallPluginParams = {
 export function planPluginUninstall(params: UninstallPluginParams): PluginUninstallPlanResult {
   const { config, pluginId, channelIds, deleteFiles = true, extensionsDir } = params;
   const packagePlan = resolvePluginPackageUninstallPlan(params);
-  const runtimePluginIds = packagePlan?.runtimePluginIds ?? [pluginId];
+  const retainedEnginePluginIds = Object.keys(
+    config.plugins?.installs?.[pluginId]?.contextEngineIdsByPlugin ?? {},
+  );
+  const runtimePluginIds = [
+    ...new Set([...(packagePlan?.runtimePluginIds ?? [pluginId]), ...retainedEnginePluginIds]),
+  ];
 
   const entries = config.plugins?.entries ?? {};
   const installs = config.plugins?.installs ?? {};
@@ -389,6 +394,7 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
   for (const configPluginId of new Set(runtimePluginIds)) {
     const removal = removePluginRuntimePolicyFromConfig(newConfig, configPluginId, {
       channelIds,
+      contextEngineIds: resolveRetainedContextEngineIds(config, configPluginId, runtimePluginIds),
       loadPaths: packagePlan?.runtimeLoadPaths ? [...packagePlan.runtimeLoadPaths] : undefined,
     });
     newConfig = removal.config;

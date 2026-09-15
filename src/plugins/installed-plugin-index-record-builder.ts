@@ -285,6 +285,7 @@ export function buildInstalledPluginIndexRecords(params: {
     }).enabled;
     const indexRecord: InstalledPluginIndexRecord = {
       pluginId: record.id,
+      ...(record.contextEngineIds ? { contextEngineIds: record.contextEngineIds } : {}),
       manifestPath: record.manifestPath,
       manifestHash,
       ...(doctorContractFile

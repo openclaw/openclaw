@@ -136,6 +136,11 @@ export function inspectPluginCapabilityArtifact(
     const manifests = resolvePluginArtifactManifests(rootDir, env, context);
     return {
       manifest: manifests[0],
+      contextEngineIdsByPlugin: Object.fromEntries(
+        manifests.flatMap((manifest) =>
+          manifest.contextEngineIds ? [[manifest.id, [...manifest.contextEngineIds]]] : [],
+        ),
+      ),
       declared: mergePluginDeclaredSurfaces(
         manifests.map(
           (manifest) => buildPluginCapabilitySummary({ manifest, origin: "global" }).declared,
