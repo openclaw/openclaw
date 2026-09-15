@@ -92,6 +92,7 @@ export type TelegramDispatchTurnConfig = Omit<
   replyQuotePosition?: number;
   replyQuoteText?: string;
   resolvedReasoningLevel: TelegramReasoningLevel;
+  sessionStreamingMode: unknown;
   statusReactionController: TelegramMessageContext["statusReactionController"];
   tableMode: Parameters<
     NonNullable<import("./bot-deps.js").TelegramBotDeps["deliverReplies"]>
