@@ -1063,11 +1063,9 @@ export class WhatsAppConnectionController {
       const now = Date.now();
       const transportStaleForMs = now - connection.lastTransportActivityAt;
       const appBaselineAt = connection.lastInboundAt ?? connection.startedAt;
-      const appSilentForMs = now - appBaselineAt;
-      const appSilenceTimeoutMs = connection.openedAfterRecentInbound
-        ? this.messageTimeoutMs
-        : this.appSilenceTimeoutMs;
-      if (transportStaleForMs <= this.transportTimeoutMs && appSilentForMs <= appSilenceTimeoutMs) {
+      const appDeliveryStalledAfterReconnect =
+        connection.openedAfterRecentInbound && now - appBaselineAt > this.messageTimeoutMs;
+      if (transportStaleForMs <= this.transportTimeoutMs && !appDeliveryStalledAfterReconnect) {
         return;
       }
       const snapshot = this.getCurrentSnapshot(connection);
