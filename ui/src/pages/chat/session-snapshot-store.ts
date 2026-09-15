@@ -192,6 +192,70 @@ function measureStoredRecordWeight(record: SessionSnapshotRecord): number {
   }
 }
 
+// Commit-tail fallback: if a global invalidation lands after our puts already
+// committed, surgically retract only keys that still hold our exact stale
+// write. Comparison and deletion happen in a single readwrite transaction, so
+// an intervening same-key write cannot slip between them. Identity covers the
+// full written record: savedAt alone collides, because it comes from Date.now()
+// and independent writers can share a timestamp under coarse timer precision.
+// A newer-generation replacement under the same key must therefore survive
+// even when its savedAt equals ours.
+function isSameSnapshotWrite(
+  current: SessionSnapshotRecord,
+  expected: SessionSnapshotRecord,
+): boolean {
+  try {
+    // Both sides pass through the same zod schema, so key order is canonical
+    // and a whole-record comparison covers savedAt, sessionId, and snapshot.
+    return JSON.stringify(current) === JSON.stringify(expected);
+  } catch {
+    return false;
+  }
+}
+
+async function retractStaleSnapshotWrites(
+  written: ReadonlyMap<string, SessionSnapshotRecord>,
+): Promise<void> {
+  if (written.size === 0) {
+    return;
+  }
+  const database = await openSessionSnapshotDatabase().catch(() => null);
+  if (!database) {
+    return;
+  }
+  try {
+    const transaction = database.transaction(
+      [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME],
+      "readwrite",
+    );
+    const snapshotStore = transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME);
+    const metadataStore = transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME);
+    const completed = transactionDone(transaction);
+    for (const [sessionKey, expected] of written) {
+      let current: unknown;
+      try {
+        current = await requestResult(snapshotStore.get(sessionKey));
+      } catch {
+        continue;
+      }
+      if (current === undefined) {
+        continue;
+      }
+      const record = parseSnapshotRecord(current, sessionKey);
+      if (record && isSameSnapshotWrite(record, expected)) {
+        snapshotStore.delete(sessionKey);
+        metadataStore.delete(sessionKey);
+      }
+    }
+    // Best-effort cleanup; a failed retract must not trigger a reset.
+    await completed.catch(() => undefined);
+  } catch {
+    // Best-effort cleanup; never fail the suppressing flush.
+  } finally {
+    database.close();
+  }
+}
+
 async function writeSnapshotRecords(
   records: SessionSnapshotRecord[],
   generation: number,
@@ -211,6 +275,19 @@ async function writeSnapshotRecords(
     const snapshotStore = transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME);
     const metadataStore = transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME);
     const currentValues = await requestResult(metadataStore.getAll());
+    // Note: this guard covers global invalidation (the only path that bumps
+    // snapshotStoreGeneration). Per-session deletes fence via the revision
+    // filter at flush dispatch; a same-key per-session delete landing
+    // mid-write across tabs is a separate tracked race, not covered here.
+    if (generation !== snapshotStoreGeneration) {
+      transaction.abort();
+      try {
+        await transactionDone(transaction);
+      } catch {
+        // Aborting is the intended outcome; suppression is not a write failure.
+      }
+      return [];
+    }
     const next = new Map<string, SessionSnapshotMetadata>();
     for (const value of currentValues) {
       const metadata = metadataSchema.safeParse(value);
@@ -243,7 +320,39 @@ async function writeSnapshotRecords(
       metadataStore.delete(oldest.sessionKey);
       evicted.push(oldest.sessionKey);
     }
-    await transactionDone(transaction);
+    // Commit-tail guard: an invalidation can land while awaiting commit, after
+    // puts are already queued. Abort on generation change during the wait; if
+    // the commit already won, retract only our exact stale keys (full write
+    // identity, so newer-generation replacements under the same key survive).
+    const written = new Map(records.map((record) => [record.sessionKey, record]));
+    const unsubscribe = subscribeSnapshotInvalidation(() => {
+      if (generation !== snapshotStoreGeneration) {
+        try {
+          transaction.abort();
+        } catch {
+          // Commit already settled; the post-commit check below handles it.
+        }
+      }
+    });
+    let commitError: Error | undefined;
+    try {
+      await transactionDone(transaction);
+    } catch (error) {
+      commitError = new Error("IndexedDB write failed", { cause: error });
+    } finally {
+      unsubscribe();
+    }
+    if (generation !== snapshotStoreGeneration) {
+      if (commitError === undefined) {
+        await retractStaleSnapshotWrites(written);
+      }
+      // Either aborted or retracted: suppression, not a write failure, so do
+      // not enter the reset path below.
+      return [];
+    }
+    if (commitError !== undefined) {
+      throw commitError;
+    }
     return evicted;
   } catch (error) {
     debugSnapshotStore("resetting cache after IndexedDB write failure", error);
@@ -379,6 +488,16 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       if (evicted === null) {
         this.resetSavedAtIndex();
         return;
+      }
+      if (generation !== snapshotStoreGeneration) {
+        // Stale flush was suppressed and never durably written. Drop its
+        // savedAt hints (only entries still holding our stale timestamp, so a
+        // newer-generation write under the same key survives).
+        for (const record of currentRecords) {
+          if (this.savedAtBySession.get(record.sessionKey) === record.savedAt) {
+            this.savedAtBySession.delete(record.sessionKey);
+          }
+        }
       }
       for (const sessionKey of evicted) {
         if (!this.pending.has(sessionKey)) {
