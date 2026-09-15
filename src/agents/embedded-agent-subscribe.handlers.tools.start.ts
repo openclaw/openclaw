@@ -17,6 +17,7 @@ import type {
 } from "./embedded-agent-subscribe.handlers.types.js";
 import { sanitizeToolArgs } from "./embedded-agent-tool-results.js";
 import type { AgentEvent } from "./runtime/index.js";
+import { resolveExecTitle } from "./tool-display-exec.js";
 import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "./tool-display.js";
 import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { buildToolMutationState } from "./tool-mutation.js";
@@ -561,7 +562,7 @@ export function handleToolExecutionStart(
       !ctx.state.toolSummaryById.has(toolCallId)
     ) {
       ctx.state.toolSummaryById.add(toolCallId);
-      ctx.emitToolSummary(toolName, meta, callSummary.commandBearing);
+      ctx.emitToolSummary(toolName, meta, callSummary.commandBearing, resolveExecTitle(args));
     }
 
     const publishPrompt = ctx.params.onToolResult;
