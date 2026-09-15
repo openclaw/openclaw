@@ -482,10 +482,17 @@ export async function sendMessageFeishu(
     mentions,
     accountId,
   } = params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const target = resolveFeishuSendTarget({ cfg, to, accountId });
+  const { client, receiveId, receiveIdType } = target;
   let messageText = text;
   if (!preparedPostText) {
-    const tableMode = resolveMarkdownTableMode({ cfg, channel: "feishu" });
+    // The target resolved the delivering account, including defaultAccount, so
+    // the table mode follows that account rather than the raw id.
+    const tableMode = resolveMarkdownTableMode({
+      cfg,
+      channel: "feishu",
+      accountId: target.accountId,
+    });
     messageText = materializeFeishuPostMarkdownSoftBreaks(
       convertMarkdownTables(text ?? "", tableMode),
     );
@@ -574,6 +581,7 @@ export async function editMessageFeishu(params: {
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
+    accountId: account.accountId,
   });
   const messageText = convertMarkdownTables(text!, tableMode);
   const normalizedText = materializeFeishuPostMarkdownSoftBreaks(messageText);

@@ -49,11 +49,13 @@ import {
   buildFeishuPayloadCard,
   consumeFeishuPresentationFallbackMarker,
   FEISHU_PRESENTATION_CAPABILITIES,
+  hasCardMarkdownTable,
   markRenderedFeishuCard,
   readNativeFeishuCard,
   renderFeishuPresentationPayload,
   renderFeishuPresentationFallbackText,
   resolveFeishuRichReply,
+  shouldUseCard,
   withinCardTableLimit,
 } from "./presentation-card.js";
 import {
@@ -128,10 +130,6 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
   }
 
   return raw;
-}
-
-function shouldUseCard(text: string): boolean {
-  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
 type FeishuOutboundPayload = Parameters<
@@ -245,13 +243,21 @@ async function sendCommentThreadReply(params: {
   }
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   const client = createFeishuClient(account);
+  // Comments have no native table renderer, so block falls back to code here.
+  const tableMode = resolveMarkdownTableMode({
+    cfg: params.cfg,
+    channel: "feishu",
+    accountId: account.accountId,
+    supportsBlockTables: false,
+  });
+  const content = convertMarkdownTables(params.text, tableMode);
   const replyId = params.replyId?.trim();
   try {
     const result = await deliverCommentThreadText(client, {
       file_token: target.fileToken,
       file_type: target.fileType,
       comment_id: target.commentId,
-      content: params.text,
+      content,
     });
     return {
       messageId:
@@ -300,19 +306,35 @@ async function sendOutboundText(params: {
   const account = resolveFeishuAccount({ cfg, accountId });
   const renderMode = account.config?.renderMode ?? "auto";
 
-  // Decide card routing on the original text so card content is never
-  // modified by post-md newline normalization. Only the post path below
-  // materializes CommonMark soft breaks for Feishu rendering.
+  // Resolve with block support so a configured or default block keeps native
+  // tables on cards. An explicit off, bullets or code converts before routing,
+  // so the mode applies in auto mode too, and a raw table promotes the message
+  // to a card only when it renders natively. Card content is never touched by
+  // the post-md newline normalization below.
+  const tableMode = resolveMarkdownTableMode({
+    cfg,
+    channel: "feishu",
+    accountId: account.accountId,
+    supportsBlockTables: true,
+  });
+  const nativeTables = tableMode === "block";
+  const tableText = nativeTables ? text : convertMarkdownTables(text, tableMode);
+  // off has no card representation, since a card renderer parses the pipes, so a
+  // table that stays raw takes the post path even when cards were requested. The
+  // card renderer's own parser answers what counts as a table here.
   const useCard =
-    (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text))) &&
-    withinCardTableLimit(text);
+    (renderMode === "card" || (renderMode === "auto" && shouldUseCard(tableText, nativeTables))) &&
+    !(tableMode === "off" && hasCardMarkdownTable(tableText)) &&
+    withinCardTableLimit(tableText);
 
+  // Post rendering has no native tables, so block falls back to code there.
   // Tables need contiguous source rows, so convert them before the parser
   // materializes prose soft breaks for Feishu post rendering.
-  const tableMode = resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const normalizedText = useCard
-    ? text
-    : materializeFeishuPostMarkdownSoftBreaks(convertMarkdownTables(text, tableMode));
+    ? tableText
+    : materializeFeishuPostMarkdownSoftBreaks(
+        nativeTables ? convertMarkdownTables(text, "code") : tableText,
+      );
 
   // Core chunks raw text before channel rendering. Re-chunk after expansion
   // and keep each fenced-code chunk independently valid Markdown.
@@ -486,6 +508,19 @@ async function sendFeishuTtsSupplementPayload(params: {
   return lastResult ?? { channel: "feishu", messageId: "" };
 }
 
+// The direct-send action builds its presentation card before reaching
+// `sendPayload`, so it shares this resolver instead of repeating the rule.
+export function presentationTextRenderer(ctx: Pick<FeishuSendPayloadContext, "cfg" | "accountId">) {
+  const account = resolveFeishuAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
+  const tableMode = resolveMarkdownTableMode({
+    cfg: ctx.cfg,
+    channel: "feishu",
+    accountId: account.accountId,
+    supportsBlockTables: true,
+  });
+  return (text: string) => (tableMode === "block" ? text : convertMarkdownTables(text, tableMode));
+}
+
 // `feishuOutbound` keeps the shared `ChannelOutboundAdapter` shape (whose
 // `sendMedia` is optional) so the object literal — which spreads
 // `createAttachedChannelResultAdapter` (returning `sendMedia?: ... | undefined`)
@@ -500,9 +535,18 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunkerMode: "markdown",
   textChunkLimit: FEISHU_TEXT_CHUNK_LIMIT,
   presentationCapabilities: FEISHU_PRESENTATION_CAPABILITIES,
-  renderPresentation: renderFeishuPresentationPayload,
+  renderPresentation: (params) =>
+    renderFeishuPresentationPayload({
+      ...params,
+      ctx: { ...params.ctx, renderText: presentationTextRenderer(params.ctx) },
+    }),
   sendPayload: async (ctx) => {
     const { payload, presentationFallback } = consumeFeishuPresentationFallbackMarker(ctx.payload);
+    // Core-rendered payloads already carry their card or fallback. Only authored
+    // presentations reaching this entry directly still need the prose projection.
+    const renderText = resolveFeishuRichReply(payload).presentation
+      ? presentationTextRenderer(ctx)
+      : undefined;
     const ttsSupplement = getReplyPayloadTtsSupplement(payload);
     if (parseFeishuCommentTarget(ctx.to)) {
       const { presentation } = resolveFeishuRichReply(payload);
@@ -544,18 +588,21 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       payload,
       text: ctx.text,
       identity: ctx.identity,
+      renderText,
     });
     if (!card) {
       const { presentation } = resolveFeishuRichReply(payload);
       const fallbackPayload = presentation
         ? {
             ...payload,
-            text: renderFeishuPresentationFallbackText(
-              {
-                text: readNativeFeishuCardJson(payload.text) ? undefined : payload.text,
-                presentation,
-              },
-              "markdown",
+            text: (renderText ?? ((text: string) => text))(
+              renderFeishuPresentationFallbackText(
+                {
+                  text: readNativeFeishuCardJson(payload.text) ? undefined : payload.text,
+                  presentation,
+                },
+                "markdown",
+              ),
             ),
             presentation: undefined,
             interactive: undefined,

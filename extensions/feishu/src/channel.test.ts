@@ -1,6 +1,16 @@
 // Feishu tests cover channel plugin behavior.
+import {
+  convertMarkdownTables,
+  type MarkdownTableMode,
+} from "openclaw/plugin-sdk/markdown-table-runtime";
+import {
+  createEmptyPluginRegistry,
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { feishuPlugin } from "./channel.js";
 import { FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER } from "./outbound.js";
@@ -352,14 +362,24 @@ describe("feishuPlugin actions", () => {
     },
   } as OpenClawConfig;
 
+  // Table modes read the channel default from the plugin meta, and the harness
+  // does not load the runtime setup, so register the real plugin for every test.
   beforeEach(() => {
     vi.clearAllMocks();
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "feishu", source: "test", plugin: feishuPlugin }]),
+    );
     createFeishuClientMock.mockReturnValue({ tag: "client" });
     getChatInfoMock.mockResolvedValue({
       chat_id: "oc_group_1",
       chat_mode: "group",
       chat_type: "private",
     });
+  });
+
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("advertises the expanded Feishu action surface", () => {
@@ -1250,6 +1270,118 @@ describe("feishuPlugin actions", () => {
     expect(details.ok).toBe(true);
     expect(details.messageId).toBe("om_card");
     expect(details.chatId).toBe("oc_group_1");
+  });
+
+  describe("presentation card markdown table modes", () => {
+    const tableMarkdown = "| Name | Role |\n| --- | --- |\n| Ada | Lead |";
+
+    function tableModeCfg(
+      selection: "channel" | "named" | "defaultAccount",
+      tables: MarkdownTableMode,
+    ): OpenClawConfig {
+      return {
+        channels: {
+          feishu: {
+            enabled: true,
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            groupPolicy: "open",
+            markdown: { tables: selection === "channel" ? tables : "off" },
+            ...(selection === "defaultAccount" ? { defaultAccount: "work" } : {}),
+            accounts: {
+              work: {
+                appId: "cli_work",
+                appSecret: "secret_work",
+                ...(selection === "channel" ? {} : { markdown: { tables } }),
+              },
+              other: { appId: "cli_other", appSecret: "secret_other" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+    }
+
+    async function cardMarkdownForPresentationTable(params: {
+      cfg: OpenClawConfig;
+      accountId?: string;
+      action?: "send" | "thread-reply";
+    }): Promise<string[]> {
+      sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+      const action = params.action ?? "send";
+      await feishuPlugin.actions?.handleAction?.({
+        action,
+        params: {
+          to: "chat:oc_group_1",
+          ...(action === "thread-reply" ? { messageId: "om_root" } : {}),
+          presentation: {
+            blocks: [
+              { type: "text", text: tableMarkdown },
+              { type: "context", text: tableMarkdown },
+            ],
+          },
+        },
+        cfg: params.cfg,
+        accountId: params.accountId,
+        toolContext: {},
+      } as never);
+
+      const sendCardArgs = requireRecord(
+        mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+        "send card args",
+      );
+      const card = requireRecord(sendCardArgs.card, "card");
+      const body = requireRecord(card.body, "card body");
+      return requireArray(body.elements, "card elements").map((element) =>
+        String(requireRecord(element, "card element").content),
+      );
+    }
+
+    // The action builds its own presentation card, so the mode has to reach that
+    // build the same way it reaches the presentation fallback through sendPayload.
+    it.each(
+      (["bullets", "code"] as const).flatMap((tables) =>
+        (["channel", "named", "defaultAccount"] as const).map((selection) => ({
+          tables,
+          selection,
+        })),
+      ),
+    )(
+      "converts a $selection $tables table on a sent presentation card",
+      async ({ tables, selection }) => {
+        const converted = convertMarkdownTables(tableMarkdown, tables);
+
+        const markdown = await cardMarkdownForPresentationTable({
+          cfg: tableModeCfg(selection, tables),
+          accountId: selection === "named" ? "work" : undefined,
+        });
+
+        expect(markdown).toEqual([converted, `<font color='grey'>${converted}</font>`]);
+        expect(markdown.join("\n")).not.toContain("| --- |");
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it("converts the table a thread-reply presentation card carries", async () => {
+      const converted = convertMarkdownTables(tableMarkdown, "bullets");
+
+      const markdown = await cardMarkdownForPresentationTable({
+        cfg: tableModeCfg("channel", "bullets"),
+        action: "thread-reply",
+      });
+
+      expect(markdown).toEqual([converted, `<font color='grey'>${converted}</font>`]);
+      expect(markdown.join("\n")).not.toContain("| --- |");
+    });
+
+    // off disables table parsing rather than choosing a card-safe shape, so the
+    // authored pipes stay on the card the action builds.
+    it("keeps the authored table on an off presentation card", async () => {
+      const markdown = await cardMarkdownForPresentationTable({
+        cfg: tableModeCfg("channel", "off"),
+      });
+
+      expect(markdown).toEqual([tableMarkdown, `<font color='grey'>${tableMarkdown}</font>`]);
+    });
   });
 
   it("falls back to text delivery when presentation text exceeds the card table limit", async () => {

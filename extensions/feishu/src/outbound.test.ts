@@ -13,7 +13,17 @@ import {
   type MessagePresentation,
   type MessagePresentationAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  convertMarkdownTables,
+  type MarkdownTableMode,
+} from "openclaw/plugin-sdk/markdown-table-runtime";
+import {
+  createEmptyPluginRegistry,
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, ReplyPayload } from "../runtime-api.js";
 import {
   FEISHU_SELECTED_SECRET_ENV,
@@ -184,6 +194,42 @@ const cardRenderConfig: ClawdbotConfig = {
   },
 };
 
+const tableMarkdown = "| Name | Role |\n| --- | --- |\n| Ada | Lead |";
+// GFM makes the outer pipes optional, and a fence hides rows that only look like a table.
+const pipelessTableMarkdown = "Name | Role\n--- | ---\nAda | Lead";
+const nativeTableShapes = [
+  { shape: "pipeless", text: pipelessTableMarkdown },
+  { shape: "leading-pipe-only", text: "| Name | Role\n| --- | ---\n| Ada | Lead" },
+  { shape: "trailing-pipe-only", text: "Name | Role |\n--- | --- |\nAda | Lead |" },
+  { shape: "blockquote", text: "> Name | Role\n> --- | ---\n> Ada | Lead" },
+  { shape: "list-item", text: "- Name | Role\n  --- | ---\n  Ada | Lead" },
+  { shape: "CRLF pipeless", text: pipelessTableMarkdown.replaceAll("\n", "\r\n") },
+  { shape: "aligned-delimiter", text: "Name | Role\n:--- | ---:\nAda | Lead" },
+] as const;
+const nonTableShapes = [
+  { shape: "header wider than delimiter", text: "| Name | Role |\n| --- |\n| Ada | Lead |" },
+  { shape: "delimiter wider than header", text: "| Name |\n| --- | --- |\n| Ada | Lead |" },
+  { shape: "dashless delimiter", text: "| Name | Role |\n| : | : |\n| Ada | Lead |" },
+  {
+    shape: "blank line before delimiter",
+    text: "| Name | Role |\n\n| --- | --- |\n| Ada | Lead |",
+  },
+] as const;
+const fencedTableSample = "```\n| Name | Role |\n| --- | --- |\n| Ada | Lead |\n```";
+// Root credentials make the implicit default account configured, so a send
+// without an account id resolves to it and reads the channel value.
+const tableModeConfig: ClawdbotConfig = {
+  channels: {
+    feishu: {
+      appId: "cli_a1",
+      appSecret: "local-test-placeholder", // pragma: allowlist secret
+      renderMode: "raw",
+      markdown: { tables: "bullets" },
+      accounts: { work: { markdown: { tables: "off" } } },
+    },
+  },
+};
+
 function createOversizedTablePresentation() {
   return adaptMessagePresentationForChannel({
     presentation: {
@@ -229,6 +275,20 @@ afterAll(() => {
   vi.doUnmock("./comment-reaction.js");
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
   vi.resetModules();
+});
+
+// The shared table-mode resolver reads config only for a registered channel id
+// and takes the plugin default from its meta. The harness does not load the
+// runtime setup, so register the real plugin for every test.
+beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "feishu", source: "test", plugin: feishuPlugin }]),
+  );
+});
+
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+  setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
 function resetOutboundMocks() {
@@ -627,6 +687,19 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     expect(sendMessageCall()?.to).toBe("chat_1");
     expect(sendMessageCall()?.text).toBe("please upload /tmp/example.png");
     expect(sendMessageCall()?.accountId).toBe("main");
+  });
+
+  it("resolves the markdown table mode for the named account on the post path", async () => {
+    await sendText({
+      cfg: tableModeConfig,
+      to: "chat_1",
+      text: tableMarkdown,
+      accountId: "work",
+    });
+    await sendText({ cfg: tableModeConfig, to: "chat_1", text: tableMarkdown });
+
+    expect(sendMessageCall(0)?.text).toBe(tableMarkdown);
+    expect(sendMessageCall(1)?.text).toBe("**Ada**  \n• Role: Lead");
   });
 
   it("sends wrapped interactive card text as a native Feishu card", async () => {
@@ -2461,6 +2534,28 @@ describe("feishuOutbound comment-thread routing", () => {
     resetOutboundMocks();
   });
 
+  it.each([
+    ["bullets", convertMarkdownTables(tableMarkdown, "bullets")],
+    ["code", convertMarkdownTables(tableMarkdown, "code")],
+    [undefined, convertMarkdownTables(tableMarkdown, "code")],
+    ["off", tableMarkdown],
+  ] as const)(
+    "converts a table for a document-comment target in %s mode",
+    async (tables, expected) => {
+      const cfg: ClawdbotConfig = tables ? { channels: { feishu: { markdown: { tables } } } } : {};
+
+      await sendText({
+        cfg,
+        to: "comment:docx:doxcn123:7623358762119646411",
+        text: tableMarkdown,
+        accountId: "main",
+      });
+
+      expect(commentThreadParams()?.content).toBe(expected);
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(feishuSecretRefPolicyCases)(
     "permits document-comment delivery only under configured SecretRef policy: $name",
     async (testCase) => {
@@ -3780,6 +3875,243 @@ describe("feishuOutbound presentation card table-limit", () => {
 
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
     expect(sendMessageFeishuMock).toHaveBeenCalled();
+  });
+});
+
+describe("feishuOutbound.sendText markdown table modes in auto mode", () => {
+  const bulletsPost = "**Ada**  \n• Role: Lead";
+  const codeCard = convertMarkdownTables(tableMarkdown, "code");
+
+  function tableCfg(scope: "channel" | "account", tables?: MarkdownTableMode): ClawdbotConfig {
+    const markdown = tables ? { markdown: { tables } } : {};
+    return scope === "channel"
+      ? { channels: { feishu: { ...markdown } } }
+      : { channels: { feishu: { accounts: { work: { ...markdown } } } } };
+  }
+
+  beforeEach(() => {
+    resetOutboundMocks();
+  });
+
+  describe.each(["raw", "core-rendered"] as const)("presentation via %s payload", (entry) => {
+    it.each(
+      (["bullets", "code"] as const).flatMap((tables) =>
+        (["channel", "named", "defaultAccount"] as const).map((selection) => ({
+          tables,
+          selection,
+        })),
+      ),
+    )("projects $selection $tables prose, blocks and fallback", async ({ tables, selection }) => {
+      const cfg: ClawdbotConfig = {
+        channels: {
+          feishu: {
+            markdown: { tables: selection === "channel" ? tables : "off" },
+            ...(selection === "defaultAccount" ? { defaultAccount: "work" } : {}),
+            accounts: {
+              work: selection !== "channel" ? { markdown: { tables } } : {},
+              other: {},
+            },
+          },
+        },
+      };
+      const presentation: MessagePresentation = {
+        blocks: [
+          { type: "text", text: tableMarkdown },
+          { type: "context", text: tableMarkdown },
+          {
+            type: "buttons",
+            buttons: [{ label: "Continue", action: { type: "command", command: "/continue" } }],
+          },
+        ],
+      };
+      let payload: ReplyPayload = { text: tableMarkdown, presentation };
+      const ctx = {
+        cfg,
+        to: "chat_1",
+        text: tableMarkdown,
+        accountId: selection === "named" ? "work" : undefined,
+        payload,
+      };
+      const converted = convertMarkdownTables(tableMarkdown, tables);
+      if (entry === "core-rendered") {
+        const rendered = await feishuOutbound.renderPresentation?.({ payload, presentation, ctx });
+        expect(rendered).toBeDefined();
+        if (!rendered) {
+          throw new Error("expected a rendered presentation");
+        }
+        expect(rendered.text?.split(converted)).toHaveLength(4);
+        expect(rendered.text).not.toContain("| --- |");
+        const { presentation: _presentation, ...consumed } = rendered;
+        payload = consumed;
+      }
+
+      await feishuOutbound.sendPayload?.({ ...ctx, text: payload.text ?? "", payload });
+
+      const card = sendCardCall()?.card;
+      expect(card).toBeDefined();
+      const elements = card.body.elements.filter(
+        (element: { tag: string }) => element.tag === "markdown",
+      );
+      expect(elements.map((element: { content: string }) => element.content)).toEqual([
+        converted,
+        converted,
+        `<font color='grey'>${converted}</font>`,
+      ]);
+      expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("follows defaultAccount when the account id is omitted", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          defaultAccount: "work",
+          markdown: { tables: "off" },
+          accounts: { work: { markdown: { tables: "bullets" } } },
+        },
+      },
+    };
+
+    await sendText({ cfg, to: "chat_1", text: tableMarkdown });
+
+    expect(sendMessageCall()?.text).toBe(bulletsPost);
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("follows the only configured account when the account id is omitted", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          markdown: { tables: "off" },
+          accounts: {
+            work: {
+              appId: "cli_a1",
+              appSecret: "local-test-placeholder", // pragma: allowlist secret
+              markdown: { tables: "bullets" },
+            },
+          },
+        },
+      },
+    };
+
+    await sendText({ cfg, to: "chat_1", text: tableMarkdown });
+
+    expect(sendMessageCall()?.text).toBe(bulletsPost);
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("off posts the raw table even when renderMode is card", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: { feishu: { renderMode: "card", markdown: { tables: "off" } } },
+    };
+
+    await sendText({ cfg, to: "chat_1", text: tableMarkdown, accountId: "main" });
+
+    expect(sendMessageCall()?.text).toBe(tableMarkdown);
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("off posts a pipeless GFM table the card renderer would draw", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: { feishu: { renderMode: "card", markdown: { tables: "off" } } },
+    };
+
+    await sendText({ cfg, to: "chat_1", text: pipelessTableMarkdown, accountId: "main" });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("off keeps a fenced table sample on the card path", async () => {
+    const cfg: ClawdbotConfig = {
+      channels: { feishu: { renderMode: "card", markdown: { tables: "off" } } },
+    };
+
+    await sendText({ cfg, to: "chat_1", text: fencedTableSample, accountId: "main" });
+
+    expect(sendStructuredCardCall()?.text).toBe(fencedTableSample);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  describe.each(["channel", "account"] as const)("configured at %s scope", (scope) => {
+    const accountId = scope === "account" ? "work" : undefined;
+
+    it("off keeps the raw table on the post path", async () => {
+      await sendText({ cfg: tableCfg(scope, "off"), to: "chat_1", text: tableMarkdown, accountId });
+
+      expect(sendMessageCall()?.text).toBe(tableMarkdown);
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("bullets converts on the post path", async () => {
+      await sendText({
+        cfg: tableCfg(scope, "bullets"),
+        to: "chat_1",
+        text: tableMarkdown,
+        accountId,
+      });
+
+      expect(sendMessageCall()?.text).toBe(bulletsPost);
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("code rides a card as a fenced block", async () => {
+      await sendText({
+        cfg: tableCfg(scope, "code"),
+        to: "chat_1",
+        text: tableMarkdown,
+        accountId,
+      });
+
+      expect(codeCard.startsWith("```")).toBe(true);
+      expect(sendStructuredCardCall()?.text).toBe(codeCard);
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it.each(
+      nativeTableShapes.flatMap(({ shape, text }) =>
+        (["block", undefined] as const).map((tables) => ({ shape, text, tables })),
+      ),
+    )("$tables promotes a $shape native table to a card", async ({ tables, text }) => {
+      await sendText({
+        cfg: tableCfg(scope, tables),
+        to: "chat_1",
+        text,
+        accountId,
+      });
+
+      expect(sendStructuredCardCall()?.text).toBe(text);
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it.each(
+      nonTableShapes.flatMap(({ shape, text }) =>
+        (["block", undefined] as const).map((tables) => ({ shape, text, tables })),
+      ),
+    )("$tables posts literal rows with $shape", async ({ tables, text }) => {
+      await sendText({ cfg: tableCfg(scope, tables), to: "chat_1", text, accountId });
+
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+      // Posts encode soft line breaks, but retain the literal non-table prose.
+      expect(sendMessageCall()?.text).toBe(text.replace(/(?<!\n)\n(?!\n)/g, "  \n"));
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it.each(["block", undefined] as const)(
+      "%s keeps the native table on a card",
+      async (tables) => {
+        await sendText({
+          cfg: tableCfg(scope, tables),
+          to: "chat_1",
+          text: tableMarkdown,
+          accountId,
+        });
+
+        expect(sendStructuredCardCall()?.text).toBe(tableMarkdown);
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      },
+    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

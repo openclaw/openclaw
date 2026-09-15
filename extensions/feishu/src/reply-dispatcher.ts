@@ -32,7 +32,9 @@ import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.
 import type { MentionTarget } from "./mention-target.types.js";
 import {
   consumeFeishuPresentationFallbackMarker,
+  hasCardMarkdownTable,
   renderFeishuReplyPayload,
+  shouldUseCard,
   withinCardTableLimit,
 } from "./presentation-card.js";
 import {
@@ -60,11 +62,6 @@ import {
 } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
-
-/** Detect if text contains markdown elements that benefit from card rendering */
-function shouldUseCard(text: string): boolean {
-  return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
-}
 
 function mergeStreamingFinalText(
   previousText: string,
@@ -279,7 +276,34 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     fallbackLimit: 4000,
   });
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu", accountId);
-  const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
+  const tableMode = core.channel.text.resolveMarkdownTableMode({
+    cfg,
+    channel: "feishu",
+    accountId,
+    supportsBlockTables: true,
+  });
+  // Post rendering has no native tables, so block falls back to code there. An
+  // explicit off, bullets or code converts before each card path that commits it, so the
+  // mode applies in auto mode, to a presentation card's own markdown, and to the text a
+  // streaming card commits. Streamed reasoning shares that card, so it converts on
+  // arrival and carries one representation to every flush and to the close. Partial
+  // answer previews stream raw text, so the preview dedupe compares payload text, while
+  // streamed content enters the ownership state (closing record, settlement, delivered
+  // finals) and every comparison against a final in this one rendered form. The closing
+  // record and the settlement lookup take the answer rather than the reasoning preview.
+  // An unmatched off close is the exception, since it posts reasoning and answer
+  // combined and records that combined body as a delivered final. Off conversion returns
+  // its input, so that key holds the value it held before this change.
+  const nativeTables = tableMode === "block";
+  const postTableMode = nativeTables ? "code" : tableMode;
+  const renderTables = (value: string): string =>
+    nativeTables ? value : core.channel.text.convertMarkdownTables(value, tableMode);
+  // off has no card representation, since a card renderer parses the pipes, so text
+  // that still carries a table takes the post path. The card renderer's own parser
+  // answers what counts as a table, so pipe-less GFM counts and a fenced sample that
+  // only looks like one does not.
+  const tableNeedsPostPath = (value: string): boolean =>
+    tableMode === "off" && hasCardMarkdownTable(value);
   const renderMode = account.config?.renderMode ?? "auto";
   // Streaming cards cannot attach native mention recipients. Bot-authored ingress
   // therefore uses normal cards/posts so every emitted unit reaches the peer bot.
@@ -300,6 +324,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
+  let streamTextIsPreview = true;
   let lastPartial = "";
   let reasoningText = "";
   let statusLine = "";
@@ -308,6 +333,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   // Partial previews are replaceable; only committed final text may precede an error notice.
   let hasStreamingFinalText = false;
   const deliveredFinalTexts = new Set<string>();
+  const blockPostDeliveries = new Map<string, Promise<FeishuReplyDeliveryResult>>();
   type StreamingDisposition = "closed" | "discarded";
   type StreamingCloseOutcome = {
     disposition: StreamingDisposition;
@@ -401,6 +427,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     });
   };
 
+  const streamDisplayText = () => (streamTextIsPreview ? streamText : renderTables(streamText));
+
   const queueStreamingUpdate = (
     nextText: string,
     options?: {
@@ -411,6 +439,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (!nextText) {
       return;
     }
+    // Answer snapshots and mirrored blocks share authored text until display. Both arrival
+    // orders must compare and merge that representation, never a rendered table.
     if (options?.dedupeWithLastPartial && nextText === lastPartial) {
       return;
     }
@@ -418,6 +448,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       lastPartial = nextText;
     }
     const mode = options?.mode ?? "snapshot";
+    streamTextIsPreview = mode === "snapshot";
     if (mode === "delta") {
       streamText = `${streamText}${nextText}`;
     } else {
@@ -436,7 +467,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
       lastSnapshotTextLength = nextText.length;
     }
-    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamDisplayText()));
   };
 
   const queueReasoningUpdate = (nextThinking: string) => {
@@ -444,7 +475,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       return;
     }
     reasoningText = nextThinking;
-    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamDisplayText()));
   };
 
   const startStreaming = () => {
@@ -513,6 +544,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     activeStreamingGeneration = undefined;
     partialUpdateQueue = Promise.resolve();
     streamText = "";
+    streamTextIsPreview = true;
     lastPartial = "";
     reasoningText = "";
     statusLine = "";
@@ -547,6 +579,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     const startPromiseToClose = streamingStartPromise;
     const updateQueueToClose = partialUpdateQueue;
     const finalizedAnswerText = streamText;
+    const answerText = renderTables(finalizedAnswerText);
     const finalizedReasoningText = reasoningText;
     const outcome = {
       disposition,
@@ -566,10 +599,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       let finalizationError: unknown;
       if (streamingToClose?.isActive()) {
         statusLine = "";
-        const text = buildCombinedStreamText(finalizedReasoningText, finalizedAnswerText);
+        const text = buildCombinedStreamText(finalizedReasoningText, answerText);
+        // Committing here would put the table in a card just as surely as delivering a
+        // final would, so this close drops the card and reuses a matching block
+        // receipt or sends the combined text for a final to inherit.
+        const closeNeedsPost = disposition === "closed" && tableNeedsPostPath(text);
         let closed;
         try {
-          if (disposition === "discarded") {
+          if (disposition === "discarded" || closeNeedsPost) {
             closed = await streamingToClose.discard();
           } else {
             const finalNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
@@ -588,6 +625,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           content: closed.content,
           kind: "card",
         });
+        // A failed removal can leave the card visible, so only a clean discard hands
+        // the text to a post instead.
+        if (closeNeedsPost && finalizationError === undefined) {
+          result = await sendPostReply(text, "final", undefined, answerText);
+        }
         if (result.visibleReplySent) {
           markVisibleReplySent();
         }
@@ -599,7 +641,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           finalizedAnswerText &&
           (finalizationError === undefined || result.content === text)
         ) {
-          deliveredFinalTexts.add(finalizedAnswerText);
+          deliveredFinalTexts.add(answerText);
         }
         if (
           finalizationError instanceof FeishuStreamingFinalizationError &&
@@ -620,7 +662,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         // generation must never recover its obsolete prose through a new static card.
         rememberClosedStreamingSettlement(
           generationToClose,
-          finalizedAnswerText,
+          answerText,
           result,
           finalizationError,
           disposition,
@@ -632,18 +674,21 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         ...(finalizationError === undefined ? {} : { error: finalizationError }),
       };
     } catch (error: unknown) {
-      if (disposition === "discarded") {
+      const result = isChannelPartialDeliveryError(error)
+        ? error.deliveryResult
+        : noVisibleFeishuReplyDelivery;
+      if (disposition === "discarded" || result.visibleReplySent) {
         rememberClosedStreamingSettlement(
           generationToClose,
-          finalizedAnswerText,
-          noVisibleFeishuReplyDelivery,
+          answerText,
+          result,
           error,
           disposition,
         );
       }
       return {
         ...outcome,
-        result: noVisibleFeishuReplyDelivery,
+        result,
         error,
       };
     } finally {
@@ -665,7 +710,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     if (session && inFlightStreamingClose?.session === session) {
       return inFlightStreamingClose.promise;
     }
-    const content = streamText;
+    // The closing record must match the rendered final it may later inherit.
+    const content = renderTables(streamText);
     const closePromise = performStreamingClose(disposition);
     if (session && generation !== undefined) {
       const closing = { session, generation, content, disposition, promise: closePromise };
@@ -735,7 +781,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       return false;
     }
     startStreaming();
-    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+    flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamDisplayText()));
     return false;
   };
 
@@ -756,7 +802,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     const chunkSource = paramsLocal.useCard
       ? paramsLocal.text
       : materializeFeishuPostMarkdownSoftBreaks(
-          core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode),
+          core.channel.text.convertMarkdownTables(paramsLocal.text, postTableMode),
         );
     const initialChunks = core.channel.text.chunkMarkdownTextWithMode(
       chunkSource,
@@ -827,25 +873,71 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     });
   };
 
-  const sendPostReply = (text: string, infoKind?: string, firstChunkMentions?: MentionTarget[]) =>
-    sendChunkedTextReply({
-      text,
-      useCard: false,
-      infoKind,
-      firstChunkMentions,
-      chunkMentions: requiredMentionTargets,
-      sendChunk: ({ chunk, mentions }) =>
-        sendMessageFeishu({
-          cfg,
-          to: sendTarget,
-          text: chunk,
-          replyToMessageId: sendReplyToMessageId,
-          replyInThread: effectiveReplyInThread,
-          allowTopLevelReplyFallback,
-          accountId,
-          ...(mentions ? { mentions } : {}),
-        }),
-    });
+  const sendPostReply = (
+    text: string,
+    infoKind?: string,
+    firstChunkMentions?: MentionTarget[],
+    blockAnswerText = text,
+  ) => {
+    // Block receipts are keyed by the rendered answer, never the reasoning preview
+    // added by close. Keep that key separate from an unmatched close's post body.
+    const matchingBlock =
+      infoKind === "final" && tableNeedsPostPath(blockAnswerText)
+        ? blockPostDeliveries.get(blockAnswerText)
+        : undefined;
+    const send = () =>
+      sendChunkedTextReply({
+        text,
+        useCard: false,
+        infoKind,
+        firstChunkMentions,
+        chunkMentions: requiredMentionTargets,
+        sendChunk: ({ chunk, mentions }) =>
+          sendMessageFeishu({
+            cfg,
+            to: sendTarget,
+            text: chunk,
+            replyToMessageId: sendReplyToMessageId,
+            replyInThread: effectiveReplyInThread,
+            allowTopLevelReplyFallback,
+            accountId,
+            ...(mentions ? { mentions } : {}),
+          }),
+      });
+    if (matchingBlock) {
+      return matchingBlock.catch((error: unknown) => {
+        // A partial failure still owns accepted chunks. Retrying the whole text
+        // would duplicate them, and the error does not identify a retryable suffix.
+        if (isChannelPartialDeliveryError(error)) {
+          throw error;
+        }
+        return send();
+      });
+    }
+    const delivery = send();
+    if (infoKind === "block") {
+      // Idle may overlap the send. Its matching preview inherits this post's
+      // acceptance and receipt instead of starting a second delivery.
+      const previousDelivery = blockPostDeliveries.get(text);
+      const retainedDelivery = delivery.catch((error: unknown) => {
+        // A later failed attempt cannot erase an earlier accepted post.
+        if (previousDelivery) {
+          return previousDelivery;
+        }
+        throw error;
+      });
+      blockPostDeliveries.set(text, retainedDelivery);
+      void retainedDelivery.catch((error: unknown) => {
+        if (
+          !isChannelPartialDeliveryError(error) &&
+          blockPostDeliveries.get(text) === retainedDelivery
+        ) {
+          blockPostDeliveries.delete(text);
+        }
+      });
+    }
+    return delivery;
+  };
 
   const sendMediaReplies = async (
     payload: ReplyPayload,
@@ -999,7 +1091,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     const cardHeader = resolveCardHeader(agentId, identity);
     const cardNote = resolveCardNote(agentId, identity, responsePrefixContextProvider());
-    const useRecoveryCard = withinCardTableLimit(content);
+    const useRecoveryCard = !tableNeedsPostPath(content) && withinCardTableLimit(content);
     return await sendChunkedTextReply({
       text: content,
       useCard: useRecoveryCard,
@@ -1295,6 +1387,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (!replyLifecycleStateInitialized) {
         replyLifecycleStateInitialized = true;
         deliveredFinalTexts.clear();
+        blockPostDeliveries.clear();
         closedStreamingSettlements.clear();
         sentIndependentBlockText = false;
         idleRequestedForReply = false;
@@ -1357,9 +1450,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     deliver: async (inputPayload: ReplyPayload, info) => {
       // Delivery runs after modifying hooks. Render here so native cards carry the
       // accepted prose, and a canceled payload never creates a card.
+      const sourceText = inputPayload.text ?? "";
       const prepared = await renderFeishuReplyPayload(inputPayload, {
         to: sendTarget,
         identity,
+        renderText: renderTables,
         // Cards notify only required bot recipients; incoming user mentions remain context.
         mentions: requiredMentionTargets,
       });
@@ -1372,10 +1467,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       const payloadText =
         payload.isReasoning && resolvedText ? formatReasoningMessage(resolvedText) : resolvedText;
       const reply = resolveSendableOutboundReplyParts({ ...payload, text: payloadText });
+      // Reasoning retains its established formatted delivery. Answer snapshots
+      // and mirrored blocks instead share unconverted prose.
+      const streamSourceText = payload.isReasoning ? reply.text : sourceText;
+      // reply.text already carries the conversion, so only the stream text this merge
+      // reads still needs it, in the form the closing card, the closing record and the
+      // delivered-final set hold.
       const text =
         info?.kind === "final" && !hasIndependentPresentation
           ? mergeStreamingFinalText(
-              streamText,
+              renderTables(streamText),
               reply.text,
               payload.isError === true && hasStreamingFinalText,
             )
@@ -1395,17 +1496,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         );
       const finalTextExceedsStreamingLimit =
         info?.kind === "final" && hasText && text.length > textChunkLimit;
+      // A block payload reaches a card of its own under block streaming, so the
+      // exclusion covers every card-capable payload and not only a final.
+      const tableNeedsPost = hasText && tableNeedsPostPath(text);
       // Feishu's table ceiling applies to static card elements, not CardKit's streamed markdown.
       // Keep the intents separate so an active preview cannot fork into an independent post.
       const cardRenderingRequested =
         renderMode === "card" ||
         (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
-        (renderMode === "auto" && shouldUseCard(text));
-      const useStaticCard = hasText && cardRenderingRequested && withinCardTableLimit(text);
+        (renderMode === "auto" && shouldUseCard(text, nativeTables));
+      const useStaticCard =
+        hasText && cardRenderingRequested && !tableNeedsPost && withinCardTableLimit(text);
       const useStreamingCard =
         hasText &&
         streamingEnabled &&
         !finalTextExceedsStreamingLimit &&
+        !tableNeedsPost &&
         (info?.kind === "final" || cardRenderingRequested);
       const skipTextForDuplicateFinal =
         !hasIndependentPresentation &&
@@ -1421,6 +1527,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         !(hasIndependentPresentation && payload.isError === true && hasStreamingFinalText) &&
         (hasIndependentPresentation ||
           finalTextExceedsStreamingLimit ||
+          tableNeedsPost ||
           (hasMedia &&
             ((hasVoiceMedia && !shouldDeliverText && !ttsTextAlreadyVisible) ||
               skipTextForDuplicateFinal)));
@@ -1542,16 +1649,26 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
-              queueStreamingUpdate(text, { mode: "delta", dedupeWithLastPartial: true });
+              // A block repeating what the preview already streamed is compared on the
+              // payload text both sides started from, so only new text is appended.
+              queueStreamingUpdate(streamSourceText, {
+                mode: "delta",
+                dedupeWithLastPartial: true,
+              });
             }
             if (info?.kind === "final") {
               // Final payloads can be cumulative snapshots or independent
               // notices. Preserve both when the latter arrives after an answer.
-              streamText = text;
+              streamText = mergeStreamingFinalText(
+                streamText,
+                streamSourceText,
+                payload.isError === true && hasStreamingFinalText,
+              );
+              streamTextIsPreview = false;
               hasStreamingFinalText = true;
               snapshotBaseText = "";
-              lastSnapshotTextLength = text.length;
-              flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
+              lastSnapshotTextLength = streamText.length;
+              flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamDisplayText()));
             }
           }
           // Send media even when streaming handled the text
@@ -1674,7 +1791,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               return false;
             }
             startStreaming();
-            queueReasoningUpdate(formatReasoningMessage(payload.text));
+            // Convert before the italic line wrapping, the same order the delivered
+            // reasoning path uses, so the table is still parseable when the mode runs.
+            queueReasoningUpdate(formatReasoningMessage(renderTables(payload.text)));
             return false;
           }
         : undefined,

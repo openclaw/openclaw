@@ -52,6 +52,13 @@ export function createFeishuCommentReplyDispatcher(
     },
   );
   const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "feishu", params.accountId);
+  // Comments have no native table renderer, so block falls back to code here.
+  const tableMode = core.channel.text.resolveMarkdownTableMode({
+    cfg: params.cfg,
+    channel: "feishu",
+    accountId: account.accountId,
+    supportsBlockTables: false,
+  });
   const typingReaction = createCommentTypingReactionLifecycle({
     cfg: params.cfg,
     fileToken: params.fileToken,
@@ -90,7 +97,14 @@ export function createFeishuCommentReplyDispatcher(
       if (!text.trim()) {
         return noVisibleFeishuReplyDelivery;
       }
-      const chunks = core.channel.text.chunkTextWithMode(text, textChunkLimit, chunkMode);
+      const tableText = core.channel.text.convertMarkdownTables(text, tableMode);
+      // A converted table is a fenced block, so the chunker has to close and reopen the
+      // fence rather than cut it in half.
+      const chunks = core.channel.text.chunkMarkdownTextWithMode(
+        tableText,
+        textChunkLimit,
+        chunkMode,
+      );
       const results: FeishuReplyDeliverySource[] = [];
       const acceptedChunks: string[] = [];
       for (const chunk of chunks) {
@@ -122,7 +136,7 @@ export function createFeishuCommentReplyDispatcher(
       return createFeishuReplyDeliveryResult({
         results,
         visibleReplySent: results.length > 0,
-        content: text,
+        content: tableText,
         kind: "text",
       });
     },

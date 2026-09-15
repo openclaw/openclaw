@@ -1,5 +1,12 @@
 // Feishu tests cover comment dispatcher plugin behavior.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import {
+  createEmptyPluginRegistry,
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFeishuRuntimeAccountMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -120,7 +127,9 @@ describe("createFeishuCommentReplyDispatcher", () => {
         text: {
           resolveTextChunkLimit: vi.fn(() => 4000),
           resolveChunkMode: vi.fn(() => "line"),
-          chunkTextWithMode: vi.fn((text: string) => [text]),
+          resolveMarkdownTableMode: vi.fn(() => "code"),
+          convertMarkdownTables: vi.fn((text: string) => text),
+          chunkMarkdownTextWithMode: vi.fn((text: string) => [text]),
         },
         reply: { resolveHumanDelayConfig: vi.fn(() => undefined) },
       },
@@ -382,7 +391,7 @@ describe("createFeishuCommentReplyDispatcher", () => {
   });
 
   it("chunks the transformed comment text including attachment links", async () => {
-    const chunkTextWithMode = vi.fn((text: string) =>
+    const chunkMarkdownTextWithMode = vi.fn((text: string) =>
       Array.from({ length: Math.ceil(text.length / 12) }, (_value, index) =>
         text.slice(index * 12, (index + 1) * 12),
       ),
@@ -392,7 +401,9 @@ describe("createFeishuCommentReplyDispatcher", () => {
         text: {
           resolveTextChunkLimit: vi.fn(() => 12),
           resolveChunkMode: vi.fn(() => "line"),
-          chunkTextWithMode,
+          resolveMarkdownTableMode: vi.fn(() => "code"),
+          convertMarkdownTables: vi.fn((text: string) => text),
+          chunkMarkdownTextWithMode,
         },
       },
     });
@@ -404,11 +415,133 @@ describe("createFeishuCommentReplyDispatcher", () => {
       { kind: "final" },
     );
 
-    expect(chunkTextWithMode).toHaveBeenCalledWith(expected, 12, "line");
+    expect(chunkMarkdownTextWithMode).toHaveBeenCalledWith(expected, 12, "line");
     expect(
       deliverCommentThreadTextMock.mock.calls.every((call) => call[1].content.length <= 12),
     ).toBe(true);
     expect(result).toMatchObject({ content: expected, visibleReplySent: true });
+  });
+
+  describe("markdown table modes", () => {
+    const tableMarkdown = "| Name | Role |\n| --- | --- |\n| Ada | Lead |";
+    let actual: typeof import("openclaw/plugin-sdk/markdown-table-runtime");
+
+    beforeEach(async () => {
+      actual = await vi.importActual<typeof import("openclaw/plugin-sdk/markdown-table-runtime")>(
+        "openclaw/plugin-sdk/markdown-table-runtime",
+      );
+      const runtime = getFeishuRuntimeMock();
+      getFeishuRuntimeMock.mockReturnValue({
+        ...runtime,
+        channel: {
+          ...runtime.channel,
+          text: {
+            ...runtime.channel.text,
+            resolveMarkdownTableMode: actual.resolveMarkdownTableMode,
+            convertMarkdownTables: actual.convertMarkdownTables,
+          },
+        },
+      });
+      // Feishu declares block as its plugin default; the harness registers the
+      // same meta because it does not load the runtime setup.
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "feishu",
+            source: "test",
+            plugin: {
+              id: "feishu",
+              meta: { id: "feishu" },
+              messaging: { defaultMarkdownTableMode: "block" },
+            },
+          },
+        ]),
+      );
+    });
+
+    afterEach(() => {
+      resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    });
+
+    it.each(["bullets", "code", undefined, "off"] as const)(
+      "converts a table before comment delivery in %s mode",
+      async (tables: MarkdownTableMode | undefined) => {
+        const expected =
+          tables === "off"
+            ? tableMarkdown
+            : actual.convertMarkdownTables(
+                tableMarkdown,
+                tables === "bullets" ? "bullets" : "code",
+              );
+        const created = createFeishuCommentReplyDispatcher({
+          cfg: (tables ? { channels: { feishu: { markdown: { tables } } } } : {}) as never,
+          agentId: "main",
+          runtime: { log: vi.fn(), error: vi.fn() } as never,
+          accountId: "main",
+          fileToken: "doc_token_1",
+          fileType: "docx",
+          commentId: "comment_1",
+          replyId: "reply_1",
+          isWholeComment: false,
+        });
+
+        await replyDispatcherOptions(created).deliver({ text: tableMarkdown }, { kind: "final" });
+
+        expect(deliverCommentThreadTextMock.mock.calls[0]?.[1]?.content).toBe(expected);
+      },
+    );
+
+    // A converted table is one fenced block, so the chunker that splits it has to
+    // close and reopen the fence instead of cutting the block in half. This covers an
+    // ordinary table at a workable limit, in both real chunk modes. A limit too small to
+    // hold a marker pair, or a marker grown long by backticks inside a cell, still falls
+    // back to a raw boundary in the core chunker and is not repaired here.
+    it.each(["length", "newline"] as const)(
+      "balances the fences of an oversized converted table in %s mode",
+      async (chunkMode) => {
+        const chunking = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-chunking")>(
+          "openclaw/plugin-sdk/reply-chunking",
+        );
+        const limit = 200;
+        const wideTable = [
+          "| Name | Role |",
+          "| --- | --- |",
+          ...Array.from(
+            { length: 14 },
+            (_value, index) => `| Member ${index} | Engineer ${index} |`,
+          ),
+        ].join("\n");
+        const runtime = getFeishuRuntimeMock();
+        getFeishuRuntimeMock.mockReturnValue({
+          ...runtime,
+          channel: {
+            ...runtime.channel,
+            text: {
+              ...runtime.channel.text,
+              resolveTextChunkLimit: vi.fn(() => limit),
+              resolveChunkMode: vi.fn(() => chunkMode),
+              chunkTextWithMode: chunking.chunkTextWithMode,
+              chunkMarkdownTextWithMode: chunking.chunkMarkdownTextWithMode,
+            },
+          },
+        });
+        const created = createTestCommentReplyDispatcher();
+
+        await replyDispatcherOptions(created).deliver({ text: wideTable }, { kind: "final" });
+
+        const contents = deliverCommentThreadTextMock.mock.calls.map(
+          (call) => call[1].content as string,
+        );
+        expect(actual.convertMarkdownTables(wideTable, "code").length).toBeGreaterThan(limit);
+        // Keeping the block whole by widening the limit would hide the split, not repair it.
+        expect(contents.length).toBeGreaterThan(1);
+        for (const content of contents) {
+          expect(content.length).toBeLessThanOrEqual(limit);
+          expect((content.match(/^`{3,}/gm)?.length ?? 0) % 2).toBe(0);
+        }
+      },
+    );
   });
 
   it("retains the accepted comment reply id and text when a later chunk fails", async () => {
@@ -417,7 +550,9 @@ describe("createFeishuCommentReplyDispatcher", () => {
         text: {
           resolveTextChunkLimit: vi.fn(() => 4),
           resolveChunkMode: vi.fn(() => "line"),
-          chunkTextWithMode: vi.fn(() => ["first", "second"]),
+          resolveMarkdownTableMode: vi.fn(() => "code"),
+          convertMarkdownTables: vi.fn((text: string) => text),
+          chunkMarkdownTextWithMode: vi.fn(() => ["first", "second"]),
         },
         reply: { resolveHumanDelayConfig: vi.fn(() => undefined) },
       },

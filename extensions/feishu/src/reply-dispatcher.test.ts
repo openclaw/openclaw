@@ -5,9 +5,17 @@ import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import {
+  createEmptyPluginRegistry,
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { afterAll, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
 
 type StreamingSessionStub = {
   active: boolean;
@@ -217,7 +225,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         text: {
           resolveTextChunkLimit: vi.fn(() => 4000),
           resolveChunkMode: vi.fn(() => "line"),
-          resolveMarkdownTableMode: vi.fn(() => "preserve"),
+          resolveMarkdownTableMode: vi.fn(() => "block"),
           convertMarkdownTables: vi.fn((text) => text),
           chunkTextWithMode: vi.fn((text) => [text]),
           chunkMarkdownTextWithMode: vi.fn((text) => [text]),
@@ -278,6 +286,60 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
     expect(sendMessageFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text: expected }));
+  });
+
+  it("resolves the markdown table mode for the named account on post replies", async () => {
+    const { convertMarkdownTables, resolveMarkdownTableMode } = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/markdown-table-runtime")
+    >("openclaw/plugin-sdk/markdown-table-runtime");
+    const runtime = getFeishuRuntimeMock();
+    getFeishuRuntimeMock.mockReturnValue({
+      ...runtime,
+      channel: {
+        ...runtime.channel,
+        text: {
+          ...runtime.channel.text,
+          resolveMarkdownTableMode,
+          convertMarkdownTables,
+        },
+      },
+    });
+    resolveFeishuAccountMock.mockReturnValue({
+      ...createReplyAccount("auto", "off", "feishu"),
+      config: { renderMode: "raw", streaming: { mode: "off" } },
+    });
+    const tableMarkdown = "| Name | Role |\n| --- | --- |\n| Ada | Lead |";
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          markdown: { tables: "bullets" },
+          accounts: { work: { markdown: { tables: "off" } } },
+        },
+      },
+    };
+
+    // The shared resolver reads config only for a registered channel id, and this
+    // harness does not load the runtime setup, so register a minimal feishu plugin.
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "feishu", source: "test", plugin: { id: "feishu", meta: { id: "feishu" } } },
+      ]),
+    );
+    try {
+      for (const accountId of ["work", undefined]) {
+        const { result } = createDispatcherHarness({ accountId, cfg });
+        const dispatcher = createReplyDispatcher(toTypingDispatcherOptions(result));
+        dispatcher.sendFinalReply({ text: tableMarkdown });
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+      }
+    } finally {
+      resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    }
+
+    expect(sendMessageFeishuMock.mock.calls[0]?.[0]?.text).toBe(tableMarkdown);
+    expect(sendMessageFeishuMock.mock.calls[1]?.[0]?.text).toBe("**Ada**  \n• Role: Lead");
   });
 
   it("keeps card attribution on the selected-model prefix context", async () => {
@@ -4447,6 +4509,1099 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       await options.deliver({ text }, { kind: "final" });
 
       expect(sendMessageFeishuMock).toHaveBeenCalled();
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("markdown table modes", () => {
+    const tableMarkdown = "| Name | Role |\n| --- | --- |\n| Ada | Lead |";
+    // GFM makes the outer pipes optional, and a fence hides rows that only look like a table.
+    const pipelessTableMarkdown = "Name | Role\n--- | ---\nAda | Lead";
+    const nativeTableShapes = [
+      { shape: "pipeless", text: pipelessTableMarkdown },
+      { shape: "leading-pipe-only", text: "| Name | Role\n| --- | ---\n| Ada | Lead" },
+      { shape: "trailing-pipe-only", text: "Name | Role |\n--- | --- |\nAda | Lead |" },
+      { shape: "blockquote", text: "> Name | Role\n> --- | ---\n> Ada | Lead" },
+      { shape: "list-item", text: "- Name | Role\n  --- | ---\n  Ada | Lead" },
+      { shape: "CRLF pipeless", text: pipelessTableMarkdown.replaceAll("\n", "\r\n") },
+      { shape: "aligned-delimiter", text: "Name | Role\n:--- | ---:\nAda | Lead" },
+    ] as const;
+    const nonTableShapes = [
+      { shape: "header wider than delimiter", text: "| Name | Role |\n| --- |\n| Ada | Lead |" },
+      { shape: "delimiter wider than header", text: "| Name |\n| --- | --- |\n| Ada | Lead |" },
+      { shape: "dashless delimiter", text: "| Name | Role |\n| : | : |\n| Ada | Lead |" },
+      {
+        shape: "blank line before delimiter",
+        text: "| Name | Role |\n\n| --- | --- |\n| Ada | Lead |",
+      },
+    ] as const;
+    const fencedTableSample = "```\n| Name | Role |\n| --- | --- |\n| Ada | Lead |\n```";
+    const bulletsCard = "**Ada**\n• Role: Lead";
+    const bulletsPost = "**Ada**  \n• Role: Lead";
+    let codeText = "";
+
+    beforeEach(async () => {
+      sendMessageFeishuMock.mockReset();
+      const actual = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/markdown-table-runtime")
+      >("openclaw/plugin-sdk/markdown-table-runtime");
+      codeText = actual.convertMarkdownTables(tableMarkdown, "code");
+      const runtime = getFeishuRuntimeMock();
+      getFeishuRuntimeMock.mockReturnValue({
+        ...runtime,
+        channel: {
+          ...runtime.channel,
+          text: {
+            ...runtime.channel.text,
+            resolveMarkdownTableMode: actual.resolveMarkdownTableMode,
+            convertMarkdownTables: actual.convertMarkdownTables,
+          },
+        },
+      });
+      // Feishu declares block as its plugin default; the harness registers the
+      // same meta because it does not load the runtime setup.
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "feishu",
+            source: "test",
+            plugin: {
+              id: "feishu",
+              meta: { id: "feishu" },
+              messaging: { defaultMarkdownTableMode: "block" },
+            },
+          },
+        ]),
+      );
+    });
+
+    afterEach(() => {
+      resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(createEmptyPluginRegistry());
+    });
+
+    function tableCfg(tables?: MarkdownTableMode): ClawdbotConfig {
+      return tables ? { channels: { feishu: { markdown: { tables } } } } : {};
+    }
+
+    function createBlockTableHarness(
+      cfg: ClawdbotConfig = tableCfg("off"),
+      allowReasoningPreview = false,
+    ) {
+      resolveFeishuAccountMock.mockReturnValue({
+        accountId: "main",
+        appId: "app_id",
+        appSecret: "app_secret",
+        domain: "feishu",
+        config: {
+          renderMode: "auto",
+          streaming: { mode: "partial", block: { enabled: true } },
+        },
+      });
+      return createDispatcherHarness({ accountId: "main", cfg, allowReasoningPreview });
+    }
+
+    it.each([
+      { waiter: "idle", phase: "with reasoning for idle", pending: false },
+      { waiter: "idle", phase: "with reasoning for idle", pending: true },
+      // Final-first compatibility controls reach the lookup after close clears reasoning.
+      { waiter: "final", phase: "after final clears reasoning", pending: false },
+      { waiter: "final", phase: "after final clears reasoning", pending: true },
+    ])("reuses the off answer receipt $phase and pending=$pending", async ({ waiter, pending }) => {
+      const { result, options } = createBlockTableHarness(tableCfg("off"), true);
+      let acceptPost!: (value: { messageId: string }) => void;
+      sendMessageFeishuMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          acceptPost = resolve;
+        }),
+      );
+      result.replyOptions.onReasoningStream?.({ text: "Check the team roster." });
+      result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+      const block = options.deliver({ text: tableMarkdown }, { kind: "block" });
+      await vi.waitFor(() => expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1));
+      if (!pending) {
+        acceptPost({ messageId: "om-reasoned-answer" });
+        await block;
+      }
+      const idle = waiter === "idle" ? Promise.resolve(options.onIdle?.()) : undefined;
+      const final =
+        waiter === "final"
+          ? options.deliver({ text: tableMarkdown }, { kind: "final" })
+          : undefined;
+      await vi.waitFor(() => expect(requireStreamingInstance(0).discard).toHaveBeenCalledTimes(1));
+      if (pending) {
+        acceptPost({ messageId: "om-reasoned-answer" });
+      }
+      const acceptedBlock = await block;
+      await idle;
+      const acceptedFinal = final
+        ? await final
+        : await options.deliver({ text: tableMarkdown }, { kind: "final" });
+      await options.onIdle?.();
+
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+      expect(sendMessageFeishuMock.mock.calls[0]?.[0]?.text).toBe(tableMarkdown);
+      expect(acceptedFinal).toMatchObject({
+        messageIds: ["om-reasoned-answer"],
+        visibleReplySent: true,
+      });
+      expect(acceptedFinal?.receipt?.parts).toEqual(acceptedBlock?.receipt?.parts);
+      expect(requireStreamingInstance(0).closeWithResult).not.toHaveBeenCalled();
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    // With no accepted block to reuse, the close still delivers reasoning and answer.
+    it("preserves reasoning when idle alone posts an off answer", async () => {
+      const { result, options } = createBlockTableHarness(tableCfg("off"), true);
+      result.replyOptions.onReasoningStream?.({ text: "Check the team roster." });
+      result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+      await options.onIdle?.();
+
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+      expect(sendMessageFeishuMock.mock.calls[0]?.[0]?.text).toContain("> Check the team roster.");
+      expect(sendMessageFeishuMock.mock.calls[0]?.[0]?.text).toContain(tableMarkdown);
+      expect(requireStreamingInstance(0).closeWithResult).not.toHaveBeenCalled();
+    });
+
+    it("reuses the posted block receipt when idle closes its matching off preview", async () => {
+      const { result, options } = createBlockTableHarness();
+      sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om-block-post" });
+      result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+      const block = await options.deliver({ text: tableMarkdown }, { kind: "block" });
+      await options.onIdle?.();
+
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+      expect(requireStreamingInstance(0).discard).toHaveBeenCalledTimes(1);
+      expect(requireStreamingInstance(0).closeWithResult).not.toHaveBeenCalled();
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+      const final = await options.deliver({ text: tableMarkdown }, { kind: "final" });
+      expect(final).toMatchObject({
+        messageIds: ["om-block-post"],
+        visibleReplySent: true,
+      });
+      expect(final?.receipt?.parts).toEqual(block?.receipt?.parts);
+      expect(final?.receipt?.platformMessageIds).toEqual(["om-block-post"]);
+      expect(final?.receipt?.sentAt).toBe(block?.receipt?.sentAt);
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("reuses the block post when its matching off final arrives before idle", async () => {
+      const { result, options } = createBlockTableHarness();
+      sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om-block-before-final" });
+      result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+      await options.deliver({ text: tableMarkdown }, { kind: "block" });
+      const final = await options.deliver({ text: tableMarkdown }, { kind: "final" });
+      await options.onIdle?.();
+
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+      expect(final).toMatchObject({
+        messageIds: ["om-block-before-final"],
+        visibleReplySent: true,
+      });
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("waits for the matching block post before settling an idle close and final", async () => {
+      const { result, options } = createBlockTableHarness();
+      let acceptPost!: (value: { messageId: string }) => void;
+      sendMessageFeishuMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          acceptPost = resolve;
+        }),
+      );
+      result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+      const block = options.deliver({ text: tableMarkdown }, { kind: "block" });
+      await vi.waitFor(() => expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1));
+      const idle = Promise.resolve(options.onIdle?.());
+      await vi.waitFor(() => expect(requireStreamingInstance(0).discard).toHaveBeenCalledTimes(1));
+      const final = await options.deliver({ text: tableMarkdown }, { kind: "final" });
+      acceptPost({ messageId: "om-pending-block" });
+      await block;
+      await idle;
+      const settled = (await final?.finalization) ?? final;
+
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+      expect(settled).toMatchObject({
+        messageIds: ["om-pending-block"],
+        visibleReplySent: true,
+      });
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+      expect(requireStreamingInstance(0).closeWithResult).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { waiter: "final", pending: false, receipt: true },
+      { waiter: "idle", pending: false, receipt: true },
+      { waiter: "final", pending: true, receipt: true },
+      { waiter: "idle", pending: true, receipt: true },
+      { waiter: "final", pending: true, receipt: false },
+      { waiter: "idle", pending: true, receipt: false },
+    ])(
+      "retains accepted off block chunks for $waiter with pending=$pending and receipt=$receipt",
+      async ({ waiter, pending, receipt }) => {
+        const { chunkMarkdownTextWithMode } = await vi.importActual<
+          typeof import("openclaw/plugin-sdk/reply-chunking")
+        >("openclaw/plugin-sdk/reply-chunking");
+        getFeishuRuntimeMock().channel.text.chunkMarkdownTextWithMode.mockImplementation(
+          chunkMarkdownTextWithMode,
+        );
+        getFeishuRuntimeMock().channel.text.resolveTextChunkLimit.mockReturnValue(200);
+        const { result, options } = createBlockTableHarness();
+        const text = `${tableMarkdown}\n${"| Grace | Engineer |\n".repeat(30)}`.trim();
+        let rejectChunk!: (error: Error) => void;
+        sendMessageFeishuMock
+          .mockResolvedValueOnce(receipt ? { messageId: "om-accepted-prefix" } : {})
+          .mockReturnValueOnce(
+            new Promise((_, reject) => {
+              rejectChunk = reject;
+            }),
+          )
+          .mockResolvedValue({ messageId: "om-unwanted-retry" });
+        result.replyOptions.onPartialReply?.({ text });
+        await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+        const block = options.deliver({ text }, { kind: "block" }).catch((error: unknown) => error);
+        await vi.waitFor(() => expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2));
+        if (!pending) {
+          rejectChunk(new Error("later chunk rejected"));
+          await block;
+        }
+        const idle =
+          waiter === "idle"
+            ? Promise.resolve(options.onIdle?.()).catch((error: unknown) => error)
+            : undefined;
+        const final =
+          waiter === "final"
+            ? options.deliver({ text }, { kind: "final" }).catch((error: unknown) => error)
+            : undefined;
+        await vi.waitFor(() =>
+          expect(requireStreamingInstance(0).discard).toHaveBeenCalledTimes(1),
+        );
+        if (pending) {
+          rejectChunk(new Error("later chunk rejected"));
+        }
+        const blockError: unknown = await block;
+        expect(isChannelPartialDeliveryError(blockError)).toBe(true);
+        if (!isChannelPartialDeliveryError(blockError)) {
+          throw new Error("expected partial block acceptance");
+        }
+        const prefix = sendMessageFeishuMock.mock.calls[0]?.[0]?.text;
+        expect(prefix).toBeTruthy();
+        expect(prefix).not.toBe(text);
+        expect(blockError.deliveryResult).toMatchObject({
+          ...(receipt ? { messageIds: ["om-accepted-prefix"] } : {}),
+          visibleReplySent: true,
+          content: prefix,
+        });
+
+        if (waiter === "idle") {
+          expect(await idle).toBeInstanceOf(Error);
+        }
+        const finalError: unknown = final
+          ? await final
+          : await options.deliver({ text }, { kind: "final" }).catch((error: unknown) => error);
+        expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+        expect(isChannelPartialDeliveryError(finalError)).toBe(true);
+        if (!isChannelPartialDeliveryError(finalError)) {
+          throw new Error("expected retained partial acceptance");
+        }
+        expect(finalError.deliveryResult).toMatchObject({
+          ...(receipt ? { messageIds: ["om-accepted-prefix"] } : {}),
+          visibleReplySent: true,
+          content: prefix,
+        });
+        expect(finalError.deliveryResult.receipt?.parts).toEqual(
+          blockError.deliveryResult.receipt?.parts,
+        );
+        await Promise.resolve(options.onIdle?.()).catch(() => undefined);
+        expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+        expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+        expect(requireStreamingInstance(0).closeWithResult).not.toHaveBeenCalled();
+      },
+    );
+
+    it("preserves a single accepted off block without message_id for its matching final", async () => {
+      const { sendMessageFeishu } = await vi.importActual<typeof import("./send.js")>("./send.js");
+      const { result, options } = createBlockTableHarness();
+      resolveFeishuAccountMock.mockReturnValue({
+        ...createReplyAccount("auto", "partial", "feishu"),
+        configured: true,
+      });
+      const createMessage = vi
+        .fn()
+        .mockResolvedValueOnce({ code: 0, data: {} })
+        .mockResolvedValue({ code: 0, data: { message_id: "om-unwanted-retry" } });
+      createFeishuClientMock.mockReturnValue({ im: { message: { create: createMessage } } });
+      sendMessageFeishuMock.mockImplementation(sendMessageFeishu);
+      result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+      const blockError: unknown = await options
+        .deliver({ text: tableMarkdown }, { kind: "block" })
+        .catch((error: unknown) => error);
+      expect(isChannelPartialDeliveryError(blockError)).toBe(true);
+      expect(blockError).toMatchObject({
+        message: expect.stringContaining("Feishu send failed: no message_id returned"),
+        deliveryResult: { visibleReplySent: true, content: tableMarkdown },
+      });
+      if (!isChannelPartialDeliveryError(blockError)) {
+        throw new Error("expected acceptance without a message identifier");
+      }
+      expect(blockError.deliveryResult.messageIds ?? []).toEqual([]);
+      expect(createMessage).toHaveBeenCalledTimes(1);
+      expect(createMessage).toHaveBeenCalledWith({
+        params: { receive_id_type: "chat_id" },
+        data: {
+          receive_id: "oc_chat",
+          msg_type: "post",
+          content: buildFeishuPostMessageContent({ messageText: tableMarkdown }),
+        },
+      });
+
+      const finalError: unknown = await options
+        .deliver({ text: tableMarkdown }, { kind: "final" })
+        .catch((error: unknown) => error);
+      expect({
+        attempts: createMessage.mock.calls.length,
+        partialFailure: isChannelPartialDeliveryError(finalError),
+      }).toEqual({ attempts: 1, partialFailure: true });
+      expect(finalError).toMatchObject({
+        message: expect.stringContaining("Feishu send failed: no message_id returned"),
+        deliveryResult: { visibleReplySent: true, content: tableMarkdown },
+      });
+      if (!isChannelPartialDeliveryError(finalError)) {
+        throw new Error("expected the matching final to retain the failed outcome");
+      }
+      expect(finalError.deliveryResult.messageIds ?? []).toEqual([]);
+      await Promise.resolve(options.onIdle?.()).catch(() => undefined);
+      await expect(result.ensureNoVisibleReplyFallback("accepted-no-id-block")).resolves.toBe(
+        false,
+      );
+      expect(createMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+      expect(requireStreamingInstance(0).closeWithResult).not.toHaveBeenCalled();
+    });
+
+    it("retries a rejected in-flight block when idle is the only remaining delivery", async () => {
+      const { result, options } = createBlockTableHarness();
+      let rejectPost!: (error: Error) => void;
+      sendMessageFeishuMock
+        .mockReturnValueOnce(
+          new Promise((_, reject) => {
+            rejectPost = reject;
+          }),
+        )
+        .mockResolvedValue({ messageId: "om-idle-retry" });
+      result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+      const block = options
+        .deliver({ text: tableMarkdown }, { kind: "block" })
+        .catch((error: unknown) => error);
+      await vi.waitFor(() => expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1));
+      const idle = Promise.resolve(options.onIdle?.()).catch((error: unknown) => error);
+      await vi.waitFor(() => expect(requireStreamingInstance(0).discard).toHaveBeenCalledTimes(1));
+      rejectPost(new Error("pending block unavailable"));
+
+      expect(await block).toBeInstanceOf(Error);
+      expect(await idle).toBeUndefined();
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+      expect(requireStreamingInstance(0).closeWithResult).not.toHaveBeenCalled();
+      const final = await options.deliver({ text: tableMarkdown }, { kind: "final" });
+      expect(final).toMatchObject({ messageIds: ["om-idle-retry"], visibleReplySent: true });
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("retries a rejected in-flight block for its matching final before idle", async () => {
+      const { result, options } = createBlockTableHarness();
+      let rejectPost!: (error: Error) => void;
+      sendMessageFeishuMock
+        .mockReturnValueOnce(
+          new Promise((_, reject) => {
+            rejectPost = reject;
+          }),
+        )
+        .mockResolvedValue({ messageId: "om-final-retry" });
+      result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+      const block = options
+        .deliver({ text: tableMarkdown }, { kind: "block" })
+        .catch((error: unknown) => error);
+      await vi.waitFor(() => expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1));
+      const final = options
+        .deliver({ text: tableMarkdown }, { kind: "final" })
+        .catch((error: unknown) => error);
+      await vi.waitFor(() => expect(requireStreamingInstance(0).discard).toHaveBeenCalledTimes(1));
+      rejectPost(new Error("pending block unavailable"));
+
+      expect(await block).toBeInstanceOf(Error);
+      expect(await final).toMatchObject({ messageIds: ["om-final-retry"], visibleReplySent: true });
+      await options.onIdle?.();
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+      expect(requireStreamingInstance(0).closeWithResult).not.toHaveBeenCalled();
+    });
+
+    it("still posts an unmatched table preview after a different block post", async () => {
+      const { result, options } = createBlockTableHarness();
+      result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+      const otherTable = tableMarkdown.replace("Ada", "Grace");
+      await options.deliver({ text: otherTable }, { kind: "block" });
+      await options.onIdle?.();
+
+      expect(sendMessageFeishuMock.mock.calls.map(([params]) => params.text)).toEqual([
+        otherTable,
+        tableMarkdown,
+      ]);
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("retains an accepted block receipt when a later matching block post fails", async () => {
+      const { result, options } = createBlockTableHarness();
+      sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om-accepted-block" });
+      result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+      await options.deliver({ text: tableMarkdown }, { kind: "block" });
+
+      sendMessageFeishuMock.mockRejectedValueOnce(new Error("later block unavailable"));
+      await expect(options.deliver({ text: tableMarkdown }, { kind: "block" })).rejects.toThrow(
+        "later block unavailable",
+      );
+      await options.onIdle?.();
+
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+      const final = await options.deliver({ text: tableMarkdown }, { kind: "final" });
+      expect(final).toMatchObject({
+        messageIds: ["om-accepted-block"],
+        visibleReplySent: true,
+      });
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("does not count a rejected block post as delivered when idle closes", async () => {
+      const { result, options } = createBlockTableHarness();
+      sendMessageFeishuMock.mockRejectedValueOnce(new Error("block post unavailable"));
+      result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+      await expect(options.deliver({ text: tableMarkdown }, { kind: "block" })).rejects.toThrow(
+        "block post unavailable",
+      );
+      await options.onIdle?.();
+
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+      expect(sendMessageFeishuMock.mock.calls[1]?.[0]?.text).toBe(tableMarkdown);
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    async function deliverFinal(
+      tables: MarkdownTableMode | undefined,
+      streaming: "off" | "partial",
+      text = tableMarkdown,
+    ) {
+      resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", streaming, "feishu"));
+      const { options } = createDispatcherHarness({ accountId: "main", cfg: tableCfg(tables) });
+      const delivery = await options.deliver({ text }, { kind: "final" });
+      await options.onIdle?.();
+      await delivery?.finalization;
+    }
+
+    it.each([
+      { shape: "piped", text: tableMarkdown },
+      { shape: "pipeless", text: pipelessTableMarkdown },
+    ])("recovers a failed idle post as a post for an off $shape table", async ({ text }) => {
+      resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", "partial", "feishu"));
+      const { result, options } = createDispatcherHarness({
+        accountId: "main",
+        cfg: tableCfg("off"),
+      });
+      result.replyOptions.onPartialReply?.({ text });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+      const instance = requireStreamingInstance(0);
+      let release!: (closed: StreamingCloseResult) => void;
+      instance.discard.mockReturnValueOnce(
+        new Promise<StreamingCloseResult>((resolve) => {
+          release = resolve;
+        }),
+      );
+      sendMessageFeishuMock
+        .mockRejectedValueOnce(new Error("post unavailable"))
+        .mockResolvedValue({ messageId: "om-recovery-post" });
+      const idle = Promise.resolve(options.onIdle?.()).catch((error: unknown) => error);
+      await vi.waitFor(() => expect(instance.discard).toHaveBeenCalledTimes(1));
+      instance.active = false;
+      const delivery = await options.deliver({ text }, { kind: "final" });
+      const finalization = delivery?.finalization;
+      release({ visibleReplySent: false, content: "" });
+
+      expect(await idle).toBeInstanceOf(Error);
+      const accepted = await finalization;
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+      expect(instance.closeWithResult).not.toHaveBeenCalled();
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+      expect(sendMessageFeishuMock.mock.calls[1]?.[0]?.text).toContain("Ada");
+      expect(accepted).toMatchObject({
+        messageIds: ["om-recovery-post"],
+        visibleReplySent: true,
+      });
+    });
+
+    it("off keeps the raw table on the post path", async () => {
+      await deliverFinal("off", "off");
+
+      expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({ text: tableMarkdown }),
+      );
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("bullets converts on the post path", async () => {
+      await deliverFinal("bullets", "off");
+
+      expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({ text: bulletsPost }),
+      );
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("code rides a static card as a fenced block", async () => {
+      await deliverFinal("code", "off");
+
+      expect(codeText.startsWith("```")).toBe(true);
+      expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({ text: codeText }),
+      );
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it.each(
+      nativeTableShapes.flatMap(({ shape, text }) =>
+        (["block", undefined] as const).map((tables) => ({ shape, text, tables })),
+      ),
+    )("$tables promotes a $shape native table to a static card", async ({ tables, text }) => {
+      await deliverFinal(tables, "off", text);
+
+      expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text }));
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it.each(
+      nonTableShapes.flatMap(({ shape, text }) =>
+        (["block", undefined] as const).map((tables) => ({ shape, text, tables })),
+      ),
+    )("$tables posts literal rows with $shape", async ({ tables, text }) => {
+      await deliverFinal(tables, "off", text);
+
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+      // Posts encode soft line breaks, but retain the literal non-table prose.
+      expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({ text: text.replace(/(?<!\n)\n(?!\n)/g, "  \n") }),
+      );
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it.each(["block", undefined] as const)(
+      "%s opens a preview for a pipeless block without core block streaming",
+      async (tables) => {
+        resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", "partial", "feishu"));
+        const { options } = createDispatcherHarness({ cfg: tableCfg(tables), accountId: "main" });
+
+        await options.deliver({ text: pipelessTableMarkdown }, { kind: "block" });
+
+        expect(streamingInstances).toHaveLength(1);
+        expect(requireStreamingInstance(0).start).toHaveBeenCalledTimes(1);
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+        await options.onIdle?.();
+        expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledWith(
+          pipelessTableMarkdown,
+          expect.any(Object),
+        );
+        expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["block", undefined] as const)(
+      "%s keeps the native table on a static card",
+      async (tables) => {
+        await deliverFinal(tables, "off");
+
+        expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+          expect.objectContaining({ text: tableMarkdown }),
+        );
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it("commits converted text through the streaming card", async () => {
+      await deliverFinal("bullets", "partial");
+
+      expect(requireStreamingInstance(0).closeWithResult.mock.calls[0]?.[0]).toBe(bulletsCard);
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("commits the raw table through the streaming card in block mode", async () => {
+      await deliverFinal("block", "partial");
+
+      expect(requireStreamingInstance(0).closeWithResult.mock.calls[0]?.[0]).toBe(tableMarkdown);
+    });
+
+    function quoteReasoning(text: string): string {
+      return `> \u{1f4ad} **Thinking**\n${text
+        .split("\n")
+        .map((line) => `> ${line}`)
+        .join("\n")}`;
+    }
+
+    // Streamed reasoning shares the card with the answer, so one card must not
+    // show a native table beside a converted one.
+    it("commits a converted reasoning table through the streaming card", async () => {
+      const { result, options } = createBlockTableHarness(tableCfg("code"), true);
+      result.replyOptions.onReasoningStream?.({ text: tableMarkdown });
+      result.replyOptions.onPartialReply?.({ text: "Roster ready." });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+      await options.onIdle?.();
+
+      const committed = requireStreamingInstance(0).closeWithResult.mock.calls[0]?.[0];
+      expect(committed).toContain(quoteReasoning(codeText));
+      expect(committed).not.toContain(quoteReasoning(tableMarkdown));
+      // The italic line wrapper runs after conversion and would wrap the fence
+      // markers too, but formatReasoningPrefix strips those markers again, so the
+      // fence reaches the card whole rather than as literal underscored text.
+      expect(committed).not.toContain("_```_");
+    });
+
+    it("commits a bullets reasoning table through the streaming card", async () => {
+      const { result, options } = createBlockTableHarness(tableCfg("bullets"), true);
+      result.replyOptions.onReasoningStream?.({ text: tableMarkdown });
+      result.replyOptions.onPartialReply?.({ text: "Roster ready." });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+      await options.onIdle?.();
+
+      const committed = requireStreamingInstance(0).closeWithResult.mock.calls[0]?.[0];
+      expect(committed).toContain(quoteReasoning(bulletsCard));
+      expect(committed).not.toContain(quoteReasoning(tableMarkdown));
+    });
+
+    // off has no card representation at all, so a reasoning-only table still diverts
+    // the whole close to a post rather than being converted.
+    it("posts an off close whose only table is in streamed reasoning", async () => {
+      const { result, options } = createBlockTableHarness(tableCfg("off"), true);
+      result.replyOptions.onReasoningStream?.({ text: tableMarkdown });
+      result.replyOptions.onPartialReply?.({ text: "Roster ready." });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+      await options.onIdle?.();
+
+      expect(requireStreamingInstance(0).discard).toHaveBeenCalledTimes(1);
+      expect(requireStreamingInstance(0).closeWithResult).not.toHaveBeenCalled();
+      expect(sendMessageFeishuMock.mock.calls[0]?.[0]?.text).toContain(
+        quoteReasoning(tableMarkdown),
+      );
+    });
+
+    // block keeps native tables, and the reasoning half must not diverge from it.
+    it("keeps a native reasoning table on the streaming card in block mode", async () => {
+      const { result, options } = createBlockTableHarness(tableCfg("block"), true);
+      result.replyOptions.onReasoningStream?.({ text: tableMarkdown });
+      result.replyOptions.onPartialReply?.({ text: "Roster ready." });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+      await options.onIdle?.();
+
+      const committed = requireStreamingInstance(0).closeWithResult.mock.calls[0]?.[0];
+      expect(committed).toContain(quoteReasoning(tableMarkdown));
+    });
+
+    it("routes an off final with a table to the post path instead of a streaming card", async () => {
+      await deliverFinal("off", "partial");
+
+      expect(streamingInstances).toHaveLength(0);
+      expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({ text: tableMarkdown }),
+      );
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("routes an off final with a pipeless GFM table to the post path", async () => {
+      await deliverFinal("off", "partial", pipelessTableMarkdown);
+
+      expect(streamingInstances).toHaveLength(0);
+      expect(sendMessageFeishuMock).toHaveBeenCalled();
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { shape: "piped", text: tableMarkdown },
+      { shape: "pipeless", text: pipelessTableMarkdown },
+    ])("posts an off block carrying a $shape table under block streaming", async ({ text }) => {
+      resolveFeishuAccountMock.mockReturnValue({
+        accountId: "main",
+        appId: "app_id",
+        appSecret: "app_secret",
+        domain: "feishu",
+        config: {
+          renderMode: "auto",
+          streaming: { mode: "partial", block: { enabled: true } },
+        },
+      });
+      const { options } = createDispatcherHarness({ accountId: "main", cfg: tableCfg("off") });
+
+      await options.deliver({ text }, { kind: "block" });
+      await options.onIdle?.();
+
+      expect(streamingInstances).toHaveLength(0);
+      expect(sendMessageFeishuMock).toHaveBeenCalled();
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps an off block without a table on the streaming card", async () => {
+      resolveFeishuAccountMock.mockReturnValue({
+        accountId: "main",
+        appId: "app_id",
+        appSecret: "app_secret",
+        domain: "feishu",
+        config: {
+          renderMode: "auto",
+          streaming: { mode: "partial", block: { enabled: true } },
+        },
+      });
+      const { options } = createDispatcherHarness({ accountId: "main", cfg: tableCfg("off") });
+
+      await options.deliver({ text: "plain block" }, { kind: "block" });
+      await options.onIdle?.();
+
+      expect(requireStreamingInstance(0).closeWithResult.mock.calls[0]?.[0]).toBe("plain block");
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps an off final whose only table is inside a fence on the card path", async () => {
+      await deliverFinal("off", "off", fencedTableSample);
+
+      expect(sendStructuredCardFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({ text: fencedTableSample }),
+      );
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it("discards an open preview when an off final carries a table", async () => {
+      resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", "partial", "feishu"));
+      const { result, options } = createDispatcherHarness({
+        accountId: "main",
+        cfg: tableCfg("off"),
+      });
+      result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+      await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+      const delivery = await options.deliver({ text: tableMarkdown }, { kind: "final" });
+      await options.onIdle?.();
+      await delivery?.finalization;
+
+      const instance = requireStreamingInstance(0);
+      expect(instance.discard).toHaveBeenCalledTimes(1);
+      expect(instance.closeWithResult).not.toHaveBeenCalled();
+      expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({ text: tableMarkdown }),
+      );
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { shape: "piped", text: tableMarkdown },
+      { shape: "pipeless", text: pipelessTableMarkdown },
+    ])(
+      "posts an idle-closed $shape table preview and assigns it to the matching final in off mode",
+      async ({ text }) => {
+        resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", "partial", "feishu"));
+        const { result, options } = createDispatcherHarness({
+          accountId: "main",
+          cfg: tableCfg("off"),
+        });
+        result.replyOptions.onPartialReply?.({ text });
+        await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+        const instance = requireStreamingInstance(0);
+        let resolveDiscard!: (closed: StreamingCloseResult) => void;
+        const discardPromise = new Promise<StreamingCloseResult>((resolve) => {
+          resolveDiscard = resolve;
+        });
+        let resolveClose!: (closed: StreamingCloseResult) => void;
+        const closePromise = new Promise<StreamingCloseResult>((resolve) => {
+          resolveClose = resolve;
+        });
+        instance.discard.mockReturnValueOnce(discardPromise);
+        instance.closeWithResult.mockReturnValueOnce(closePromise);
+        sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om-table-post" });
+        const idle = Promise.resolve(options.onIdle?.());
+        // Hold whichever way the close leaves the card so the final races it.
+        await vi.waitFor(() =>
+          expect(
+            instance.discard.mock.calls.length + instance.closeWithResult.mock.calls.length,
+          ).toBe(1),
+        );
+        instance.active = false;
+
+        const delivery = await options.deliver({ text }, { kind: "final" });
+        resolveDiscard({ visibleReplySent: false, content: "" });
+        resolveClose({ visibleReplySent: true, content: text, messageId: "om-table-card" });
+        await idle;
+
+        expect(instance.closeWithResult).not.toHaveBeenCalled();
+        expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+        expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+        expect(sendMessageFeishuMock.mock.calls[0]?.[0]?.text).toContain("Ada");
+        await expect(delivery?.finalization).resolves.toMatchObject({
+          messageIds: ["om-table-post"],
+          visibleReplySent: true,
+        });
+      },
+    );
+
+    it.each(["bullets", "code"] as const)(
+      "assigns an idle-closed table preview to its matching final in %s mode",
+      async (tables) => {
+        resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", "partial", "feishu"));
+        const { result, options } = createDispatcherHarness({
+          accountId: "main",
+          cfg: tableCfg(tables),
+        });
+        result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+        await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+        const instance = requireStreamingInstance(0);
+        let resolveClose!: (closed: StreamingCloseResult) => void;
+        const closePromise = new Promise<StreamingCloseResult>((resolve) => {
+          resolveClose = resolve;
+        });
+        instance.closeWithResult.mockReturnValueOnce(closePromise);
+        const idle = Promise.resolve(options.onIdle?.());
+        await vi.waitFor(() => expect(instance.closeWithResult).toHaveBeenCalledTimes(1));
+        instance.active = false;
+        const committed = String(instance.closeWithResult.mock.calls[0]?.[0]);
+
+        const delivery = await options.deliver({ text: tableMarkdown }, { kind: "final" });
+        resolveClose({ visibleReplySent: true, content: committed, messageId: "om-table" });
+        await idle;
+
+        expect(committed).not.toBe(tableMarkdown);
+        await expect(delivery?.finalization).resolves.toMatchObject({
+          messageIds: ["om-table"],
+          visibleReplySent: true,
+        });
+        expect(streamingInstances).toHaveLength(1);
+        expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      },
+    );
+
+    const convertingModes = [
+      { tables: "bullets" as const, converted: () => bulletsCard },
+      { tables: "code" as const, converted: () => codeText },
+    ];
+
+    it.each(convertingModes)(
+      "keeps one $tables table when a cumulative partial follows a block",
+      async ({ tables, converted }) => {
+        const { result, options } = createBlockTableHarness(tableCfg(tables));
+        const delivery = await options.deliver({ text: tableMarkdown }, { kind: "block" });
+
+        result.replyOptions.onPartialReply?.({
+          text: `${tableMarkdown}\n\nInventory complete.`,
+        });
+        await options.onIdle?.();
+        await delivery?.finalization;
+
+        expect(firstStreamingCloseText()).toBe(`${converted()}\n\nInventory complete.`);
+        expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledTimes(1);
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+        // Changing the answer representation must not erase reasoning formatting.
+        for (const kind of ["block", "final"] as const) {
+          const { options: reasoningOptions } = createBlockTableHarness(tableCfg(tables));
+          await reasoningOptions.deliver({ text: tableMarkdown, isReasoning: true }, { kind });
+          await reasoningOptions.onIdle?.();
+          const instance = requireStreamingInstance(kind === "block" ? 1 : 2);
+          const expected =
+            "Thinking\n\n" +
+            converted()
+              .split("\n")
+              .map((line) => (line ? `_${line}_` : line))
+              .join("\n");
+          expect(instance.closeWithResult).toHaveBeenCalledWith(expected, expect.anything());
+        }
+      },
+    );
+
+    it.each(convertingModes)(
+      "commits one table when a $tables block repeats its streamed preview",
+      async ({ tables, converted }) => {
+        const { result, options } = createBlockTableHarness(tableCfg(tables));
+        result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+        await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+        await options.deliver({ text: tableMarkdown }, { kind: "block" });
+        await options.onIdle?.();
+
+        expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledTimes(1);
+        expect(firstStreamingCloseText()).toBe(converted());
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+        expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(convertingModes)(
+      "still mirrors $tables block text the preview never streamed",
+      async ({ tables, converted }) => {
+        const { result, options } = createBlockTableHarness(tableCfg(tables));
+        result.replyOptions.onPartialReply?.({ text: "Intro line." });
+        await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+        await options.deliver({ text: `\n\n${tableMarkdown}` }, { kind: "block" });
+        await options.onIdle?.();
+
+        expect(firstStreamingCloseText()).toBe(`Intro line.\n\n${converted()}`);
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(convertingModes)(
+      "mirrors a $tables block that arrives without any preview",
+      async ({ tables, converted }) => {
+        const { options } = createBlockTableHarness(tableCfg(tables));
+
+        await options.deliver({ text: tableMarkdown }, { kind: "block" });
+        await options.onIdle?.();
+
+        expect(firstStreamingCloseText()).toBe(converted());
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["block", undefined] as const)(
+      "keeps one native table when a %s block repeats its streamed preview",
+      async (tables) => {
+        const { result, options } = createBlockTableHarness(tableCfg(tables));
+        result.replyOptions.onPartialReply?.({ text: tableMarkdown });
+        await vi.waitFor(() => expect(streamingInstances).toHaveLength(1));
+
+        await options.deliver({ text: tableMarkdown }, { kind: "block" });
+        await options.onIdle?.();
+
+        expect(requireStreamingInstance(0).closeWithResult).toHaveBeenCalledTimes(1);
+        expect(firstStreamingCloseText()).toBe(tableMarkdown);
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      },
+    );
+
+    function presentationCardMarkdown(index = 0): string[] {
+      const card = requireRecord(presentationCardBodies()[index], "presentation card");
+      const body = requireRecord(card.body, "presentation card body");
+      const elements = Array.isArray(body.elements) ? body.elements : [];
+      return elements
+        .filter((element): element is Record<string, unknown> => isRecord(element))
+        .filter((element) => element.tag === "markdown")
+        .map((element) => String(element.content));
+    }
+
+    async function deliverPresentationTable(tables: MarkdownTableMode | undefined) {
+      resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", "off", "feishu"));
+      const { options } = createDispatcherHarness({ accountId: "main", cfg: tableCfg(tables) });
+      return await options.deliver(
+        { text: tableMarkdown, presentation: approvalPresentation },
+        { kind: "final" },
+      );
+    }
+
+    it.each(convertingModes)(
+      "converts all $tables presentation prose and its fallback",
+      async ({ tables, converted }) => {
+        const { options } = createBlockTableHarness(tableCfg(tables));
+        const delivery = await options.deliver(
+          {
+            text: tableMarkdown,
+            presentation: {
+              blocks: [
+                { type: "text", text: tableMarkdown },
+                { type: "context", text: tableMarkdown },
+                {
+                  type: "buttons",
+                  buttons: [
+                    { label: "Continue", action: { type: "command", command: "/continue" } },
+                  ],
+                },
+              ],
+            },
+          },
+          { kind: "final" },
+        );
+
+        expect(presentationCardMarkdown()).toEqual([
+          converted(),
+          converted(),
+          `<font color='grey'>${converted()}</font>`,
+        ]);
+        expect(delivery?.content?.split(converted())).toHaveLength(4);
+        expect(delivery?.content).not.toContain("| --- |");
+        expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(convertingModes)(
+      "converts the table a $tables presentation card carries",
+      async ({ tables, converted }) => {
+        const delivery = await deliverPresentationTable(tables);
+
+        expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+        const markdown = presentationCardMarkdown();
+        expect(markdown[0]).toBe(converted());
+        expect(markdown.join("\n")).not.toContain("| --- |");
+        // The card's prose, the fallback the peer keeps and the reported content agree.
+        expect(delivery?.content).toContain(converted());
+        expect(delivery?.content).not.toContain("| --- |");
+        expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+        expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(["block", undefined] as const)(
+      "keeps the native table a %s presentation card carries",
+      async (tables) => {
+        const delivery = await deliverPresentationTable(tables);
+
+        expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+        expect(presentationCardMarkdown()[0]).toBe(tableMarkdown);
+        expect(delivery?.content).toContain(tableMarkdown);
+      },
+    );
+
+    // off disables table parsing rather than choosing a card-safe shape, so it has no
+    // converted form to put in a card. An explicit presentation stays a card whenever it
+    // fits the card limits, with or without controls, so the peer sees one card whose
+    // markdown element holds the authored pipes.
+    it("keeps the authored table on an off presentation card", async () => {
+      const delivery = await deliverPresentationTable("off");
+
+      expect(sendCardFeishuMock).toHaveBeenCalledTimes(1);
+      expect(presentationCardMarkdown()[0]).toBe(tableMarkdown);
+      const serialized = JSON.stringify(presentationCardBodies()[0]);
+      expect(serialized).toContain("Allow once");
+      expect(serialized).toContain("Deny");
+      expect(delivery?.content).toContain(tableMarkdown);
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
       expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
     });
   });

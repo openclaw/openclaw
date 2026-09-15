@@ -147,6 +147,21 @@ export function withinCardTableLimit(text: string): boolean {
   return countMarkdownTables(text) <= FEISHU_CARD_TABLE_LIMIT;
 }
 
+/**
+ * Whether a card renderer would draw a table for this text. The card limit above
+ * already counts tables with the renderer's own parser, so both answers come from
+ * one owner: pipe-less GFM counts, and a fenced sample that only looks like a
+ * table does not.
+ */
+export function hasCardMarkdownTable(text: string): boolean {
+  return countMarkdownTables(text) > 0;
+}
+
+/** Fenced code promotes a message to a card; native tables use the renderer's parser. */
+export function shouldUseCard(text: string, nativeTables: boolean): boolean {
+  return /```[\s\S]*?```/.test(text) || (nativeTables && hasCardMarkdownTable(text));
+}
+
 export function feishuCardWithinTableLimit(card: Record<string, unknown>): boolean {
   let remaining = FEISHU_CARD_TABLE_LIMIT;
   const visit = (value: unknown): boolean => {
@@ -256,15 +271,16 @@ function buildFeishuPayloadButton(button: MessagePresentationButton): Record<str
 
 function buildFeishuCardElementsForBlock(
   block: MessagePresentationBlock,
+  renderText: (text: string) => string,
 ): Record<string, unknown>[] {
   if (block.type === "text") {
-    return [{ tag: "markdown", content: escapeFeishuCardMarkdownText(block.text) }];
+    return [{ tag: "markdown", content: escapeFeishuCardMarkdownText(renderText(block.text)) }];
   }
   if (block.type === "context") {
     return [
       {
         tag: "markdown",
-        content: `<font color='grey'>${escapeFeishuCardMarkdownText(block.text)}</font>`,
+        content: `<font color='grey'>${escapeFeishuCardMarkdownText(renderText(block.text))}</font>`,
       },
     ];
   }
@@ -278,7 +294,9 @@ function buildFeishuCardElementsForBlock(
     return [
       {
         tag: "markdown",
-        content: escapeFeishuCardMarkdownText(renderMessagePresentationChartFallbackText(block)),
+        content: escapeFeishuCardMarkdownText(
+          renderText(renderMessagePresentationChartFallbackText(block)),
+        ),
       },
     ];
   }
@@ -286,7 +304,9 @@ function buildFeishuCardElementsForBlock(
     return [
       {
         tag: "markdown",
-        content: escapeFeishuCardMarkdownText(renderMessagePresentationTableFallbackText(block)),
+        content: escapeFeishuCardMarkdownText(
+          renderText(renderMessagePresentationTableFallbackText(block)),
+        ),
       },
     ];
   }
@@ -294,7 +314,7 @@ function buildFeishuCardElementsForBlock(
     {
       tag: "markdown",
       content: escapeFeishuCardMarkdownText(
-        renderMessagePresentationFallbackText({ presentation: { blocks: [block] } }),
+        renderText(renderMessagePresentationFallbackText({ presentation: { blocks: [block] } })),
       ),
     },
   ];
@@ -316,17 +336,19 @@ function resolvePresentationHeaderTemplate(tone: NormalizedMessagePresentation["
 function buildFeishuPresentationCardElements(params: {
   presentation: NormalizedMessagePresentation;
   fallbackText?: string;
+  renderText?: (text: string) => string;
 }): Record<string, unknown>[] {
   const elements: Record<string, unknown>[] = [];
+  const renderText = params.renderText ?? ((text: string) => text);
   const fallbackText = params.fallbackText?.trim();
   if (fallbackText) {
     elements.push({
       tag: "markdown",
-      content: escapeFeishuCardMarkdownText(fallbackText),
+      content: escapeFeishuCardMarkdownText(renderText(fallbackText)),
     });
   }
   for (const block of params.presentation.blocks) {
-    for (const element of buildFeishuCardElementsForBlock(block)) {
+    for (const element of buildFeishuCardElementsForBlock(block, renderText)) {
       elements.push(element);
     }
   }
@@ -339,6 +361,7 @@ function buildFeishuPresentationCardElements(params: {
 export function buildFeishuPresentationCard(params: {
   presentation: NormalizedMessagePresentation;
   fallbackText?: string;
+  renderText?: (text: string) => string;
 }): FeishuNativeCard {
   return {
     schema: "2.0",
@@ -418,6 +441,7 @@ export function buildFeishuPayloadCard(params: {
   text?: string;
   identity?: OutboundIdentity;
   mentions?: MentionTarget[];
+  renderText?: (text: string) => string;
 }): FeishuNativeCard | undefined {
   const nativeCard = readNativeFeishuCard(params.payload);
   const rawText = params.text ?? params.payload.text;
@@ -427,6 +451,7 @@ export function buildFeishuPayloadCard(params: {
   const isNativeCard = card !== undefined;
   if (!card && presentation) {
     card = buildFeishuPresentationCard({
+      renderText: params.renderText,
       presentation: {
         ...presentation,
         title: presentation.title ?? resolveFeishuIdentityHeaderTitle(params.identity),
@@ -466,6 +491,7 @@ type FeishuPresentationContext = {
   to: string;
   identity?: OutboundIdentity;
   mentions?: MentionTarget[];
+  renderText?: (text: string) => string;
 };
 
 export function renderFeishuPresentationPayload({
@@ -484,17 +510,21 @@ export function renderFeishuPresentationPayload({
     text: payload.text,
     identity: ctx.identity,
     mentions: ctx.mentions,
+    renderText: ctx.renderText,
   });
   const isComment = Boolean(parseFeishuCommentTarget(ctx.to));
   // Native limits may clip labels. A whole-card or comment fallback must retain
   // the authored labels; an accepted native card keeps its adapted projection.
   const fallbackPresentation =
     !card || isComment ? (sourcePresentation ?? presentation) : presentation;
-  const { fallbackText, fallbackHasCommand } = buildFeishuPresentationFallback({
+  const { fallbackText: rawFallbackText, fallbackHasCommand } = buildFeishuPresentationFallback({
     text: readNativeFeishuCardJson(payload.text) ? undefined : payload.text,
     presentation: fallbackPresentation,
     textFormat: isComment ? "plain" : "markdown",
   });
+  // Card elements and the fallback are separate projections of authored prose.
+  // Neither projection consumes text already formatted for the other.
+  const fallbackText = ctx.renderText ? ctx.renderText(rawFallbackText) : rawFallbackText;
   const existingFeishuData = isRecord(payload.channelData?.feishu)
     ? payload.channelData.feishu
     : undefined;
@@ -539,7 +569,12 @@ export async function renderFeishuReplyPayload(
 ): Promise<{ payload: ReplyPayload; card?: FeishuNativeCard }> {
   const { presentation } = resolveFeishuRichReply(payload);
   if (!presentation) {
-    return { payload };
+    return {
+      payload:
+        payload.text && ctx.renderText
+          ? { ...payload, text: ctx.renderText(payload.text) }
+          : payload,
+    };
   }
   const rendered = await renderPresentationForDelivery(
     {

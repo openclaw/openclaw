@@ -76,7 +76,8 @@ channel and optionally per account:
 Inline code in table cells keeps its parsed content, including leading and
 trailing spaces, in every enabled table mode.
 
-Per-channel plugin defaults: Matrix defaults to `block` (native tables);
+Per-channel plugin defaults: Feishu defaults to `block` (native tables in
+cards; `code` on the post path); Matrix defaults to `block` (native tables);
 Mattermost defaults to `off`; Signal and WhatsApp default to `bullets`;
 Telegram defaults to `block` (which resolves to `code` unless the account
 has `richMessages` enabled). Any
