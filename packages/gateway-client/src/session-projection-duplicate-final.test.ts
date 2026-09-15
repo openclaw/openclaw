@@ -71,4 +71,51 @@ describe("session projection final-answer dedup", () => {
 
     expect(state.messages).toHaveLength(2);
   });
+
+  it("does not let a toolUse-persisted row adopt a different live answer", () => {
+    const differentLive = {
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: "A different final answer" }],
+    };
+    let state = createSessionProjection(scope);
+    state = reconcileSessionProjectionSnapshot(state, [saved], scope);
+    state = reduceSessionProjection(state, {
+      type: "runTerminal",
+      runId: "announce:repro",
+      status: "completed",
+      message: differentLive,
+    });
+    state = projectLiveSessionMessage(state, differentLive, { runId: "announce:repro" });
+
+    // The durable "Selected answer" and the live "A different final answer"
+    // are distinct answers and must both remain visible.
+    expect(state.messages).toHaveLength(2);
+  });
+
+  it("retains the live terminal when a later same-run row contradicts the toolUse inference", () => {
+    const laterToolRow = {
+      role: "assistant" as const,
+      content: [
+        { type: "text" as const, text: "Checking another file." },
+        {
+          type: "toolCall" as const,
+          id: "read-2",
+          name: "read",
+          arguments: { path: "src/index.ts" },
+        },
+      ],
+      stopReason: "toolUse" as const,
+      __openclaw: { id: "assistant-tool-boundary", seq: 218, runId: "announce:repro" },
+    };
+    let state = createSessionProjection(scope);
+    state = reduceSessionProjection(state, terminalEvent());
+    state = projectLiveSessionMessage(state, live, { runId: "announce:repro" });
+    state = reconcileSessionProjectionSnapshot(state, [saved, laterToolRow], scope);
+
+    // The run continued past the toolUse-persisted row (a later tool row
+    // exists), so the live terminal must stay instead of being inferred away:
+    // saved row + later tool row + live terminal all remain.
+    expect(state.messages).toHaveLength(3);
+    expect(state.messages).toContain(live);
+  });
 });

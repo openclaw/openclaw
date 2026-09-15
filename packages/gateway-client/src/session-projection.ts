@@ -7,6 +7,7 @@ import {
   findUniqueSnapshotTerminalMatch,
   isUnsequencedLiveTerminal,
   isSessionProjectionToolContinuation,
+  readFinalContentIdentity,
   readSessionProjectionFinalMessageIdentity,
 } from "./session-projection-final-identity.js";
 import {
@@ -287,6 +288,17 @@ function entryMatches(
       provisionalEntry.live &&
       !durableSegment &&
       !isSessionProjectionToolContinuation(durableEntry.message) &&
+      // Admitting a text-only toolUse-persisted final must not let a durable
+      // row adopt a *different* same-run live answer: when such a row is kept,
+      // a unique match suppresses the other side without any content
+      // comparison downstream, so require identical final content for the
+      // newly admitted class only. Pre-existing matches (no tool stop reason,
+      // or the durable row arriving as an identity promotion) keep their
+      // established semantics.
+      (durableEntry !== left ||
+        readRecord(durableEntry.message)?.["stopReason"] !== "toolUse" ||
+        readFinalContentIdentity(durableEntry.message) ===
+          readFinalContentIdentity(provisionalEntry.message)) &&
       provisionalEntry.identity.sequence === null &&
       (provisionalEntry.afterSequence === undefined ||
         (provisionalEntry.afterSequence !== null &&

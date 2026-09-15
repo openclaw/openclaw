@@ -85,7 +85,7 @@ function hasCompatiblePersistedFinalIdentity(currentMessage: unknown, incomingMe
   );
 }
 
-function readFinalContentIdentity(message: unknown): string | null {
+export function readFinalContentIdentity(message: unknown): string | null {
   const display = readSessionMessageDisplayContent(message);
   if (!display.text && !display.hasNonText) {
     return null;
@@ -184,13 +184,13 @@ export function findUniqueSnapshotTerminalMatch(
   let snapshotIndexes: Map<TerminalProjectionEntry, number> | undefined;
   let firstUserIndex = -1;
   let lastAssistantIndex = -1;
-  const hasCompletedRunSnapshotContext = (entry: TerminalProjectionEntry): boolean => {
-    const runId = current.identity?.runId;
-    if (!runId || entry.identity?.runId !== runId) {
-      return false;
+  const ensureRunIndexes = (): void => {
+    if (snapshotIndexes) {
+      return;
     }
-    if (!snapshotIndexes) {
-      const indexes = new Map<TerminalProjectionEntry, number>();
+    const runId = current.identity?.runId;
+    const indexes = new Map<TerminalProjectionEntry, number>();
+    if (runId) {
       snapshot.forEach((candidate, index) => {
         if (candidate.identity?.runId === runId) {
           // Keep indexOf's first-occurrence identity when a snapshot repeats an entry.
@@ -204,15 +204,34 @@ export function findUniqueSnapshotTerminalMatch(
           }
         }
       });
-      snapshotIndexes = indexes;
     }
-    const entryIndex = snapshotIndexes.get(entry);
+    snapshotIndexes = indexes;
+  };
+  const hasCompletedRunSnapshotContext = (entry: TerminalProjectionEntry): boolean => {
+    const runId = current.identity?.runId;
+    if (!runId || entry.identity?.runId !== runId) {
+      return false;
+    }
+    ensureRunIndexes();
+    const entryIndex = snapshotIndexes?.get(entry);
     return (
       entryIndex !== undefined &&
       firstUserIndex >= 0 &&
       firstUserIndex < entryIndex &&
       lastAssistantIndex <= entryIndex
     );
+  };
+  // A toolUse-persisted row can only be the run's selected final when no later
+  // same-run assistant row exists in the snapshot: a following assistant or
+  // tool row proves the run continued past it, so the live terminal must stay.
+  const isLastSameRunAssistantRow = (entry: TerminalProjectionEntry): boolean => {
+    const runId = current.identity?.runId;
+    if (!runId || entry.identity?.runId !== runId) {
+      return false;
+    }
+    ensureRunIndexes();
+    const entryIndex = snapshotIndexes?.get(entry);
+    return entryIndex !== undefined && lastAssistantIndex >= 0 && entryIndex >= lastAssistantIndex;
   };
   const durableTerminalMatches = matches.filter((entry) => {
     const metadata = readRecord(readRecord(entry.message)?.["__openclaw"]);
@@ -223,9 +242,12 @@ export function findUniqueSnapshotTerminalMatch(
             // A row persisted with the run's terminal tool stop reason and no
             // tool-call content is the run's selected final; it must reconcile
             // with its unkeyed live projection (#148297). Unmarked rows stay
-            // separate — partial history must not adopt the terminal.
+            // separate — partial history must not adopt the terminal — and the
+            // row must be the run's last assistant row in the snapshot, since
+            // a later same-run row proves the run continued past it.
             (readRecord(entry.message)?.["stopReason"] === "toolUse" &&
-              !isSessionProjectionToolContinuation(entry.message)))) ||
+              !isSessionProjectionToolContinuation(entry.message) &&
+              isLastSameRunAssistantRow(entry)))) ||
         hasCompletedRunSnapshotContext(entry)) &&
       readFinalContentIdentity(entry.message) === terminalContent
     );
