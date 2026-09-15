@@ -2354,6 +2354,29 @@ describe("capability cli", () => {
     },
   );
 
+  it("forwards --agent to explicit-model image description", async () => {
+    mocks.loadConfig.mockReturnValue({
+      agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+    });
+
+    await runCapability(
+      "image",
+      "describe",
+      "--agent",
+      "beta",
+      "--file",
+      "photo.png",
+      "--model",
+      "ollama/qwen2.5vl:7b",
+      "--json",
+    );
+
+    expect(firstImageDescribeWithModelCall()).toMatchObject({
+      agentId: "beta",
+      agentDir: "/tmp/agent-beta",
+    });
+  });
+
   it.each([
     {
       name: "model run",
