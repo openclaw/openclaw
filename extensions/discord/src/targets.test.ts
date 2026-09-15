@@ -106,11 +106,16 @@ describe("resolveDiscordTarget", () => {
   });
 
   it("returns a resolved user for usernames", async () => {
-    vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValueOnce([
+    vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValue([
       { kind: "user", id: "user:999", name: "Jane" } as const,
     ]);
 
     expectTargetFields(await resolveDiscordTarget("jane", { cfg, accountId: "default" }), {
+      kind: "user",
+      id: "999",
+      normalized: "user:999",
+    });
+    expectTargetFields(await resolveDiscordTarget("jane123", { cfg, accountId: "default" }), {
       kind: "user",
       id: "999",
       normalized: "user:999",
