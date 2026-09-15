@@ -524,35 +524,50 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     },
   );
 
-  it("drains every unique auxiliary lifecycle event at the queue cap", async () => {
-    const candidate = '[tool:read] {"path":"SECRET"';
-    const lifecycles = Array.from({ length: 129 }, (_, index) => [
-      { type: "thinking_start", contentIndex: index + 1 },
-      { type: "thinking_end", contentIndex: index + 1, content: "" },
-    ]).flat();
-    const events = await normalize([streamTextDelta(candidate), ...lifecycles]);
+  it.each(["candidate", "suppressing"])(
+    "drains every unique auxiliary lifecycle event at the queue cap while %s",
+    async (kind) => {
+      const candidate =
+        kind === "candidate"
+          ? '[tool:read] {"path":"SECRET"'
+          : '[tool:read] {"path":"SECRET' + "x".repeat(256_001);
+      const lifecycles = Array.from({ length: 129 }, (_, index) => [
+        { type: "thinking_start", contentIndex: index + 1 },
+        { type: "thinking_end", contentIndex: index + 1, content: "" },
+      ]).flat();
+      const events = await normalize([streamTextDelta(candidate), ...lifecycles]);
 
-    expect(events[0]?.type).toBe("start");
-    expect(events.filter((event) => event.type === "thinking_start")).toHaveLength(129);
-    expect(events.filter((event) => event.type === "thinking_end")).toHaveLength(129);
-    expect(events.slice(1)).toMatchObject(lifecycles);
-    expect(JSON.stringify(events)).not.toContain("SECRET");
-  });
+      expect(events[0]?.type).toBe("start");
+      expect(events.filter((event) => event.type === "thinking_start")).toHaveLength(129);
+      expect(events.filter((event) => event.type === "thinking_end")).toHaveLength(129);
+      expect(events.slice(1)).toMatchObject(lifecycles);
+      expect(JSON.stringify(events)).not.toContain("SECRET");
+    },
+  );
 
-  it("drains merged auxiliary deltas at the queue byte cap", async () => {
-    const candidate = '[tool:read] {"path":"SECRET"';
-    const chunk = "x".repeat(128_001);
-    const events = await normalize([
-      streamTextDelta(candidate),
-      { type: "thinking_delta", contentIndex: 1, delta: chunk },
-      { type: "thinking_delta", contentIndex: 1, delta: chunk },
-      { type: "thinking_delta", contentIndex: 1, delta: chunk },
-    ]);
+  it.each(["candidate", "suppressing"])(
+    "drains merged auxiliary deltas at the queue byte cap while %s",
+    async (kind) => {
+      const candidate =
+        kind === "candidate"
+          ? '[tool:read] {"path":"SECRET"'
+          : '[tool:read] {"path":"SECRET' + "x".repeat(256_001);
+      const chunk = "x".repeat(128_001);
+      const events = await normalize([
+        streamTextDelta(candidate),
+        { type: "thinking_delta", contentIndex: 1, delta: chunk },
+        { type: "thinking_delta", contentIndex: 1, delta: chunk },
+        { type: "thinking_delta", contentIndex: 1, delta: chunk },
+      ]);
 
-    expect(events[0]?.type).toBe("start");
-    expect(events.filter((event) => event.type === "thinking_delta")).toHaveLength(2);
-    expect(JSON.stringify(events)).not.toContain("SECRET");
-  });
+      expect(events[0]?.type).toBe("start");
+      expect(events.filter((event) => event.type === "thinking_delta")).toHaveLength(2);
+      expect(
+        events.filter((event) => event.type === "thinking_delta").map((event) => event.delta),
+      ).toEqual([chunk + chunk, chunk]);
+      expect(JSON.stringify(events)).not.toContain("SECRET");
+    },
+  );
 
   it("preserves clean required partials after scrubbing a call", async () => {
     const call = `<function=read><parameter=path>${"x".repeat(256_001)}</parameter></function>`;
@@ -593,6 +608,31 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     const events = await normalize(sourceEvents);
 
     expect(textDeltas(events).join("")).toBe(visible);
+  });
+
+  it("preserves fence protection after replaying a false prefix at the auxiliary queue cap", async () => {
+    const prefix = "[tool:read] " + " ".repeat(256);
+    const invalidation = "nope\n\n```text\n";
+    const lifecycles = Array.from({ length: 129 }, (_, index) => [
+      { type: "thinking_start", contentIndex: index + 1 },
+      { type: "thinking_end", contentIndex: index + 1, content: "" },
+    ]).flat();
+    const fencedCall = '[read]\n{"path":"example.txt"}\n[/read]\n';
+    const events = await normalize(
+      [
+        streamTextDelta(prefix),
+        streamTextDelta(invalidation),
+        ...lifecycles,
+        streamTextDelta(fencedCall),
+      ],
+      { protectFences: true },
+    );
+
+    expect(events).toEqual([
+      streamTextDelta(prefix + invalidation),
+      ...lifecycles,
+      streamTextDelta(fencedCall),
+    ]);
   });
 
   it("scans complete under-cap call sequences linearly", () => {
