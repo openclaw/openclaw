@@ -16,6 +16,7 @@ import {
   type ServiceDefinitionMutationArtifact,
   type ServiceDefinitionMutationCapability,
   type SystemdServiceReadBinding,
+  type SystemdServiceReadTarget,
 } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import {
@@ -197,8 +198,12 @@ export async function readSystemdDefinitionMutationCapability(
     timeoutMs?: number;
     requireLoaded?: boolean;
     systemdReadBinding?: SystemdServiceReadBinding;
+    systemdReadTarget?: SystemdServiceReadTarget;
   },
 ): Promise<ServiceDefinitionMutationCapability> {
+  if (options?.systemdReadTarget?.scope === "system") {
+    return { kind: "sealed", reason: "system-owned" };
+  }
   const selected = path.basename(resolveSystemdUnitPath(env));
   const names =
     selected === "openclaw-gateway.service" ? [selected, "openclaw.service"] : [selected];

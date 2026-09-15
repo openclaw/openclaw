@@ -10,9 +10,11 @@ import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest"
 import { WebSocketServer } from "ws";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
+import type { ExtraGatewayService } from "../../daemon/inspect.js";
 import type { ForeignLaunchdJob } from "../../daemon/launchd-foreign-jobs.js";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { gatewayEdgeAuthValueForTarget } from "../../gateway/edge-auth.js";
 import {
@@ -74,7 +76,9 @@ const inspectGatewayTlsCertificate = vi.fn(async (_cfg?: unknown) => ({
   ok: true as const,
   value: { cert: "public-certificate", fingerprintSha256: "sha256:11:22:33:44" },
 }));
-const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) => []);
+const findExtraGatewayServices = vi.fn<
+  (_env?: unknown, _opts?: unknown) => Promise<ExtraGatewayService[]>
+>(async () => []);
 const findStaleOpenClawUpdateLaunchdJobs = vi.fn<
   (env?: NodeJS.ProcessEnv) => Promise<StaleOpenClawUpdateLaunchdJob[]>
 >(async () => []);
@@ -164,10 +168,7 @@ const serviceIsLoaded = vi.fn<
   (opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number }) => Promise<boolean>
 >(async (_opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number }) => true);
 const serviceReadRuntime = vi.fn<
-  (
-    _env?: NodeJS.ProcessEnv,
-    _opts?: { timeoutMs?: number },
-  ) => Promise<{ status: string; detail?: string }>
+  (_env?: NodeJS.ProcessEnv, _opts?: { timeoutMs?: number }) => Promise<GatewayServiceRuntime>
 >(async (_env?: NodeJS.ProcessEnv, _opts?: { timeoutMs?: number }) => ({ status: "running" }));
 const inspectGatewayRestart = vi.fn<(opts?: unknown) => Promise<GatewayRestartSnapshot>>(
   async (_opts?: unknown) => ({
@@ -324,6 +325,7 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service.js")>()),
   resolveGatewayService: () =>
     createMockGatewayService({
+      ...(process.platform === "linux" ? { label: "systemd" } : {}),
       isLoaded: serviceIsLoaded,
       readCommand: serviceReadCommand,
       readRuntime: serviceReadRuntime,
@@ -599,6 +601,51 @@ describe("gatherDaemonStatus", () => {
       renderPortDiagnosticsForCli({ ...status, port: { ...status.port, status: "free" } }, false),
     ).toEqual([]);
   });
+
+  it.each(["user", "system", undefined] as const)(
+    "uses observed systemd scope %s to label status and exclude only its owned unit",
+    async (scope) => {
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      const userService: ExtraGatewayService = {
+        platform: "linux",
+        label: "openclaw.service",
+        scope: "user",
+        detail: "unit: /home/test/.config/systemd/user/openclaw.service",
+      };
+      const systemService: ExtraGatewayService = {
+        platform: "linux",
+        label: "openclaw.service",
+        scope: "system",
+        detail: "unit: /etc/systemd/system/openclaw.service",
+      };
+      const otherService: ExtraGatewayService = {
+        ...systemService,
+        label: "openclaw-rescue.service",
+        detail: "unit: /etc/systemd/system/openclaw-rescue.service",
+      };
+      findExtraGatewayServices.mockResolvedValueOnce([userService, systemService, otherService]);
+      serviceReadRuntime.mockResolvedValueOnce({
+        status: scope ? "running" : "unknown",
+        systemd: { unit: "openclaw.service", ...(scope ? { scope } : {}) },
+      });
+
+      try {
+        const status = await gatherStatus({ probe: false, deep: true });
+
+        expect(status.extraServices).toEqual(
+          scope === "user"
+            ? [systemService, otherService]
+            : scope === "system"
+              ? [userService, otherService]
+              : [userService, systemService, otherService],
+        );
+        expect(status.service.label).toBe(scope ? `systemd ${scope}` : "systemd");
+      } finally {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    },
+  );
 
   it("uses wss probe URL and forwards TLS fingerprint when daemon TLS is enabled", async () => {
     const status = await gatherStatus();

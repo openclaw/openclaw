@@ -59,7 +59,7 @@ import type {
 } from "./service-types.js";
 import { readSystemdDefinitionMutationCapability } from "./systemd-definition-mutation.js";
 import { admitSystemdServiceReadBinding } from "./systemd-peer.js";
-import { isSystemdServiceAbsent } from "./systemd-scope.js";
+import { findSystemdGatewayInstallation, isSystemdServiceAbsent } from "./systemd-scope.js";
 import {
   findInstalledSystemdGatewayScope,
   installSystemdService,
@@ -107,6 +107,7 @@ export type GatewayService = {
       environment?: GatewayServiceEnv;
       requireLoaded?: boolean;
       systemdReadBinding?: GatewayServiceReadOptions["systemdReadBinding"];
+      systemdReadTarget?: GatewayServiceReadOptions["systemdReadTarget"];
     },
   ) => ReturnType<typeof readSystemdDefinitionMutationCapability>;
   readCommand: (
@@ -120,6 +121,8 @@ export type GatewayService = {
 };
 
 type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
+  systemdReadTarget?: GatewayServiceReadOptions["systemdReadTarget"];
+  systemdInstallation?: GatewayServiceState["systemdInstallation"];
   requireEffective?: boolean;
   requireLoadedCommand?: boolean;
   loadForInspection?: GatewayServiceReadOptions["loadForInspection"];
@@ -221,11 +224,28 @@ export async function readGatewayServiceLoadState(
 
 export async function readGatewayServiceState(
   service: GatewayService,
-  args: ReadGatewayServiceStateArgs = {},
+  input: ReadGatewayServiceStateArgs = {},
 ): Promise<GatewayServiceState> {
+  let args = input;
   const baseEnv = args.env ?? (process.env as GatewayServiceEnv);
+  if (service.readCommand === readSystemdServiceExecStart && !args.systemdReadTarget) {
+    const installation = await findSystemdGatewayInstallation(baseEnv);
+    if (installation.kind === "dueling" && args.requireEffective && args.requireLoadedCommand) {
+      throw new Error(
+        "Both user and system systemd units own this Gateway name. Run openclaw doctor interactively to inspect the competing supervisors before maintenance.",
+      );
+    }
+    const target =
+      installation.kind === "system"
+        ? installation.system
+        : installation.kind === "user" || installation.kind === "dueling"
+          ? installation.user
+          : undefined;
+    args = { ...args, systemdInstallation: installation, systemdReadTarget: target };
+  }
   if (
     service.readCommand === readSystemdServiceExecStart &&
+    args.systemdReadTarget?.scope !== "system" &&
     args.requireEffective &&
     args.requireLoadedCommand &&
     !args.systemdReadBinding
@@ -257,7 +277,7 @@ async function readGatewayServiceStateWithBinding(
   args: ReadGatewayServiceStateArgs,
 ): Promise<GatewayServiceState> {
   const baseEnv = args.env ?? process.env;
-  const { timeoutMs, systemdReadBinding } = args;
+  const { timeoutMs, systemdReadBinding, systemdReadTarget } = args;
   const deadline = performance.now() + (timeoutMs && timeoutMs > 0 ? timeoutMs : 5000);
   systemdReadBinding?.verify();
   let absent = await service.isAbsent?.({ env: baseEnv, timeoutMs }).catch(() => false);
@@ -277,12 +297,14 @@ async function readGatewayServiceStateWithBinding(
               }
             : {}),
           ...(systemdReadBinding ? { systemdReadBinding } : {}),
+          ...(systemdReadTarget ? { systemdReadTarget } : {}),
           ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
           ...(args.loadForInspection ? { loadForInspection: args.loadForInspection } : {}),
         })
       : await service
           .readCommand(baseEnv, {
             timeoutMs,
+            ...(systemdReadTarget ? { systemdReadTarget } : {}),
             onCommandInspection: (inspection) => {
               commandInspection = inspection;
             },
@@ -330,6 +352,7 @@ async function readGatewayServiceStateWithBinding(
     service
       .readRuntime(env, {
         timeoutMs,
+        ...(systemdReadTarget ? { systemdReadTarget } : {}),
         ...(commandInspection ? { commandInspection } : {}),
         ...(systemdReadBinding ? { systemdReadBinding } : {}),
         ...(args.requireEffective && args.requireLoadedCommand ? { requireLoaded: true } : {}),
@@ -343,6 +366,7 @@ async function readGatewayServiceStateWithBinding(
             env: baseEnv,
             environment: env,
             timeoutMs,
+            ...(systemdReadTarget ? { systemdReadTarget } : {}),
             ...(systemdReadBinding ? { systemdReadBinding } : {}),
             ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
           })
@@ -354,6 +378,7 @@ async function readGatewayServiceStateWithBinding(
     inspectionReason:
       runtime?.inspectionReason ??
       (loadState.status === "unknown" ? loadState.inspectionReason : undefined),
+    ...(args.systemdInstallation ? { systemdInstallation: args.systemdInstallation } : {}),
     installed,
     loadState,
     running: runtime?.status === "running",
@@ -523,7 +548,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     readRuntime: readLaunchAgentRuntime,
   },
   linux: {
-    label: "systemd user",
+    label: "systemd",
     loadedText: "enabled",
     notLoadedText: "disabled",
     stage: ignoreServiceWriteResult(stageSystemdService),
@@ -544,11 +569,13 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
       timeoutMs,
       requireLoaded,
       systemdReadBinding,
+      systemdReadTarget,
     }) =>
       readSystemdDefinitionMutationCapability(env ?? process.env, {
         environment,
         timeoutMs,
         ...(systemdReadBinding ? { systemdReadBinding } : {}),
+        ...(systemdReadTarget ? { systemdReadTarget } : {}),
         ...(requireLoaded ? { requireLoaded: true } : {}),
       }),
     readCommand: readSystemdServiceExecStart,

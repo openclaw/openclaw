@@ -16,6 +16,7 @@ import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import { inspectGatewayHeapLimit } from "../../daemon/gateway-heap.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
+import { formatServiceLabel } from "../../daemon/runtime-format.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
@@ -395,6 +396,14 @@ async function gatherDaemonStatusImpl(
             deep: true,
           }),
         )
+        .then((services) =>
+          services.filter(
+            (extra) =>
+              extra.platform !== "linux" ||
+              extra.scope !== runtime?.systemd?.scope ||
+              extra.label !== runtime?.systemd?.unit,
+          ),
+        )
         .catch(() => [])
     : [];
   const launchdDiagnostics =
@@ -595,7 +604,10 @@ async function gatherDaemonStatusImpl(
     logFile: resolveConfiguredLogFilePath(cliCfg),
     service: {
       inspectionReason: serviceState.inspectionReason,
-      label: service.label,
+      label: formatServiceLabel(service.label, runtime),
+      ...(serviceState.systemdInstallation
+        ? { systemdInstallation: serviceState.systemdInstallation }
+        : {}),
       loaded: loadState.status === "unknown" ? null : loaded,
       loadState,
       loadedText: service.loadedText,

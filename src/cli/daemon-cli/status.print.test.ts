@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExtraGatewayService } from "../../daemon/inspect.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnv } from "../../test-utils/env.js";
@@ -43,7 +44,7 @@ const resolveControlUiLinksMock = vi.hoisted(() =>
 const isSystemdUnavailableDetailMock = vi.hoisted(() => vi.fn(() => false));
 const renderSystemdUnavailableHintsMock = vi.hoisted(() => vi.fn<() => string[]>(() => []));
 const renderGatewayServiceCleanupHintsMock = vi.hoisted(() =>
-  vi.fn<(_services: unknown) => string[]>(() => []),
+  vi.fn<(_services: readonly ExtraGatewayService[]) => string[]>(() => []),
 );
 const isWSLEnvMock = vi.hoisted(() =>
   vi.fn((env?: Record<string, string | undefined>) => Boolean(env?.WSL_DISTRO_NAME)),
@@ -115,6 +116,39 @@ vi.mock("./status.gather.js", () => ({
 }));
 
 describe("printDaemonStatus", () => {
+  it("reports competing systemd supervisors without removal advice", () => {
+    printDaemonStatus(
+      {
+        extraServices: [],
+        service: {
+          label: "systemd user",
+          loadState: { status: "loaded" },
+          loadedText: "enabled",
+          notLoadedText: "disabled",
+          systemdInstallation: {
+            kind: "dueling",
+            user: {
+              scope: "user",
+              unitName: "openclaw-gateway.service",
+              unitPath: "/home/gateway/.config/systemd/user/openclaw-gateway.service",
+            },
+            system: {
+              scope: "system",
+              unitName: "openclaw-gateway.service",
+              unitPath: "/etc/systemd/system/openclaw-gateway.service",
+            },
+          },
+        },
+      },
+      { json: false, deep: true },
+    );
+    const output = [...runtime.log.mock.calls, ...runtime.error.mock.calls].flat().join("\n");
+    expect(output).toContain("BOTH a user-scope");
+    expect(output).toContain("/etc/systemd/system/openclaw-gateway.service");
+    expect(output).toContain("openclaw doctor");
+    expect(output).not.toContain("disable --now");
+    expect(output).not.toContain("rm ");
+  });
   function expectMockLineContains(mock: typeof runtime.log, expected: string) {
     const output = mock.mock.calls.map(([line]) => line).join("\n");
     expect(output).toContain(expected);
@@ -185,31 +219,46 @@ describe("printDaemonStatus", () => {
     expect(command.managedOverrides).toBeDefined();
   });
 
-  it("prints user-manager pending reload guidance after the service file", () => {
-    printDaemonStatus(
-      {
-        service: {
-          label: "systemd",
-          loadState: { status: "loaded" },
-          loadedText: "loaded",
-          notLoadedText: "not loaded",
-          command: {
-            programArguments: ["node"],
-            sourcePath: "/home/test/.config/systemd/user/openclaw.service",
-            reloadPending: true,
+  it.each([
+    ["user", "systemctl --user"],
+    ["system", "sudo systemctl --system"],
+  ] as const)(
+    "prints %s-manager pending reload guidance after the service file",
+    (scope, command) => {
+      const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      try {
+        printDaemonStatus(
+          {
+            service: {
+              label: "systemd",
+              loadState: { status: "loaded" },
+              loadedText: "loaded",
+              notLoadedText: "not loaded",
+              runtime: { status: "running", systemd: { scope, unit: "openclaw.service" } },
+              command: {
+                programArguments: ["node"],
+                sourcePath: `${scope === "user" ? "/home/test/.config/systemd/user" : "/etc/systemd/system"}/openclaw.service`,
+                reloadPending: true,
+              },
+            },
+            port: { port: 18789, status: "free", listeners: [], hints: [] },
+            extraServices: [],
           },
-        },
-        extraServices: [],
-      },
-      { json: false },
-    );
+          { json: false },
+        );
+      } finally {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
 
-    const lines = runtime.log.mock.calls.map(([line]) => line);
-    const serviceFileIndex = lines.findIndex((line) => line.startsWith("Service file:"));
-    expect(lines[serviceFileIndex + 1]).toBe(
-      "Systemd reload: pending (run systemctl --user daemon-reload)",
-    );
-  });
+      const lines = runtime.log.mock.calls.map(([line]) => line);
+      const serviceFileIndex = lines.findIndex((line) => line.startsWith("Service file:"));
+      expect(lines[serviceFileIndex + 1]).toBe(
+        `Systemd reload: pending (run ${command} daemon-reload)`,
+      );
+      expectMockLineContains(runtime.error, `Logs: journalctl --${scope} -u openclaw.service`);
+    },
+  );
 
   it("prints host desktop state and auth type", () => {
     printDaemonStatus(
@@ -1162,6 +1211,42 @@ describe("printDaemonStatus", () => {
       "ai.openclaw.gateway",
     );
   });
+
+  it.each(["user", "system"] as const)(
+    "requires inspection before suggesting cleanup for a detected %s systemd unit",
+    async (scope) => {
+      const { renderGatewayServiceCleanupHints } =
+        await vi.importActual<typeof import("../../daemon/inspect.js")>("../../daemon/inspect.js");
+      renderGatewayServiceCleanupHintsMock.mockImplementation(renderGatewayServiceCleanupHints);
+
+      printDaemonStatus(
+        {
+          service: {
+            label: "systemd",
+            loadState: { status: "unknown", detail: "ownership not verified" },
+            loadedText: "enabled",
+            notLoadedText: "disabled",
+          },
+          extraServices: [
+            {
+              platform: "linux",
+              label: "openclaw.service",
+              scope,
+              detail: `unit: ${scope === "user" ? "/home/test/.config/systemd/user" : "/etc/systemd/system"}/openclaw.service`,
+            },
+          ],
+        },
+        { json: false, deep: true },
+      );
+
+      const output = runtime.log.mock.calls.map(([line]) => line).join("\n");
+      expect(output).toContain("openclaw.service");
+      expect(output).not.toContain("disable --now");
+      expect(output).not.toContain("rm ");
+      expect(output).toContain(`Inspection hint: systemctl --${scope} status -- openclaw.service`);
+      expect(output).toContain(`Inspection hint: systemctl --${scope} cat -- openclaw.service`);
+    },
+  );
 
   it("prints a terse plugin drift warning outside deep mode", () => {
     printDaemonStatus(

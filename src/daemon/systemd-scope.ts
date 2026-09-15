@@ -164,7 +164,7 @@ async function findMarkerOwnedSystemSystemdUnit(): Promise<{
  * upgrade restart cascade in issue #79375: two supervisors bind the same
  * port and SIGTERM each other forever.
  */
-type SystemdGatewayInstallation =
+export type SystemdGatewayInstallation =
   | { kind: "none" }
   | { kind: "user"; user: InstalledSystemdGatewayScope }
   | { kind: "system"; system: InstalledSystemdGatewayScope }
@@ -202,6 +202,9 @@ async function findSystemSystemdGatewayScope(
   const systemPath = await findSystemSystemdUnitPath(env);
   if (systemPath) {
     return { scope: "system", unitName: canonicalUnitName, unitPath: systemPath };
+  }
+  if (env.OPENCLAW_SERVICE_KIND?.trim() === "node") {
+    return null;
   }
   // System-scope installs may use a non-canonical unit name; fall back to a
   // marker-owned lookup before declaring no system unit exists.
