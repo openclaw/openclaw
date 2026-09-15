@@ -5,13 +5,7 @@
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asFiniteNumber as normalizeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  sql,
-  type ExpressionBuilder,
-  type Insertable,
-  type Selectable,
-  type Updateable,
-} from "kysely";
+import { sql, type ExpressionBuilder, type Insertable, type Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -41,7 +35,6 @@ type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs
 type SubagentRunSqliteRow = Selectable<SubagentRunsTable>;
 type BoundSubagentRunRecord = Insertable<SubagentRunsTable>;
 type SubagentRunSqliteInsert = BoundSubagentRunRecord;
-type SubagentRunSqliteUpdate = Updateable<SubagentRunsTable>;
 type SubagentRunReadSqliteRow = Pick<
   SubagentRunSqliteRow,
   "run_id" | "child_session_key" | "controller_session_key" | "requester_session_key" | "created_at"
@@ -165,7 +158,13 @@ export function upsertSubagentRunRowInDatabase(
       .insertInto("subagent_runs")
       .values(row)
       .onConflict((conflict) =>
-        conflict.column("run_id").doUpdateSet(subagentRunRecordToSqliteUpdate(row)),
+        conflict.column("run_id").doUpdateSet((eb) => ({
+          child_session_key: eb.ref("excluded.child_session_key"),
+          controller_session_key: eb.ref("excluded.controller_session_key"),
+          requester_session_key: eb.ref("excluded.requester_session_key"),
+          created_at: eb.ref("excluded.created_at"),
+          payload_json: eb.ref("excluded.payload_json"),
+        })),
       ),
   );
 }
@@ -195,11 +194,6 @@ export function readSubagentRun(
       .where("run_id", "=", runId),
   ).rows[0];
   return row ? rowToSubagentRunRecord(row) : null;
-}
-
-function subagentRunRecordToSqliteUpdate(values: SubagentRunSqliteInsert): SubagentRunSqliteUpdate {
-  const { run_id: _runId, ...update } = values;
-  return update;
 }
 
 function writeSubagentRunValues(

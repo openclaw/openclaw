@@ -2,10 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync, constants } from "node:sqlite";
+import { DatabaseSync, StatementSync, constants } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import {
@@ -596,9 +596,20 @@ describe("subagent registry sqlite store", () => {
         END;
       `);
 
-      first.task = "updated task";
+      first.task = `updated task ${"x".repeat(1_024)}`;
       runs.delete(removed.runId);
-      saveSubagentRegistryChangesToSqlite(runs, [first.runId, removed.runId]);
+      const writes = vi.spyOn(StatementSync.prototype, "run");
+      let boundPayloadTextBytes = 0;
+      try {
+        saveSubagentRegistryChangesToSqlite(runs, [first.runId, removed.runId]);
+        boundPayloadTextBytes = writes.mock.calls.flat().reduce<number>((bytes, value) => {
+          return typeof value === "string" && value.includes(first.task)
+            ? bytes + Buffer.byteLength(value)
+            : bytes;
+        }, 0);
+      } finally {
+        writes.mockRestore();
+      }
 
       expect(
         db.prepare("SELECT action, run_id FROM subagent_run_write_audit ORDER BY rowid").all(),
@@ -607,9 +618,14 @@ describe("subagent registry sqlite store", () => {
         { action: "delete", run_id: removed.runId },
       ]);
       expect([...loadSubagentRegistryFromSqlite().entries()]).toMatchObject([
-        [first.runId, { task: "updated task" }],
+        [first.runId, { task: first.task }],
         [untouched.runId, { task: untouched.task }],
       ]);
+      expect(boundPayloadTextBytes).toBeGreaterThan(Buffer.byteLength(first.task));
+      // One payload copy plus room for normalization; rebinding it for UPDATE exceeds this.
+      expect(boundPayloadTextBytes).toBeLessThanOrEqual(
+        Buffer.byteLength(JSON.stringify(first)) + 256,
+      );
     });
   });
 
