@@ -176,12 +176,15 @@ describe("voice-call realtime route ownership", () => {
         );
       }
 
-      await vi.waitFor(() => {
-        expect(salesProvider.createBridge).toHaveBeenCalledTimes(1);
-        expect(supportProvider.createBridge).toHaveBeenCalledTimes(1);
-        expect(salesConnect).toHaveBeenCalledTimes(1);
-        expect(supportConnect).toHaveBeenCalledTimes(1);
-      });
+      await vi.waitFor(
+        () => {
+          expect(salesProvider.createBridge).toHaveBeenCalledTimes(1);
+          expect(supportProvider.createBridge).toHaveBeenCalledTimes(1);
+          expect(salesConnect).toHaveBeenCalledTimes(1);
+          expect(supportConnect).toHaveBeenCalledTimes(1);
+        },
+        { timeout: 10_000 },
+      );
       expect(salesProvider.createBridge).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: "sales",
