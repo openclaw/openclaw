@@ -1,7 +1,10 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
+import { createUpdateProgress } from "../cli/update-cli/progress.js";
+import { defaultRuntime } from "../runtime.js";
+import type { UpdateStepResult } from "./update-runner-types.js";
 
 export class FakeChild extends EventEmitter {
   pid: number;
@@ -79,4 +82,17 @@ export function stubHealthyGateway() {
     "fetch",
     vi.fn(async () => Response.json({ status: "started", ready: true })),
   );
+}
+
+export function renderSteps(steps: UpdateStepResult[]) {
+  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+  const presentation = createUpdateProgress(true);
+  onTestFinished(() => {
+    presentation.dispose();
+    log.mockRestore();
+  });
+  for (const [index, step] of steps.entries()) {
+    presentation.progress.onStepComplete?.({ ...step, index, total: steps.length });
+  }
+  return log.mock.calls.flat().join("\n");
 }

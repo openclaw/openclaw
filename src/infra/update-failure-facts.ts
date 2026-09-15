@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
@@ -26,4 +27,36 @@ export function normalizeUpdateFailureFacts(
   env: NodeJS.ProcessEnv = process.env,
 ): UpdateFailureFact[] {
   return facts.slice(0, 5).map((fact) => createUpdateFailureFact(fact, env));
+}
+
+/** Config validation issues are more specific than the CLI's failure envelope. */
+export function parseConfigFailureFacts(
+  stdout: string,
+  env: NodeJS.ProcessEnv,
+): UpdateFailureFact[] {
+  let report: unknown;
+  try {
+    report = JSON.parse(stdout);
+  } catch {
+    // A failed command may exit before it writes its configuration report.
+    return [];
+  }
+  if (!isRecord(report) || !Array.isArray(report.issues)) {
+    return [];
+  }
+  return normalizeUpdateFailureFacts(
+    report.issues.flatMap((issue) =>
+      isRecord(issue) && typeof issue.message === "string"
+        ? [
+            {
+              check: "config",
+              code: "candidate-config-failed",
+              message: issue.message,
+              affectedKey: typeof issue.path === "string" ? issue.path : undefined,
+            },
+          ]
+        : [],
+    ),
+    env,
+  );
 }
