@@ -97,10 +97,9 @@ function normalizeConnectProxyUrl(proxyUrl: URL): URL {
     decodeURIComponent(normalized.username);
     decodeURIComponent(normalized.password);
   } catch (err) {
-    throw new Error(
-      `Proxy CONNECT failed via ${normalized.origin}: ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err },
-    );
+    const detail =
+      err instanceof URIError ? "URI malformed" : err instanceof Error ? err.message : String(err);
+    throw new Error(`Proxy CONNECT failed via ${normalized.origin}: ${detail}`, { cause: err });
   }
   return normalized;
 }
