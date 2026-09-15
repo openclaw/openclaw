@@ -1,6 +1,5 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
-import { normalizeTalkTransport } from "../../../../../src/talk/talk-session-controller.js";
 import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../../../../../src/talk/voice-transcript.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
@@ -21,7 +20,12 @@ import {
   retireUncommittedRealtimeTalkTransport,
   retryVoiceTranscriptPersistence,
 } from "./transcript-owner.ts";
-import { createRealtimeTalkTransport, resolveRealtimeTalkTransport } from "./transport.ts";
+import {
+  createRealtimeTalkTransport,
+  normalizeLaunchTransport,
+  resolveRealtimeTalkTransport,
+  type RealtimeTalkLaunchTransport,
+} from "./transport.ts";
 
 export type { RealtimeTalkStatus };
 
@@ -30,7 +34,7 @@ type RealtimeTalkLaunchOptions = {
   model?: string;
   voice?: string;
   voiceChangeId?: string;
-  transport?: "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
+  transport?: RealtimeTalkLaunchTransport;
   vadThreshold?: number;
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
@@ -64,8 +68,6 @@ export async function switchActiveRealtimeTalkCameras(
   }
 }
 
-type RealtimeTalkLaunchTransport = NonNullable<RealtimeTalkLaunchOptions["transport"]>;
-
 type RealtimeTalkConfigResult = {
   config?: {
     talk?: {
@@ -75,22 +77,6 @@ type RealtimeTalkConfigResult = {
     };
   };
 };
-
-function normalizeLaunchTransport(value: unknown): RealtimeTalkLaunchTransport | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const transport = normalizeTalkTransport(value);
-  if (
-    transport === "webrtc" ||
-    transport === "provider-websocket" ||
-    transport === "gateway-relay" ||
-    transport === "managed-room"
-  ) {
-    return transport;
-  }
-  return undefined;
-}
 
 function compactLaunchParams(
   params: RealtimeTalkLaunchOptions & {
@@ -135,7 +121,7 @@ export class RealtimeTalkSession {
     try {
       // Each start owns a new call. Provider allocation can retire an earlier
       // transport, so a failed start cannot restore that transport locally.
-      this.retireTransport();
+      void this.retireTransport();
       const lifecycleGeneration = this.lifecycleGeneration;
       this.closed = false;
       this.callbacks.onStatus?.("connecting", t("chat.voice.preparing"));
@@ -210,7 +196,7 @@ export class RealtimeTalkSession {
         } else if (this.clientVoiceSessionOwner === owner) {
           const detached = this.detachVoiceSession();
           if (detached) {
-            this.closeLogicalVoiceSession(detached);
+            void this.closeLogicalVoiceSession(detached);
           }
         }
       };
@@ -289,7 +275,7 @@ export class RealtimeTalkSession {
         nextTransport.activate?.();
       } catch (error) {
         if (this.transport === nextTransport) {
-          this.retireTransport();
+          void this.retireTransport();
         }
         throw error;
       }
@@ -445,14 +431,14 @@ export class RealtimeTalkSession {
     const detached = this.detachVoiceSession();
     const transport = this.transport;
     const hadPendingStartup = this.pendingStartup !== null;
-    const completions: Array<void | Promise<void>> = [];
+    const completions: Promise<void>[] = [];
     this.transport = null;
     this.selectedTransport = undefined;
     try {
-      completions.push(this.stopPendingStartup());
+      completions.push(Promise.resolve(this.stopPendingStartup()));
     } finally {
       try {
-        completions.push(transport?.stop());
+        completions.push(Promise.resolve(transport?.stop()));
       } finally {
         if (detached) {
           completions.push(this.closeLogicalVoiceSession(detached));
@@ -492,7 +478,7 @@ export class RealtimeTalkSession {
     }
     const transcriptQueue = VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue();
     transcriptQueue.seal();
-    this.closeLogicalVoiceSession({
+    void this.closeLogicalVoiceSession({
       voiceSessionId,
       serverOwned: false,
       transcriptQueue,
@@ -541,7 +527,7 @@ export class RealtimeTalkSession {
           // A transport's terminal event owns cleanup, even while its error stays
           // visible. Retired transports cannot close a newer call.
           if (event.type === "session.closed") {
-            this.retireTransport();
+            void this.retireTransport();
           }
         } finally {
           this.callbacks.onTalkEvent?.(event);
@@ -594,7 +580,7 @@ export class RealtimeTalkSession {
     ) {
       return;
     }
-    this.retireTransport();
+    void this.retireTransport();
     // Retire the overflowing transport before accepted-write and close failures
     // settle so the first terminal persistence error keeps precedence.
     this.transportGeneration += 1;

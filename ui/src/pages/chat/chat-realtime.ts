@@ -110,7 +110,7 @@ export function stopChatRealtimeTalk(
   } else {
     resetChatRealtimeConversation(state);
   }
-  session?.stop();
+  void session?.stop();
 }
 
 export function dismissRealtimeTalkError(state: ChatRealtimeState) {

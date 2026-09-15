@@ -52,7 +52,10 @@ import {
   resolveTalkRealtimeProviderInstructions,
   resolveTalkRealtimeGatewayRelayLaunch,
 } from "../session-config.js";
-import { readTalkRealtimeInitialItems } from "../session-history.js";
+import {
+  buildTalkRealtimeHistoryInstructions,
+  readTalkRealtimeInitialItems,
+} from "../session-history.js";
 import {
   forgetUnifiedTalkSession,
   getUnifiedTalkSession,
@@ -365,9 +368,10 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           initialItems,
           voiceSelectionVoices: voices,
           instructions:
-            controlSource === "delegation"
+            (controlSource === "delegation"
               ? (providerInstructions ?? "")
-              : buildRealtimeInstructions(providerInstructions),
+              : buildRealtimeInstructions(providerInstructions)) +
+            buildTalkRealtimeHistoryInstructions(initialItems),
           tools:
             controlSource === "delegation"
               ? []

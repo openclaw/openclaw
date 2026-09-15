@@ -11,6 +11,28 @@ import type {
 } from "./shared.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./webrtc.ts";
 
+export type RealtimeTalkLaunchTransport =
+  | "webrtc"
+  | "provider-websocket"
+  | "gateway-relay"
+  | "managed-room";
+
+export function normalizeLaunchTransport(value: unknown): RealtimeTalkLaunchTransport | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const transport = normalizeTalkTransport(value);
+  if (
+    transport === "webrtc" ||
+    transport === "provider-websocket" ||
+    transport === "gateway-relay" ||
+    transport === "managed-room"
+  ) {
+    return transport;
+  }
+  return undefined;
+}
+
 export function createRealtimeTalkTransport(
   session: RealtimeTalkSessionResult,
   ctx: RealtimeTalkTransportContext,

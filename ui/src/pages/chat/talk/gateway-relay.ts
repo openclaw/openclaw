@@ -160,7 +160,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       try {
         this.handleRelayEvent(event);
       } catch (error) {
-        this.stop();
+        void this.stop();
         throw error;
       }
       if (this.closed) {
@@ -269,7 +269,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     try {
       this.ctx.callbacks.onStatus?.("error", formatUiError(error));
     } finally {
-      this.stop();
+      void this.stop();
     }
   }
 
@@ -311,7 +311,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       );
       // Overflow is locally terminal, so release the server relay immediately even
       // if the browser's microphone permission prompt never settles.
-      this.stop();
+      void this.stop();
       return;
     }
     this.pendingActivationEvents.push(event);
@@ -339,7 +339,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
                 "error",
                 t("chat.composer.realtimeTalkMissingTurnIdentity"),
               );
-              this.stop();
+              void this.stop();
               return;
             }
             if (this.activeOutputTurnId !== turnId || !this.outputQueue.isPlaying) {
@@ -692,7 +692,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     const turnId = this.activeOutputTurnId;
     if (!turnId) {
       this.ctx.callbacks.onStatus?.("error", t("chat.composer.realtimeTalkMissingTurnIdentity"));
-      this.stop();
+      void this.stop();
       return;
     }
     this.cancelRequestedForPlayback = true;
@@ -723,7 +723,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       .catch((error: unknown) => {
         this.pendingOutputCancellations -= 1;
         this.reportToolResultSubmissionError(error);
-        this.stop();
+        void this.stop();
       });
   }
 

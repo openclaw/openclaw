@@ -14,7 +14,6 @@ import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../../../talk/voice-transcript.js
 import { createTalkClientAgentConsultRunner } from "../client-agent-consult.js";
 import { createTalkRealtimeRunControlOwner } from "../realtime-run-control.js";
 import { closeExpiredTalkRelaySessions } from "../relay-session-lifecycle.js";
-import { buildTalkRealtimeHistoryInstructions } from "../session-history.js";
 import { markTalkVoiceSessionReady } from "../voice-selection.js";
 import { bindTalkRealtimeRelayAgentConsult } from "./agent-consult.js";
 import {
@@ -218,8 +217,7 @@ export function createTalkRealtimeRelaySession(
     agentId: relayAgentId,
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
-    instructions:
-      params.instructions + buildTalkRealtimeHistoryInstructions(params.initialItems ?? []),
+    instructions: params.instructions,
     language: params.language,
     autoRespondToAudio: params.forceAgentConsultOnFinalTranscript !== true,
     interruptResponseOnInputAudio: params.forceAgentConsultOnFinalTranscript !== true,
