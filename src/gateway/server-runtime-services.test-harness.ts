@@ -98,6 +98,10 @@ vi.mock("./server-restart-sentinel.js", () => ({
   settleQueuedSessionDelivery: runtimeServiceMocks.settleQueuedSessionDelivery,
 }));
 
+vi.mock("./server-followup-queue-recovery.js", () => ({
+  scheduleRestoredFollowupQueueRecovery: () => () => {},
+}));
+
 vi.mock("./channel-health-monitor.js", () => ({
   startChannelHealthMonitor: runtimeServiceMocks.startChannelHealthMonitor,
 }));

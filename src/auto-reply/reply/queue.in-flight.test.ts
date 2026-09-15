@@ -226,7 +226,8 @@ describe("followup queue in-flight ownership", () => {
       expect(groupCompletions.map((complete) => complete.mock.calls.length)).toEqual([0, 0]);
 
       await aggregate?.turnAdoptionLifecycle?.onAdopted?.();
-      expect(queue?.items.map((item) => item.prompt)).toEqual(["survivor"]);
+      // Admitted sources remain durably represented until the aggregate settles.
+      expect(queue?.items.map((item) => item.prompt)).toEqual(["group-1", "group-2", "survivor"]);
       expect(queue?.inFlight.size).toBe(2);
       expect(getFollowupQueueDepth(key)).toBe(1);
 

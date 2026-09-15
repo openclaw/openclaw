@@ -31,6 +31,7 @@ import {
 } from "./scheduled-run-gateway-context.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
+import { scheduleRestoredFollowupQueueRecovery } from "./server-followup-queue-recovery.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import {
@@ -479,9 +480,11 @@ export function activateGatewayScheduledServices(params: {
     cfg: params.cfgAtStart,
     log: params.log,
   });
+  const stopFollowupQueueRecovery = scheduleRestoredFollowupQueueRecovery();
   let deliveryRecoveryStopPromise: Promise<void> | undefined;
   const stopDeliveryRecovery = () => {
     // Both owners fence synchronously before the close prelude awaits either.
+    stopFollowupQueueRecovery();
     deliveryRecoveryStopPromise ??= Promise.all([
       stopOutboundDeliveryRecovery(),
       stopSessionDeliveryRuntime(),

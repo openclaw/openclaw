@@ -29,6 +29,7 @@ import { prepareChannelParticipantObservation } from "../../sessions/session-par
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
+import type { TurnAdoptionLifecycle } from "../get-reply-options.types.js";
 import type { FinalizedRuntimeMsgContext as FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import type {
@@ -65,6 +66,38 @@ import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 
+/**
+ * Observe adoption without mutating the caller's lifecycle owner.
+ *
+ * Cancellation custody must not fork with this copy. The followup queue installs
+ * its durable `onCancellationRequested` write on whichever lifecycle object the
+ * queued run carries, while the Gateway owner keeps invoking the original, so
+ * that one property stays aliased to the owner instead of being copied by value.
+ */
+function withDispatchAdoptionObserver(
+  owner: TurnAdoptionLifecycle,
+  turnAdoptionState: { adopted: boolean },
+): TurnAdoptionLifecycle {
+  const observed: TurnAdoptionLifecycle = {
+    ...owner,
+    onAdopted: async () => {
+      // Adoption is durable only after this callback commits. Input
+      // already retained by another run separately forbids replay.
+      await owner.onAdopted();
+      turnAdoptionState.adopted = true;
+    },
+  };
+  Object.defineProperty(observed, "onCancellationRequested", {
+    configurable: true,
+    enumerable: true,
+    get: () => owner.onCancellationRequested,
+    set: (next: TurnAdoptionLifecycle["onCancellationRequested"]) => {
+      owner.onCancellationRequested = next;
+    },
+  });
+  return observed;
+}
+
 export async function gatherDispatchRequest(
   params: DispatchFromConfigParams,
   messageAuditTerminal: InboundMessageAuditTerminalRecorder | undefined,
@@ -83,15 +116,10 @@ export async function gatherDispatchRequest(
       ...params.replyOptions,
       ...(turnAdoptionLifecycle
         ? {
-            turnAdoptionLifecycle: {
-              ...turnAdoptionLifecycle,
-              onAdopted: async () => {
-                // Adoption is durable only after this callback commits. Input
-                // already retained by another run separately forbids replay.
-                await turnAdoptionLifecycle.onAdopted();
-                turnAdoptionState.adopted = true;
-              },
-            },
+            turnAdoptionLifecycle: withDispatchAdoptionObserver(
+              turnAdoptionLifecycle,
+              turnAdoptionState,
+            ),
           }
         : {}),
     },
