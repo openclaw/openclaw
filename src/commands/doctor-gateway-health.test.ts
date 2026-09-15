@@ -1,7 +1,11 @@
 // Doctor gateway health tests cover gateway probe failures, auth requirements, and repair messages.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
-import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
+import {
+  GatewayProtocolRequestTimeoutError,
+  retainGatewayResponsePayload,
+} from "../../packages/gateway-client/src/protocol-request.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import {
@@ -120,9 +124,14 @@ describe("checkGatewayHealth", () => {
     callGateway.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({});
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await expect(
-      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({ authenticated: true, healthOk: true, status: { ok: true } });
+    const now = vi.spyOn(performance, "now").mockReturnValue(0);
+    try {
+      await expect(
+        checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+      ).resolves.toEqual({ authenticated: true, healthOk: true, status: { ok: true } });
+    } finally {
+      now.mockRestore();
+    }
 
     expect(callGateway).toHaveBeenNthCalledWith(
       1,
@@ -142,7 +151,7 @@ describe("checkGatewayHealth", () => {
     expect(callGateway).toHaveBeenNthCalledWith(3, {
       method: "diagnostics.stability",
       params: { type: "telemetry.exporter", limit: 1000 },
-      timeoutMs: 3000,
+      timeoutMs: 6000,
       config: cfg,
     });
     expect(runtime.error).not.toHaveBeenCalled();
@@ -321,6 +330,148 @@ describe("checkGatewayHealth", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
+  describe("latency-aware diagnostics", () => {
+    beforeEach(async () => {
+      await import("../agents/tools/in-process-gateway.js");
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function mockResponseTiming(statusMs: number | null, diagnosticsMs: number | null) {
+      const statusStarted = createDeferred();
+      const channelsStarted = createDeferred();
+      const exporterStarted = createDeferred();
+      callGateway.mockImplementation(
+        ({ method, timeoutMs }: { method: string; timeoutMs: number }) => {
+          const started =
+            method === "status"
+              ? statusStarted
+              : method === "channels.status"
+                ? channelsStarted
+                : exporterStarted;
+          const responseMs = method === "status" ? statusMs : diagnosticsMs;
+          return new Promise((resolve, reject) => {
+            let response: ReturnType<typeof setTimeout> | undefined;
+            const deadline = setTimeout(() => {
+              clearTimeout(response);
+              reject(
+                method === "diagnostics.stability"
+                  ? new GatewayProtocolRequestTimeoutError(
+                      { method, timeoutMs, requestSent: true },
+                      `gateway request timeout for ${method}`,
+                    )
+                  : new Error(`gateway timeout after ${timeoutMs}ms`),
+              );
+            }, timeoutMs);
+            if (responseMs !== null) {
+              response = setTimeout(() => {
+                clearTimeout(deadline);
+                resolve(method === "status" ? { ok: true } : { statusIssues: [] });
+              }, responseMs);
+            }
+            started.resolve();
+          });
+        },
+      );
+      return {
+        statusStarted: statusStarted.promise,
+        diagnosticsStarted: Promise.all([channelsStarted.promise, exporterStarted.promise]),
+      };
+    }
+
+    it.each([
+      {
+        timeoutMs: 10_000,
+        statusMs: 7_000,
+        diagnosticsMs: 12_000,
+        budgetMs: 21_000,
+        probeMs: 13_000,
+      },
+      { timeoutMs: 3_000, statusMs: 100, diagnosticsMs: 4_000, budgetMs: 6_100, probeMs: 5_000 },
+      { timeoutMs: 3_000, statusMs: 2_000, diagnosticsMs: 5_000, budgetMs: 8_000, probeMs: 5_000 },
+      {
+        timeoutMs: 20_000,
+        statusMs: 12_000,
+        diagnosticsMs: 12_000,
+        budgetMs: 30_000,
+        probeMs: 17_000,
+      },
+    ])("allows slow diagnostics after a $statusMs ms status response", async (timing) => {
+      const started = mockResponseTiming(timing.statusMs, timing.diagnosticsMs);
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const result = checkGatewayHealth({ runtime, cfg, timeoutMs: timing.timeoutMs });
+      await started.statusStarted;
+      await vi.advanceTimersByTimeAsync(timing.statusMs);
+      await started.diagnosticsStarted;
+      await vi.advanceTimersByTimeAsync(timing.diagnosticsMs);
+
+      await expect(result).resolves.toMatchObject({ healthOk: true, authenticated: true });
+      expect(note).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "channels.status",
+          params: { probe: true, timeoutMs: timing.probeMs },
+          timeoutMs: timing.budgetMs,
+        }),
+      );
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({ method: "diagnostics.stability", timeoutMs: timing.budgetMs }),
+      );
+    });
+
+    it("reports measured latency and the exhausted diagnostic budget without failing health", async () => {
+      const started = mockResponseTiming(7_000, null);
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const result = checkGatewayHealth({ runtime, cfg, timeoutMs: 10_000 });
+      await started.statusStarted;
+      await vi.advanceTimersByTimeAsync(7_000);
+      await started.diagnosticsStarted;
+      await vi.advanceTimersByTimeAsync(21_000);
+
+      await expect(result).resolves.toMatchObject({ healthOk: true, authenticated: true });
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Gateway answered status in 7s; channel diagnostics did not finish within 21s",
+        ),
+        "Channel warnings",
+      );
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Gateway answered status in 7s; exporter diagnostics did not finish within 21s",
+        ),
+        "Telemetry exporters",
+      );
+      expect(
+        note.mock.calls.every(([message]) => String(message).includes("host may be slow")),
+      ).toBe(true);
+      expect(runtime.error).not.toHaveBeenCalled();
+    });
+
+    it("does not run follow-up channel probes when status never answers", async () => {
+      const started = mockResponseTiming(null, null);
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const result = checkGatewayHealth({ runtime, cfg, timeoutMs: 3_000 });
+      await started.statusStarted;
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(runtime.error).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(result).resolves.toEqual({
+        authenticated: false,
+        healthOk: false,
+        status: undefined,
+      });
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("gateway timeout after 3000ms"),
+      );
+    });
+  });
+
   it("redacts credentials and terminal controls in channel probe failures", async () => {
     const token = "sk-abcdefghijklmnopqrstuv";
     callGateway
@@ -493,20 +644,6 @@ describe("checkGatewayHealth", () => {
         "- matrix (missing-main-entry): dist/index.js is missing",
       ].join("\n"),
       "Plugins configured unavailable",
-    );
-  });
-
-  it("does not run follow-up channel probes when liveness fails", async () => {
-    callGateway.mockRejectedValueOnce(new Error("gateway timeout after 3000ms"));
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-
-    await expect(
-      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
-    ).resolves.toEqual({ authenticated: false, healthOk: false, status: undefined });
-
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("gateway timeout after 3000ms"),
     );
   });
 

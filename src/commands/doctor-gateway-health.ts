@@ -1,4 +1,5 @@
 /** Gateway health probes used by doctor before deeper daemon and memory diagnostics. */
+import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -25,6 +26,7 @@ import type {
 } from "../gateway/server-methods/doctor.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatDurationSeconds } from "../infra/format-time/format-duration.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { StatusSummary } from "../status/summary.js";
 import { VERSION } from "../version.js";
@@ -58,6 +60,19 @@ type GatewayMemoryProbe = {
 
 function isGatewayCallTimeout(message: string): boolean {
   return /^gateway timeout after \d+ms(?:\n|$)/.test(message);
+}
+
+function resolveGatewayDiagnosticsTimeouts(timeoutMs: number, statusElapsedMs: number) {
+  // Preserve five seconds of channel work, plus the measured round-trip and result-delivery margin.
+  const transportMs = Math.ceil(statusElapsedMs) + 1_000;
+  const diagnosticsTimeoutMs = Math.min(
+    30_000,
+    Math.max(timeoutMs, 5_000 + transportMs, Math.ceil(statusElapsedMs * 3)),
+  );
+  return {
+    diagnosticsTimeoutMs,
+    channelProbeTimeoutMs: Math.max(1, diagnosticsTimeoutMs - transportMs),
+  };
 }
 
 function isGatewayHealthAuthUnavailableError(error: unknown): boolean {
@@ -142,6 +157,7 @@ export async function checkGatewayHealth(params: {
   let status: StatusSummary | undefined;
   let gatewaySnapshot: GatewayHello["snapshot"] | undefined;
   try {
+    const statusStartedAt = performance.now();
     status = await callGateway<StatusSummary>({
       method: "status",
       params: { includeChannelSummary: false },
@@ -152,6 +168,13 @@ export async function checkGatewayHealth(params: {
         noteGatewayStateDirectory(snapshot, "live Gateway");
       },
     });
+    const statusElapsedMs = performance.now() - statusStartedAt;
+    const { diagnosticsTimeoutMs, channelProbeTimeoutMs } = resolveGatewayDiagnosticsTimeouts(
+      timeoutMs,
+      statusElapsedMs,
+    );
+    const slowDiagnosticNote = (diagnostic: string) =>
+      `Gateway answered status in ${formatDurationSeconds(statusElapsedMs)}; ${diagnostic} diagnostics did not finish within ${formatDurationSeconds(diagnosticsTimeoutMs)}. The host may be slow; this does not mark the Gateway unhealthy.`;
     healthOk = true;
     noteCliGatewayVersionSkew(status);
     if (status.startupMigrationWarning) {
@@ -187,14 +210,14 @@ export async function checkGatewayHealth(params: {
     const [channelsResult, exporterResult] = await Promise.allSettled([
       callGateway({
         method: "channels.status",
-        params: { probe: true, timeoutMs: 5000 },
-        timeoutMs: 6000,
+        params: { probe: true, timeoutMs: channelProbeTimeoutMs },
+        timeoutMs: diagnosticsTimeoutMs,
         config: params.cfg,
       }),
       requestGateway({
         method: "diagnostics.stability",
         params: { type: "telemetry.exporter", limit: 1000 },
-        timeoutMs: Math.min(timeoutMs, 6000),
+        timeoutMs: diagnosticsTimeoutMs,
         config: params.cfg,
       }),
     ]);
@@ -216,7 +239,9 @@ export async function checkGatewayHealth(params: {
     } else {
       note(
         [
-          `Channel status probe failed: ${sanitizeTerminalText(formatErrorMessage(channelsResult.reason))}`,
+          isGatewayCallTimeout(formatErrorMessage(channelsResult.reason))
+            ? slowDiagnosticNote("channel")
+            : `Channel status probe failed: ${sanitizeTerminalText(formatErrorMessage(channelsResult.reason))}`,
           `Retry: ${formatCliCommand("openclaw channels status --probe")}`,
         ].join("\n"),
         "Channel warnings",
@@ -230,7 +255,10 @@ export async function checkGatewayHealth(params: {
     } else {
       note(
         [
-          `Exporter diagnostics failed: ${sanitizeTerminalText(formatErrorMessage(exporterResult.reason))}`,
+          exporterResult.reason instanceof GatewayProtocolRequestTimeoutError ||
+          isGatewayCallTimeout(formatErrorMessage(exporterResult.reason))
+            ? slowDiagnosticNote("exporter")
+            : `Exporter diagnostics failed: ${sanitizeTerminalText(formatErrorMessage(exporterResult.reason))}`,
           `Retry: ${formatCliCommand("openclaw gateway stability --type telemetry.exporter")}`,
         ].join("\n"),
         "Telemetry exporters",
