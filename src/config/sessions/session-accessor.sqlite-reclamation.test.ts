@@ -12,7 +12,6 @@ import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
-import { configureSqliteWalMaintenance } from "../../infra/sqlite-wal.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -543,73 +542,6 @@ test.runIf(process.platform !== "win32")(
       await Promise.allSettled([reclamation, ...(canonicalWrite ? [canonicalWrite] : [])]);
     }
   },
-);
-
-test.each([false, true])(
-  "periodic vacuum services reclamation approval (rejected: %s)",
-  async (rejected) => {
-    const { database, databaseOptions } = createFixture();
-    // sqlite-allow-raw -- Disposable free pages exercise the real incremental vacuum.
-    database.db.exec(`CREATE TABLE reclamation_fixture (payload BLOB);
-      INSERT INTO reclamation_fixture VALUES (zeroblob(8388608));
-      DROP TABLE reclamation_fixture;`);
-    const freePages = () =>
-      Number(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count);
-    const before = freePages();
-    expect(before).toBeGreaterThan(512);
-    const plan = createLifecycleArtifactReclamationPlan({
-      agentId: databaseOptions.agentId,
-      databaseOptions,
-      entries: [],
-      materializedPlans: [],
-    });
-    const maintenanceErrors: unknown[] = [];
-    let commitChecks = 0;
-    let commitRequested = false;
-    let checksDuringMaintenance = 0;
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    const maintenance = configureSqliteWalMaintenance(database.db, {
-      busyTimeoutMs: 1_000,
-      checkpointIntervalMs: 1,
-      onCheckpointError: (error) => maintenanceErrors.push(error),
-    });
-    hooks.beforeAuthorization = () => {
-      // The worker holds the writer lock and cannot commit until this thread approves it.
-      commitRequested = true;
-      const checksBeforeMaintenance = commitChecks;
-      vi.advanceTimersByTime(1);
-      checksDuringMaintenance = commitChecks - checksBeforeMaintenance;
-    };
-    try {
-      const reclamation = runSqliteSessionReclamation({
-        forceInProcess: false,
-        plan,
-        assertCommitAllowed: () => {
-          commitChecks += 1;
-          if (rejected && commitRequested) {
-            throw new Error("reclamation owner retired");
-          }
-        },
-      });
-      if (rejected) {
-        await expect(reclamation).rejects.toThrow("reclamation owner retired");
-      } else {
-        await expect(reclamation).resolves.toMatchObject({
-          kind: "lifecycle-artifacts",
-          value: { removedEntries: 0 },
-        });
-      }
-      expect(maintenanceErrors).toEqual([]);
-      expect(checksDuringMaintenance).toBeGreaterThan(0);
-      const reclaimed = before - freePages();
-      expect(reclaimed).toBeGreaterThan(0);
-      expect(reclaimed).toBeLessThanOrEqual(512);
-    } finally {
-      maintenance.close({ checkpointMode: "PASSIVE" });
-      vi.useRealTimers();
-    }
-  },
-  20_000,
 );
 
 test("one reclamation pass leaves a large freelist for bounded later maintenance", async () => {

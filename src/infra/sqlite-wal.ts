@@ -19,6 +19,10 @@ import {
   type SqliteWalCheckpointOptions,
   type SqliteWalHealth,
 } from "./sqlite-wal-checkpoint.js";
+import {
+  cancelSqliteWalWriteAdmission,
+  createSqliteWalMaintenanceScheduler,
+} from "./sqlite-wal-write-admission.js";
 
 export type { SqliteWalHealth } from "./sqlite-wal-checkpoint.js";
 
@@ -672,10 +676,28 @@ export function configureSqliteWalMaintenance(
   const checkpoint = (): boolean => runMaintenance(() => runCheckpoint(checkpointMode));
 
   let timer: IntervalHandle | null = null;
+  const maintain = createSqliteWalMaintenanceScheduler(
+    db,
+    () => {
+      // Admission may outlive this timer or its exact native connection.
+      if (!timer || invalidated) {
+        return;
+      }
+      runMaintenance(() => {
+        const checkpointed = runCheckpoint(periodicCheckpointMode);
+        runIncrementalVacuum();
+        return checkpointed;
+      });
+    },
+    (error) => checkpointOwner.recordError(error),
+  );
   if (timerIntervalMs > 0) {
     timer = runInSqliteMaintenanceContext(
       () =>
         setInterval(() => {
+          if (!timer || invalidated) {
+            return;
+          }
           if (tripwireDatabasePath && splitBrainDetectionEnabled) {
             let splitBrain: SqliteWalSplitBrainEvent | undefined;
             try {
@@ -700,11 +722,7 @@ export function configureSqliteWalMaintenance(
               terminateForSqliteWalSplitBrain(splitBrain, options.databaseLabel);
             }
           }
-          runMaintenance(() => {
-            const checkpointed = runCheckpoint(periodicCheckpointMode);
-            runIncrementalVacuum();
-            return checkpointed;
-          });
+          maintain();
         }, timerIntervalMs) as IntervalHandle,
     );
     timer.unref?.();
@@ -716,10 +734,9 @@ export function configureSqliteWalMaintenance(
     },
     checkpoint,
     close: (closeOptions) => {
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
+      clearInterval(timer ?? undefined);
+      timer = null;
+      cancelSqliteWalWriteAdmission(db);
       if (invalidated) {
         return false;
       }
