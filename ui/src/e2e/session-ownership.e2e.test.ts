@@ -12,6 +12,7 @@ import {
   captureUiProofEnabled,
   createSessionOwnershipProofContext,
   openSidebarSortMenu,
+  preCompactOwnerStackStyles,
   routeAvatarFixtures,
 } from "./session-ownership-visuals.test-support.ts";
 
@@ -211,21 +212,35 @@ suite.define(() => {
         frontSize: [Math.round(frontBounds.width), Math.round(frontBounds.height)],
         overlap: backBounds.right - frontBounds.left,
         reveal: frontBounds.left - backBounds.left,
+        verticalReveal: frontBounds.top - backBounds.top,
+        outerRadii: [backBounds, frontBounds].map(
+          (face) =>
+            Math.hypot(
+              face.left + face.width / 2 - (stackBounds.left + stackBounds.width / 2),
+              face.top + face.height / 2 - (stackBounds.top + stackBounds.height / 2),
+            ) +
+            face.width / 2,
+        ),
         slotWidth: slotBounds.width,
         stackSize: [Math.round(stackBounds.width), Math.round(stackBounds.height)],
         textGap: textBounds.left - stackBounds.right,
       };
     });
     expect(geometry).toEqual({
-      backSize: [18, 18],
+      backSize: [12, 12],
       centerDelta: 0,
-      frontSize: [18, 18],
-      overlap: 8,
-      reveal: 10,
+      frontSize: [14, 14],
+      overlap: expect.closeTo(8.1, 1),
+      reveal: expect.closeTo(3.9, 1),
+      verticalReveal: expect.closeTo(3.9, 1),
+      outerRadii: [expect.any(Number), expect.any(Number)],
       slotWidth: 20,
-      stackSize: [28, 20],
-      textGap: 4,
+      stackSize: [20, 20],
+      textGap: 8,
     });
+    for (const radius of geometry.outerRadii) {
+      expect(radius).toBeLessThanOrEqual(10.05);
+    }
     await expectBrowser(overflowRow.locator(".session-owner-stack__overflow")).toHaveText("+2");
     const rowHeights = await Promise.all([
       collaborativeRow.evaluate((row) => row.getBoundingClientRect().height),
@@ -242,21 +257,16 @@ suite.define(() => {
     expect(titleLefts[0]).toBeCloseTo(titleLefts[1] ?? 0, 5);
 
     if (captureUiProofEnabled) {
-      const legacyStyles = await currentPage.addStyleTag({
-        content: `
-          .session-owner-stack { width: 24px; }
-          .session-owner-stack__back { width: 14px; height: 14px; }
-          .session-owner-stack__back .viewer-avatar,
-          .session-owner-stack__overflow { width: 14px; height: 14px; font-size: 7px; }
-          .session-owner-stack__front { width: 20px; height: 20px; }
-        `,
+      // Reproduce this PR's parent geometry, not the older 14px/20px predecessor.
+      const parentStyles = await currentPage.addStyleTag({
+        content: preCompactOwnerStackStyles,
       });
       await captureSessionOwnerProof(suite, currentPage, "00-before-light.png");
       await currentPage.evaluate(() =>
         document.documentElement.setAttribute("data-theme-mode", "dark"),
       );
       await captureSessionOwnerProof(suite, currentPage, "01-before-dark.png");
-      await legacyStyles.evaluate((style) => style.parentNode?.removeChild(style));
+      await parentStyles.evaluate((style) => style.parentNode?.removeChild(style));
       await captureSessionOwnerProof(suite, currentPage, "02-after-dark.png");
       await currentPage.evaluate(() =>
         document.documentElement.setAttribute("data-theme-mode", "light"),
