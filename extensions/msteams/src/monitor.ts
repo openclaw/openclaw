@@ -468,12 +468,23 @@ export async function monitorMSTeamsProvider(
     const sdkSigninApp = app as MSTeamsApp & {
       onTokenExchange?: (ctx: unknown) => Promise<unknown>;
       onVerifyState?: (ctx: unknown) => Promise<unknown>;
+      oauthHandlers?: {
+        onTokenExchange?: (ctx: unknown) => Promise<unknown>;
+        onVerifyState?: (ctx: unknown) => Promise<unknown>;
+      };
     };
-    const delegate = sdkSigninApp[delegateName];
+    // @microsoft/teams.apps moved the sign-in handlers from the App instance
+    // onto app.oauthHandlers; accept either placement so a pinned SDK bump
+    // does not silently break the exchange. Both placements bind their own
+    // `this` (arrow-function class fields in 2.0.x), but call the owner we
+    // found the handler on so instance-method shapes keep working too.
+    const owner =
+      sdkSigninApp[delegateName] !== undefined ? sdkSigninApp : sdkSigninApp.oauthHandlers;
+    const delegate = owner?.[delegateName];
     if (typeof delegate !== "function") {
       throw new Error(`Teams SDK ${delegateName} handler is unavailable`);
     }
-    return delegate.call(sdkSigninApp, ctx);
+    return delegate.call(owner, ctx);
   };
 
   // Replace the SDK's default sign-in invoke routes with an authz gate that
