@@ -5,6 +5,7 @@ import https from "node:https";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { signalUnixRpcRequest, streamSignalUnixEvents } from "./client-unix.js";
 
 export type SignalRpcOptions = {
   baseUrl: string;
@@ -211,6 +212,9 @@ export async function signalRpcRequest<T = unknown>(
   params: Record<string, unknown> | undefined,
   opts: SignalRpcOptions,
 ): Promise<T> {
+  if (opts.baseUrl.trim().startsWith("unix:")) {
+    return signalUnixRpcRequest<T>(method, params, opts);
+  }
   const id = generateSecureUuid();
   const body = JSON.stringify({
     jsonrpc: "2.0",
@@ -250,6 +254,10 @@ export async function signalCheck(
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   try {
+    if (baseUrl.trim().startsWith("unix:")) {
+      await signalUnixRpcRequest("version", undefined, { baseUrl, timeoutMs });
+      return { ok: true, status: null, error: null };
+    }
     const res = await requestSignalHttp(resolveSignalEndpointUrl(baseUrl, "/api/v1/check"), {
       method: "GET",
       timeoutMs,
@@ -355,6 +363,9 @@ export async function streamSignalEvents(params: {
   onEvent: (event: SignalSseEvent) => unknown;
   onStreamOpen?: () => void;
 }): Promise<void> {
+  if (params.baseUrl.trim().startsWith("unix:")) {
+    return streamSignalUnixEvents(params);
+  }
   const url = resolveSignalEndpointUrl(params.baseUrl, "/api/v1/events");
   if (params.account) {
     url.searchParams.set("account", params.account);
