@@ -24,7 +24,6 @@ import {
   buildCircuitBreakerKey,
   forgetActiveRecallRun,
   getCachedResult,
-  getCircuitBreakerEntry,
   isCircuitBreakerOpen,
   resetActiveRecallStateForTests,
   setCachedResult,
@@ -565,7 +564,6 @@ const testing = {
   setSetupGraceTimeoutMsForTests,
   setTimeoutPartialDataGraceMsForTests,
   setCachedResult,
-  getCircuitBreakerEntry,
 };
 
 export { testing };
