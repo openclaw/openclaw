@@ -29,6 +29,7 @@ import {
 } from "./session-catalog-terminal.js";
 import {
   parseCodexCatalogTranscriptPage,
+  serializeCodexCatalogTranscriptPage,
   readCodexCatalogTranscriptPage,
   readLegacyCodexTranscriptPage,
 } from "./session-catalog-transcript.js";
@@ -134,7 +135,9 @@ export function createCodexSessionCatalogNodeHostCommands(
         const request = bindRequest(paramsJSON);
         const action = readNodeTranscriptParams(request.params);
         try {
-          return JSON.stringify(await readCodexCatalogTranscriptPage(request.control, action));
+          return serializeCodexCatalogTranscriptPage(
+            await readCodexCatalogTranscriptPage(request.control, action),
+          );
         } catch (error) {
           if (error instanceof CatalogParamsError) {
             throw error;

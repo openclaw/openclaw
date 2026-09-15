@@ -54,6 +54,54 @@ function readTranscript(control: CodexSessionCatalogControl, limit: number, curs
 }
 
 describe("Codex catalog transcript", () => {
+  it.each(["commandExecution", "mcpToolCall"])(
+    "keeps null output empty for completed %s",
+    (type) => {
+      const item = catalogThreadItem("quiet", {
+        type,
+        status: "completed",
+        command: "true",
+        tool: "lookup",
+        aggregatedOutput: null,
+        result: null,
+        error: null,
+      });
+      expect(toGenericTranscriptItem(item)).toMatchObject({ type: "toolResult", text: "" });
+    },
+  );
+
+  it("completes status-less search and image items while preserving pending searches", async () => {
+    const results = [{ title: "Guide", url: "https://example.com/guide" }];
+    const { control } = nativeItemControl([
+      catalogThreadItem("search-pending", {
+        type: "webSearch",
+        query: "",
+        action: null,
+        results: null,
+      }),
+      catalogThreadItem("search-done", {
+        type: "webSearch",
+        query: "guide",
+        action: { type: "search", query: "guide" },
+        results,
+      }),
+      catalogThreadItem("view", { type: "imageView", path: "/repo/image.png" }),
+      catalogThreadItem("generate-pending", { type: "imageGeneration", status: "", result: "" }),
+    ]);
+    const { items } = await readTranscript(control, 10);
+    expect(items.toReversed()).toMatchObject([
+      { id: "search-pending", type: "toolCall" },
+      {
+        id: "search-done",
+        type: "toolResult",
+        text: JSON.stringify(results, null, 2),
+        toolInput: { query: "guide" },
+      },
+      { id: "view", type: "toolResult", toolInput: { path: "/repo/image.png" } },
+      { id: "generate-pending", type: "toolCall" },
+    ]);
+  });
+
   it("preserves full tool text and raw data before transport paging", () => {
     const output = "result ".repeat(1000);
     const source = catalogThreadItem("tool-1", {
@@ -67,7 +115,102 @@ describe("Codex catalog transcript", () => {
       id: "tool-1",
       type: "toolResult",
       text: output,
+      toolName: "shell",
+      toolCallId: "tool-1",
+      toolInput: { command: "rg pattern" },
+      exitCode: 0,
       raw: source,
+    });
+  });
+
+  it("preserves completed native calls without inventing separate history entries", async () => {
+    const source = [
+      catalogThreadItem("command", {
+        type: "commandExecution",
+        command: "false",
+        cwd: "/repo",
+        aggregatedOutput: "",
+        exitCode: 1,
+        status: "failed",
+      }),
+      catalogThreadItem("mcp", {
+        type: "mcpToolCall",
+        tool: "lookup",
+        arguments: { query: "test" },
+        result: { content: [{ type: "text", text: "found" }] },
+        error: null,
+        status: "completed",
+      }),
+      catalogThreadItem("patch", {
+        type: "fileChange",
+        changes: [{ path: "a.ts", kind: "modified" }],
+        status: "completed",
+      }),
+    ];
+    const { control } = nativeItemControl(source);
+    const first = await readTranscript(control, 2);
+    const second = await readTranscript(control, 2, first.nextCursor);
+    const items = [...first.items, ...second.items].toReversed();
+    expect(items).toHaveLength(3);
+    expect(items[0]).toMatchObject({
+      id: "command",
+      type: "toolResult",
+      text: "",
+      toolCallId: "command",
+      toolInput: { command: "false", cwd: "/repo" },
+      exitCode: 1,
+      isError: true,
+    });
+    expect(items[1]).toMatchObject({
+      id: "mcp",
+      type: "toolResult",
+      toolCallId: "mcp",
+      toolInput: { query: "test" },
+    });
+    expect(items[1]?.isError).not.toBe(true);
+    expect(items[2]).toMatchObject({
+      id: "patch",
+      type: "toolResult",
+      toolCallId: "patch",
+      toolInput: { changes: [{ path: "a.ts", kind: "modified" }] },
+    });
+  });
+
+  it("reports the identity a native tool card needs, including failure", () => {
+    const call = catalogThreadItem("tool-2", {
+      type: "commandExecution",
+      command: "rg pattern",
+      cwd: "/repo",
+    });
+    expect(toGenericTranscriptItem(call)).toMatchObject({
+      type: "toolCall",
+      toolName: "shell",
+      toolCallId: "tool-2",
+      toolInput: { command: "rg pattern", cwd: "/repo" },
+    });
+
+    const failed = catalogThreadItem("tool-3", {
+      type: "commandExecution",
+      command: "false",
+      aggregatedOutput: "boom",
+      exitCode: 1,
+    });
+    // Call and result share the item id, which is what pairs them into one card.
+    expect(toGenericTranscriptItem(failed)).toMatchObject({
+      type: "toolResult",
+      toolCallId: "tool-3",
+      exitCode: 1,
+      isError: true,
+    });
+
+    const patch = catalogThreadItem("tool-4", {
+      type: "fileChange",
+      changes: [{ path: "a.ts", kind: "modified" }],
+    });
+    expect(toGenericTranscriptItem(patch)).toMatchObject({
+      type: "toolCall",
+      toolName: "apply_patch",
+      toolInput: { changes: [{ path: "a.ts", kind: "modified" }] },
     });
   });
 

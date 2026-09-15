@@ -21,6 +21,121 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
 }));
 
 describe("importClaudeHistory", () => {
+  it.each([false, true])(
+    "preserves each tool and result in %s mixed native rows",
+    async (mixed) => {
+      appended.length = 0;
+      const rows = [
+        {
+          type: "assistant",
+          uuid: "calls",
+          message: {
+            role: "assistant",
+            content: [
+              ...(mixed
+                ? [
+                    { type: "text", text: "Writing both files" },
+                    { type: "thinking", thinking: "Keep both bodies" },
+                  ]
+                : []),
+              {
+                type: "tool_use",
+                id: "write-a",
+                name: "Write",
+                input: { file_path: "a.txt", content: "first body" },
+              },
+              {
+                type: "tool_use",
+                id: "write-b",
+                name: "Write",
+                input: { file_path: "b.txt", content: "second body" },
+              },
+            ],
+          },
+        },
+        {
+          type: "user",
+          uuid: "results",
+          message: {
+            role: "user",
+            content: [
+              { type: "tool_result", tool_use_id: "write-a", content: "Written" },
+              {
+                type: "tool_result",
+                tool_use_id: "write-b",
+                content: "Permission denied",
+                is_error: true,
+              },
+              ...(mixed ? [{ type: "text", text: "Continue with a.txt" }] : []),
+            ],
+          },
+        },
+      ];
+      const items = rows
+        .map((row) =>
+          parseTranscriptLine(Buffer.from(JSON.stringify(row)), (value, maxLength) =>
+            typeof value === "string" && value.length <= maxLength ? value : undefined,
+          ),
+        )
+        .filter((item) => item !== undefined)
+        .toReversed();
+      const params = {
+        items,
+        threadId: "thread-1",
+        storePath: "/tmp/sessions.json",
+        sessionId: "session-1",
+        sessionKey: "agent:main:catalog-adopt",
+        agentId: "main",
+        config: {} as OpenClawConfig,
+      };
+      await importClaudeHistory(params);
+
+      const assistantBlocks = appended
+        .filter((message) => message.role === "assistant")
+        .flatMap((message) => message.content);
+      expect(assistantBlocks).toEqual([
+        ...(mixed
+          ? [
+              { type: "text", text: "Writing both files" },
+              { type: "thinking", thinking: "Keep both bodies" },
+            ]
+          : []),
+        {
+          type: "toolCall",
+          id: "write-a",
+          name: "Write",
+          arguments: { file_path: "a.txt", content: "first body" },
+        },
+        {
+          type: "toolCall",
+          id: "write-b",
+          name: "Write",
+          arguments: { file_path: "b.txt", content: "second body" },
+        },
+      ]);
+      expect(appended.filter((message) => message.role === "toolResult")).toMatchObject([
+        { toolCallId: "write-a", content: [{ type: "text", text: "Written" }], isError: false },
+        {
+          toolCallId: "write-b",
+          content: [{ type: "text", text: "Permission denied" }],
+          isError: true,
+        },
+      ]);
+      if (mixed) {
+        expect(appended.at(-1)).toMatchObject({
+          role: "user",
+          content: "Continue with a.txt",
+          __openclaw: { mirrorOrigin: "claude-catalog-import" },
+        });
+      }
+      const keys = appended.map((message) => message.idempotencyKey);
+      expect(new Set(keys).size).toBe(keys.length);
+      appended.length = 0;
+      await importClaudeHistory(params);
+      expect(appended.map((message) => message.idempotencyKey)).toEqual(keys);
+    },
+  );
+
   it("omits metadata without changing other native conversation rows", async () => {
     appended.length = 0;
     const parse = (entry: Record<string, unknown>) =>
@@ -72,6 +187,28 @@ describe("importClaudeHistory", () => {
       expect.arrayContaining(["run the review", "compacted context", "transcript-only context"]),
     );
     expect(appended.find((message) => message.role === "assistant")).toBeDefined();
+  });
+
+  it("keeps non-object native tool input visible instead of replacing it with empty arguments", async () => {
+    appended.length = 0;
+    await importClaudeHistory({
+      items: [
+        {
+          type: "toolCall",
+          uuid: "call",
+          content: [{ type: "tool_use", id: "call", name: "custom", input: ["x"] }],
+        },
+      ],
+      threadId: "thread-1",
+      storePath: "/tmp/sessions.json",
+      sessionId: "session-1",
+      sessionKey: "agent:main:catalog-adopt",
+      agentId: "main",
+      config: {} as OpenClawConfig,
+    });
+    expect(appended[0]?.content).toEqual([
+      { type: "text", text: `Tool call\n\ncustom\n\n${JSON.stringify(["x"], null, 2)}` },
+    ]);
   });
 
   it("preserves Date.parse semantics for valid strings and falls back for invalid values", async () => {
