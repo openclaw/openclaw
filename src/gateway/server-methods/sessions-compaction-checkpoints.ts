@@ -217,12 +217,10 @@ function createCheckpointHandler(action: CheckpointAction): GatewayRequestHandle
           preparationError = errorShape(ErrorCodes.INVALID_REQUEST, placementError.message);
           return;
         }
-        clearSessionQueues([
-          key,
-          current.canonicalKey,
-          current.sessionStoreKey,
-          current.entry.sessionId,
-        ]);
+        // Drain admitted work before the mutation proceeds, but do not retire
+        // queues here: a restore that never proceeds (or whose durable restore
+        // fails) must leave accepted follow-up and command-lane work intact.
+        // Old-generation queues are cleared only after durable restore succeeds.
         const released = await interruptSessionWorkAdmissions({
           scope: storePath,
           identities: lifecycleIdentities,
@@ -277,6 +275,16 @@ function createCheckpointHandler(action: CheckpointAction): GatewayRequestHandle
           sessionStoreKey: current.sessionStoreKey,
           checkpointId,
         });
+        // Retire old-generation queues only after durable restore succeeds, so a
+        // failed restore leaves accepted follow-up and command-lane work intact.
+        if (result.status === "created") {
+          clearSessionQueues([
+            key,
+            current.canonicalKey,
+            current.sessionStoreKey,
+            current.entry.sessionId,
+          ]);
+        }
         complete(result, current.canonicalKey);
       },
     });

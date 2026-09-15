@@ -61,6 +61,7 @@ import {
   createCheckpointFixture,
   directSessionReq,
   expectNoSessionQueueCleanup,
+  expectSessionQueueClearedOnce,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
@@ -1768,6 +1769,214 @@ test("sessions.compact preserves accepted queued follow-up work", async () => {
     expect(getExistingFollowupQueue(sessionKey)?.items).toHaveLength(1);
     expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
     expectNoSessionQueueCleanup();
+  } finally {
+    clearFollowupQueue(sessionKey);
+    ws.close();
+  }
+});
+
+async function seedRestorableCheckpoint(storePath: string, dir: string) {
+  const fixture = await createCheckpointFixture(dir, { legacyPreCompactionSnapshot: false });
+  const checkpointEntry = compactionCheckpointEntry(fixture, {
+    checkpointId: "checkpoint-1",
+    sessionKey: "agent:main:main",
+    createdAt: Date.now(),
+    reason: "manual",
+    summary: "checkpoint summary",
+    tokensBefore: 123,
+    tokensAfter: 45,
+  });
+  await seedSessionEntry({
+    entry: sessionStoreEntry(fixture.sessionId, {
+      sessionFile: fixture.sessionFile,
+      compactionCheckpoints: [checkpointEntry],
+    }),
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  await seedTranscriptRows({
+    sessionId: fixture.sessionId,
+    sessionKey: "agent:main:main",
+    storePath,
+    totalLines: 2,
+  });
+  await alignCheckpointBoundaryWithSqliteRows({
+    sessionId: fixture.sessionId,
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  return fixture;
+}
+
+test.each([
+  { name: "follow-up", withFollowup: true, withCommand: false },
+  { name: "command-lane", withFollowup: false, withCommand: true },
+])(
+  "sessions.compaction.restore preserves accepted $name work when active admission blocks restore",
+  async ({ withFollowup, withCommand }) => {
+    const { dir, storePath } = await createSessionStoreDir();
+    await seedRestorableCheckpoint(storePath, dir);
+    const sessionKey = "agent:main:main";
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+    const queuedRun = {
+      prompt: "please also update the changelog",
+      enqueuedAt: Date.now(),
+      run: {},
+    } as unknown as FollowupRun;
+    if (withFollowup) {
+      expect(
+        enqueueFollowupRun(
+          sessionKey,
+          queuedRun,
+          { mode: "followup", debounceMs: 60_000 },
+          "none",
+          undefined,
+          false,
+        ),
+      ).toBe(true);
+    }
+    let commandRan = false;
+    let queuedCommand: Promise<void> | undefined;
+    if (withCommand) {
+      setCommandLaneConcurrency(lane, 0);
+      queuedCommand = enqueueCommandInLane(lane, async () => {
+        commandRan = true;
+      });
+      expect(getCommandLaneSnapshot(lane)).toMatchObject({ queuedCount: 1 });
+    }
+
+    // Hold an admission on the session/request identities (not the fenced
+    // sessionId/lifecycleRevision pair) so the lifecycle mutation proceeds into
+    // its prepare step but interruptSessionWorkAdmissions cannot release it,
+    // exercising the restore-never-proceeds path.
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: ["main", sessionKey],
+      assertAllowed: () => {},
+    });
+
+    const { ws } = await openClient();
+    try {
+      const restored = await rpcReq(
+        ws,
+        "sessions.compaction.restore",
+        { key: "main", checkpointId: "checkpoint-1" },
+        20_000,
+      );
+
+      expect(restored.ok).toBe(false);
+      expect(restored.error).toMatchObject({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("is still active"),
+      });
+      // Accepted queued work must survive a restore that left durable
+      // session/checkpoint state unchanged.
+      if (withFollowup) {
+        expect(getExistingFollowupQueue(sessionKey)?.items).toHaveLength(1);
+      }
+      if (withCommand) {
+        expect(getCommandLaneSnapshot(lane).queuedCount).toBe(1);
+        expect(commandRan).toBe(false);
+      }
+      expectNoSessionQueueCleanup();
+    } finally {
+      clearFollowupQueue(sessionKey);
+      if (withCommand) {
+        setCommandLaneConcurrency(lane, 1);
+        await queuedCommand;
+      }
+      admission.release();
+      ws.close();
+    }
+    expect(commandRan).toBe(withCommand);
+  },
+);
+
+test("sessions.compaction.restore preserves accepted queued work when an embedded run blocks restore", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const fixture = await seedRestorableCheckpoint(storePath, dir);
+  const sessionKey = "agent:main:main";
+  const queuedRun = {
+    prompt: "please also update the changelog",
+    enqueuedAt: Date.now(),
+    run: {},
+  } as unknown as FollowupRun;
+  expect(
+    enqueueFollowupRun(
+      sessionKey,
+      queuedRun,
+      { mode: "followup", debounceMs: 60_000 },
+      "none",
+      undefined,
+      false,
+    ),
+  ).toBe(true);
+
+  // An embedded run that never ends exercises the sibling interruption path:
+  // abort is sent, but waitForEmbeddedAgentRunEnd times out, so restore must
+  // fail without retiring accepted queued work.
+  embeddedRunMock.activeIds.add(fixture.sessionId);
+  embeddedRunMock.waitResults.set(fixture.sessionId, false);
+
+  const { ws } = await openClient();
+  try {
+    const restored = await rpcReq(
+      ws,
+      "sessions.compaction.restore",
+      { key: "main", checkpointId: "checkpoint-1" },
+      20_000,
+    );
+
+    expect(restored.ok).toBe(false);
+    expect(restored.error).toMatchObject({
+      code: "UNAVAILABLE",
+      message: expect.stringContaining("is still active"),
+    });
+    expect(getExistingFollowupQueue(sessionKey)?.items).toHaveLength(1);
+    expectNoSessionQueueCleanup();
+  } finally {
+    clearFollowupQueue(sessionKey);
+    embeddedRunMock.activeIds.delete(fixture.sessionId);
+    embeddedRunMock.waitResults.delete(fixture.sessionId);
+    ws.close();
+  }
+});
+
+test("sessions.compaction.restore clears old-generation queues exactly once after durable restore succeeds", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const fixture = await seedRestorableCheckpoint(storePath, dir);
+  const sessionKey = "agent:main:main";
+  const queuedRun = {
+    prompt: "please also update the changelog",
+    enqueuedAt: Date.now(),
+    run: {},
+  } as unknown as FollowupRun;
+  expect(
+    enqueueFollowupRun(
+      sessionKey,
+      queuedRun,
+      { mode: "followup", debounceMs: 60_000 },
+      "none",
+      undefined,
+      false,
+    ),
+  ).toBe(true);
+
+  const { ws } = await openClient();
+  try {
+    const restored = await rpcReq<{
+      ok: boolean;
+      entry: { sessionId?: string };
+    }>(ws, "sessions.compaction.restore", {
+      key: "main",
+      checkpointId: "checkpoint-1",
+    });
+
+    expect(restored.ok).toBe(true);
+    // Durable restore succeeded: old-generation queues are retired exactly once.
+    expectSessionQueueClearedOnce(["main", "agent:main:main"]);
+    // A fresh replacement session took over the same key.
+    expect(restored.payload?.entry.sessionId).not.toBe(fixture.sessionId);
   } finally {
     clearFollowupQueue(sessionKey);
     ws.close();

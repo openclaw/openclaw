@@ -4,7 +4,6 @@ import {
   isEmbeddedAgentRunActive,
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
@@ -92,11 +91,6 @@ export async function interruptSessionRunIfActive(params: {
 
   if (hasEmbeddedRun && params.sessionId) {
     abortEmbeddedAgentRun(params.sessionId);
-  }
-
-  clearSessionQueues([params.requestedKey, params.canonicalKey, params.sessionId]);
-
-  if (hasEmbeddedRun && params.sessionId) {
     const ended = await waitForEmbeddedAgentRunEnd(params.sessionId, 15_000);
     if (!ended) {
       return {

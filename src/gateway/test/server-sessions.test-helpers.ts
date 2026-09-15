@@ -629,6 +629,10 @@ function expectSessionQueueCleanup(expectedQueueKeys: string[]) {
   }
 }
 
+export function expectSessionQueueClearedOnce(expectedQueueKeys: string[]) {
+  expectSessionQueueCleanup(expectedQueueKeys);
+}
+
 export function expectNoSessionQueueCleanup() {
   expect(sessionCleanupMocks.clearSessionQueues).not.toHaveBeenCalled();
 }
