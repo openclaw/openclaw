@@ -1792,6 +1792,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/prism:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/qa-channel:
     dependencies:
       typebox:

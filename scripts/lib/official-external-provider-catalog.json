@@ -1298,6 +1298,55 @@
       }
     },
     {
+      "name": "@openclaw/prism-provider",
+      "description": "OpenClaw Prism provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "prism",
+          "label": "Prism"
+        },
+        "providerEndpoints": [
+          {
+            "endpointClass": "prism-native",
+            "hosts": ["api.prisminference.com"]
+          }
+        ],
+        "providers": [
+          {
+            "id": "prism",
+            "name": "Prism",
+            "docs": "/providers/prism",
+            "categories": ["cloud", "llm"],
+            "envVars": ["PRISM_API_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "prism-api-key",
+                "choiceLabel": "Prism API key",
+                "choiceHint": "OpenAI-compatible Prism endpoint",
+                "groupId": "prism",
+                "groupLabel": "Prism",
+                "groupHint": "OpenAI-compatible Prism endpoint",
+                "optionKey": "prismApiKey",
+                "cliFlag": "--prism-api-key",
+                "cliOption": "--prism-api-key <key>",
+                "cliDescription": "Prism API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/prism-provider",
+          "npmSpec": "@openclaw/prism-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.9.4"
+        }
+      }
+    },
+    {
       "name": "@openclaw/qianfan-provider",
       "description": "OpenClaw Qianfan provider plugin.",
       "source": "official",
