@@ -84,6 +84,15 @@ export function createSessionManagedListRefresh(
       }
       return entry.pending;
     }
+    // Another bootstrap path can hydrate this query while its initial fill waits for admission.
+    if (
+      refresh.background &&
+      !refresh.invalidated &&
+      !refresh.append &&
+      entry.connectionEpoch === scope.epoch
+    ) {
+      return Promise.resolve();
+    }
     if (refresh.append && !entry.snapshot.result) {
       return Promise.resolve();
     }
@@ -214,9 +223,15 @@ export function createSessionManagedListRefresh(
     if (!refresh.background || entry.pending) {
       return refreshManagedList(entry, refresh);
     }
+    if (!entry.queued || (refresh.invalidated && entry.queued.background)) {
+      entry.queued = refresh;
+    }
     return host.background(entry, async () => {
       if (managedLists.get(entry.key) === entry && entry.listeners.size > 0) {
-        await refreshManagedList(entry, refresh);
+        // Scheduler deduplication must retain invalidation that arrives after the initial fill.
+        const queued = entry.queued ?? refresh;
+        entry.queued = null;
+        await refreshManagedList(entry, queued);
       }
     });
   };
