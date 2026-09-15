@@ -414,6 +414,9 @@ async function runDoctorConfigPreflightOperation(
         cfg: automaticConfigRepair?.config ?? baseConfig,
         env: startupMigrationEnv,
         measure: options.measure,
+        retainedPluginIds: pluginMigrations
+          .snapshotOptions()
+          .deferredPluginMigrations.map((plugin) => plugin.pluginId),
         converge: !gatewayStartupCheckpointRequired || shouldRecordStartupCheckpoint,
         lease: startupMigrationLease,
         snapshotRead: { ...configSnapshotRead, snapshot },

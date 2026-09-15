@@ -73,10 +73,12 @@ export async function inspectPluginMigrationAvailability(params: {
           configuredChannelOwnerPluginIds: context.configuredChannelOwnerPluginIds,
           blockedPluginIds,
         });
-        const inspectedIds = new Set([...selected, ...(params.retainedPluginIds ?? [])]);
+        const retainedPluginIds = new Set(params.retainedPluginIds ?? []);
+        const inspectedIds = new Set([...selected, ...retainedPluginIds]);
         const requiredPluginIds: string[] = [];
         const inspectionRequiredPluginIds: string[] = [];
         const statelessCandidates = new Set<string>();
+        const configOnlyCandidates = new Set<string>();
         for (const plugin of metadata.plugins) {
           if (!inspectedIds.has(plugin.id)) {
             continue;
@@ -100,6 +102,9 @@ export async function inspectPluginMigrationAvailability(params: {
             inspectionRequiredPluginIds.push(plugin.id);
           } else {
             statelessCandidates.add(plugin.id);
+            if (artifact && plugin.doctorContract?.configRepair === true) {
+              configOnlyCandidates.add(plugin.id);
+            }
           }
         }
         const requiredIds = new Set(requiredPluginIds);
@@ -118,15 +123,25 @@ export async function inspectPluginMigrationAvailability(params: {
               isPayloadMissing(params.env, context.records[pluginId]?.installPath)) ||
             context.installedPluginIdsWithRepairablePackages.has(pluginId) ||
             context.configuredPluginIdsWithStaleDescriptors.has(pluginId);
+          // Installation deferral cannot hide a ready config-only contract from the canary.
+          // Retained obligations still belong to the migration completion owner.
+          const readyConfigOnly =
+            !unavailable &&
+            !retainedPluginIds.has(pluginId) &&
+            configOnlyCandidates.has(pluginId) &&
+            plugin !== undefined &&
+            isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: params.cfg });
+          const available =
+            bundled || (!params.deferInstallation && !unavailable) || readyConfigOnly;
           if (
-            (bundled || (!params.deferInstallation && !unavailable)) &&
+            available &&
             plugin &&
             statelessCandidates.has(pluginId) &&
             isActivatedManifestOwner({ plugin, normalizedConfig, rootConfig: params.cfg })
           ) {
             statelessPluginIds.push(pluginId);
           }
-          if (bundled || (!params.deferInstallation && !unavailable)) {
+          if (available) {
             return [];
           }
           return [

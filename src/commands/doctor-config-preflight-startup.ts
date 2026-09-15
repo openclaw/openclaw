@@ -214,6 +214,7 @@ export async function prepareDoctorMigrationPlugins(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   measure?: ConfigSnapshotReadMeasure;
+  retainedPluginIds?: readonly string[];
   converge: boolean;
   lease: StartupMigrationLease | undefined;
   snapshotRead: DoctorConfigPreflightPluginSnapshotRead;

@@ -26,6 +26,12 @@ protection.
 Session edits and deletions made after the core import remain authoritative when
 the plugin migration resumes.
 
+Available plugins that declare only config repair can run their Doctor contracts
+during the private update canary without fetching replacement packages. Plugins
+with stale or missing payloads, state migrations, unknown migration contracts, or
+retained migration obligations still wait for the existing convergence and
+migration owners.
+
 While a migration is pending, explicit config edits that would change or remove
 its retained inputs are refused with the recovery command. Unrelated settings
 remain writable. Complete the plugin migration before editing those inputs.

@@ -87,6 +87,7 @@ export async function runDoctorPluginConvergence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   measure?: ConfigSnapshotReadMeasure;
+  retainedPluginIds?: readonly string[];
 }): Promise<StartupPluginConvergenceResult> {
   const plan = await planStartupPluginVerification(params);
   if (!plan.required) {

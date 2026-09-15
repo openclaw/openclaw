@@ -51,11 +51,56 @@ const {
   runWithPluginMetadataSnapshot,
   note,
   recordDeferredPluginMigrations,
+  pendingPluginMigrations,
+  inspectPluginMigrationAvailability,
 } = preflightStateMigrationMocks;
 const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js");
 
 describe("runDoctorConfigPreflight state migration", () => {
   beforeEach(resetStateMigrationPreflightMocks);
+
+  it("retains config-only migration debt through update convergence", async () => {
+    const pending = {
+      pluginId: "fixture",
+      reason: "Plugin installation was deferred by the previous update.",
+      command: "openclaw update repair",
+    };
+    pendingPluginMigrations.mockReturnValue([pending]);
+    inspectPluginMigrationAvailability.mockImplementation(async ({ retainedPluginIds }) => ({
+      pending: retainedPluginIds?.includes("fixture") ? [pending] : [],
+      requiredPluginIds: [],
+      inspectionRequiredPluginIds: [],
+      statelessPluginIds: retainedPluginIds?.includes("fixture") ? [] : ["fixture"],
+    }));
+
+    await readConfigFileSnapshot.withImplementation(
+      async () =>
+        makePreflightConfigSnapshot({
+          gateway: { mode: "local" },
+          plugins: { entries: { fixture: { enabled: true } } },
+        }),
+      async () =>
+        withEnvAsync(
+          {
+            OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+            OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
+          },
+          async () => {
+            const result = await runDoctorConfigPreflight({
+              migrateState: true,
+              migrateLegacyConfig: false,
+              invalidConfigNote: false,
+            });
+            expect(result.deferredPluginMigrations).toEqual([pending]);
+            expect(recordDeferredPluginMigrations).toHaveBeenLastCalledWith(
+              expect.objectContaining({ pending: [pending], resolvedPluginIds: [] }),
+            );
+            expect(runPostCorePluginConvergence).not.toHaveBeenCalled();
+          },
+        ),
+    );
+  });
 
   it("forwards config snapshot phase measurement", async () => {
     const measure: ConfigSnapshotReadMeasure = async (_name, run) => await run();

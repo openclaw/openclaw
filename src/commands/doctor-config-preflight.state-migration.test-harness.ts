@@ -261,6 +261,8 @@ export const preflightStateMigrationMocks = {
   runWithPluginMetadataSnapshot,
   note,
   recordDeferredPluginMigrations,
+  pendingPluginMigrations,
+  inspectPluginMigrationAvailability,
 };
 
 export function resetStateMigrationPreflightMocks(): void {
