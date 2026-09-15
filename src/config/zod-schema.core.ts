@@ -353,6 +353,7 @@ const ModelCompatSchema = z
      * supports Anthropic long cache retention (`cache_control.ttl: "1h"`). Default: true.
      */
     supportsLongCacheRetention: z.boolean().optional(),
+    dropCumulativeTextDeltaReplays: z.boolean().optional(),
   })
   .strict()
   .optional();

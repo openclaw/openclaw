@@ -9,7 +9,9 @@ export type RecoveredDeepSeekDsmlToolCall = {
   partialArgs: string;
 };
 
-type DeepSeekDsmlRecoveredPart = { kind: "text"; text: string } | RecoveredDeepSeekDsmlToolCall;
+export type DeepSeekDsmlRecoveredPart =
+  | { kind: "text"; text: string }
+  | RecoveredDeepSeekDsmlToolCall;
 
 const DEEPSEEK_DSML_TOOL_KINDS = ["tool_calls", "tool_call", "function_calls"] as const;
 const DEEPSEEK_DSML_TOOL_OPEN_TOKENS = DEEPSEEK_DSML_MARKERS.flatMap((marker) =>
@@ -159,6 +161,9 @@ export function createDsmlRecoverer() {
     },
     flush() {
       return consume(true);
+    },
+    hasPending() {
+      return buffer.length > 0;
     },
   };
 }

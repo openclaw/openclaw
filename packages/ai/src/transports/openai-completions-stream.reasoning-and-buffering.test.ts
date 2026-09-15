@@ -211,6 +211,114 @@ describe("openai completions stream", () => {
     expectRecordFields(output.content[2], { type: "text", text: " Visible third." });
   });
 
+  it("keeps reasoning transitions between strict-buffered structured text parts", async () => {
+    const model = makeCompletionsModel({
+      id: "test/reasoning-strict-frame",
+      name: "Reasoning Strict Frame",
+      provider: "test",
+      baseUrl: "https://test.invalid/v1",
+      reasoning: true,
+      compat: { dropCumulativeTextDeltaReplays: true },
+    });
+    const output = createAssistantOutput(model);
+    const emitted: string[] = [];
+    await processCompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({ reasoning_content: "First." }),
+        makeCompletionsChunk({
+          content: [
+            { type: "text", text: "Interim." },
+            { type: "thinking", thinking: "Second." },
+            { type: "text", text: "Final." },
+          ],
+        }),
+        makeCompletionsChunk({}, "stop"),
+      ]),
+      output,
+      model,
+      {
+        push(event) {
+          if (event.type === "text_delta" || event.type === "thinking_delta") {
+            emitted.push(`${event.type}:${event.delta}`);
+          }
+        },
+      },
+      { strictReasoningTags: true },
+    );
+
+    expect(emitted).toEqual([
+      "thinking_delta:First.",
+      "text_delta:Interim.",
+      "thinking_delta:Second.",
+      "text_delta:Final.",
+    ]);
+    expect(output.content.map((block) => block.type)).toEqual([
+      "thinking",
+      "text",
+      "thinking",
+      "text",
+    ]);
+  });
+
+  it.each([
+    {
+      name: "enabled",
+      compat: { dropCumulativeTextDeltaReplays: true } as Record<string, unknown>,
+    },
+    { name: "disabled", compat: undefined },
+  ])(
+    "orders released text before structured reasoning while tag syntax stays pending with replays $name",
+    async ({ compat }) => {
+      const model = makeCompletionsModel({
+        id: "test/reasoning-pending-syntax-ordering",
+        name: "Reasoning Pending Syntax Ordering",
+        provider: "test",
+        baseUrl: "https://test.invalid/v1",
+        reasoning: true,
+        ...(compat ? { compat } : {}),
+      });
+      const output = createAssistantOutput(model);
+      const emitted: string[] = [];
+      await processCompletionsStream(
+        streamChunks([
+          makeCompletionsChunk({ reasoning_content: "First." }),
+          // The trailing tag syntax stays incomplete, so only the text prefix is released.
+          makeCompletionsChunk({ content: "Interim.<think" }),
+          makeCompletionsChunk({
+            content: [
+              { type: "thinking", thinking: "Second." },
+              { type: "text", text: "Final." },
+            ],
+          }),
+          makeCompletionsChunk({}, "stop"),
+        ]),
+        output,
+        model,
+        {
+          push(event) {
+            if (event.type === "text_delta" || event.type === "thinking_delta") {
+              emitted.push(`${event.type}:${event.delta}`);
+            }
+          },
+        },
+        { strictReasoningTags: true },
+      );
+
+      expect(emitted).toEqual([
+        "thinking_delta:First.",
+        "text_delta:Interim.<think",
+        "thinking_delta:Second.",
+        "text_delta:Final.",
+      ]);
+      expect(output.content.map((block) => block.type)).toEqual([
+        "thinking",
+        "text",
+        "thinking",
+        "text",
+      ]);
+    },
+  );
+
   it("phases text interrupted by resumed reasoning_details", async () => {
     const model = makeCompletionsModel({
       id: "openrouter/qwen/qwen3-235b-a22b",

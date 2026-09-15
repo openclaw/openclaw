@@ -6,6 +6,7 @@ import type { OpenAICompletionsOptions } from "../provider-options.js";
 import {
   createOpenAICompletionsToolCallDeltaNormalizer,
   createOpenAIEncryptedToolCallReasoningTracker,
+  extractToolCallThoughtSignature,
   finalizeOpenAICompletionsToolCalls,
 } from "../providers/openai-completions-tool-calls.js";
 import { mapOpenAIStopReason } from "../providers/openai-stop-reason.js";
@@ -23,11 +24,15 @@ import {
   type ToolArgumentPreviewSchedule,
 } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
-import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
+import {
+  createReasoningTagTextPartitioner,
+  type ReasoningTagTextDelta,
+} from "../utils/reasoning-tag-text-partitioner.js";
 import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import {
   createDsmlRecoverer,
+  type DeepSeekDsmlRecoveredPart,
   type RecoveredDeepSeekDsmlToolCall,
 } from "./openai-completions-dsml.js";
 import { getCompat } from "./openai-transport-params.js";
@@ -35,25 +40,23 @@ import {
   createModelStreamCooperativeScheduler,
   isOpenAICompletionsThinkingEnabled,
   parseOpenAICompletionsUsage,
+  createCumulativeReplayGuard,
   readOpenAICompletionsContentDeltas,
   readOpenAICompletionsReasoningBatch,
   throwIfModelStreamAborted,
   type MutableAssistantOutput,
+  type OpenAICompatibleChatCompletionChunk,
   type OpenAICompletionsContentDelta as CompletionsReasoningDelta,
   type OpenAICompletionsTextSource,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
 
-type OpenAICompatibleChoice = ChatCompletionChunk["choices"][number] & {
-  // Some compatible providers attach usage per choice instead of per chunk.
-  usage?: ChatCompletionChunk["usage"];
-  // Some compatible providers stream a complete message in place of delta.
-  message?: ChatCompletionChunk["choices"][number]["delta"];
-};
+// A deferred emit step for the DSML visible-text chain: text steps carry
+// their filtered piece and may be suppressed whole-frame by the replay guard;
+// every other step always runs.
+type DsmlChainStep = { text?: string; emit(): void };
 
-type OpenAICompatibleChatCompletionChunk = Omit<ChatCompletionChunk, "choices"> & {
-  choices: OpenAICompatibleChoice[];
-};
+const textPart = (text: string): DeepSeekDsmlRecoveredPart => ({ kind: "text", text });
 
 type CompletionsStreamOptions = {
   signal?: AbortSignal;
@@ -72,27 +75,6 @@ type CompletionsStreamOptions = {
   | { mode?: "managed"; beforeContentBlock?: never }
 );
 
-function extractToolCallThoughtSignature(toolCall: unknown): string | undefined {
-  const tc = toolCall as Record<string, unknown> | undefined;
-  if (!tc) {
-    return undefined;
-  }
-  const extra = (tc.extra_content as Record<string, unknown> | undefined)?.google as
-    | Record<string, unknown>
-    | undefined;
-  const fromExtra = extra?.thought_signature;
-  if (typeof fromExtra === "string" && fromExtra.length > 0) {
-    return fromExtra;
-  }
-  const fromFunction = (tc.function as { thought_signature?: unknown } | undefined)
-    ?.thought_signature;
-  if (typeof fromFunction === "string" && fromFunction.length > 0) {
-    return fromFunction;
-  }
-  const fromToolCall = tc.thought_signature;
-  return typeof fromToolCall === "string" && fromToolCall.length > 0 ? fromToolCall : undefined;
-}
-
 export async function processCompletionsStream(
   responseStream: AsyncIterable<ChatCompletionChunk>,
   output: MutableAssistantOutput,
@@ -104,13 +86,14 @@ export async function processCompletionsStream(
   const directMode = options?.mode === "direct";
   const emitReasoning = options?.emitReasoning ?? true;
   const compat = getCompat(model as OpenAIModeModel);
+  const replayGuard = createCumulativeReplayGuard(compat.dropCumulativeTextDeltaReplays);
   const visibleReasoningDetailTypes = new Set(compat.visibleReasoningDetailTypes);
   const shouldFilterDeepSeekDsmlText = !directMode && compat.thinkingFormat === "deepseek";
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText ? createDeepSeekTextFilter() : null;
-  const deepSeekToolCallRecoverer = shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
-  const reasoningTagTextPartitioner = createReasoningTagTextPartitioner();
+  const dsmlRecoverer = shouldFilterDeepSeekDsmlText ? createDsmlRecoverer() : null;
+  const tagPartitioner = createReasoningTagTextPartitioner();
   if (options?.strictReasoningTags) {
-    reasoningTagTextPartitioner.markStrict();
+    tagPartitioner.markStrict();
   }
   type ToolCallBlock = {
     type: "toolCall";
@@ -149,14 +132,29 @@ export async function processCompletionsStream(
     directMode && currentBlock && currentBlock.type !== "toolCall"
       ? (contentBlockIndices.get(currentBlock) ?? output.content.length - 1)
       : output.content.length - 1;
-  const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   let chunkPushedEvent = false;
   const pushStreamEvent = (event: AssistantMessageEvent) => {
     chunkPushedEvent = true;
     stream.push(event);
   };
+  // The replay ledger tracks filtered visible text and advances as each piece
+  // is released, before the post-tool-call queue can hold it back. Frame
+  // identity is decided once per complete provider frame, on its whole
+  // visible contribution; admitted pieces then record without re-comparing.
+  // Both visible-text feeders route through this seam; the closures read the
+  // declared block union rather than flow narrowing.
+  const opensTextBlock = (source?: OpenAICompletionsTextSource) =>
+    currentBlock?.type !== "text" || currentTextSource !== source;
+  const framesSettled = () =>
+    !tagPartitioner.hasPending() &&
+    !dsmlRecoverer?.hasPending() &&
+    !deepSeekTextFilter?.hasPending();
+  const classifyFrame = (visible: string) =>
+    replayGuard.classifyFrame(visible, opensTextBlock(), framesSettled());
+  const admitText = (text: string, source?: OpenAICompletionsTextSource, wholeFrame = false) =>
+    replayGuard.admitTextDelta(text, opensTextBlock(source), wholeFrame);
   const queuePostToolCallDelta = (next: CompletionsReasoningDelta) => {
-    const nextBytes = measureUtf8Bytes(next.text);
+    const nextBytes = Buffer.byteLength(next.text, "utf8");
     if (pendingPostToolCallBytes + nextBytes > MAX_POST_TOOL_CALL_BUFFER_BYTES) {
       throw new Error("Exceeded post-tool-call delta buffer limit");
     }
@@ -229,6 +227,7 @@ export async function processCompletionsStream(
       output.content.push(currentBlock);
       contentBlockIndices.set(currentBlock, output.content.length - 1);
       pushStreamEvent({ type: "text_start", contentIndex: blockIndex(), partial: output });
+      replayGuard.onTextStart();
     }
     currentBlock.text += text;
     if (pendingInterruptedTextBlock && text.trim()) {
@@ -272,7 +271,7 @@ export async function processCompletionsStream(
     appendTextDeltaInternal(text, source);
   };
   const appendVisibleTextDelta = (text: string) => {
-    if (!text) {
+    if (!text || !admitText(text)) {
       return;
     }
     if (currentBlock?.type === "toolCall" && !directMode) {
@@ -281,22 +280,25 @@ export async function processCompletionsStream(
       appendTextDelta(text);
     }
   };
-  const appendReasoningDeltas = (reasoningDeltas: readonly CompletionsReasoningDelta[]) => {
-    for (const reasoningDelta of reasoningDeltas) {
-      if (reasoningDelta.kind === "thinking" && !emitReasoning) {
+  const appendReasoningDeltas = (reasonings: readonly CompletionsReasoningDelta[]) => {
+    for (const reasoning of reasonings) {
+      if (reasoning.kind === "thinking" && !emitReasoning) {
+        continue;
+      }
+      if (reasoning.kind === "text" && !admitText(reasoning.text, reasoning.source, true)) {
         continue;
       }
       if (currentBlock?.type === "toolCall" && !directMode) {
-        queuePostToolCallDelta({ ...reasoningDelta });
+        queuePostToolCallDelta({ ...reasoning });
         continue;
       }
-      if (reasoningDelta.kind === "text") {
-        appendTextDelta(reasoningDelta.text, reasoningDelta.source);
+      if (reasoning.kind === "text") {
+        appendTextDelta(reasoning.text, reasoning.source);
       } else if (emitReasoning) {
         appendThinkingDelta(
-          directMode && model.provider === "opencode-go" && reasoningDelta.signature === "reasoning"
-            ? { ...reasoningDelta, signature: "reasoning_content" }
-            : reasoningDelta,
+          directMode && model.provider === "opencode-go" && reasoning.signature === "reasoning"
+            ? { ...reasoning, signature: "reasoning_content" }
+            : reasoning,
         );
       }
     }
@@ -336,49 +338,32 @@ export async function processCompletionsStream(
       partial: output,
     });
   };
-  const appendFilteredVisibleTextDelta = (text: string) => {
-    const recoveredParts = deepSeekToolCallRecoverer?.push(text) ?? [
-      { kind: "text" as const, text },
-    ];
-    for (const recoveredPart of recoveredParts) {
+  // Defers the DSML chain's emit steps so a caller can classify the whole
+  // filtered output before any of it streams; text steps carry their piece.
+  const planRecoveredText = (recovered: DeepSeekDsmlRecoveredPart[], plan: DsmlChainStep[]) => {
+    for (const recoveredPart of recovered) {
       if (recoveredPart.kind === "toolCall") {
-        appendRecoveredToolCall(recoveredPart);
+        plan.push({ emit: () => appendRecoveredToolCall(recoveredPart) });
         continue;
       }
-      const parts = deepSeekTextFilter?.push(recoveredPart.text) ?? [recoveredPart.text];
-      for (const part of parts) {
-        appendVisibleTextDelta(part);
+      for (const part of deepSeekTextFilter?.push(recoveredPart.text) ?? [recoveredPart.text]) {
+        plan.push({ text: part, emit: () => appendVisibleTextDelta(part) });
       }
     }
   };
-  const flushDeepSeekToolCallRecovererAtEnd = () => {
-    const recoveredParts = deepSeekToolCallRecoverer?.flush();
-    if (!recoveredParts) {
-      return;
+  const flushDeepSeekStagesAtEnd = () => {
+    const steps: DsmlChainStep[] = [];
+    planRecoveredText(dsmlRecoverer?.flush() ?? [], steps);
+    for (const part of deepSeekTextFilter?.flush() ?? []) {
+      steps.push({ text: part, emit: () => appendVisibleTextDelta(part) });
     }
-    for (const recoveredPart of recoveredParts) {
-      if (recoveredPart.kind === "toolCall") {
-        appendRecoveredToolCall(recoveredPart);
-        continue;
-      }
-      const parts = deepSeekTextFilter?.push(recoveredPart.text) ?? [recoveredPart.text];
-      for (const part of parts) {
-        appendVisibleTextDelta(part);
-      }
-    }
-  };
-  const flushDeepSeekTextFilterAtEnd = () => {
-    const parts = deepSeekTextFilter?.flush();
-    if (!parts) {
-      return;
-    }
-    for (const part of parts) {
-      appendVisibleTextDelta(part);
+    for (const step of steps) {
+      step.emit();
     }
   };
   const appendRoutedContentDelta = (delta: CompletionsReasoningDelta) => {
     if (delta.kind === "text") {
-      appendFilteredVisibleTextDelta(delta.text);
+      appendPartitionedVisibleDelta(delta);
       return;
     }
     if (!emitReasoning) {
@@ -391,8 +376,13 @@ export async function processCompletionsStream(
     }
   };
   const appendPartitionedVisibleDelta = (delta: { kind: "text" | "thinking"; text: string }) => {
-    if (delta.kind === "text") {
-      appendFilteredVisibleTextDelta(delta.text);
+    if (delta.kind !== "text") {
+      return;
+    }
+    const steps: DsmlChainStep[] = [];
+    planRecoveredText(dsmlRecoverer?.push(delta.text) ?? [textPart(delta.text)], steps);
+    for (const step of steps) {
+      step.emit();
     }
   };
   const emitReasoningUsageActivity = (hasReasoningUsageActivity: boolean) => {
@@ -409,12 +399,12 @@ export async function processCompletionsStream(
     appendThinkingDelta({ text: "" });
   };
   const flushReasoningTagTextPartitioner = () => {
-    for (const delta of reasoningTagTextPartitioner.flush()) {
+    for (const delta of tagPartitioner.flush()) {
       appendPartitionedVisibleDelta(delta);
     }
   };
   const sealTextBeforeReasoning = () => {
-    if (currentBlock?.type !== "text" && !reasoningTagTextPartitioner.hasPending()) {
+    if (currentBlock?.type !== "text" && !tagPartitioner.hasPending()) {
       return;
     }
     flushReasoningTagTextPartitioner();
@@ -439,12 +429,12 @@ export async function processCompletionsStream(
         textPhaseRequiresTerminal: true,
       };
     }
-    if (forceStrict || reasoningTagTextPartitioner.hasPending()) {
-      reasoningTagTextPartitioner.markStrict();
+    if (forceStrict || tagPartitioner.hasPending()) {
+      tagPartitioner.markStrict();
     }
     // Let following text finish syntax already owned by the Markdown
     // parser; otherwise packet batching cannot erase a lane boundary.
-    if (!hasFollowingVisibleText || !reasoningTagTextPartitioner.hasPendingSyntax()) {
+    if (!hasFollowingVisibleText || !tagPartitioner.hasPendingSyntax()) {
       sealTextBeforeReasoning();
     }
   };
@@ -541,20 +531,55 @@ export async function processCompletionsStream(
         beginReasoning(hasSameChunkVisibleText, true);
         appendReasoningDeltas(reasoningDeltas);
       }
+      // Some providers resend accumulated text as one bare delta; appending it
+      // doubles output. Visible text streams through the parser and DSML chain
+      // into a pending segment plan, and the guard classifies each segment's
+      // whole filtered visible contribution before it streams — at reasoning
+      // transitions and at the end of the content parts, so block structure,
+      // event ordering, and the post-tool-call queue match the unguarded
+      // sequence. A settled restatement drops its visible pieces while its
+      // recovered tool calls still flow; an unsettled segment always flows.
+      let plan: DsmlChainStep[] = [];
+      const planRouted = (routed: ReasoningTagTextDelta[]) => {
+        for (const piece of routed) {
+          if (piece.kind !== "text") {
+            continue;
+          }
+          planRecoveredText(dsmlRecoverer?.push(piece.text) ?? [textPart(piece.text)], plan);
+        }
+      };
+      const settlePlan = () => {
+        const admitted = classifyFrame(plan.reduce((text, step) => text + (step.text ?? ""), ""));
+        for (const step of plan.filter((candidate) => admitted || candidate.text === undefined)) {
+          step.emit();
+        }
+        plan = [];
+      };
+      const pushContent = (text: string) =>
+        hasReasoningThinking ? tagPartitioner.push(text) : tagPartitioner.pushVisible(text);
       for (const [contentDeltaIndex, contentDelta] of contentDeltas.entries()) {
         if (contentDelta.kind === "text") {
-          const routedDeltas = hasReasoningThinking
-            ? reasoningTagTextPartitioner.push(contentDelta.text)
-            : reasoningTagTextPartitioner.pushVisible(contentDelta.text);
-          for (const routedDelta of routedDeltas) {
-            appendPartitionedVisibleDelta(routedDelta);
-          }
+          planRouted(pushContent(contentDelta.text));
         } else {
-          const hasLaterVisibleText = contentDeltaIndex < lastVisibleTextIndex;
-          beginReasoning(hasLaterVisibleText);
+          // A reasoning part transitions lanes exactly as unguarded flow does:
+          // pending parser input marks strict, and buffered text releases
+          // unless following text must finish syntax the parser already owns.
+          // The released text settles — classified, then streamed — before the
+          // reasoning content appends, while text the parser still holds
+          // continues into the following segment.
+          if (tagPartitioner.hasPending()) {
+            tagPartitioner.markStrict();
+          }
+          const hasLaterVisible = contentDeltaIndex < lastVisibleTextIndex;
+          if (!hasLaterVisible || !tagPartitioner.hasPendingSyntax()) {
+            planRouted(tagPartitioner.flush());
+          }
+          settlePlan();
+          beginReasoning(hasLaterVisible);
           appendRoutedContentDelta(contentDelta);
         }
       }
+      settlePlan();
       if (!hasReasoningThinking) {
         appendReasoningDeltas(reasoningDeltas);
       }
@@ -665,8 +690,7 @@ export async function processCompletionsStream(
     throw new Error("Stream ended without finish_reason");
   }
   flushReasoningTagTextPartitioner();
-  flushDeepSeekToolCallRecovererAtEnd();
-  flushDeepSeekTextFilterAtEnd();
+  flushDeepSeekStagesAtEnd();
   currentBlock = null;
   flushPendingPostToolCallDeltas();
   // Only an explicit stop or observed SSE terminal may authorize silent tool calls.
