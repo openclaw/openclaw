@@ -7,16 +7,10 @@ import {
   createAgentCleanupScope,
 } from "../agents/run-cleanup-timeout.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { agentExecCommand } from "./agent-exec.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function createRuntime() {
-  const error = vi.fn();
-  const runtime: RuntimeEnv = { log: vi.fn(), error, exit: vi.fn() };
-  return { runtime, error };
-}
 
 function successResult() {
   return {
@@ -81,7 +75,7 @@ describe("agent exec retained-state ownership", () => {
       let runStateDir: string | undefined;
       try {
         const result = await cleanupScope.run(() =>
-          agentExecCommand("inspect", retained ? { stateDir: root } : {}, createRuntime().runtime, {
+          agentExecCommand("inspect", retained ? { stateDir: root } : {}, createTestRuntime(), {
             gatewayLockOptions: lockOptions,
             runAgent: async () => {
               runStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -126,7 +120,8 @@ describe("agent exec retained-state ownership", () => {
       throw new Error("Expected live Gateway fixture lock");
     }
     const runAgent = vi.fn(async () => successResult());
-    const { runtime, error } = createRuntime();
+    const runtime = createTestRuntime();
+    const { error } = runtime;
 
     try {
       const result = await agentExecCommand("inspect", { stateDir }, runtime, {
@@ -148,7 +143,7 @@ describe("agent exec retained-state ownership", () => {
     const lockOptions = createGatewayLockOptions(stateDir);
     const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
 
-    await agentExecCommand("inspect", { stateDir }, createRuntime().runtime, {
+    await agentExecCommand("inspect", { stateDir }, createTestRuntime(), {
       gatewayLockOptions: lockOptions,
       runAgent: vi.fn(async () => {
         const payload = JSON.parse(await fs.readFile(stateLockPath, "utf8")) as {
@@ -168,7 +163,7 @@ describe("agent exec retained-state ownership", () => {
     const lockOptions = createGatewayLockOptions(stateDir);
     const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
     const signals = createSignalProcess();
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     const runAgent = vi.fn(async (opts: Record<string, unknown>) => {
       const signal = opts.abortSignal as AbortSignal;
       return await new Promise<ReturnType<typeof successResult>>((_, reject) => {

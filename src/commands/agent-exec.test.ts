@@ -20,7 +20,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   buildExecRunConfig,
   resolveAgentExecPrompt,
@@ -28,21 +27,11 @@ import {
 } from "./agent-exec-input.js";
 import { classifyAgentExecResult } from "./agent-exec-result.js";
 import { agentExecCommand } from "./agent-exec.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const externalTempDirs: string[] = [];
 const execFileAsync = promisify(execFile);
-
-function createRuntime() {
-  const log = vi.fn();
-  const error = vi.fn();
-  const runtime: RuntimeEnv = {
-    log,
-    error,
-    exit: vi.fn(),
-  };
-  return { runtime, log, error };
-}
 
 function successResult(text = "done") {
   return {
@@ -238,7 +227,7 @@ describe("agent exec command composition", () => {
   });
 
   it("treats invalid timeout syntax as an ordinary usage error", async () => {
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
 
     const result = await agentExecCommand("inspect", { timeout: "nope", json: true }, runtime, {
       runAgent: vi.fn(async () => successResult()),
@@ -251,7 +240,7 @@ describe("agent exec command composition", () => {
   });
 
   it("maps structured thrown timeouts to exit code 2", async () => {
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     const timeout = Object.assign(new Error("deadline elapsed"), { name: "TimeoutError" });
     const runAgent = vi.fn(async () => {
       throw timeout;
@@ -272,7 +261,7 @@ describe("agent exec command composition", () => {
   });
 
   it("maps embedded terminal-outcome timeouts to exit code 2", async () => {
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     const timeout = new AgentRunTerminalOutcomeError(
       new Error("attempt aborted before prompt submission"),
       {
@@ -302,7 +291,7 @@ describe("agent exec command composition", () => {
   });
 
   it("creates and removes ephemeral state for a configless run", async () => {
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     let observedStateDir = "";
     let observedConfigPath: string | undefined;
     let observedConfig: unknown;
@@ -336,7 +325,7 @@ describe("agent exec command composition", () => {
   it.each(["current", "revoked", "replaced"])(
     "keeps source authority through embedded admission without signal cancellation (%s)",
     async (outcome) => {
-      const { runtime } = createRuntime();
+      const runtime = createTestRuntime();
       const controller = new AbortController();
       const claim = { current: true };
       let owner = claim;
@@ -407,7 +396,7 @@ describe("agent exec command composition", () => {
   );
 
   it("cancels a failure-owned turn and removes its temporary state", async () => {
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     const controller = new AbortController();
     let stateDir = "";
     const result = await agentExecCommand("inspect", { authEnvOnly: true }, runtime, {
@@ -432,7 +421,7 @@ describe("agent exec command composition", () => {
     const admittedAt = Date.now();
     setRuntimeConfigSnapshot({ logging: { audit: { executionIdentity: true } } });
     try {
-      const { runtime } = createRuntime();
+      const runtime = createTestRuntime();
       const result = await agentExecCommand("inspect", { stateDir: root }, runtime, {
         runAgent: vi.fn(async () => {
           expect(
@@ -508,7 +497,7 @@ describe("agent exec command composition", () => {
     await fs.writeFile(path.join(pluginDir, "index.js"), "export default {}\n", "utf8");
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = operatorStateDir;
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     let runtimeStateDir = "";
     let discoveredRoot = "";
     try {
@@ -544,7 +533,7 @@ describe("agent exec command composition", () => {
     const operatorStateDir = tempDirs.make("openclaw-agent-exec-plugin-isolated-");
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = operatorStateDir;
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     let resolvedExtensionsDir = "";
     try {
       await agentExecCommand("inspect", { isolated: true }, runtime, {
@@ -571,7 +560,7 @@ describe("agent exec command composition", () => {
     const retainedRunStateDir = tempDirs.make("openclaw-agent-exec-retained-state-");
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = operatorStateDir;
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     let resolvedExtensionsDir = "";
     try {
       await agentExecCommand("inspect", { stateDir: retainedRunStateDir }, runtime, {
@@ -602,7 +591,7 @@ describe("agent exec command composition", () => {
   ] as const)(
     "honors --code-mode $mode over model settings ($capability)",
     async ({ mode, configured, capability, enabled }) => {
-      const { runtime } = createRuntime();
+      const runtime = createTestRuntime();
       const codeMode = { enabled: configured, maxOutputBytes: 4096 };
       setRuntimeConfigSnapshot({
         agents: {
@@ -657,7 +646,7 @@ describe("agent exec command composition", () => {
   );
 
   it("rejects invalid programmatic Code Mode values", async () => {
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
 
     const result = await agentExecCommand("inspect", { codeMode: "invalid" as never }, runtime, {
       runAgent: vi.fn(async () => successResult()),
@@ -677,7 +666,8 @@ describe("agent exec command composition", () => {
     { kind: "timeout", status: "timeout", exitCode: 2, thrown: true },
     { kind: "context_overflow", status: "error", exitCode: 1, thrown: false },
   ] as const)("preserves $kind when temporary-state cleanup also fails", async (failure) => {
-    const { runtime, log, error } = createRuntime();
+    const runtime = createTestRuntime();
+    const { log, error } = runtime;
     let observedStateDir = "";
     vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("cleanup denied"));
 
@@ -713,7 +703,8 @@ describe("agent exec command composition", () => {
   });
 
   it("classifies cleanup failures before emitting the JSON envelope", async () => {
-    const { runtime, log } = createRuntime();
+    const runtime = createTestRuntime();
+    const { log } = runtime;
     let observedStateDir = "";
     vi.spyOn(fs, "rm").mockRejectedValueOnce(new Error("cleanup denied"));
 
@@ -743,7 +734,7 @@ describe("agent exec command composition", () => {
 
   it("threads --cwd and --timeout to the agent", async () => {
     const root = tempDirs.make("openclaw-agent-exec-cwd-");
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     const runAgent = vi.fn(async () => successResult());
 
     await agentExecCommand("inspect", { cwd: root, timeout: "7" }, runtime, { runAgent });
@@ -755,7 +746,8 @@ describe("agent exec command composition", () => {
   });
 
   it("emits the small stable JSON envelope", async () => {
-    const { runtime, log } = createRuntime();
+    const runtime = createTestRuntime();
+    const { log } = runtime;
 
     const result = await agentExecCommand("inspect", { json: true }, runtime, {
       runAgent: vi.fn(async () => successResult("final answer")),
@@ -776,7 +768,7 @@ describe("agent exec command composition", () => {
   });
 
   it("honors ordered fallbacks with an explicit primary model", async () => {
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     const runAgent = vi.fn(async () => successResult());
 
     await agentExecCommand(
@@ -806,7 +798,7 @@ describe("agent exec command composition", () => {
       JSON.stringify({ env: { vars: { OPENCLAW_EXEC_ENV_PROBE: "from-config" } } }),
       "utf8",
     );
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     let observedDuringRun: string | undefined;
 
     await agentExecCommand("inspect", { config: seedPath }, runtime, {
@@ -824,7 +816,7 @@ describe("agent exec command composition", () => {
 
   it("leaves no runtime config snapshot behind when the caller had none", async () => {
     clearRuntimeConfigSnapshot();
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
 
     await agentExecCommand("inspect", {}, runtime, {
       runAgent: vi.fn(async () => successResult()),
@@ -840,7 +832,7 @@ describe("agent exec command composition", () => {
       models: { providers: { caller: { baseUrl: "https://caller.invalid", models: [] } } },
     };
     setRuntimeConfigSnapshot(callerSnapshot);
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
     let observedDuringRun: string | undefined;
 
     try {
@@ -876,7 +868,7 @@ describe("agent exec command composition", () => {
       }),
       "utf8",
     );
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
 
     const result = await agentExecCommand("inspect", { config: seedPath }, runtime, {
       runAgent: vi.fn(async () => successResult()),
@@ -890,7 +882,7 @@ describe("agent exec command composition", () => {
     const stateDir = tempDirs.make("openclaw-agent-exec-state-");
     const marker = path.join(stateDir, "keep.txt");
     await fs.writeFile(marker, "keep", "utf8");
-    const { runtime } = createRuntime();
+    const runtime = createTestRuntime();
 
     await agentExecCommand("inspect", { stateDir }, runtime, {
       runAgent: vi.fn(async () => {
