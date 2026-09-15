@@ -34,6 +34,7 @@ export type GatewayEventLoopHealth = {
 type GatewayEventLoopHealthMonitor = {
   snapshot: () => GatewayEventLoopHealth | undefined;
   persistentDegradationSnapshot: () => GatewayEventLoopHealth | undefined;
+  eventLoopDelayed: () => boolean;
   reset: () => void;
   stop: () => void;
 };
@@ -203,6 +204,13 @@ export function createGatewayEventLoopHealthMonitor(
 
   return {
     snapshot: () => lastSnapshot,
+    // A stall starves this sampler, so the retained observation predates it and reads
+    // healthy. The interval since the last callback is itself a delay measurement, so the
+    // verdict comes from here rather than leaving callers to infer freshness from the
+    // observation object.
+    eventLoopDelayed: () =>
+      nowMs() - lastSampleAt >= EVENT_LOOP_DELAY_WARN_MS ||
+      (lastSnapshot?.reasons.includes("event_loop_delay") ?? false),
     // The heartbeat consumes the sampler's snapshot without advancing its window.
     persistentDegradationSnapshot: () => {
       const current = lastSnapshot;

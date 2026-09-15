@@ -148,6 +148,33 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     },
   );
 
+  it("reports a delayed loop once its own sample is overdue, before any new observation", () => {
+    // Recovery asks this after a late heartbeat. A stall starves the 20ms sampler, so the
+    // retained observation still reads healthy; the pending interval is the only evidence
+    // that exists at that moment, and it is itself a delay measurement.
+    const harness = createMonitorHarness();
+    harness.samples(50);
+    expect(harness.monitor.snapshot()).toMatchObject({ degraded: false, reasons: [] });
+    expect(harness.monitor.eventLoopDelayed()).toBe(false);
+
+    harness.elapseWithoutSampling(1_200);
+
+    expect(harness.monitor.snapshot()).toMatchObject({ degraded: false, reasons: [] });
+    expect(harness.monitor.eventLoopDelayed()).toBe(true);
+
+    harness.sample();
+    expect(harness.monitor.eventLoopDelayed()).toBe(true);
+  });
+
+  it("reports a responsive loop while the sampler keeps up", () => {
+    const harness = createMonitorHarness();
+    harness.samples(50);
+    for (let index = 0; index < 10; index++) {
+      harness.sample();
+      expect(harness.monitor.eventLoopDelayed()).toBe(false);
+    }
+  });
+
   it("retains completed observations until the next sampling window", () => {
     const harness = createMonitorHarness();
     harness.samples(50);

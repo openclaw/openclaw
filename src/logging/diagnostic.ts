@@ -143,6 +143,14 @@ type StartDiagnosticHeartbeatOptions = {
   getConfig?: () => OpenClawConfig;
   emitMemorySample?: EmitDiagnosticMemorySample;
   sampleLiveness?: SampleDiagnosticLiveness;
+  /**
+   * Loop-delay verdict for recovery decisions, kept separate from `sampleLiveness`
+   * because that one is the operator-warning path and its Gateway implementation
+   * withholds degradation shorter than a minute. The sampler owns this answer because
+   * only it knows whether its own next sample is overdue. Omitting it keeps a late tick
+   * deferring, since nothing else can prove the loop was responsive.
+   */
+  readEventLoopDelayed?: () => boolean;
   recoverStuckSession?: RecoverStuckSession;
   startupGraceMs?: number;
   /** Keeps fake-timer recovery tests fast without reopening runtime config tuning. */
@@ -1159,13 +1167,25 @@ export function startDiagnosticHeartbeat(
     const heartbeatOverdueMs = Math.max(0, heartbeatElapsedMs - DIAGNOSTIC_HEARTBEAT_INTERVAL_MS);
     const inStartupGrace = livenessGraceUntil > 0 && now < livenessGraceUntil;
     // Observe ordinary timer jitter at the scheduled tick so it cannot consume
-    // a run's remaining recovery budget. Material lateness can also hide queued
-    // progress events, so the next healthy heartbeat owns recovery instead.
+    // a run's remaining recovery budget.
     const recoveryObservationNow = now - heartbeatOverdueMs;
-    const shouldDeferRecovery = heartbeatOverdueMs >= DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS;
-    if (shouldDeferRecovery && !inStartupGrace) {
+    const heartbeatDelayed = heartbeatOverdueMs >= DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS;
+    // A late tick only hides queued progress when the loop itself was blocked, so the
+    // measured delay decides that, not the wakeup time. Virtualized hosts wake a sleeping
+    // timer late on every tick with a responsive loop, and deferring on lateness alone
+    // left recovery disabled for the process lifetime. Absent health evidence the tick
+    // still defers, because nothing then rules out a stall holding queued progress.
+    // Only a positive "responsive" reading unblocks recovery. A caller without a monitor
+    // cannot rule out a stall holding queued progress, so it keeps deferring on lateness.
+    const eventLoopDelayed = opts?.readEventLoopDelayed?.();
+    const shouldDeferRecovery = heartbeatDelayed && eventLoopDelayed !== false;
+    if (heartbeatDelayed && !inStartupGrace) {
       diag.warn(
-        `liveness heartbeat delayed: overdue=${Math.round(heartbeatOverdueMs)}ms elapsed=${Math.round(heartbeatElapsedMs)}ms; deferring recovery decisions`,
+        `liveness heartbeat delayed: overdue=${Math.round(heartbeatOverdueMs)}ms elapsed=${Math.round(heartbeatElapsedMs)}ms; ${
+          shouldDeferRecovery
+            ? "deferring recovery decisions"
+            : "event loop stayed responsive, keeping recovery decisions"
+        }`,
       );
     }
     pruneDiagnosticSessionStates(now, true);
