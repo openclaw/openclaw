@@ -185,6 +185,7 @@ export function withAgentDatabaseMaintenanceLease<T>(
       database: { scope: "shared", options, schemaPolicy: options.schemaPolicy },
       leaseMs: options.leaseMs ?? 60_000,
       waitMs: 5_000,
+      prepareDatabase: true,
       heartbeat: "worker",
       leaseLabel: "agent database maintenance lease",
       operationLabel: "agent.database.maintenance.lease",

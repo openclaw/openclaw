@@ -12,6 +12,7 @@ import type { OpenClawStateLeaseContext } from "./openclaw-state-lease-context.j
 import { createOpenClawStateLeaseExclusion } from "./openclaw-state-lease-exclusion.js";
 import { startOpenClawStateLeaseHeartbeat } from "./openclaw-state-lease-heartbeat.js";
 import {
+  prepareLeaseDatabase,
   readLeaseDatabase,
   resolveLeaseDatabasePath,
   withLeaseWriteTransaction,
@@ -31,6 +32,8 @@ type OpenClawStateLeaseOptions = {
   leaseMs: number;
   waitMs: number;
   signal?: AbortSignal;
+  /** Maintenance prepares normal storage before waiting for its operation lease. */
+  prepareDatabase?: boolean;
   /** Maintenance can block the event loop for longer than the lease duration. */
   heartbeat?: "worker";
   /** Stable diagnostic noun used in errors. */
@@ -172,6 +175,7 @@ function validateOptions(options: OpenClawStateLeaseOptions) {
     ),
     waitMs: validateDuration(options.waitMs, `${leaseLabel} waitMs`, 0, MAX_TIMER_TIMEOUT_MS),
     signal: options.signal,
+    prepareDatabase: options.prepareDatabase === true,
     heartbeat: options.heartbeat,
     leaseLabel,
     operationLabel,
@@ -314,7 +318,11 @@ export async function withOpenClawStateLease<T>(
   const owner = randomUUID();
   // Acquisition budgets are elapsed-time contracts. Wall-clock changes still
   // affect persisted expiry timestamps, but must not lengthen or shorten waits.
-  const deadline = performance.now() + validated.waitMs;
+  let deadline = performance.now() + validated.waitMs;
+  let prepareDatabase =
+    validated.prepareDatabase &&
+    validated.waitMs > 0 &&
+    validated.database.schemaPolicy !== "existing";
   let attempt = 0;
   let confirmedExpiresAt: number | undefined;
   while (confirmedExpiresAt === undefined) {
@@ -322,6 +330,13 @@ export async function withOpenClawStateLease<T>(
       throw abortError(validated.signal, "acquisition", validated.leaseLabel);
     }
     try {
+      if (prepareDatabase) {
+        prepareDatabase = false;
+        // Cold integrity/schema work is not lease contention. Preparation never
+        // waits on locks; a refused attempt keeps the original acquisition budget.
+        prepareLeaseDatabase(validated.database);
+        deadline = performance.now() + validated.waitMs;
+      }
       confirmedExpiresAt = tryAcquire({
         database: validated.database,
         operationLabel: validated.operationLabel,

@@ -138,13 +138,7 @@ function assertOpenClawStateDatabaseFreshOpenAllowed(
 const stateDbLog = createSubsystemLogger("state/db");
 const deferredStateDatabases = new WeakSet<DatabaseSync>();
 
-function repairStateSchema(
-  pathname: string,
-  env: NodeJS.ProcessEnv,
-): {
-  changes: string[];
-  warnings: string[];
-} {
+function repairStateSchema(pathname: string, env: NodeJS.ProcessEnv) {
   ensureOpenClawStatePermissions(pathname, env);
   const db = openNodeSqliteDatabase(pathname);
   const rebuiltIndexNames = new Set<string>();
@@ -582,11 +576,20 @@ function openOpenClawStateDatabaseWithBusyTimeout(
     throw error;
   }
   const database = stateDbCache.publishOpenClawStateDatabase(unpublished);
-  if (readSqliteUserVersion(database.db) < OPENCLAW_STATE_SCHEMA_VERSION) {
-    deferredStateDatabases.add(database.db);
-    reconcileOpenClawStateSchemaPublication(options);
+  try {
+    if (readSqliteUserVersion(database.db) < OPENCLAW_STATE_SCHEMA_VERSION) {
+      deferredStateDatabases.add(database.db);
+      reconcileOpenClawStateSchemaPublication(options);
+    }
+    return database;
+  } catch (error) {
+    // Failed publication can retain this cached handle before the caller can
+    // restore its temporary busy timeout. Ordinary later writes keep their policy.
+    if (database.db.isOpen) {
+      setSqliteBusyTimeout(database.db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+    }
+    throw error;
   }
-  return database;
 }
 
 /** Open or return a cached shared state database after schema and migration checks. */
