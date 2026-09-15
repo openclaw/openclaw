@@ -4,7 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const hookRunner = vi.hoisted(() => ({
   hasHooks: vi.fn(() => true),
   runInboundClaim: vi.fn(async () => undefined),
-  runMessageReceived: vi.fn(async () => undefined),
+  // The declared parameters keep `mock.calls` inspectable for absent-field assertions.
+  runMessageReceived: vi.fn(async (_event: unknown, _context: unknown) => undefined),
 }));
 
 vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
@@ -12,9 +13,9 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
   return { ...actual, getGlobalHookRunner: () => hookRunner };
 });
 
-const { emitTelegramLiveLocationMessageHook } = await import("./location-message-hook.js");
+const { emitTelegramRecordedUpdateMessageHook } = await import("./recorded-update-message-hook.js");
 
-describe("Telegram location message hooks", () => {
+describe("Telegram recorded-update message hooks", () => {
   beforeEach(() => {
     hookRunner.hasHooks.mockClear();
     hookRunner.runInboundClaim.mockClear();
@@ -22,7 +23,7 @@ describe("Telegram location message hooks", () => {
     hookRunner.runMessageReceived.mockResolvedValue(undefined);
   });
 
-  it("ignores non-location edits", () => {
+  it("emits text edits through the global message-received contract", () => {
     const msg = {
       chat: { id: 1234, type: "private" },
       message_id: 456,
@@ -32,11 +33,104 @@ describe("Telegram location message hooks", () => {
       text: "edited text",
     } as Message;
 
-    emitTelegramLiveLocationMessageHook({
+    emitTelegramRecordedUpdateMessageHook({
       accountId: "main",
       msg,
       updateId: 9002,
       updateKind: "edited_message",
+      isForum: false,
+    });
+
+    expect(hookRunner.hasHooks).toHaveBeenCalledWith("message_received", expect.any(Object));
+    expect(hookRunner.runMessageReceived).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "456",
+        senderId: "789",
+        content: "edited text",
+        timestamp: 1_786_094_520_000,
+        providerUpdate: {
+          id: "9002",
+          kind: "edited_message",
+          messageId: "456",
+          messageTimestamp: 1_786_094_460_000,
+          editedTimestamp: 1_786_094_520_000,
+        },
+      }),
+      expect.objectContaining({
+        channelId: "telegram",
+        accountId: "main",
+        conversationId: "telegram:1234",
+        messageId: "456",
+        senderId: "789",
+      }),
+    );
+    expect(hookRunner.runMessageReceived.mock.calls[0]?.[0]).not.toHaveProperty("location");
+    expect(hookRunner.runInboundClaim).not.toHaveBeenCalled();
+  });
+
+  it("emits caption edits for media messages", () => {
+    const msg = {
+      chat: { id: -1001234, type: "supergroup", title: "Travel updates" },
+      message_id: 457,
+      date: 1_786_094_460,
+      edit_date: 1_786_094_600,
+      from: { id: 789, is_bot: false, first_name: "Mariano" },
+      caption: "corrected caption",
+    } as Message;
+
+    emitTelegramRecordedUpdateMessageHook({
+      accountId: "main",
+      msg,
+      updateId: 9006,
+      updateKind: "edited_message",
+      isForum: false,
+    });
+
+    expect(hookRunner.runMessageReceived).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "457",
+        content: "corrected caption",
+        providerUpdate: expect.objectContaining({ id: "9006", kind: "edited_message" }),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("ignores edits that carry no text, caption, or location", () => {
+    const msg = {
+      chat: { id: 1234, type: "private" },
+      message_id: 458,
+      date: 1_786_094_460,
+      edit_date: 1_786_094_520,
+      from: { id: 789, is_bot: false, first_name: "Mariano" },
+      text: "   ",
+    } as Message;
+
+    emitTelegramRecordedUpdateMessageHook({
+      accountId: "main",
+      msg,
+      updateId: 9007,
+      updateKind: "edited_message",
+      isForum: false,
+    });
+
+    expect(hookRunner.runMessageReceived).not.toHaveBeenCalled();
+  });
+
+  it("leaves non-edit updates without a location untouched", () => {
+    const msg = {
+      chat: { id: 1234, type: "private" },
+      message_id: 459,
+      date: 1_786_094_460,
+      from: { id: 789, is_bot: false, first_name: "Mariano" },
+      text: "first send",
+    } as Message;
+
+    emitTelegramRecordedUpdateMessageHook({
+      accountId: "main",
+      msg,
+      updateId: 9008,
+      updateKind: "message",
       isForum: false,
     });
 
@@ -58,7 +152,7 @@ describe("Telegram location message hooks", () => {
       },
     } as Message;
 
-    emitTelegramLiveLocationMessageHook({
+    emitTelegramRecordedUpdateMessageHook({
       accountId: "main",
       msg,
       updateId: 9002,
@@ -109,7 +203,7 @@ describe("Telegram location message hooks", () => {
       location: { latitude: 43.8376, longitude: 18.4534 },
     } as Message;
 
-    emitTelegramLiveLocationMessageHook({
+    emitTelegramRecordedUpdateMessageHook({
       accountId: "main",
       msg,
       updateId: 9003,
@@ -137,7 +231,7 @@ describe("Telegram location message hooks", () => {
       location: { latitude: 43.8376, longitude: 18.4534, live_period: 900 },
     } as Message;
 
-    emitTelegramLiveLocationMessageHook({
+    emitTelegramRecordedUpdateMessageHook({
       accountId: "main",
       msg,
       updateId: 9004,
@@ -168,7 +262,7 @@ describe("Telegram location message hooks", () => {
     } as Message;
 
     expect(
-      emitTelegramLiveLocationMessageHook({
+      emitTelegramRecordedUpdateMessageHook({
         accountId: "main",
         msg,
         updateId: 9005,

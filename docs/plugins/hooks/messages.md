@@ -70,6 +70,17 @@ Use message hooks for channel-level routing and delivery policy:
   `{ cancel: true }`.
 - `message_sent`: observe final success or failure.
 
+A channel that receives a message edit emits `message_received` for the edited
+message when it records the edit instead of starting an agent turn.
+`providerUpdate.kind` names the provider update, such as `edited_message` or
+`edited_channel_post`, `providerUpdate.editedTimestamp` and the event
+`timestamp` carry the edit time, and `messageId` stays the original message id,
+so a plugin can attach the revision to the message it replaces. Telegram emits
+these for text, caption, and location edits. An edit does not start an agent
+turn, and the emission is fire-and-forget, so it does not gate the channel's
+own update acknowledgement; treat it as observation, not as a delivery
+guarantee.
+
 For audio-only TTS replies, `content` may contain the hidden spoken
 transcript even when the channel payload has no visible text/caption.
 Rewriting that `content` updates the hook-visible transcript only; it is not

@@ -24,8 +24,8 @@ import {
   TelegramPairingStoreReadError,
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
-import { emitTelegramLiveLocationMessageHook } from "./location-message-hook.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
+import { emitTelegramRecordedUpdateMessageHook } from "./recorded-update-message-hook.js";
 
 type TelegramMessageHandlerParams = Pick<
   RegisterTelegramHandlerParams,
@@ -160,7 +160,7 @@ function createTelegramInboundHandlers(
     }
     await recordMessageForReplyChain(normalizedMsg, gate.context.threadSpec, params.botUserId);
     if (params.providerUpdate) {
-      emitTelegramLiveLocationMessageHook({
+      emitTelegramRecordedUpdateMessageHook({
         accountId,
         msg: normalizedMsg,
         updateId: params.providerUpdate.id,

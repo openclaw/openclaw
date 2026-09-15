@@ -1,4 +1,5 @@
-// Telegram live-location edits bypass agent dispatch but still need the normal observation hook.
+// Telegram updates that the drain records without dispatching an agent turn -- message edits and
+// live-location edits -- still need the normal inbound observation hook.
 import type { Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -15,7 +16,14 @@ import {
   resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
 
-function buildTelegramLocationMessageHook(params: {
+/** Text a recorded edit contributes to the observation hook when it carries no location. */
+function resolveTelegramEditedMessageText(msg: Message): string | undefined {
+  const body = msg.text ?? msg.caption;
+  const trimmed = body?.trim();
+  return trimmed ? body : undefined;
+}
+
+function buildTelegramRecordedUpdateMessageHook(params: {
   accountId: string;
   msg: Message;
   updateId: number;
@@ -23,7 +31,12 @@ function buildTelegramLocationMessageHook(params: {
   isForum: boolean;
 }) {
   const location = extractTelegramLocation(params.msg);
-  if (!location) {
+  const isEdit = params.updateKind.startsWith("edited_");
+  // Edits without a location still carry the authoritative message body, and the drain records
+  // them without an agent turn, so this is the only surface a plugin can observe them on.
+  const editedText = location || !isEdit ? undefined : resolveTelegramEditedMessageText(params.msg);
+  const body = location ? formatLocationText(location) : editedText;
+  if (!body) {
     return null;
   }
   const msg = params.msg;
@@ -52,20 +65,20 @@ function buildTelegramLocationMessageHook(params: {
         : msg.date
           ? msg.date * 1000
           : undefined,
-    Body: formatLocationText(location),
-    RawBody: formatLocationText(location),
-    BodyForAgent: formatLocationText(location),
+    Body: body,
+    RawBody: body,
+    BodyForAgent: body,
     MessageThreadId: threadSpec.id,
     GroupSubject: isGroup ? msg.chat.title : undefined,
-    LocationLat: location.latitude,
-    LocationLon: location.longitude,
-    LocationAccuracy: location.accuracy,
-    LocationName: location.name,
-    LocationAddress: location.address,
-    LocationSource: location.source,
-    LocationIsLive: location.isLive,
-    LocationLivePeriodSeconds: msg.location?.live_period,
-    LocationCaption: location.caption,
+    LocationLat: location?.latitude,
+    LocationLon: location?.longitude,
+    LocationAccuracy: location?.accuracy,
+    LocationName: location?.name,
+    LocationAddress: location?.address,
+    LocationSource: location?.source,
+    LocationIsLive: location?.isLive,
+    LocationLivePeriodSeconds: location ? msg.location?.live_period : undefined,
+    LocationCaption: location?.caption,
     ProviderUpdateId: String(params.updateId),
     ProviderUpdateKind: params.updateKind,
     ProviderMessageTimestamp: msg.date ? msg.date * 1000 : undefined,
@@ -78,10 +91,10 @@ function buildTelegramLocationMessageHook(params: {
   };
 }
 
-export function emitTelegramLiveLocationMessageHook(
-  params: Parameters<typeof buildTelegramLocationMessageHook>[0],
+export function emitTelegramRecordedUpdateMessageHook(
+  params: Parameters<typeof buildTelegramRecordedUpdateMessageHook>[0],
 ): void {
-  const pair = buildTelegramLocationMessageHook(params);
+  const pair = buildTelegramRecordedUpdateMessageHook(params);
   const runner = getGlobalHookRunner();
   if (!pair || !runner?.hasHooks("message_received", pair.context)) {
     return;
