@@ -489,6 +489,49 @@ describe("session message-cut methods", () => {
     );
   });
 
+  it.each(["sessions.rewind", "sessions.fork"] as const)(
+    "%s restores canonical inbound media facts and skips invalid URI hints",
+    async (method) => {
+      await appendTranscriptMessage(
+        { agentId: "main", sessionId: sourceSessionId, sessionKey },
+        {
+          eventId: "canonical-image",
+          parentId: "assistant-entry",
+          message: {
+            role: "user",
+            content: "canonical image prompt",
+            __openclaw: {
+              media: [
+                { url: `media://inbound/${storedImageId}`, contentType: "image/png" },
+                { url: "media://inbound/%73tored-image.png", contentType: "image/png" },
+                { url: `media://outbound/${storedImageId}`, contentType: "image/png" },
+                { url: "media://inbound/nested%2Fimage.png", contentType: "image/png" },
+                { url: `media://inbound/${storedImageId}?query=1`, contentType: "image/png" },
+                { url: "https://example.test/stored-image.png", contentType: "image/png" },
+                { url: "file:///tmp/stored-image.png", contentType: "image/png" },
+              ],
+            },
+          },
+        },
+      );
+      const respond = await invoke(method, "canonical-image");
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          editorText: "canonical image prompt",
+          editorAttachments: [{ mimeType: "image/png", data: storedImageData.toString("base64") }],
+        }),
+        undefined,
+      );
+      expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(1);
+      expect(mocks.readMediaBuffer).toHaveBeenCalledWith(
+        storedImageId,
+        "inbound",
+        expect.any(Number),
+      );
+    },
+  );
+
   it("returns editor text for rewind and a new key for fork", async () => {
     const profileId = "profile-fork-creator";
     const fork = await invoke("sessions.fork", "user-entry", {

@@ -4,14 +4,22 @@ import { generateUUID } from "../../lib/uuid.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
-  // FileReader data URLs may include MIME parameters; chat.send uses the bare media type.
-  const match = /^data:([^;,]+)(?:;[^;,=]+=[^;,]*)*;base64,(.+)$/.exec(dataUrl);
-  if (!match) {
+  const commaIndex = dataUrl.indexOf(",");
+  if (!dataUrl.startsWith("data:") || commaIndex < 0) {
     return null;
   }
-  const mimeType = match[1];
-  const content = match[2];
-  return mimeType && content ? { mimeType, content } : null;
+  // FileReader may include MIME parameters. Validate metadata separately from
+  // the payload, so neither repeated parameters nor image bytes need a capture regex.
+  const [mimeType, ...parameters] = dataUrl.slice(5, commaIndex).split(";");
+  if (
+    !mimeType ||
+    parameters.pop() !== "base64" ||
+    parameters.some((parameter) => !/^[^=]+=[\s\S]*$/.test(parameter))
+  ) {
+    return null;
+  }
+  const content = dataUrl.slice(commaIndex + 1);
+  return content && !/[\r\n\u2028\u2029]/.test(content) ? { mimeType, content } : null;
 }
 
 /** Converts composer attachments into the base64 payload accepted by chat.send. */

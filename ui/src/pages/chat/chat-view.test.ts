@@ -6713,6 +6713,33 @@ describe("chat attachment picker", () => {
     );
   });
 
+  it("converts supported-size pasted image bytes into an attachment", () => {
+    const onAttachmentsChange = vi.fn();
+    const container = renderChatView({ onAttachmentsChange });
+    const textarea = getComposerTextarea(container);
+    const base64 = Buffer.alloc(4 * 1024 * 1024, 0xab).toString("base64");
+    const allowed = textarea.dispatchEvent(createPasteEvent(`data:image/png;base64,${base64}`, []));
+    expect(allowed).toBe(false);
+    const attachments = requireFirstAttachmentsChange(onAttachmentsChange);
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]?.sizeBytes).toBe(4 * 1024 * 1024);
+    expect(getChatAttachmentDataUrl(itemAt(attachments, 0, "pasted image"))).toBe(
+      `data:image/png;base64,${base64}`,
+    );
+  });
+
+  it.each(["AA$A", "QQ=Q", "===="])(
+    "leaves invalid pasted image bytes %s out of attachments",
+    (data) => {
+      const onAttachmentsChange = vi.fn();
+      const container = renderChatView({ onAttachmentsChange });
+      getComposerTextarea(container).dispatchEvent(
+        createPasteEvent(`data:image/png;base64,${data}`, []),
+      );
+      expect(onAttachmentsChange).not.toHaveBeenCalled();
+    },
+  );
+
   it("removes a pasted image attachment from the preview", () => {
     const attachment: ChatAttachment = {
       id: "image",

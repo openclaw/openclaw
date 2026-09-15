@@ -18,6 +18,7 @@ import {
   type SessionBranchSwitchMutationResult,
   type SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
+import { parseInboundMediaUri } from "../../media/media-reference.js";
 import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
@@ -75,10 +76,16 @@ async function resolveEditorMediaAttachments(
   const seen = new Set<string>();
   const attachments: Array<{ mimeType: string; data: string }> = [];
   for (const ref of refs) {
-    // Transcript paths are untrusted hints; only the basename is read through the
+    // Transcript references are untrusted hints; only an inbound id is read through the
     // media store (its traversal guards and byte cap stay authoritative), so
     // dedupe on that resolved id — path aliases must not repeat the same read.
-    const id = path.basename(ref.path);
+    let id: string;
+    try {
+      id = parseInboundMediaUri(ref.path)?.id ?? path.basename(ref.path);
+    } catch {
+      // A corrupt URI is only a failed attachment hint, never a failed history cut.
+      continue;
+    }
     if (seen.has(id)) {
       continue;
     }

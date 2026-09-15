@@ -201,12 +201,17 @@ function dataImageClipboardFile(
   dataUrl: string,
   baseName = "pasted-image",
 ): { file: File; dataUrl: string } | null {
-  const match = /^\s*data:(image\/[a-z0-9.+-]+);base64,([a-z0-9+/=\s]+)\s*$/i.exec(dataUrl);
+  const trimmed = dataUrl.trim();
+  const commaIndex = trimmed.indexOf(",");
+  const match =
+    commaIndex >= 0
+      ? /^data:(image\/[a-z0-9.+-]+);base64$/i.exec(trimmed.slice(0, commaIndex))
+      : null;
   if (!match) {
     return null;
   }
   const mimeType = match[1]?.toLowerCase();
-  const base64Source = match[2];
+  const base64Source = trimmed.slice(commaIndex + 1);
   if (!mimeType || !base64Source) {
     return null;
   }

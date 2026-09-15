@@ -307,6 +307,16 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
   });
 
+  it("offloads a multi-megabyte PDF data URL with the exact decoded bytes", async () => {
+    const bytes = Buffer.alloc(9 * 1024 * 1024);
+    bytes.write("%PDF-1.4\n");
+    const { parsed } = await parseWithWarnings("read this", [
+      pdfAttachment({ content: `data:application/pdf;base64,${bytes.toString("base64")}` }),
+    ]);
+    expect(parsed.offloadedRefs).toHaveLength(1);
+    expect(saveMediaBufferMock.mock.calls[0]?.[0]).toEqual(bytes);
+  });
+
   it("parses large clipboard data URL images without full base64 decoding", async () => {
     const png = Buffer.concat([Buffer.from(PNG_1x1, "base64"), Buffer.alloc(1_900_000)]);
     const base64 = png.toString("base64");

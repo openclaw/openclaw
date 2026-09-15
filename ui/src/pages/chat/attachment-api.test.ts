@@ -24,3 +24,31 @@ it.each([
     ).toEqual([{ type, mimeType, fileName: "attachment", content: "bm90ZXM=" }]);
   },
 );
+
+it("serializes supported-size parameterized attachments without losing bytes", () => {
+  const content = Buffer.alloc(4 * 1024 * 1024, 0xab).toString("base64");
+  expect(
+    buildChatApiAttachments([
+      {
+        id: "large-attachment",
+        dataUrl: `data:application/pdf;name=large.pdf;charset=utf-8;base64,${content}`,
+        mimeType: "application/pdf",
+        fileName: "large.pdf",
+      },
+    ]),
+  ).toEqual([{ type: "file", mimeType: "application/pdf", fileName: "large.pdf", content }]);
+});
+
+it.each([
+  "data:application/pdf;base64,",
+  "data:;base64,QQ==",
+  "data:application/pdf;name;base64,QQ==",
+  "data:application/pdf;=empty-name;base64,QQ==",
+  "data:application/pdf;name=x,broken;base64,QQ==",
+  "data:application/pdf;base64;name=x,QQ==",
+  "data:application/pdf,QQ==",
+])("reports an unavailable payload instead of silently dropping %s", (dataUrl) => {
+  expect(() =>
+    buildChatApiAttachments([{ id: "broken", dataUrl, mimeType: "application/pdf" }]),
+  ).toThrow();
+});

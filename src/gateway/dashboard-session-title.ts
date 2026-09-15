@@ -1,3 +1,4 @@
+import { isValidBase64 } from "@openclaw/media-core/base64";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -12,7 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { isValidAttachmentBase64, type ChatAttachment } from "./chat-attachments.js";
+import type { ChatAttachment } from "./chat-attachments.js";
 import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
@@ -49,7 +50,7 @@ function decodeTextAttachmentPrefix(attachment: ChatAttachment, maxChars: number
   if (!mimeType?.startsWith("text/") || typeof content !== "string" || !content) {
     return null;
   }
-  if (!isValidAttachmentBase64(content)) {
+  if (!isValidBase64(content)) {
     return null;
   }
   // Three UTF-8 bytes per UTF-16 code unit plus one partial code point is sufficient
