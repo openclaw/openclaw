@@ -247,6 +247,36 @@ describe("Discord durable ingress", () => {
     });
   });
 
+  it("admits a later same-channel message while an earlier one is deferred", async () => {
+    await withQueue(async (queue) => {
+      const dispatched: string[] = [];
+      const dispatch = vi.fn(async (event: { id?: string }) => {
+        dispatched.push(event.id ?? "");
+        if (event.id === "2001") {
+          return { kind: "deferred" as const };
+        }
+        return undefined;
+      });
+      const monitor = createDiscordIngressMonitor({
+        accountId: "default",
+        client: {} as never,
+        runtime: runtime(),
+        queue,
+        dispatch,
+      });
+      monitor.start();
+      try {
+        await monitor.accept(createRawMessage("2001", "channel-1"));
+        await vi.waitFor(() => expect(dispatched).toEqual(["2001"]));
+
+        await monitor.accept(createRawMessage("2002", "channel-1"));
+        await vi.waitFor(() => expect(dispatched).toEqual(["2001", "2002"]));
+      } finally {
+        await monitor.stop();
+      }
+    });
+  });
+
   it("dead-letters a permanent Discord authentication failure", async () => {
     await withQueue(async (queue) => {
       const monitor = createDiscordIngressMonitor({

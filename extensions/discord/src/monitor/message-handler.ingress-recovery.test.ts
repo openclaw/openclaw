@@ -212,7 +212,15 @@ describe("Discord durable ingress replacement recovery", () => {
         preflight: bufferedPreflight,
         debounceMs: 60_000,
       });
-      await vi.waitFor(async () => expect(await queue.listClaims()).toHaveLength(1));
+      // The follower's ingress lane releases once poison is deferred into the
+      // debounce buffer (openclaw#148730), so both rows are claimed and
+      // buffered together rather than follower staying locked out of admission.
+      await vi.waitFor(async () =>
+        expect((await queue.listClaims()).map((claim) => claim.id).toSorted()).toEqual([
+          "follower",
+          "poison",
+        ]),
+      );
       await bufferedHandler.deactivate();
       expect(bufferedPreflight).not.toHaveBeenCalled();
       expect(await retryFacts(queue, "poison")).toEqual(expectedFacts);

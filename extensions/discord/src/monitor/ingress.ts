@@ -148,6 +148,11 @@ export function createDiscordIngressMonitor(params: {
     },
     appendRetryDelaysMs: [0],
     drain: {
+      // Deferral hands the event to the reply/debounce owner, which preserves
+      // ordering and lifecycle settlement on its own; holding the channel lane
+      // past that point only blocks a later same-channel correction from
+      // reaching steering (openclaw#148730).
+      deferredLaneOccupancy: "release",
       retryPolicy: {
         maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
         deadLetterMinAgeMs: 0,
