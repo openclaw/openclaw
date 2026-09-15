@@ -751,6 +751,31 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
+  it("normalizes deprecated channel selection before planning flow partitions", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-legacy-matrix-");
+
+    await runQaSuite({
+      repoRoot,
+      channelDriverSelection: {
+        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
+        channel: "matrix",
+        channelDriver: "crabline",
+        providerReadinessArtifactPath: "crabline-provider-readiness.json",
+      },
+      scenarioIds: ["dm-chat-baseline"],
+    });
+
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelDriver: "crabline",
+        channelId: "matrix",
+        scenarioIds: ["dm-chat-baseline"],
+      }),
+    );
+    expect(runQaFlowSuite.mock.calls[0]?.[0]).not.toHaveProperty("channelDriverSelection");
+  });
+
   it("forces the declared runtime for a single runtime-specific flow scenario", async () => {
     const repoRoot = await makeTempRepo("qa-suite-single-codex-runtime-");
     const result = await runQaSuite({
@@ -1695,7 +1720,7 @@ describe("qa suite runtime launcher", () => {
                 fixture: "mock-openai",
               },
               channel: {
-                id: params?.channelDriverSelection?.channel ?? "qa-channel",
+                id: params?.channelId ?? "qa-channel",
                 live: false,
                 driver: "crabline",
               },
@@ -1719,7 +1744,7 @@ describe("qa suite runtime launcher", () => {
           const launch = params!.evidenceAnchors![0]!.launch;
           const invocation = createQaEvidenceInvocation({
             scenarios: scenarioIds.map((id) => ({ id, execution: { kind: "flow" } })),
-            channel: params?.channelDriverSelection?.channel ?? null,
+            channel: params?.channelId ?? null,
             launch,
             anchors: params?.evidenceAnchors,
             continuation: params?.evidenceContinuation,
@@ -1778,7 +1803,7 @@ describe("qa suite runtime launcher", () => {
         1,
         expect.objectContaining({
           outputDir: path.join(outputDir, "flow", "telegram"),
-          channelDriverSelection: expect.objectContaining({ channel: "telegram" }),
+          channelId: "telegram",
           scenarioIds: ["telegram-help-command"],
         }),
       );
@@ -1786,7 +1811,7 @@ describe("qa suite runtime launcher", () => {
         2,
         expect.objectContaining({
           outputDir: path.join(outputDir, "flow", "matrix"),
-          channelDriverSelection: expect.objectContaining({ channel: "matrix" }),
+          channelId: "matrix",
           scenarioIds: ["matrix-restart-resume"],
         }),
       );
@@ -2218,12 +2243,8 @@ describe("qa suite runtime launcher", () => {
     await runQaSuite({
       repoRoot,
       outputDir: ".artifacts/qa-e2e/crabline-serial",
-      channelDriverSelection: {
-        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-        channel: "telegram",
-        channelDriver: "crabline",
-        providerReadinessArtifactPath: "crabline-provider-readiness.json",
-      },
+      channelDriver: "crabline",
+      channelId: "telegram",
       scenarioIds: ["telegram-help-command", "dm-chat-baseline", "control-ui-chat-flow-playwright"],
     });
 
@@ -2278,12 +2299,7 @@ describe("qa suite runtime launcher", () => {
     await runQaSuite({
       repoRoot,
       outputDir: ".artifacts/qa-e2e/crabline-isolated",
-      channelDriverSelection: {
-        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-        channel: "telegram",
-        channelDriver: "crabline",
-        providerReadinessArtifactPath: "crabline-provider-readiness.json",
-      },
+      channelDriver: "crabline",
       concurrency: 8,
       scenarioIds: [
         "dm-chat-baseline",

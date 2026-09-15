@@ -49,6 +49,7 @@ type QaCrablineTransportState = QaTransportState & {
   getOutboundEvents: () => Promise<readonly QaTransportOutboundEvent[]>;
   observeEvent: (event: unknown) => void;
   rememberProviderTarget: (providerTargetKey: string, qaTarget: string) => void;
+  resetTransport: () => void;
 };
 
 function normalizeCrablineSignalGatewayConfig(config: OpenClawConfig): OpenClawConfig {
@@ -222,16 +223,20 @@ function createCrablineState(params: {
   const telegramMessageByProviderId = new Map<string, QaBusMessage>();
   const pendingTelegramMessagesByChat = new Map<string, QaBusMessage[]>();
   const outboundEvents: QaTransportOutboundEvent[] = [];
+  const resetTransport = () => {
+    targetByProviderTarget.clear();
+    logicalRouteByTarget.clear();
+    telegramMessageByProviderId.clear();
+    pendingTelegramMessagesByChat.clear();
+    outboundEvents.length = 0;
+  };
 
   return {
     reset() {
+      resetTransport();
       baseState.reset();
-      targetByProviderTarget.clear();
-      logicalRouteByTarget.clear();
-      telegramMessageByProviderId.clear();
-      pendingTelegramMessagesByChat.clear();
-      outboundEvents.length = 0;
     },
+    resetTransport,
     getSnapshot: baseState.getSnapshot.bind(baseState),
     async getOutboundEvents() {
       return outboundEvents;
@@ -341,6 +346,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     final: QaBusMessage;
   }>;
   readonly prepareFlow?: QaTransportAdapter["prepareFlow"];
+  readonly resetTransport: () => void;
   #releaseDiscordQaApiBase?: () => void;
 
   constructor(params: {
@@ -360,6 +366,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     this.#selection = params.selection;
     this.#transportPolicy = params.transportPolicy;
     this.#state = params.state;
+    this.resetTransport = params.state.resetTransport;
     if (params.selection.channel === "discord" && params.adapter.manifest.provider === "discord") {
       const manifest = params.adapter.manifest;
       let prepared:
@@ -577,4 +584,33 @@ export async function createQaCrablineTransportAdapter(params: {
     selection: params.selection,
     state,
   });
+}
+
+export async function createQaCrablineTransportDefinition(
+  params: Parameters<typeof createQaCrablineTransportAdapter>[0],
+) {
+  const transport = await createQaCrablineTransportAdapter(params);
+  return {
+    id: transport.id,
+    label: transport.label,
+    accountId: transport.accountId,
+    requiredPluginIds: transport.requiredPluginIds,
+    supportedActions: transport.supportedActions,
+    sendInbound: transport.sendInbound.bind(transport),
+    createGatewayConfig: transport.createGatewayConfig,
+    waitReady: transport.waitReady,
+    buildAgentDelivery: transport.buildAgentDelivery,
+    handleAction: transport.handleAction,
+    createReportNotes: transport.createReportNotes,
+    resetTransport: transport.resetTransport,
+    ...(transport.sendNativeCommand ? { sendNativeCommand: transport.sendNativeCommand } : {}),
+    ...(transport.waitForOutboundSequence
+      ? { waitForOutboundSequence: transport.waitForOutboundSequence }
+      : {}),
+    ...(transport.createRuntimeEnvPatch
+      ? { createRuntimeEnvPatch: transport.createRuntimeEnvPatch }
+      : {}),
+    ...(transport.prepareFlow ? { prepareFlow: transport.prepareFlow } : {}),
+    cleanupAfterGatewayStop: transport.cleanupAfterGatewayStop.bind(transport),
+  };
 }

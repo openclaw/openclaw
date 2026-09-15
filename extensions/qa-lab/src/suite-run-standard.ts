@@ -96,7 +96,6 @@ export async function runQaFlowSuiteStandard(
     adapterFactories: params?.adapterFactories,
     channelDriver: params?.channelDriver,
     channelId: params?.channelId,
-    channelDriverSelection: params?.channelDriverSelection,
     adapterOptions: {
       ...params?.adapterOptions,
       scenarioIds: selectedScenarios.map((scenario) => scenario.id),
@@ -428,13 +427,9 @@ export async function runQaFlowSuiteStandard(
           alternateModel,
           fastMode,
           concurrency,
-          channel: params?.channelId ?? params?.channelDriverSelection?.channel ?? transport.id,
+          channel: params?.channelId ?? transport.id,
           channelDriver: transportFactoryResult.driver,
-          // Nested workers retain the selection for transport setup, but the outer
-          // aggregate alone owns readiness publication under the shared output tree.
-          channelDriverSelection: isQaSuiteNestedRun(params)
-            ? undefined
-            : params?.channelDriverSelection,
+          publishTransportArtifacts: !isQaSuiteNestedRun(params),
           isolatedWorkers: false,
           writeEvidenceFile: params?.writeEvidenceFile,
           // Same "filtered → executed list, unfiltered → null" convention as

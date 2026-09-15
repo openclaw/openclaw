@@ -39,7 +39,6 @@ export async function createQaSuiteTransportAdapter(params: {
   adapterFactories?: readonly QaTransportAdapterFactory[];
   channelDriver?: QaScorecardChannelDriver | null;
   channelId?: string;
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   cleanupOnFailure?: () => Promise<void>;
   outputDir: string;
   transportPolicy?: NonNullable<QaSuiteRunParams["adapterOptions"]>["transportPolicy"];
@@ -49,13 +48,12 @@ export async function createQaSuiteTransportAdapter(params: {
   try {
     const driver = selectQaTransportDriver({
       channelDriver: params.channelDriver,
-      channelDriverSelection: params.channelDriverSelection,
       channelId: params.channelId,
       transportId: params.transportId,
     });
     const result = await createQaTransportAdapter(
       {
-        channelId: params.channelId ?? params.channelDriverSelection?.channel ?? params.transportId,
+        channelId: params.channelId ?? params.transportId,
         driver,
         outputDir: params.outputDir,
         adapterOptions: {
@@ -84,7 +82,35 @@ export type QaSuiteRunParams = QaSuiteBaseRunParams & {
   // Profile runs prove every applicable declared channel. Direct channel lanes
   // still treat execution.channels as an OR eligibility list.
   expandScenarioChannels?: boolean;
+  /** @deprecated Use channelDriver and channelId. Scheduled for removal after 2026-10-15. */
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
 };
+
+export function normalizeQaSuiteRunParams(
+  params: QaSuiteRunParams | undefined,
+): QaSuiteRunParams | undefined {
+  const selection = params?.channelDriverSelection;
+  if (!params || !selection) {
+    return params;
+  }
+  if (params.channelDriver && params.channelDriver !== selection.channelDriver) {
+    throw new Error(
+      `channelDriver=${params.channelDriver} conflicts with adapter setup driver=${selection.channelDriver}`,
+    );
+  }
+  if (params.channelId && params.channelId !== selection.channel) {
+    throw new Error(
+      `channel=${params.channelId} conflicts with adapter setup channel=${selection.channel}`,
+    );
+  }
+  const { channelDriverSelection: _legacySelection, ...canonical } = params;
+  const normalized = {
+    ...canonical,
+    channelDriver: selection.channelDriver,
+    channelId: selection.channel,
+  };
+  return isQaSuiteNestedRun(params) ? markQaSuiteNestedRun(normalized) : normalized;
+}
 
 export function shouldLogQaSuiteProgress(env: NodeJS.ProcessEnv = process.env) {
   const override = parseBooleanValue(env.OPENCLAW_QA_SUITE_PROGRESS);
@@ -138,10 +164,9 @@ export function formatQaSuiteRunStartProgress(params: {
   concurrency: number;
   transportId: QaTransportId;
   channelDriver?: QaScorecardChannelDriver | null;
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
+  channelId?: string | null;
 }) {
-  const channelDriver = params.channelDriver ?? params.channelDriverSelection?.channelDriver;
-  const channel = params.channelDriverSelection?.channel;
+  const channelDriver = params.channelDriver;
   const parts = [
     `run start: scenarios=${params.selectedScenarioCount}`,
     `concurrency=${params.concurrency}`,
@@ -150,8 +175,8 @@ export function formatQaSuiteRunStartProgress(params: {
   if (channelDriver) {
     parts.push(`channelDriver=${sanitizeQaSuiteProgressValue(channelDriver)}`);
   }
-  if (channel) {
-    parts.push(`channel=${sanitizeQaSuiteProgressValue(channel)}`);
+  if (params.channelId) {
+    parts.push(`channel=${sanitizeQaSuiteProgressValue(params.channelId)}`);
   }
   return parts.join(" ");
 }
@@ -508,5 +533,5 @@ export type { QaSuiteSummaryJson } from "./suite-summary.js";
 
 export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuiteResult> {
   const { runQaFlowSuiteFromRuntime } = await import("./suite-run.runtime.js");
-  return await runQaFlowSuiteFromRuntime(params);
+  return await runQaFlowSuiteFromRuntime(normalizeQaSuiteRunParams(params));
 }

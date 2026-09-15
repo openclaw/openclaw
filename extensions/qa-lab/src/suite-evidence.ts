@@ -59,8 +59,7 @@ export async function createQaSuiteEvidenceInvocation(
     params?.evidenceAnchors?.[0]?.launch ??
       (await captureQaEvidenceLaunchIdentity(context.repoRoot)),
   );
-  const channel =
-    params?.channelId ?? params?.channelDriverSelection?.channel ?? context.transportId;
+  const channel = params?.channelId ?? context.transportId;
   const invocation = createQaEvidenceInvocation({
     scenarios: context.selectedScenarios,
     channel,

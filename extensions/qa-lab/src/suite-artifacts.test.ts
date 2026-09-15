@@ -241,12 +241,7 @@ describe("suite artifacts", () => {
           concurrency: 1,
           channel: "telegram",
           channelDriver: "crabline",
-          channelDriverSelection: {
-            capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-            channel: "telegram",
-            channelDriver: "crabline",
-            providerReadinessArtifactPath: "crabline-provider-readiness.json",
-          },
+          publishTransportArtifacts: true,
         });
 
         const summary = JSON.parse(await fs.readFile(artifacts.summaryPath, "utf8")) as {

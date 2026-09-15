@@ -52,6 +52,20 @@ describe("buildQaSuiteSummaryJson", () => {
     const json = buildQaSuiteSummaryJson({
       ...baseParams,
       channelDriver: "crabline",
+      channel: "telegram",
+      channelCapabilityMatrixPath: "crabline-channel-driver-capabilities.json",
+      channelDriverSmokePath: "crabline-provider-readiness.json",
+    });
+
+    expect(json.run.channelDriver).toBe("crabline");
+    expect(json.run.channel).toBe("telegram");
+    expect(json.run.channelCapabilityMatrixPath).toBe("crabline-channel-driver-capabilities.json");
+    expect(json.run.channelDriverSmokePath).toBe("crabline-provider-readiness.json");
+  });
+
+  it("normalizes deprecated Crabline selection metadata at the summary boundary", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
       channelDriverSelection: {
         capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
         channel: "telegram",
@@ -60,10 +74,27 @@ describe("buildQaSuiteSummaryJson", () => {
       },
     });
 
-    expect(json.run.channelDriver).toBe("crabline");
-    expect(json.run.channel).toBe("telegram");
-    expect(json.run.channelCapabilityMatrixPath).toBe("crabline-channel-driver-capabilities.json");
-    expect(json.run.channelDriverSmokePath).toBe("crabline-provider-readiness.json");
+    expect(json.run).toMatchObject({
+      channel: "telegram",
+      channelDriver: "crabline",
+      channelCapabilityMatrixPath: "crabline-channel-driver-capabilities.json",
+      channelDriverSmokePath: "crabline-provider-readiness.json",
+    });
+  });
+
+  it("rejects conflicting deprecated summary metadata", () => {
+    expect(() =>
+      buildQaSuiteSummaryJson({
+        ...baseParams,
+        channel: "discord",
+        channelDriverSelection: {
+          capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
+          channel: "telegram",
+          channelDriver: "crabline",
+          providerReadinessArtifactPath: "crabline-provider-readiness.json",
+        },
+      }),
+    ).toThrow("channel=discord conflicts with adapter setup channel=telegram");
   });
 
   it("records realized non-Crabline channel metadata", () => {

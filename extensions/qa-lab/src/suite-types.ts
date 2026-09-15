@@ -1,4 +1,3 @@
-import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   QaEvidenceOccurrence,
@@ -71,7 +70,6 @@ export type QaSuiteRunParams = {
   providerMode?: QaProviderMode;
   transportId?: QaTransportId;
   channelDriver?: QaScorecardChannelDriver;
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;

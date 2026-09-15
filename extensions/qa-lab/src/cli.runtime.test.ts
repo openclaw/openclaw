@@ -255,7 +255,7 @@ function executionCellsForSuiteParams(params?: QaSuiteRunParams) {
   return expandQaScenarioExecutionCells({
     scenarios,
     channelDriver: params?.channelDriver ?? "qa-channel",
-    channel: params?.channelId ?? params?.channelDriverSelection?.channel,
+    channel: params?.channelId,
     defaultChannel:
       params?.channelDriver === "crabline" ? OPENCLAW_CRABLINE_DEFAULT_CHANNEL : undefined,
     supportsChannel:
@@ -553,7 +553,6 @@ describe("qa cli runtime", () => {
       outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "scenario-test"),
       transportId: "qa-channel",
       channelDriver: undefined,
-      channelDriverSelection: undefined,
       primaryModel: "mock-openai/gpt-5.6-luna",
       alternateModel: undefined,
       fastMode: undefined,
@@ -978,7 +977,7 @@ describe("qa cli runtime", () => {
             observedCells: expandQaScenarioExecutionCells({
               scenarios: [readQaScenarioById("telegram-commands-command")],
               channelDriver: params?.channelDriver ?? "qa-channel",
-              channel: params?.channelId ?? params?.channelDriverSelection?.channel,
+              channel: params?.channelId,
               defaultChannel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
               supportsChannel: isCrablineServerChannel,
               expandChannels: true,
@@ -1012,10 +1011,7 @@ describe("qa cli runtime", () => {
           fastMode: true,
           concurrency: 2,
         });
-        expect(suiteArgs.channelDriverSelection).toMatchObject({
-          channel: "telegram",
-          channelDriver: "crabline",
-        });
+        expect(suiteArgs.channelId).toBe("telegram");
         expect(suiteArgs.scenarioIds).toEqual(["telegram-commands-command"]);
         expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
         const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
@@ -1089,7 +1085,7 @@ describe("qa cli runtime", () => {
 
     const suiteArgs = mockFirstObjectArg(runQaSuite);
     expect(suiteArgs.channelDriver).toBe("live");
-    expect(suiteArgs.channelDriverSelection).toBeUndefined();
+    expect(suiteArgs.channelId).toBeUndefined();
   });
 
   it("keeps portable channel scenarios in driver-selected profile runs", async () => {
@@ -1124,7 +1120,7 @@ describe("qa cli runtime", () => {
       providerMode: "mock-openai",
       channelDriver: "live",
     });
-    expect(suiteArgs.channelDriverSelection).toBeUndefined();
+    expect(suiteArgs.channelId).toBeUndefined();
     expectWriteContains(stdoutWrite, "QA run profile: all; categories: 1; scenarios:");
   });
 
@@ -1247,7 +1243,7 @@ describe("qa cli runtime", () => {
     const suiteArgs = mockFirstObjectArg(runQaSuite);
     expect(suiteArgs).toMatchObject({
       channelDriver: "crabline",
-      channelDriverSelection: { channel: "matrix", channelDriver: "crabline" },
+      channelId: "matrix",
       scenarioIds: ["matrix-restart-resume"],
     });
   });
@@ -1309,7 +1305,6 @@ describe("qa cli runtime", () => {
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/frontier"),
       transportId: "qa-channel",
       channelDriver: undefined,
-      channelDriverSelection: undefined,
       providerMode: "live-frontier",
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "anthropic/claude-sonnet-4-6",
@@ -1379,7 +1374,7 @@ describe("qa cli runtime", () => {
     const [crablineArgs, liveArgs] = runQaSuite.mock.calls.map(([args]) => args);
     expect(crablineArgs).toMatchObject({
       channelDriver: "crabline",
-      channelDriverSelection: { channel: "telegram" },
+      channelId: "telegram",
       scenarioIds: ["telegram-help-command"],
     });
     expect(liveArgs).toMatchObject({
@@ -1412,7 +1407,7 @@ describe("qa cli runtime", () => {
       2,
       expect.objectContaining({
         channelDriver: "crabline",
-        channelDriverSelection: expect.objectContaining({ channel: "telegram" }),
+        channelId: "telegram",
         scenarioIds: [],
       }),
     );
@@ -1476,12 +1471,7 @@ describe("qa cli runtime", () => {
       outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/multipass-telegram"),
       transportId: "qa-channel",
       channelDriver: "crabline",
-      channelDriverSelection: {
-        capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-        channel: "telegram",
-        channelDriver: "crabline",
-        providerReadinessArtifactPath: "crabline-provider-readiness.json",
-      },
+      channelId: "telegram",
       evidenceMode: undefined,
       providerMode: "mock-openai",
       primaryModel: undefined,
@@ -1502,7 +1492,6 @@ describe("qa cli runtime", () => {
     expect(runQaSuite).toHaveBeenCalledWith(
       expect.objectContaining({
         channelDriver: "crabline",
-        channelDriverSelection: undefined,
         scenarioIds: ["telegram-help-command", "matrix-restart-resume"],
       }),
     );
@@ -1515,7 +1504,7 @@ describe("qa cli runtime", () => {
     });
 
     const suiteArgs = mockFirstObjectArg(runQaSuite);
-    expect(suiteArgs.channelDriverSelection).toBeUndefined();
+    expect(suiteArgs.channelId).toBeUndefined();
     expect(suiteArgs.scenarioIds).toEqual(
       expect.arrayContaining(["telegram-help-command", "matrix-restart-resume"]),
     );
@@ -1541,7 +1530,7 @@ describe("qa cli runtime", () => {
     expect(runQaMultipass).not.toHaveBeenCalled();
   });
 
-  it("passes Crabline channel-driver selection through to the multipass runner", async () => {
+  it("passes the generic channel driver and channel through to the multipass runner", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
@@ -1554,12 +1543,8 @@ describe("qa cli runtime", () => {
 
     expect(runQaMultipass).toHaveBeenCalledWith(
       expect.objectContaining({
-        channelDriverSelection: {
-          capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-          channel: "telegram",
-          channelDriver: "crabline",
-          providerReadinessArtifactPath: "crabline-provider-readiness.json",
-        },
+        channelDriver: "crabline",
+        channelId: "telegram",
       }),
     );
     expect(runQaSuite).not.toHaveBeenCalled();
@@ -1578,7 +1563,6 @@ describe("qa cli runtime", () => {
       outputDir: undefined,
       transportId: "qa-channel",
       channelDriver: undefined,
-      channelDriverSelection: undefined,
       providerMode: "mock-openai",
       primaryModel: undefined,
       alternateModel: undefined,
@@ -1625,7 +1609,6 @@ describe("qa cli runtime", () => {
         outputDir: undefined,
         transportId: "qa-channel",
         channelDriver: undefined,
-        channelDriverSelection: undefined,
         providerMode: "mock-openai",
         primaryModel: undefined,
         alternateModel: undefined,
@@ -1704,7 +1687,6 @@ describe("qa cli runtime", () => {
       outputDir: undefined,
       transportId: "qa-channel",
       channelDriver: undefined,
-      channelDriverSelection: undefined,
       providerMode: "mock-openai",
       primaryModel: undefined,
       alternateModel: undefined,
@@ -3329,7 +3311,6 @@ describe("qa cli runtime", () => {
       outputDir: undefined,
       transportId: "qa-channel",
       channelDriver: undefined,
-      channelDriverSelection: undefined,
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "anthropic/claude-opus-4-8",

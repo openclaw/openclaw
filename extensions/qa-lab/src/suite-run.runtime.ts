@@ -42,14 +42,14 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
   });
   const transportId = normalizeQaTransportId(params?.transportId);
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params?.outputDir);
-  const channelDriver = params?.channelDriver ?? params?.channelDriverSelection?.channelDriver;
+  const channelDriver = params?.channelDriver;
   const selectedScenarios = selectQaFlowSuiteScenarios({
     scenarios: catalog.scenarios,
     scenarioIds: params?.scenarioIds,
     providerMode: requestedModels.providerMode,
     primaryModel: requestedModels.primaryModel,
     channelDriver,
-    channel: params?.channelId ?? params?.channelDriverSelection?.channel,
+    channel: params?.channelId,
     claudeCliAuthMode: params?.claudeCliAuthMode,
     resolveModuleFlowSupport: (channel) =>
       qaTransportSupportsModuleFlows(params?.adapterFactories, {
@@ -83,7 +83,7 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
       cells: expandQaScenarioExecutionCells({
         scenarios: selectedScenarios,
         channelDriver: channelDriver ?? transportId,
-        channel: params?.channelId ?? params?.channelDriverSelection?.channel,
+        channel: params?.channelId,
         expandChannels: false,
       }),
     }),
@@ -112,7 +112,7 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
     : normalizeQaSuiteConcurrency(
         params?.concurrency,
         selectedScenarios.length,
-        params?.channelDriverSelection ? 1 : defaultQaSuiteConcurrencyForTransport(transportId),
+        channelDriver === "crabline" ? 1 : defaultQaSuiteConcurrencyForTransport(transportId),
       );
   const progressEnabled = shouldLogQaSuiteProgress();
   const context: QaSuiteResolvedRunContext = {
@@ -140,7 +140,7 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
       concurrency,
       transportId,
       channelDriver: params?.channelDriver,
-      channelDriverSelection: params?.channelDriverSelection,
+      channelId: params?.channelId,
     }),
   );
   const useIsolatedScenarioWorkers = shouldRunQaSuiteWithIsolatedScenarioWorkers({
@@ -153,7 +153,6 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
     return await runQaRuntimeParitySuite({
       runQaFlowSuite: runQaFlowSuiteFromRuntime,
       adapterFactories: preparedParams.adapterFactories,
-      channelId: params.channelId,
       adapterOptions: params.adapterOptions,
       evidenceMode: params.evidenceMode,
       repoRoot,
@@ -161,8 +160,8 @@ export async function runQaFlowSuiteFromRuntime(params?: QaSuiteRunParams): Prom
       startedAt,
       providerMode,
       transportId,
-      channelDriverSelection: params.channelDriverSelection,
       channelDriver: params.channelDriver,
+      channelId: params.channelId,
       primaryModel,
       alternateModel,
       fastMode,

@@ -41,7 +41,7 @@ export async function runQaScenarioWithFlakeRetry(
 
 export function createQaSuiteReportNotes(params: {
   transport: QaTransportAdapter;
-  channelDriverSelection?: QaSuiteChannelDriverSelection | null;
+  crablineArtifacts?: QaSuiteChannelDriverSelection | null;
   providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
@@ -52,9 +52,8 @@ export function createQaSuiteReportNotes(params: {
 }) {
   return [
     ...params.transport.createReportNotes(params),
-    // Crabline reports completed generation paths through this filename-narrowed selection.
     ...(params.createCrablineChannelReportNotes?.(
-      params.channelDriverSelection as OpenClawCrablineChannelDriverSelection | null | undefined,
+      params.crablineArtifacts as OpenClawCrablineChannelDriverSelection | null | undefined,
     ) ?? []),
   ];
 }
@@ -65,7 +64,7 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
   providerMode: QaProviderMode;
   transportId: QaTransportId;
   channelDriver?: QaScorecardChannelDriver;
-  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
+  channelId?: string;
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
@@ -76,7 +75,7 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
   return {
     adapterFactories: params.input?.adapterFactories,
     adapterOptions: params.input?.adapterOptions,
-    channelId: params.input?.channelId,
+    channelId: params.channelId ?? params.input?.channelId,
     evidenceMode: params.input?.evidenceMode,
     repoRoot: params.repoRoot,
     sutOpenClawCommand: params.input?.sutOpenClawCommand,
@@ -85,7 +84,6 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
     providerMode: params.providerMode,
     transportId: params.transportId,
     channelDriver: params.channelDriver,
-    channelDriverSelection: params.channelDriverSelection,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
     fastMode: params.fastMode,

@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveOpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it } from "vitest";
 import { runQaSuite } from "./suite-launch.runtime.js";
@@ -45,11 +44,8 @@ describe("Discord Crabline real-plugin roundtrip", () => {
         "qa-e2e",
         `discord-crabline-roundtrip-${process.pid}-${Date.now()}`,
       );
-      const selection = resolveOpenClawCrablineChannelDriverSelection({ channel: "discord" });
-
       const suite = await runQaSuite({
         channelDriver: "crabline",
-        channelDriverSelection: selection,
         channelId: "discord",
         controlUiEnabled: false,
         outputDir,

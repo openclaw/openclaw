@@ -454,12 +454,8 @@ describe("qa suite", () => {
         selectedScenarioCount: 80,
         concurrency: 1,
         transportId: "qa-channel",
-        channelDriverSelection: {
-          capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-          channel: "telegram",
-          channelDriver: "crabline",
-          providerReadinessArtifactPath: "crabline-provider-readiness.json",
-        },
+        channelDriver: "crabline",
+        channelId: "telegram",
       }),
     ).toBe(
       "run start: scenarios=80 concurrency=1 transport=qa-channel channelDriver=crabline channel=telegram",
