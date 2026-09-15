@@ -71,6 +71,7 @@ const mocks = vi.hoisted(() => ({
   readAcpSessionMeta: vi.fn<typeof readAcpSessionMeta>(() => undefined),
   listAgentIds: vi.fn(() => ["main"]),
   loadConfigReturn: {} as OpenClawConfig,
+  userTurnStorePath: undefined as string | undefined,
   loadVoiceWakeRoutingConfig: vi.fn(),
   resolveVoiceWakeRouteByTrigger: vi.fn(),
   getChannelPlugin: vi.fn(),
@@ -176,14 +177,16 @@ vi.mock("../../sessions/user-turn-transcript.js", async () => {
         ...params,
         // Handler-unit fixtures mock session loading with ordered returns. The
         // gateway-server suites own real target revalidation and SQLite proof.
-        target: {
-          sessionId: "test-session-id",
-          expectedSessionId: "test-session-id",
-          sessionKey: "agent:main:main",
-          sessionEntry: { sessionId: "test-session-id", updatedAt: Date.now() },
-          storePath: "/tmp/sessions.json",
-          agentId: "main",
-        },
+        target: mocks.userTurnStorePath
+          ? params.target
+          : {
+              sessionId: "test-session-id",
+              expectedSessionId: "test-session-id",
+              sessionKey: "agent:main:main",
+              sessionEntry: { sessionId: "test-session-id", updatedAt: Date.now() },
+              storePath: "/tmp/sessions.json",
+              agentId: "main",
+            },
       }),
   };
 });
@@ -1144,6 +1147,7 @@ export function restoreAgentTaskRegistryRuntimeAfterTests(): void {
 }
 
 export const describe0AfterEach0 = () => {
+  mocks.userTurnStorePath = undefined;
   // Drain deferred broadcasts before retiring the test-owned row and runtime state.
   flushPendingSessionsChangedEvents();
   mocks.loadGatewaySessionRow.mockReset();

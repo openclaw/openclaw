@@ -168,6 +168,15 @@ During healthy worker provisioning or workspace preparation, accepted input stay
 
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
+- **Resume a paused child task:** use `mode: "resume"` with the continuation message. The calling session must control the native child task, and that task must be paused by `sessions_yield`. This preserves its task identity and original completion recipient. Ordinary `followup` messages do not resume tasks.
+
+Task resume returns `status: "accepted"`, `mode: "resume"`, the successor `runId`,
+the original `taskRunId`, and `completion: "task"`. The existing task owner delivers
+the eventual result once; the tool does not wait for the answer or start a separate
+reply-back loop. Omit `watch` and `timeoutSeconds`, or set `timeoutSeconds: 0`;
+`watch: true` and positive waits are rejected. Resume requires trusted in-process
+Gateway admission. Unrelated callers, completed tasks, and changed child sessions
+are rejected rather than falling back to ordinary messaging.
 
 `timeoutSeconds` limits the sending tool's wait, not the receiver's execution
 budget. For nonblocking coordination, use `sessions_send` with `timeoutSeconds: 0`.

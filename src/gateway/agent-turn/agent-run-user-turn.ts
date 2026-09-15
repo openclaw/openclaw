@@ -396,3 +396,19 @@ export function releasePreparedAgentRunUserTurn(
     });
   }
 }
+
+/** Cancels rejected input while preserving both admission and settlement failures. */
+export function releasePreparedAgentRunUserTurnAfterFailure(
+  prepared: PreparedAgentRunUserTurn,
+  error: unknown,
+): unknown {
+  try {
+    releasePreparedAgentRunUserTurn(prepared, "cancelled");
+    return error;
+  } catch (cleanupError) {
+    return new AggregateError(
+      [error, cleanupError],
+      `${formatForLog(error)}; pending input cleanup failed: ${formatForLog(cleanupError)}`,
+    );
+  }
+}
