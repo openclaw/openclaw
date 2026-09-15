@@ -25,6 +25,7 @@ import {
   parseNonInteractiveCustomApiFlags,
   resolveCustomProviderId,
 } from "../../onboard-custom-config.js";
+import { persistCustomProviderCredential } from "../../onboard-custom-credential.js";
 import { rejectOnboardingOption } from "../../onboard-options.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
@@ -261,6 +262,19 @@ export async function applyNonInteractiveAuthChoice(params: {
         supportsImageInput: customAuth.supportsImageInput,
         target: params.target,
       });
+      try {
+        await persistCustomProviderCredential({
+          config: result.config,
+          providerId: result.providerId,
+          ...(params.target ? { target: params.target } : {}),
+        });
+      } catch (error) {
+        // Setup stays valid: the config catalog key remains active. Surface
+        // the store miss so doctor's credential repair is not a surprise.
+        runtime.error(
+          `Could not store the custom provider credential in the agent auth store: ${formatErrorMessage(error)}`,
+        );
+      }
       if (result.providerIdRenamedFrom && result.providerId) {
         runtime.log(
           `Custom provider ID "${result.providerIdRenamedFrom}" already exists for a different base URL. Using "${result.providerId}".`,

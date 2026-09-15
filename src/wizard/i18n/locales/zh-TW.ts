@@ -34,6 +34,9 @@ export const zh_TW = {
       compatibilityOpenAiResponsesHint: "使用 /responses",
       compatibilityUnknown: "未知（自動偵測）",
       compatibilityUnknownHint: "先探測 OpenAI Chat、OpenAI Responses，再探測 Anthropic 端點",
+      credentialStoreFailed:
+        "無法將 API 金鑰存入代理認證儲存：{error}。金鑰仍可透過設定生效；之後可執行 `openclaw doctor --fix` 遷移。",
+      credentialStoreTitle: "憑證儲存",
       detectionFailed: "無法偵測端點類型。",
       detectionFailedNote:
         "這個端點沒有回應 OpenAI Chat、OpenAI Responses 或 Anthropic 風格的請求。",

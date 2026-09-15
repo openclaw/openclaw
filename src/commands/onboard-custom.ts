@@ -27,6 +27,7 @@ import {
   type CustomApiCompatibility,
   type CustomApiResult,
 } from "./onboard-custom-config.js";
+import { persistCustomProviderCredential } from "./onboard-custom-credential.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
 const VERIFY_TIMEOUT_MS = 30_000;
@@ -441,6 +442,23 @@ export async function promptCustomApiConfig(params: {
         to: result.providerId,
       }),
       t("wizard.customProvider.endpointIdTitle"),
+    );
+  }
+
+  try {
+    await persistCustomProviderCredential({
+      config: result.config,
+      providerId: result.providerId,
+      ...(params.target ? { target: params.target } : {}),
+    });
+  } catch (error) {
+    // Setup stays valid: the config catalog key remains active. Surface the
+    // store miss so doctor's credential repair is not a surprise.
+    await prompter.note(
+      t("wizard.customProvider.credentialStoreFailed", {
+        error: error instanceof Error ? error.message : String(error),
+      }),
+      t("wizard.customProvider.credentialStoreTitle"),
     );
   }
 

@@ -34,6 +34,9 @@ export const zh_CN = {
       compatibilityOpenAiResponsesHint: "使用 /responses",
       compatibilityUnknown: "未知（自动检测）",
       compatibilityUnknownHint: "先探测 OpenAI Chat、OpenAI Responses，再探测 Anthropic 端点",
+      credentialStoreFailed:
+        "无法将 API 密钥存入代理认证存储：{error}。密钥仍可通过配置生效；之后可运行 `openclaw doctor --fix` 迁移。",
+      credentialStoreTitle: "凭据存储",
       detectionFailed: "无法检测端点类型。",
       detectionFailedNote:
         "这个端点没有响应 OpenAI Chat、OpenAI Responses 或 Anthropic 风格的请求。",

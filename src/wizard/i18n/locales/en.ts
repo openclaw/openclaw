@@ -34,6 +34,9 @@ export const en = {
       compatibilityOpenAiResponsesHint: "Uses /responses",
       compatibilityUnknown: "Unknown (detect automatically)",
       compatibilityUnknownHint: "Probes OpenAI Chat, OpenAI Responses, then Anthropic endpoints",
+      credentialStoreFailed:
+        "Could not store the API key in the agent auth store: {error}. The key still works from config; run `openclaw doctor --fix` to migrate it later.",
+      credentialStoreTitle: "Credential storage",
       detectionFailed: "Could not detect endpoint type.",
       detectionFailedNote:
         "This endpoint did not respond to OpenAI Chat, OpenAI Responses, or Anthropic style requests.",

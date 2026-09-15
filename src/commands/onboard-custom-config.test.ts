@@ -1,6 +1,16 @@
 // Onboard custom config tests cover provider-specific config merging and context-window bounds.
 import { setCurrentManifestModelIdNormalizationPolicies } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { describe, expect, it, vi } from "vitest";
+import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+
+vi.mock("../agents/auth-profiles/store.js", () => ({
+  updateAuthProfileStoreWithLock: vi.fn(),
+}));
+vi.mock("../agents/auth-profiles/shared-main-dir.js", () => ({
+  resolveSharedMainAuthAgentDir: () => "/tmp/main-store",
+}));
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import * as providerModelNormalizationRuntime from "../agents/provider-model-normalization.runtime.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -15,6 +25,7 @@ import {
   resolveCustomModelAliasError,
   resolveCustomModelImageInputInference,
 } from "./onboard-custom-config.js";
+import { persistCustomProviderCredential } from "./onboard-custom-credential.js";
 
 const EXPECTED_CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 const manifestPlugins = [
@@ -811,6 +822,128 @@ describe("resolveCustomModelImageInputInference", () => {
     expect(resolveCustomModelImageInputInference("my-private-model")).toEqual({
       supportsImageInput: false,
       confidence: "unknown",
+    });
+  });
+});
+
+describe("persistCustomProviderCredential", () => {
+  const emptyStore = (): AuthProfileStore => ({ version: AUTH_STORE_VERSION, profiles: {} });
+  // resolveSharedMainAuthAgentDir is mocked to /tmp/main-store.
+  const target = { agentId: "main", agentDir: "/tmp/main-store", workspaceDir: "/tmp/ws" };
+  const childTarget = { agentId: "ops", agentDir: "/tmp/ops-store", workspaceDir: "/tmp/ws" };
+
+  const runUpdater = (
+    call: Parameters<typeof updateAuthProfileStoreWithLock>[0],
+    store: AuthProfileStore,
+  ) => call.updater(store);
+
+  const captureStoreCall = () => {
+    const call = vi.mocked(updateAuthProfileStoreWithLock).mock.calls[0]?.[0];
+    if (!call) {
+      throw new Error("expected a store write");
+    }
+    return call;
+  };
+
+  const configWithApiKey = (apiKey: unknown) =>
+    ({
+      models: {
+        providers: {
+          custom: { apiKey },
+        },
+      },
+    }) as unknown as OpenClawConfig;
+
+  it("persists a literal key as the provider default profile", async () => {
+    const store = emptyStore();
+    vi.mocked(updateAuthProfileStoreWithLock).mockResolvedValueOnce(store);
+    await persistCustomProviderCredential({
+      config: configWithApiKey("sk-literal"),
+      providerId: "custom",
+      target,
+    });
+    expect(updateAuthProfileStoreWithLock).toHaveBeenCalledTimes(1);
+    const call = captureStoreCall();
+    expect(call.agentDir).toBe("/tmp/main-store");
+    expect(runUpdater(call, store)).toBe(true);
+    expect(store.profiles["custom:default"]).toEqual({
+      type: "api_key",
+      provider: "custom",
+      key: "sk-literal",
+    });
+  });
+
+  it("mirrors the profile into the shared main store for non-main targets", async () => {
+    const store = emptyStore();
+    const storeMock = vi.mocked(updateAuthProfileStoreWithLock);
+    storeMock.mockReset();
+    storeMock.mockResolvedValue(store);
+    await persistCustomProviderCredential({
+      config: configWithApiKey("sk-literal"),
+      providerId: "custom",
+      target: childTarget,
+    });
+    const [childCall, mainCall] = storeMock.mock.calls;
+    expect(childCall?.[0].agentDir).toBe("/tmp/ops-store");
+    expect(mainCall?.[0].agentDir).toBe("/tmp/main-store");
+    if (!childCall || !mainCall) {
+      throw new Error("expected both store writes");
+    }
+    expect(runUpdater(childCall[0], store)).toBe(true);
+    expect(runUpdater(mainCall[0], store)).toBe(false); // main copy already mirrored
+    expect(store.profiles["custom:default"]).toEqual({
+      type: "api_key",
+      provider: "custom",
+      key: "sk-literal",
+    });
+    vi.mocked(updateAuthProfileStoreWithLock).mockReset();
+  });
+
+  it("throws when the locked store write fails to persist (lock contention)", async () => {
+    vi.mocked(updateAuthProfileStoreWithLock).mockResolvedValueOnce(null);
+    await expect(
+      persistCustomProviderCredential({
+        config: configWithApiKey("sk-literal"),
+        providerId: "custom",
+        target,
+      }),
+    ).rejects.toThrow("agent auth profile store could not be updated");
+  });
+
+  it("skips env-ref and marker keys and keeps them config-owned", async () => {
+    for (const apiKey of [{ source: "env", id: "CUSTOM_API_KEY" }, "custom-local"]) {
+      vi.mocked(updateAuthProfileStoreWithLock).mockClear();
+      await persistCustomProviderCredential({
+        config: configWithApiKey(apiKey),
+        providerId: "custom",
+        target,
+      });
+      expect(updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    }
+  });
+
+  it("allocates around foreign profile types and replaces the owned api_key slot", async () => {
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "custom:default": { type: "oauth", provider: "custom" } as never,
+        "custom:models-json": { type: "api_key", provider: "custom", key: "old" } as never,
+      },
+    };
+    vi.mocked(updateAuthProfileStoreWithLock).mockResolvedValueOnce(store);
+    await persistCustomProviderCredential({
+      config: configWithApiKey("sk-new"),
+      providerId: "custom",
+      target,
+    });
+    const call = captureStoreCall();
+    expect(runUpdater(call, store)).toBe(true);
+    // The oauth profile is not setup-owned; the same-provider api_key slot is.
+    expect(store.profiles["custom:default"]).toEqual({ type: "oauth", provider: "custom" });
+    expect(store.profiles["custom:models-json"]).toEqual({
+      type: "api_key",
+      provider: "custom",
+      key: "sk-new",
     });
   });
 });
