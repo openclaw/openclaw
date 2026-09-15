@@ -129,6 +129,45 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     resetPluginTtsAndThreadMocks();
   });
 
+  it.each([true, false])(
+    "preserves the resolver's explicit silent completion: %s",
+    async (silent) => {
+      const result = await dispatchReplyFromConfig({
+        ctx: createHookCtx(),
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyResolver: async (_ctx, opts) => {
+          if (silent) {
+            opts?.onIntentionalSilentReply?.();
+          }
+          return undefined;
+        },
+      });
+      expect(result.intentionalSilent === true).toBe(silent);
+      if (silent) {
+        expect(result.noVisibleReplyFallbackEligible).not.toBe(true);
+      }
+    },
+  );
+
+  it("does not report silent success after routed progress delivery fails", async () => {
+    mocks.routeReply.mockResolvedValue({ ok: false, messageId: "" });
+    const result = await dispatchReplyFromConfig({
+      ctx: { ...createHookCtx(), OriginatingChannel: "discord", OriginatingTo: "channel:C1" },
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async (_ctx, opts) => {
+        await opts?.onBlockReply?.({ text: "Progress update" });
+        opts?.onIntentionalSilentReply?.();
+        return undefined;
+      },
+    });
+
+    expect(mocks.routeReply).toHaveBeenCalled();
+    expect(result.intentionalSilent).not.toBe(true);
+    expect(result.queuedFinal).toBe(false);
+  });
+
   it("returns handled dispatch results from plugins", async () => {
     hookMocks.runner.runReplyDispatch.mockResolvedValue({
       handled: true,

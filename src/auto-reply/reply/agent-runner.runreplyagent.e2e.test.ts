@@ -1144,6 +1144,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("suppresses bare NO_REPLY silent-turn payloads", async () => {
+    const onIntentionalSilentReply = vi.fn();
     const onPartialReply = vi.fn();
     const onBlockReply = vi.fn();
     const onReasoningStream = vi.fn();
@@ -1152,11 +1153,21 @@ describe("runReplyAgent typing (heartbeat)", () => {
       await params.onReasoningStream?.({ text: "Reasoning:\nNO_REPLY" });
       await params.onPartialReply?.({ text: "NO_REPLY" });
       await params.onBlockReply?.({ text: "NO_REPLY" });
-      return { payloads: [{ text: "NO_REPLY" }], meta: { finalAssistantText: "NO_REPLY" } };
+      return {
+        payloads: [{ text: "NO_REPLY" }],
+        meta: { finalAssistantRawText: "NO_REPLY", terminalReplyKind: "silent-empty" },
+      };
     });
 
+    const opts = {
+      isHeartbeat: false,
+      onPartialReply,
+      onBlockReply,
+      onReasoningStream,
+      onIntentionalSilentReply,
+    };
     const { run } = createMinimalRun({
-      opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
+      opts,
       blockStreamingEnabled: true,
       runOverrides: { silentExpected: true },
     });
@@ -1166,6 +1177,36 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(res).toBeUndefined();
+    expect(onIntentionalSilentReply).toHaveBeenCalledOnce();
+  });
+
+  it("does not report intentional silence when a tool failure remains unresolved", async () => {
+    const onIntentionalSilentReply = vi.fn();
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }, { text: "Tool verification failed", isError: true }],
+      meta: { finalAssistantRawText: "NO_REPLY" },
+    });
+    const opts = { isHeartbeat: false, onIntentionalSilentReply };
+    const { run } = createMinimalRun({ opts, runOverrides: { silentExpected: true } });
+
+    const result = await run();
+
+    expect(onIntentionalSilentReply).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ isError: true }));
+  });
+
+  it("does not infer successful silence from raw NO_REPLY rejected by the runner", async () => {
+    const onIntentionalSilentReply = vi.fn();
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: { finalAssistantRawText: "NO_REPLY" },
+    });
+    const opts = { isHeartbeat: false, onIntentionalSilentReply };
+    const { run } = createMinimalRun({ opts, runOverrides: { silentExpected: true } });
+
+    await run();
+
+    expect(onIntentionalSilentReply).not.toHaveBeenCalled();
   });
 
   it("does not start typing on assistant message start without prior text in message mode", async () => {

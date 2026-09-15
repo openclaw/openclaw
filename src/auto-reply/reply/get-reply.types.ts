@@ -12,6 +12,8 @@ export type ReplySessionBinding = {
 };
 
 type InternalReplySessionOptions = {
+  /** Reports a successful explicit silent final before payload filtering removes it. */
+  onIntentionalSilentReply?: () => void;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
   sessionPromptSourceReplyDeliveryMode?: GetReplyOptions["sourceReplyDeliveryMode"];

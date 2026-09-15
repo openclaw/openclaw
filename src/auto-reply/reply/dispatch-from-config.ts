@@ -2056,6 +2056,7 @@ export async function dispatchReplyFromConfig(
     return await normalizeReplyMediaPayloadPaths(payload);
   };
 
+  let routedDeliveryFailed = false;
   const routeReplyToOriginating = async (
     payload: ReplyPayload,
     options?: { abortSignal?: AbortSignal; mirror?: boolean; kind?: ReplyDispatchKind },
@@ -2071,7 +2072,7 @@ export async function dispatchReplyFromConfig(
       ctx.CommandSource === "native"
         ? (resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey)
         : ctx.SessionKey;
-    return await routeReplyRuntime.routeReply({
+    const result = await routeReplyRuntime.routeReply({
       payload,
       channel: routeReplyChannel,
       to: routeReplyTo,
@@ -2093,6 +2094,10 @@ export async function dispatchReplyFromConfig(
       replyKind: options?.kind ?? "final",
       runId: params.replyOptions?.runId,
     });
+    if (!result.ok) {
+      routedDeliveryFailed = true;
+    }
+    return result;
   };
 
   const isRoutedReplyDelivered = (result: { ok: boolean; suppressed?: boolean }) =>
@@ -2211,6 +2216,7 @@ export async function dispatchReplyFromConfig(
   const chatType = normalizeChatType(ctx.ChatType);
   const silentReplyConversationType = resolveRoutedPolicyConversationType(ctx);
   const silentReplySurface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
+  let intentionalSilent = false;
   const emptyFinalAllowedAsSilent =
     silentReplyConversationType !== undefined &&
     resolveSilentReplyPolicyFromPolicies({
@@ -3403,6 +3409,10 @@ export async function dispatchReplyFromConfig(
                     onSessionPrepared: notePreparedSession,
                   } satisfies InternalReplyResolverOptions),
                   onObservedReplyDelivery: markObservedReplyDelivery,
+                  onIntentionalSilentReply: () => {
+                    intentionalSilent = true;
+                    params.replyOptions?.onIntentionalSilentReply?.();
+                  },
                   suppressToolErrorWarnings,
                   shouldSuppressToolErrorWarnings,
                   typingPolicy: typing.typingPolicy,
@@ -4048,6 +4058,7 @@ export async function dispatchReplyFromConfig(
     );
     markIdle("message_completed");
     completeDispatchReplyOperation();
+    const completedSilently = intentionalSilent && !finalDeliveryFailed && !routedDeliveryFailed;
     return attachSourceReplyDeliveryMode({
       queuedFinal,
       counts,
@@ -4055,7 +4066,8 @@ export async function dispatchReplyFromConfig(
         ? { sessionMetadataChanges: sessionMetadataChangesForResult }
         : {}),
       ...(observedReplyDelivery ? { observedReplyDelivery } : {}),
-      ...(!queuedFinal && !observedReplyDelivery && !emptyFinalAllowedAsSilent
+      ...(completedSilently ? { intentionalSilent: true } : {}),
+      ...(!queuedFinal && !observedReplyDelivery && !completedSilently && !emptyFinalAllowedAsSilent
         ? { noVisibleReplyFallbackEligible: true }
         : {}),
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),

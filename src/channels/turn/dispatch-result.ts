@@ -7,6 +7,8 @@ export type ChannelTurnDispatchResultLike =
       queuedFinal?: boolean;
       counts?: Partial<Record<ReplyDispatchKind, number>>;
       observedReplyDelivery?: boolean;
+      intentionalSilent?: boolean;
+      failedCounts?: Partial<Record<ReplyDispatchKind, number>>;
     }
   | null
   | undefined;

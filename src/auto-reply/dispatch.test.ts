@@ -694,6 +694,7 @@ describe("withReplyDispatcher", () => {
     hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
       queuedFinal: true,
       counts: { tool: 0, block: 0, final: 1 },
+      intentionalSilent: true,
     });
 
     const result = await dispatchInboundMessage({
@@ -708,6 +709,7 @@ describe("withReplyDispatcher", () => {
       counts: { tool: 0, block: 0, final: 0 },
       failedCounts: { tool: 0, block: 0, final: 1 },
     });
+    expect(result.intentionalSilent).not.toBe(true);
   });
 
   it("uses CommandTargetSessionKey for silent-reply policy on native command turns", async () => {

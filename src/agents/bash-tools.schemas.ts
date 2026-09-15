@@ -6,12 +6,16 @@
  */
 import { Type } from "typebox";
 import { optionalStringEnum } from "./schema/typebox.js";
+import { TOOL_RECOVERY_VERIFICATION_DESCRIPTION } from "./tool-recovery.js";
 
 const EXEC_TOOL_HOST_VALUES = ["auto", "sandbox", "gateway", "node"] as const;
 
 /** Parameters accepted by the exec tool. */
 export const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
+  verifiesRecoveryOfToolCallId: Type.Optional(
+    Type.String({ description: TOOL_RECOVERY_VERIFICATION_DESCRIPTION }),
+  ),
   workdir: Type.Optional(
     Type.String({
       description:

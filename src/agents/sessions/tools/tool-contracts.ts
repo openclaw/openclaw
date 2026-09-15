@@ -8,6 +8,7 @@ import type { TruncationResult } from "./truncate.js";
 
 export interface BashToolInput {
   command: string;
+  verifiesRecoveryOfToolCallId?: string;
   timeout?: number;
 }
 

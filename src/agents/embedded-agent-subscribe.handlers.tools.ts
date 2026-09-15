@@ -91,6 +91,7 @@ import {
 } from "./tool-error-summary.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { buildToolRecoveryFingerprint, readToolRecoveryVerificationId } from "./tool-recovery.js";
 import { readToolResultDetails } from "./tool-result-error.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
@@ -256,11 +257,17 @@ function buildToolCallSummary(
   const mutation = buildToolMutationState(toolName, args, meta);
   return {
     meta,
+    ...(isExecToolName(toolName)
+      ? { verifiesRecoveryOfToolCallId: readToolRecoveryVerificationId(args) }
+      : {}),
     instanceReplaySafe,
     mutatingAction: mutation.mutatingAction,
     replaySafe:
       (instanceReplaySafe && !mutation.mutatingAction) ||
       (structuredReplaySafe && mutation.replaySafe),
+    ...(!isExecToolName(toolName) && !mutation.mutatingAction
+      ? { recoveryFingerprint: buildToolRecoveryFingerprint(toolName, args) }
+      : {}),
     actionFingerprint: mutation.actionFingerprint,
     fileTarget: mutation.fileTarget,
   };
@@ -383,6 +390,26 @@ function isAsyncStartedToolResult(result: unknown): boolean {
   return details?.async === true && details.status === "started";
 }
 
+function readRunningExecSessionId(result: unknown): string | undefined {
+  const details = readToolResultDetails(result);
+  return details?.status === "running" ? readStringValue(details.sessionId) : undefined;
+}
+
+function readResolvedExecSessionId(
+  toolName: string,
+  args: Record<string, unknown>,
+  result: unknown,
+): string | undefined {
+  if (toolName !== "process" || readStringValue(args.action)?.toLowerCase() !== "poll") {
+    return undefined;
+  }
+  const details = readToolResultDetails(result);
+  if (details?.status !== "completed" && details?.status !== "failed") {
+    return undefined;
+  }
+  return readStringValue(details.sessionId);
+}
+
 function readAsyncStartedTaskIds(result: unknown): {
   asyncTaskRunId?: string;
   asyncTaskId?: string;
@@ -406,6 +433,11 @@ function readExecToolDetails(result: unknown): ExecToolDetails | null {
     return null;
   }
   return details as ExecToolDetails;
+}
+
+function isTerminalSuccessfulExecResult(result: unknown): boolean {
+  const details = readExecToolDetails(result);
+  return details === null || details.status === "completed";
 }
 
 function truncateLiveExecOutput(text: string): string {
@@ -1322,13 +1354,28 @@ export async function handleToolExecutionEnd(
   const attemptedMutatingAction = callSummary.mutatingAction && executionStarted;
   const attemptedPotentialSideEffect = !callSummary.replaySafe && executionStarted;
   const meta = callSummary.meta;
-  const asyncStarted = !isToolError && isAsyncStartedToolResult(sanitizedResult);
+  const resolvedExecSessionId = readResolvedExecSessionId(toolName, startArgs, sanitizedResult);
+  if (resolvedExecSessionId) {
+    for (const toolMeta of ctx.state.toolMetas) {
+      if (toolMeta.backgroundExecSessionId === resolvedExecSessionId) {
+        toolMeta.asyncStarted = undefined;
+        toolMeta.backgroundExecSessionId = undefined;
+      }
+    }
+  }
+  const backgroundExecSessionId = !isToolError
+    ? readRunningExecSessionId(sanitizedResult)
+    : undefined;
+  const asyncStarted =
+    !isToolError &&
+    (backgroundExecSessionId !== undefined || isAsyncStartedToolResult(sanitizedResult));
   const asyncTaskIds = asyncStarted ? readAsyncStartedTaskIds(sanitizedResult) : {};
   ctx.state.toolMetas.push({
     toolName,
     meta,
     replaySafe: callSummary.replaySafe,
     ...(asyncStarted ? { asyncStarted: true, ...asyncTaskIds } : {}),
+    ...(backgroundExecSessionId ? { backgroundExecSessionId } : {}),
   });
   const acceptedSessionSpawn =
     toolName === "sessions_spawn" && !isToolError
@@ -1339,6 +1386,8 @@ export async function handleToolExecutionEnd(
   }
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);
+  let verifiedRecoveryOfToolCallId: string | undefined;
+  let recoveryAssociation: "explicit" | "same-action" | undefined;
   if (isToolError) {
     const errorMessage = extractToolErrorMessage(sanitizedResult);
     const errorCode = extractToolErrorCode(sanitizedResult);
@@ -1348,6 +1397,7 @@ export async function handleToolExecutionEnd(
         : undefined;
     ctx.state.lastToolError = {
       toolName,
+      toolCallId,
       meta,
       ...(errorCode ? { errorCode } : {}),
       error: errorMessage,
@@ -1355,25 +1405,46 @@ export async function handleToolExecutionEnd(
       timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
       middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
       mutatingAction: attemptedMutatingAction,
+      recoveryFingerprint: callSummary.recoveryFingerprint,
       actionFingerprint: attemptedMutatingAction ? callSummary.actionFingerprint : undefined,
       fileTarget: attemptedMutatingAction ? callSummary.fileTarget : undefined,
     };
   } else if (ctx.state.lastToolError) {
-    // Keep unresolved mutating failures until the same action succeeds.
-    if (ctx.state.lastToolError.mutatingAction) {
-      if (
-        isSameToolMutationAction(ctx.state.lastToolError, {
-          toolName,
-          meta,
-          actionFingerprint: callSummary?.actionFingerprint,
-          fileTarget: callSummary?.fileTarget,
-        })
-      ) {
-        ctx.state.lastToolError = undefined;
-      }
-    } else {
+    const lastToolError = ctx.state.lastToolError;
+    const explicitlyVerifiesFailure =
+      isExecToolName(toolName) &&
+      isExecToolName(lastToolError.toolName) &&
+      typeof lastToolError.toolCallId === "string" &&
+      callSummary.verifiesRecoveryOfToolCallId === lastToolError.toolCallId &&
+      isTerminalSuccessfulExecResult(sanitizedResult);
+    const repeatsFailedMutation =
+      !isExecToolName(lastToolError.toolName) &&
+      lastToolError.mutatingAction === true &&
+      isSameToolMutationAction(lastToolError, {
+        toolName,
+        meta,
+        actionFingerprint: callSummary.actionFingerprint,
+        fileTarget: callSummary.fileTarget,
+      });
+    const repeatsFailedReadOnlyAction =
+      lastToolError.mutatingAction !== true &&
+      typeof lastToolError.recoveryFingerprint === "string" &&
+      lastToolError.recoveryFingerprint === callSummary.recoveryFingerprint;
+    if (explicitlyVerifiesFailure || repeatsFailedMutation || repeatsFailedReadOnlyAction) {
+      verifiedRecoveryOfToolCallId = lastToolError.toolCallId;
+      recoveryAssociation = explicitlyVerifiesFailure ? "explicit" : "same-action";
       ctx.state.lastToolError = undefined;
     }
+  }
+  if (verifiedRecoveryOfToolCallId) {
+    ctx.log.info("embedded run tool error recovered", {
+      event: "embedded_tool_error_recovered",
+      runId,
+      toolName,
+      verificationToolCallId: toolCallId,
+      verifiedRecoveryOfToolCallId,
+      recoveryAssociation,
+    });
   }
   const toolErrorSummary = ctx.state.lastToolError
     ? summarizeToolValidationError(ctx.state.lastToolError)
@@ -1497,6 +1568,11 @@ export async function handleToolExecutionEnd(
       isError: isToolError,
       result: eventResult,
       ...(toolErrorSummary ? { toolErrorSummary } : {}),
+      ...(callSummary.verifiesRecoveryOfToolCallId
+        ? { verifiesRecoveryOfToolCallId: callSummary.verifiesRecoveryOfToolCallId }
+        : {}),
+      ...(verifiedRecoveryOfToolCallId ? { verifiedRecoveryOfToolCallId } : {}),
+      ...(recoveryAssociation ? { recoveryAssociation } : {}),
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
@@ -1528,6 +1604,11 @@ export async function handleToolExecutionEnd(
       meta,
       isError: isToolError,
       ...(toolErrorSummary ? { toolErrorSummary } : {}),
+      ...(callSummary.verifiesRecoveryOfToolCallId
+        ? { verifiesRecoveryOfToolCallId: callSummary.verifiesRecoveryOfToolCallId }
+        : {}),
+      ...(verifiedRecoveryOfToolCallId ? { verifiedRecoveryOfToolCallId } : {}),
+      ...(recoveryAssociation ? { recoveryAssociation } : {}),
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });

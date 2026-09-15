@@ -520,7 +520,7 @@ function finalizeDispatchResult(
     ...result,
     queuedFinal: result.queuedFinal && counts.final > 0,
     counts,
-    ...(hasFailedCounts ? { failedCounts } : {}),
+    ...(hasFailedCounts ? { failedCounts, intentionalSilent: undefined } : {}),
   };
 }
 

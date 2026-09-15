@@ -313,6 +313,18 @@ const createScopedToolSet = (scopeKey: string) => ({
   process: createProcessTool({ scopeKey }),
 });
 const execTool = createTestExecTool();
+
+describe("exec tool schema", () => {
+  it("exposes explicit recovery verification linkage to providers", () => {
+    const parameters = execTool.parameters as {
+      properties?: Record<string, { description?: string }>;
+    };
+
+    expect(parameters.properties?.verifiesRecoveryOfToolCallId?.description).toContain(
+      "exact failed exec or Bash tool call",
+    );
+  });
+});
 const processTool = createProcessTool();
 const withLabel = <T extends object>(label: string, fields: T): T & LabeledCase => ({
   label,

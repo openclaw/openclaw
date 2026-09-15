@@ -3116,7 +3116,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("treats post-tool exact NO_REPLY assistant turns as intentional silence", () => {
     const attempt = makeAttemptResult({
       assistantTexts: ["NO_REPLY"],
-      toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
+      toolMetas: [{ toolName: "exec", meta: "verify completed write", replaySafe: false }],
       lastAssistant: {
         role: "assistant",
         stopReason: "stop",
@@ -3135,6 +3135,26 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         attempt,
       }),
     ).toBe(true);
+  });
+
+  it.each([
+    { lastToolError: { toolName: "exec", error: "verification failed" } },
+    { toolMetas: [{ toolName: "exec", asyncStarted: true, replaySafe: false }] },
+    { itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 } },
+  ])("does not treat NO_REPLY with unresolved work as success: %j", (overrides) => {
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: ["NO_REPLY"],
+          toolMetas: [{ toolName: "exec", replaySafe: false }],
+          ...overrides,
+        }),
+      }),
+    ).toBe(false);
   });
 
   it("does not treat error or side-effect empty turns as silent", () => {
@@ -3353,53 +3373,79 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectWarnMessageWith("empty response detected");
   });
 
-  it("returns NO_REPLY without retrying post-tool exact silent assistant replies", async () => {
-    mockedClassifyFailoverReason.mockReturnValue(null);
-    mockedResolveModelAsync.mockResolvedValue({
-      model: {
-        id: "step-router-v1",
-        provider: "stepfun",
-        contextWindow: 200000,
-        api: "openai-completions",
-      },
-      error: null,
-      authStorage: {
-        setRuntimeApiKey: vi.fn(),
-      },
-      modelRegistry: {},
-    });
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        assistantTexts: ["NO_REPLY"],
-        toolMetas: [{ toolName: "process.poll", meta: "pid=123", replaySafe: true }],
-        lastAssistant: {
-          role: "assistant",
-          api: "openai-completions",
-          stopReason: "stop",
+  it.each([
+    {
+      name: "completed exec",
+      toolMetas: [{ toolName: "exec", replaySafe: false }],
+      lastToolError: undefined,
+      silent: true,
+    },
+    {
+      name: "background exec still running",
+      toolMetas: [{ toolName: "exec", asyncStarted: true, replaySafe: false }],
+      lastToolError: undefined,
+      silent: false,
+    },
+    {
+      name: "suppressed unresolved read failure",
+      toolMetas: [{ toolName: "read", replaySafe: true }],
+      lastToolError: { toolName: "read", error: "report missing" },
+      silent: false,
+    },
+  ])(
+    "preserves the runner's silent completion decision: $name",
+    async ({ toolMetas, lastToolError, silent }) => {
+      mockedClassifyFailoverReason.mockReturnValue(null);
+      mockedResolveModelAsync.mockResolvedValue({
+        model: {
+          id: "step-router-v1",
           provider: "stepfun",
-          model: "step-router-v1",
-          content: [{ type: "text", text: "NO_REPLY" }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
-    );
+          contextWindow: 200000,
+          api: "openai-completions",
+        },
+        error: null,
+        authStorage: {
+          setRuntimeApiKey: vi.fn(),
+        },
+        modelRegistry: {},
+      });
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["NO_REPLY"],
+          toolMetas,
+          lastToolError,
+          lastAssistant: {
+            role: "assistant",
+            api: "openai-completions",
+            stopReason: "stop",
+            provider: "stepfun",
+            model: "step-router-v1",
+            content: [{ type: "text", text: "NO_REPLY" }],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      );
 
-    const result = await runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      allowEmptyAssistantReplyAsSilent: true,
-      provider: "stepfun",
-      model: "step-router-v1",
-      runId: "run-post-tool-exact-silent-retry",
-    });
+      const result = await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        allowEmptyAssistantReplyAsSilent: true,
+        suppressToolErrorWarnings: true,
+        provider: "stepfun",
+        model: "step-router-v1",
+        runId: "run-post-tool-exact-silent-retry",
+      });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    const onlyCall = runAttemptCall(0);
-    expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-    expectNoWarnMessageWith("empty response detected");
-    expectNoWarnMessageWith("incomplete turn detected");
-    expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
-    expect(result.meta.terminalReplyKind).toBe("silent-empty");
-    expect(result.meta.livenessState).toBe("working");
-  });
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+      const onlyCall = runAttemptCall(0);
+      expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+      expectNoWarnMessageWith("empty response detected");
+      expectNoWarnMessageWith("incomplete turn detected");
+      if (silent) {
+        expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
+        expect(result.meta.livenessState).toBe("working");
+      }
+      expect(result.meta.terminalReplyKind).toBe(silent ? "silent-empty" : undefined);
+    },
+  );
 
   it("keeps retrying and surfacing clean empty assistant turns without the silence flag", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);

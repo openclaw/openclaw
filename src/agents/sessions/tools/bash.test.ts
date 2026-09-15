@@ -24,6 +24,19 @@ describe("bash tool timeout helpers", () => {
   });
 });
 
+describe("bash tool schema", () => {
+  it("exposes explicit recovery verification linkage to providers", () => {
+    const tool = createBashTool(process.cwd());
+    const parameters = tool.parameters as {
+      properties?: Record<string, { description?: string }>;
+    };
+
+    expect(parameters.properties?.verifiesRecoveryOfToolCallId?.description).toContain(
+      "exact failed exec or Bash tool call",
+    );
+  });
+});
+
 describe("bash tool output lifecycle", () => {
   it("ignores output callbacks after execution settles", async () => {
     const operations: BashOperations = {

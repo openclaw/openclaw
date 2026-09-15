@@ -299,7 +299,10 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
   // Suppress the silent-drop warning using the canonical visible-delivery signal, which
   // includes observedReplyDelivery and other non-count delivery paths. A partial count-only
   // check would falsely flag observed-path deliveries (queuedFinal=false, zero counts) as drops.
-  if (hasVisibleChannelTurnDispatch(dispatchResult)) {
+  const intentionalSilent =
+    dispatchResult?.intentionalSilent === true &&
+    !Object.values(dispatchResult.failedCounts ?? {}).some((count) => (count ?? 0) > 0);
+  if (intentionalSilent || hasVisibleChannelTurnDispatch(dispatchResult)) {
     return;
   }
   log.warn(

@@ -14,17 +14,25 @@ import { truncateToVisualLines } from "../../modes/interactive/components/visual
 import { theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { getBashShellConfig, getShellEnv, killProcessTree } from "../../shell-utils.js";
+import { TOOL_RECOVERY_VERIFICATION_DESCRIPTION } from "../../tool-recovery.js";
 import { waitForChildProcess } from "../../utils/child-process.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import type { BashOperations } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
-import { formatFullOutputFooter, type BashToolDetails } from "./tool-contracts.js";
+import {
+  formatFullOutputFooter,
+  type BashToolDetails,
+  type BashToolInput,
+} from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
 
 const bashSchema = Type.Object({
   command: Type.String({ description: "Bash command to execute" }),
+  verifiesRecoveryOfToolCallId: Type.Optional(
+    Type.String({ description: TOOL_RECOVERY_VERIFICATION_DESCRIPTION }),
+  ),
   timeout: Type.Optional(
     Type.Number({ description: "Timeout in seconds (optional, no default timeout)" }),
   ),
@@ -294,7 +302,7 @@ export function createBashToolDefinition(
     parameters: bashSchema,
     async execute(
       toolCallId,
-      { command, timeout }: { command: string; timeout?: number },
+      { command, timeout }: BashToolInput,
       signal?: AbortSignal,
       onUpdate?,
       ctx?,

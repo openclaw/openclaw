@@ -101,6 +101,7 @@ export type {
 
 type ExecToolArgs = Record<string, unknown> & {
   command: string;
+  verifiesRecoveryOfToolCallId?: string;
   workdir?: string;
   env?: Record<string, string>;
   yieldMs?: number;

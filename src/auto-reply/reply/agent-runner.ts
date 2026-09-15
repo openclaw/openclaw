@@ -103,6 +103,7 @@ import {
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
@@ -1138,7 +1139,7 @@ export async function runReplyAgent(params: {
   isActive: boolean;
   isRunActive?: () => boolean;
   isStreaming: boolean;
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   typing: TypingController;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -1809,6 +1810,20 @@ export async function runReplyAgent(params: {
     }
 
     const payloadArray = runResult.payloads ?? [];
+    const returnWithoutPayload = () => {
+      if (
+        !runResult.meta.error &&
+        !runResult.meta.aborted &&
+        !runResult.meta.yielded &&
+        !runResult.meta.failureSignal &&
+        !runResult.meta.pendingToolCalls?.length &&
+        !payloadArray.some((payload) => payload.isError) &&
+        runResult.meta.terminalReplyKind === "silent-empty"
+      ) {
+        opts?.onIntentionalSilentReply?.();
+      }
+      return returnWithQueuedFollowupDrain(undefined);
+    };
 
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });
@@ -2193,7 +2208,7 @@ export async function runReplyAgent(params: {
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
       }
-      return returnWithQueuedFollowupDrain(undefined);
+      return returnWithoutPayload();
     }
 
     const payloadCandidates = (
@@ -2257,7 +2272,7 @@ export async function runReplyAgent(params: {
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
       }
-      return returnWithQueuedFollowupDrain(undefined);
+      return returnWithoutPayload();
     }
 
     const successfulCronAdds = runResult.successfulCronAdds ?? 0;

@@ -619,6 +619,7 @@ function isNonVisibleAssistantTurnEligibleForSilentReply(params: {
 }
 
 function shouldSkipNonVisibleTurnRetry(params: {
+  allowCompletedSideEffects?: boolean;
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
@@ -631,11 +632,12 @@ function shouldSkipNonVisibleTurnRetry(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
     hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
-    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects,
+    (!params.allowCompletedSideEffects &&
+      resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects),
   );
 }
 
-/** Allows configured silent handling for replay-safe empty, reasoning-only, or explicit silent turns. */
+/** Allows configured quiet empty turns and explicit silence after completed work. */
 export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
   payloadCount: number;
@@ -643,18 +645,27 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
-  if (!params.allowEmptyAssistantReplyAsSilent || shouldSkipNonVisibleTurnRetry(params)) {
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  const explicitSilentReply =
+    params.payloadCount === 0 &&
+    assistant?.stopReason !== "error" &&
+    hasOnlySilentAssistantReply(params.attempt.assistantTexts);
+  // An explicit silent final can close completed effects without replaying them.
+  // Pending work, errors, aborts, and genuinely absent finals retain their guards.
+  const allowCompletedSideEffects =
+    explicitSilentReply &&
+    !hasAsyncStartedToolActivity(params.attempt.toolMetas) &&
+    (params.attempt.itemLifecycle?.activeCount ?? 0) === 0;
+  if (
+    !params.allowEmptyAssistantReplyAsSilent ||
+    shouldSkipNonVisibleTurnRetry({ ...params, allowCompletedSideEffects })
+  ) {
     return false;
   }
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
     return false;
   }
-  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
-  if (
-    params.payloadCount === 0 &&
-    assistant?.stopReason !== "error" &&
-    hasOnlySilentAssistantReply(params.attempt.assistantTexts)
-  ) {
+  if (explicitSilentReply) {
     return true;
   }
   // Post-tool empty stops are ambiguous provider failures, not intentional silence.

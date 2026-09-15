@@ -188,6 +188,31 @@ function expectInteractiveApprovalButtons(
   });
 }
 
+async function recordToolCall(
+  ctx: ToolHandlerContext,
+  params: {
+    toolName: string;
+    toolCallId: string;
+    args: Record<string, unknown>;
+    isError: boolean;
+    result?: unknown;
+  },
+) {
+  await handleToolExecutionStart(ctx, {
+    type: "tool_execution_start",
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    args: params.args,
+  } as ToolExecutionStartEvent);
+  await handleToolExecutionEnd(ctx, {
+    type: "tool_execution_end",
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    isError: params.isError,
+    result: params.result ?? (params.isError ? { error: "Command failed" } : { ok: true }),
+  } as ToolExecutionEndEvent);
+}
+
 function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
   const targets = ctx.state.messagingToolSentTargets;
   expect(targets).toHaveLength(1);
@@ -1034,6 +1059,318 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     );
 
     expect(ctx.state.lastToolError).toBeUndefined();
+  });
+
+  it.each(["exec", "bash"])(
+    "clears a changed %s command only when it verifies the exact failed call",
+    async (rawToolName) => {
+      const { ctx, onAgentEvent } = createTestContext();
+
+      await recordToolCall(ctx, {
+        toolName: rawToolName,
+        toolCallId: "tool-command-failed",
+        args: { command: "python3 verify.py --strict" },
+        isError: true,
+      });
+
+      expect(ctx.state.lastToolError).toMatchObject({
+        toolName: "exec",
+        toolCallId: "tool-command-failed",
+      });
+
+      await recordToolCall(ctx, {
+        toolName: rawToolName,
+        toolCallId: "tool-command-verification",
+        args: {
+          command: "python3 verify.py --normalized",
+          verifiesRecoveryOfToolCallId: "tool-command-failed",
+        },
+        isError: false,
+      });
+
+      expect(ctx.state.lastToolError).toBeUndefined();
+      const payloads = buildEmbeddedRunPayloads({
+        assistantTexts: ["Verification passed."],
+        toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+        lastAssistant: undefined,
+        lastToolError: ctx.state.lastToolError,
+        sessionKey: "agent:unit-session",
+        toolResultFormat: "markdown",
+        inlineToolResultsAllowed: false,
+      });
+      expect(payloads.map((payload) => payload.text).join("\n")).toBe("Verification passed.");
+      expect(onAgentEvent).toHaveBeenCalledWith({
+        stream: "tool",
+        data: expect.objectContaining({
+          phase: "result",
+          toolCallId: "tool-command-verification",
+          verifiesRecoveryOfToolCallId: "tool-command-failed",
+          verifiedRecoveryOfToolCallId: "tool-command-failed",
+        }),
+      });
+    },
+  );
+
+  it("accepts a completed exec result as explicit recovery evidence", async () => {
+    const { ctx } = createTestContext();
+
+    await recordToolCall(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-failed",
+      args: { command: "python3 verify.py --strict" },
+      isError: true,
+    });
+    await recordToolCall(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-verification",
+      args: {
+        command: "python3 verify.py --normalized",
+        verifiesRecoveryOfToolCallId: "tool-exec-failed",
+      },
+      isError: false,
+      result: {
+        details: {
+          status: "completed",
+          exitCode: 0,
+          durationMs: 10,
+          aggregated: "verified",
+        },
+      },
+    });
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+  });
+
+  it("keeps a failed exec unresolved after an unrelated successful tool", async () => {
+    const { ctx } = createTestContext();
+
+    await recordToolCall(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-failed",
+      args: { command: "python3 verify.py" },
+      isError: true,
+    });
+    await recordToolCall(ctx, {
+      toolName: "read",
+      toolCallId: "tool-read-unrelated",
+      args: { path: "/tmp/unrelated.txt" },
+      isError: false,
+    });
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      toolCallId: "tool-exec-failed",
+    });
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: ["A different check passed."],
+      toolMetas: requirePayloadToolMetas(ctx.state.toolMetas),
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+    expect(payloads.map((payload) => payload.text).join("\n")).toContain("failed");
+  });
+
+  it("clears a read failure only when the exact read call succeeds", async () => {
+    const { ctx } = createTestContext();
+
+    await recordToolCall(ctx, {
+      toolName: "read",
+      toolCallId: "tool-read-failed",
+      args: { path: "/tmp/report.txt", offset: 20 },
+      isError: true,
+    });
+    await recordToolCall(ctx, {
+      toolName: "read",
+      toolCallId: "tool-read-retry",
+      args: { offset: 20, path: "/tmp/report.txt" },
+      isError: false,
+    });
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+  });
+
+  it("keeps a read failure unresolved after a different read succeeds", async () => {
+    const { ctx } = createTestContext();
+
+    await recordToolCall(ctx, {
+      toolName: "read",
+      toolCallId: "tool-read-failed",
+      args: { path: "/tmp/report.txt" },
+      isError: true,
+    });
+    await recordToolCall(ctx, {
+      toolName: "read",
+      toolCallId: "tool-read-unrelated",
+      args: { path: "/tmp/other.txt" },
+      isError: false,
+    });
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "read",
+      toolCallId: "tool-read-failed",
+    });
+  });
+
+  it.each(["exec", "bash"])(
+    "keeps a changed %s command unresolved without an explicit recovery receipt",
+    async (rawToolName) => {
+      const { ctx } = createTestContext();
+
+      await recordToolCall(ctx, {
+        toolName: rawToolName,
+        toolCallId: "tool-command-failed",
+        args: { command: "python3 verify.py --strict" },
+        isError: true,
+      });
+      await recordToolCall(ctx, {
+        toolName: rawToolName,
+        toolCallId: "tool-command-without-receipt",
+        args: { command: "python3 verify.py --normalized" },
+        isError: false,
+      });
+
+      expect(ctx.state.lastToolError).toMatchObject({
+        toolName: "exec",
+        toolCallId: "tool-command-failed",
+      });
+    },
+  );
+
+  it("keeps a changed exec command unresolved when the verification ID is wrong", async () => {
+    const { ctx } = createTestContext();
+
+    await recordToolCall(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-failed",
+      args: { command: "python3 verify.py --strict" },
+      isError: true,
+    });
+    await recordToolCall(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-wrong-verification",
+      args: {
+        command: "python3 verify.py --normalized",
+        verifiesRecoveryOfToolCallId: "another-failed-call",
+      },
+      isError: false,
+    });
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      toolCallId: "tool-exec-failed",
+    });
+  });
+
+  it("records a failed verification as the unresolved exec error", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await recordToolCall(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-failed",
+      args: { command: "python3 verify.py --strict" },
+      isError: true,
+    });
+    await recordToolCall(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-verification-failed",
+      args: {
+        command: "python3 verify.py --normalized",
+        verifiesRecoveryOfToolCallId: "tool-exec-failed",
+      },
+      isError: true,
+    });
+
+    expect(ctx.state.lastToolError).toMatchObject({
+      toolName: "exec",
+      toolCallId: "tool-exec-verification-failed",
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: expect.objectContaining({
+        phase: "result",
+        toolCallId: "tool-exec-verification-failed",
+        isError: true,
+        verifiesRecoveryOfToolCallId: "tool-exec-failed",
+      }),
+    });
+  });
+
+  it.each(["approval-pending", "approval-unavailable", "running", "started"])(
+    "does not clear an exec failure while its verification is %s",
+    async (status) => {
+      const { ctx } = createTestContext();
+
+      await recordToolCall(ctx, {
+        toolName: "exec",
+        toolCallId: "tool-exec-failed",
+        args: { command: "python3 verify.py --strict" },
+        isError: true,
+      });
+      await recordToolCall(ctx, {
+        toolName: "exec",
+        toolCallId: "tool-exec-verification-pending",
+        args: {
+          command: "python3 verify.py --normalized",
+          verifiesRecoveryOfToolCallId: "tool-exec-failed",
+        },
+        isError: false,
+        result: {
+          details: {
+            status,
+            ...(status === "started" ? { async: true } : {}),
+          },
+        },
+      });
+
+      expect(ctx.state.lastToolError).toMatchObject({
+        toolName: "exec",
+        toolCallId: "tool-exec-failed",
+      });
+    },
+  );
+
+  it("keeps a running exec pending until process poll reports the session terminal", async () => {
+    const { ctx } = createTestContext();
+
+    await recordToolCall(ctx, {
+      toolName: "exec",
+      toolCallId: "tool-exec-running",
+      args: { command: "python3 slow-verification.py" },
+      isError: false,
+      result: {
+        details: {
+          status: "running",
+          sessionId: "exec-session-1",
+        },
+      },
+    });
+
+    expect(ctx.state.toolMetas).toContainEqual(
+      expect.objectContaining({
+        toolName: "exec",
+        asyncStarted: true,
+        backgroundExecSessionId: "exec-session-1",
+      }),
+    );
+
+    await recordToolCall(ctx, {
+      toolName: "process",
+      toolCallId: "tool-process-poll",
+      args: { action: "poll", sessionId: "exec-session-1" },
+      isError: false,
+      result: {
+        details: {
+          status: "completed",
+          sessionId: "exec-session-1",
+          exitCode: 0,
+        },
+      },
+    });
+
+    expect(ctx.state.toolMetas.some((toolMeta) => toolMeta.asyncStarted === true)).toBe(false);
   });
 
   it("emits a prepared validation diagnostic without model arguments", async () => {

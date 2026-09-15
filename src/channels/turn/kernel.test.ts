@@ -804,6 +804,38 @@ describe("channel turn kernel", () => {
     expect(logRecord?.trace?.traceId).toBe(traceId);
   });
 
+  it.each([
+    { intentionalSilent: true, failed: 0, warning: false },
+    { intentionalSilent: false, failed: 0, warning: true },
+    { intentionalSilent: true, failed: 1, warning: true },
+  ])(
+    "distinguishes explicit silence from an empty or failed dispatch: %j",
+    async ({ intentionalSilent, failed, warning }) => {
+      const log = vi.fn();
+      const result = await runPreparedChannelTurn({
+        channel: "test",
+        routeSessionKey: "agent:main:test:peer",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx(),
+        recordInboundSession: createRecordInboundSession([]),
+        runDispatch: async () => ({
+          queuedFinal: false,
+          counts: { tool: 0, block: 0, final: 0 },
+          failedCounts: { final: failed },
+          intentionalSilent,
+        }),
+        log,
+        messageId: "msg-silent",
+        record: { onRecordError: vi.fn() },
+      });
+      expect(hasVisibleChannelTurnDispatch(result.dispatchResult)).toBe(false);
+      const warned = log.mock.calls.some(
+        ([event]) => event.reason === "zero-count-visible-dispatch",
+      );
+      expect(warned).toBe(warning);
+    },
+  );
+
   it("logs a warning when a visible prepared dispatch queues no payloads", async () => {
     const events: string[] = [];
     const log = vi.fn();

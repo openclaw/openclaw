@@ -8,6 +8,7 @@ import type { FileTarget } from "./tool-mutation.js";
 
 export type ToolErrorSummary = {
   toolName: string;
+  toolCallId?: string;
   meta?: string;
   errorCode?: string;
   error?: string;
@@ -15,6 +16,7 @@ export type ToolErrorSummary = {
   timedOut?: boolean;
   middlewareError?: boolean;
   mutatingAction?: boolean;
+  recoveryFingerprint?: string;
   actionFingerprint?: string;
   fileTarget?: FileTarget;
 };
