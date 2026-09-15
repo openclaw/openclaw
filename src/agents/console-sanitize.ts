@@ -6,18 +6,11 @@ export function sanitizeForConsole(text: string | undefined, maxChars = 200): st
   if (!trimmed) {
     return undefined;
   }
-  const withoutControlChars = Array.from(trimmed)
-    .filter((char) => {
-      const code = char.charCodeAt(0);
-      return !(
-        code <= 0x08 ||
-        code === 0x0b ||
-        code === 0x0c ||
-        (code >= 0x0e && code <= 0x1f) ||
-        code === 0x7f
-      );
-    })
-    .join("");
+  const withoutControlChars = trimmed.replace(
+    // oxlint-disable-next-line eslint/no-control-regex -- Console previews deliberately remove this exact ASCII control set.
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g,
+    "",
+  );
   const sanitized = withoutControlChars
     .replace(/[\r\n\t]+/g, " ")
     .replace(/\s+/g, " ")

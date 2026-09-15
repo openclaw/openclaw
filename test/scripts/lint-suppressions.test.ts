@@ -215,6 +215,7 @@ describe("production lint suppressions", () => {
         // Cleanup stays in AggregateError.errors; the initiating failure remains cause for classification and remediation.
         "src/agents/auth-profiles/oauth-refresh-fence.ts|preserve-caught-error|1",
         "src/agents/auth-profiles/oauth-refresh-peers.ts|preserve-caught-error|1",
+        "src/agents/console-sanitize.ts|eslint/no-control-regex|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|6",
         // JSON parser causes can quote reflected credentials from authenticated provider responses.
         "src/agents/provider-http-errors.ts|preserve-caught-error|1",
