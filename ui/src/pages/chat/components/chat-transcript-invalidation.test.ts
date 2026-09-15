@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { nothing, render } from "lit";
+import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
@@ -283,16 +283,17 @@ describe("chat transcript invalidation", () => {
         timestamp: index + 1,
         __openclaw: { id: `message-${index}` },
       }));
-      const transcript = {
-        expandedAssistantMessages: new Map(),
-        setContentReady: vi.fn(),
-        syncMessageRows: vi.fn(),
-      } as unknown as Parameters<typeof projectChatTranscript>[1];
+      const transcript = createTestTranscript();
       const props = threadProps("pane-offscreen-history", sessionKey, messages);
-      projectChatTranscript(props, transcript);
+      const project = () =>
+        transcript.renderSession(props.paneId, sessionKey, (session) => {
+          projectChatTranscript(props, session);
+          return html``;
+        });
+      project();
 
       const normalizeSpy = vi.spyOn(messageNormalizer, "normalizeMessage");
-      projectChatTranscript(props, transcript);
+      project();
 
       const historicalMessages = new Set<unknown>(messages);
       expect(normalizeSpy.mock.calls.some(([message]) => historicalMessages.has(message))).toBe(

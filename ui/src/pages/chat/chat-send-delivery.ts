@@ -702,7 +702,7 @@ export async function deliverChatQueueItem(
     deliveryConnectionIsCurrent() &&
     visibleSessionMatches(host, routingSessionKey, deliveryAgentId)
   ) {
-    scheduleChatScroll(host, true);
+    scheduleChatScroll(host, true, true);
   }
   if (
     result === "sent" &&
