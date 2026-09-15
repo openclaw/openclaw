@@ -44,6 +44,28 @@ struct RuntimeLocatorTests {
         #expect(resolution.version == RuntimeVersion(major: 24, minor: 16, patch: 0))
     }
 
+    @Test func `resolve preserves home for version manager shims`() async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let node = try self.makeExecutable(in: root, contents: """
+        #!/bin/sh
+        if [ -z "${HOME:-}" ]; then
+          echo 'error loading config: $HOME is not defined' >&2
+          exit 1
+        fi
+        echo v26.1.0
+        """)
+
+        let result = await RuntimeLocator.resolve(searchPaths: [root.path])
+
+        guard case let .success(resolution) = result else {
+            Issue.record("Expected a HOME-dependent version manager shim to resolve, got \(result)")
+            return
+        }
+        #expect(resolution.path == node.path)
+        #expect(resolution.version == RuntimeVersion(major: 26, minor: 1, patch: 0))
+    }
+
     @Test func `resolve fails on boundary below minimum`() async throws {
         let script = """
         #!/bin/sh

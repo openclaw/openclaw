@@ -151,6 +151,34 @@ import Testing
         #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "rpc"]))
     }
 
+    @Test(arguments: ["Library/pnpm", "Library/pnpm/bin"])
+    func `discovers pnpm installed CLI with GUI paths`(installationDirectory: String) async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let pnpmPath = home.appendingPathComponent("Library/pnpm/pnpm")
+        let openclawPath = home.appendingPathComponent(installationDirectory).appendingPathComponent("openclaw")
+        try makeExecutableForTests(at: pnpmPath)
+        try makeExecutableForTests(at: openclawPath)
+        try "#!/bin/sh\nprintf pnpm-installed-cli\n".write(to: openclawPath, atomically: true, encoding: .utf8)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: openclawPath.path)
+
+        let paths = CommandResolver.preferredPaths(
+            home: home,
+            current: ["/usr/bin", "/bin"],
+            projectRoot: home,
+            profile: AppProfile(environment: [:]))
+        let executable = try #require(CommandResolver.openclawExecutable(searchPaths: paths))
+        try #require(executable == openclawPath.path)
+        let result = try await BoundedProcess.run(
+            path: executable,
+            arguments: ["--version"],
+            environment: ["HOME": home.path, "PATH": paths.joined(separator: ":")],
+            workingDirectory: home.path,
+            timeout: 5)
+        #expect(result.terminationStatus == 0)
+        #expect(String(data: result.output, encoding: .utf8) == "pnpm-installed-cli")
+    }
+
     @Test func `uses open claw binary without node runtime`() async throws {
         let (suiteName, defaults) = self.makeLocalDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
