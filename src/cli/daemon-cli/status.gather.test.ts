@@ -1700,16 +1700,14 @@ describe("gatherDaemonStatus", () => {
       try {
         const status = await gatherStatus({ probe: false, deep, rpc });
         printDaemonStatus(status, { json: false, deep });
+        const output = [...log.mock.calls, ...error.mock.calls].flat().join("\n");
+        expect(output.match(/they will SIGTERM each other/g) ?? []).toHaveLength(diagnose ? 1 : 0);
         if (diagnose) {
-          expect(error.mock.calls.flat().join("\n")).toContain(
-            "they will SIGTERM each other in a restart loop",
-          );
-          expect(error.mock.calls.flat().join("\n")).toContain(
-            "Run `openclaw doctor` interactively",
-          );
+          expect(output).toContain(status.gateway?.duelingScopesWarning);
+          expect(output).toContain("Run `openclaw doctor` interactively");
         } else {
           expect(findSystemdGatewayInstallation).not.toHaveBeenCalled();
-          expect(error.mock.calls.flat().join("\n")).not.toContain("they will SIGTERM each other");
+          expect(status.gateway?.duelingScopesWarning).toBeUndefined();
         }
       } finally {
         log.mockRestore();

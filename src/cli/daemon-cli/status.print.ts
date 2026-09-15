@@ -3,7 +3,6 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import { formatHostDesktopStatus } from "../../commands/status-overview-values.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
-import { DEFAULT_GATEWAY_PORT } from "../../config/paths.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -22,7 +21,6 @@ import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
 } from "../../daemon/systemd-hints.js";
-import { formatDuelingScopesWarning } from "../../daemon/systemd-scope.js";
 import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailable.js";
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
@@ -96,15 +94,6 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   defaultRuntime.log(
     `${label("Service:")} ${accent(service.label)} (${serviceStatus})${diagnosticOnlySuffix}`,
   );
-  if (service.systemdInstallation?.kind === "dueling") {
-    const warning = formatDuelingScopesWarning(
-      service.systemdInstallation,
-      status.gateway?.port ?? DEFAULT_GATEWAY_PORT,
-    );
-    if (warning) {
-      defaultRuntime.log(warnText(warning));
-    }
-  }
   const transport = service.runtime?.systemd?.transport;
   if (opts.deep && transport) {
     defaultRuntime.log(

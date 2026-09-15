@@ -116,12 +116,27 @@ vi.mock("./status.gather.js", () => ({
 }));
 
 describe("printDaemonStatus", () => {
-  it("reports competing systemd supervisors without removal advice", () => {
+  it.each([
+    { target: "managed service", port: 18789, probeUrl: "ws://127.0.0.1:18789", diagnose: true },
+    {
+      target: "explicit --url",
+      port: 19443,
+      probeUrl: "wss://gateway.example:19443",
+      diagnose: false,
+    },
+    { target: "explicit --port", port: 19002, probeUrl: "ws://127.0.0.1:19002", diagnose: false },
+  ])("renders the gathered supervisor warning once for $target", ({ port, probeUrl, diagnose }) => {
+    const warning =
+      "detected BOTH a user-scope (/home/gateway/.config/systemd/user/openclaw-gateway.service) " +
+      "and a system-scope (/etc/systemd/system/openclaw-gateway.service) gateway unit bound to port 18789; " +
+      "they will SIGTERM each other in a restart loop. " +
+      "Run `openclaw doctor` interactively to inspect both scopes and review supported cleanup.";
     printDaemonStatus(
       {
         extraServices: [],
         service: {
           label: "systemd user",
+          targetRole: diagnose ? "target" : "diagnostic-only",
           loadState: { status: "loaded" },
           loadedText: "enabled",
           notLoadedText: "disabled",
@@ -139,13 +154,22 @@ describe("printDaemonStatus", () => {
             },
           },
         },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port,
+          portSource: "env/config",
+          probeUrl,
+          ...(diagnose ? { duelingScopesWarning: warning } : {}),
+        },
       },
       { json: false, deep: true },
     );
     const output = [...runtime.log.mock.calls, ...runtime.error.mock.calls].flat().join("\n");
-    expect(output).toContain("BOTH a user-scope");
-    expect(output).toContain("/etc/systemd/system/openclaw-gateway.service");
-    expect(output).toContain("openclaw doctor");
+    expect(output.match(/BOTH a user-scope/g) ?? []).toHaveLength(diagnose ? 1 : 0);
+    if (diagnose) {
+      expect(output).toContain(warning);
+    }
     expect(output).not.toContain("disable --now");
     expect(output).not.toContain("rm ");
   });
