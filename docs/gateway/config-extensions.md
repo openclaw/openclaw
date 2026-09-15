@@ -18,6 +18,13 @@ OpenClaw and other runtime adapters. `openclaw mcp list`, `show`, `set`, and
 `unset` manage this block without connecting to the servers. The Fetch example
 requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
 
+> **Note:** The legacy `npx -y @modelcontextprotocol/server-fetch` package was
+> removed from npm and no longer resolves. If your `mcp.servers.fetch` config
+> still references it, switch to `uvx mcp-server-fetch` (shown below) or pick
+> another currently-published `@modelcontextprotocol/*` server.
+> See [openclaw/openclaw#141180](https://github.com/openclaw/openclaw/issues/141180)
+> for the original report.
+
 ```json5
 {
   mcp: {
