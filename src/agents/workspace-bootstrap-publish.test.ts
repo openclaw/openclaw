@@ -163,6 +163,55 @@ describe("bootstrap publication atomicity", () => {
     expect(await listTempSiblings(tempDir)).toEqual([]);
   });
 
+  it.each(["EPERM", "EACCES"])(
+    "treats a Windows %s from the exclusive publish as an existing winner",
+    async (code) => {
+      // Windows NTFS can report EPERM/EACCES instead of EEXIST when the
+      // exclusive link collides with a target that already exists (pending
+      // delete, AV hold, or a workspace behind a directory junction). The
+      // writer must confirm the target exists and accept the collision
+      // instead of failing the workspace turn.
+      const tempDir = await makeTempWorkspace("openclaw-workspace-");
+      const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const linkSpy = vi.spyOn(syncFs, "linkSync").mockImplementation((_source, target) => {
+        // A concurrent writer won the target; Windows reports a
+        // permission-shaped error for the loser instead of EEXIST.
+        syncFs.writeFileSync(target, "CONCURRENT-WINNER\n");
+        throw Object.assign(new Error(`${code}: operation not permitted, link`), { code });
+      });
+
+      try {
+        await expect(workspace.publishBootstrapFile(agentsPath, "OURS\n")).resolves.toBe(false);
+        expect(await fs.readFile(agentsPath, "utf8")).toBe("CONCURRENT-WINNER\n");
+        expect(await listTempSiblings(tempDir)).toEqual([]);
+      } finally {
+        linkSpy.mockRestore();
+        platformSpy.mockRestore();
+      }
+    },
+  );
+
+  it("keeps a Windows EPERM failure when the bootstrap target is still absent", async () => {
+    // The Windows collision acceptance must not swallow a genuine permission
+    // failure: without an existing target the error still propagates.
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const linkSpy = vi.spyOn(syncFs, "linkSync").mockImplementation(() => {
+      throw Object.assign(new Error("EPERM: operation not permitted, link"), { code: "EPERM" });
+    });
+
+    try {
+      await expect(workspace.publishBootstrapFile(agentsPath, "OURS\n")).rejects.toThrow();
+      await expectPathMissing(agentsPath);
+      expect(await listTempSiblings(tempDir)).toEqual([]);
+    } finally {
+      linkSpy.mockRestore();
+      platformSpy.mockRestore();
+    }
+  });
+
   it("keeps a safe reader on the complete single-link file", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const agentsPath = path.join(tempDir, DEFAULT_AGENTS_FILENAME);
