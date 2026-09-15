@@ -286,7 +286,46 @@ describe("runHeartbeatOnce ack handling", () => {
     });
   });
 
-  it.each(["HEARTBEAT_OK", "NO_REPLY"])(
+  it.each([
+    "Nothing requires attention.\n\nNO_REPLY",
+    "Nothing requires attention.\r\n  NO_REPLY  \n\n",
+    `${"A".repeat(300)}\nNO_REPLY`,
+  ])("does not deliver bounded status prose ending in a silent line: %j", async (replyText) => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const { sendTelegram } = await runTelegramHeartbeatWithDefaults({
+        tmpDir,
+        storePath,
+        replySpy,
+        replyText,
+        responsePrefix: "[Monitor]",
+      });
+      expect(replySpy).toHaveBeenCalled();
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(getLastHeartbeatEvent()).toMatchObject({ status: "ok-token" });
+    });
+  });
+
+  it.each([
+    "Service unavailable. Please investigate.",
+    "NO_REPLY: actual reminder",
+    "Please investigate NO_REPLY",
+    "The marker is `NO_REPLY`",
+    "NO_REPLY\nActual reminder",
+    "Details\nNO_REPLY\nActual reminder",
+    `${"A".repeat(301)}\nNO_REPLY`,
+  ])("preserves alerts, literal mentions, and over-budget replies: %j", async (replyText) => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const { sendTelegram, cfg } = await runTelegramHeartbeatWithDefaults({
+        tmpDir,
+        storePath,
+        replySpy,
+        replyText,
+      });
+      expectTelegramMessageSend(sendTelegram, { to: TELEGRAM_GROUP, text: replyText, cfg });
+    });
+  });
+
+  it.each(["HEARTBEAT_OK", "NO_REPLY", "Nothing requires attention.\n\nNO_REPLY"])(
     "sends HEARTBEAT_OK for %s when visibility.showOk is true",
     async (replyText) => {
       await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
@@ -574,6 +613,7 @@ describe("runHeartbeatOnce ack handling", () => {
 
   it.each([
     ["Command completed: uploaded report.txt", "Command completed: uploaded report.txt"],
+    ["Command completed.\n\nNO_REPLY", "Command completed.\n\nNO_REPLY"],
     [
       "Command completed: uploaded report.txt\nHEARTBEAT_OK",
       "Command completed: uploaded report.txt",
