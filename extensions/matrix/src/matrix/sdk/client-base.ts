@@ -27,7 +27,7 @@ import {
 import { quiesceMatrixClientSync } from "./client-sync-quiesce.js";
 import { waitForMatrixInitialSyncReady } from "./client-sync-ready.js";
 import type { MatrixCryptoFacade } from "./crypto-facade.js";
-import * as cryptoRuntimeLoader from "./crypto-runtime-loader.js";
+import * as cryptoRuntime from "./crypto-runtime-loader.js";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { matrixEventToRaw } from "./event-helpers.js";
 import { MatrixAuthedHttpClient } from "./http-client.js";
@@ -245,7 +245,7 @@ export abstract class MatrixClientBase {
         // The SDK cache callback is void; even stores without a key getter must
         // settle its admitted writes before another request reaches the wire.
         await this.recoveryKeyStore.drainPendingPersistence();
-        await cryptoRuntimeLoader.persistCryptoBeforeKeyUpload({
+        await cryptoRuntime.persistCryptoBeforeKeyUpload({
           resource,
           init,
           encryptionEnabled: this.encryptionEnabled,
@@ -309,8 +309,7 @@ export abstract class MatrixClientBase {
     ) {
       return;
     }
-
-    const runtime = await cryptoRuntimeLoader.loadMatrixCryptoRuntime();
+    const runtime = await cryptoRuntime.loadMatrixCryptoRuntime();
     this.decryptBridge ??= new runtime.MatrixDecryptBridge<MatrixRawEvent>({
       client: this.client,
       toRaw: (event) => matrixEventToRaw(event, { contentMode: "original" }),
@@ -602,7 +601,7 @@ export abstract class MatrixClientBase {
       }
       await Promise.all([this.recoveryKeyStore.close(), activePeriodicPersist]);
       if (persist) {
-        const runtime = await cryptoRuntimeLoader.getOrLoadMatrixCryptoRuntime();
+        const runtime = await cryptoRuntime.getOrLoadMatrixCryptoRuntime();
         await runtime.persistIdbToDisk({
           snapshotPath: this.idbSnapshotPath,
           databasePrefix: this.cryptoDatabasePrefix,
@@ -714,9 +713,7 @@ export abstract class MatrixClientBase {
 
   private async initializeCrypto(abortSignal: AbortSignal): Promise<void> {
     throwIfMatrixStartupAborted(abortSignal);
-    const { persistIdbToDisk, restoreIdbFromDisk } = await loadMatrixCryptoRuntime();
-
-    // Restore persisted IndexedDB crypto store before initializing WASM crypto.
+    const { persistIdbToDisk, restoreIdbFromDisk } = await cryptoRuntime.loadMatrixCryptoRuntime();
     await restoreIdbFromDisk(this.idbSnapshotPath, this.stateRuntime);
     throwIfMatrixStartupAborted(abortSignal);
 

@@ -22,9 +22,9 @@ export async function persistCryptoBeforeKeyUpload(params: {
   resource: RequestInfo | URL;
   init?: RequestInit;
   encryptionEnabled: boolean;
-  snapshotPath: string;
-  databasePrefix: string;
-  stateRuntime: MatrixSnapshotStateRuntime;
+  snapshotPath?: string;
+  databasePrefix?: string;
+  stateRuntime?: MatrixSnapshotStateRuntime;
 }): Promise<void> {
   const runtime = await loadMatrixCryptoRuntime();
   await runtime.persistCryptoBeforeKeyUpload(params);
