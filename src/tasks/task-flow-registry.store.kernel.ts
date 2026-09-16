@@ -14,8 +14,15 @@ import {
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { applyFlowPatch, normalizeRestoredFlowRecord } from "./task-flow-registry.records.js";
+import {
+  applyFlowPatch,
+  isTaskMirroredFlowSyncUnchanged,
+  normalizeRestoredFlowRecord,
+  prepareTaskMirroredFlowSyncFromCurrent,
+  type TaskFlowSyncInput,
+} from "./task-flow-registry.records.js";
 import type {
+  TaskFlowRegistryMirroredSync,
   TaskFlowRegistryStoreSnapshot,
   TaskFlowRegistryUpdate,
   TaskFlowRegistryUpdateResult,
@@ -305,6 +312,33 @@ export function readTaskFlowRecord(db: DatabaseSync, flowId: string): TaskFlowRe
   ));
   const row = read(flowId).rows[0];
   return row ? rowToFlowRecord(row) : undefined;
+}
+
+/** Select and prepare only after the owning transaction has acquired its writer. */
+export function syncTaskMirroredFlowRecordInDatabase(
+  db: DatabaseSync,
+  task: TaskFlowSyncInput,
+  assertSelected?: (current: TaskFlowRecord) => void,
+): TaskFlowRegistryMirroredSync {
+  if (!db.isTransaction) {
+    throw new Error("Task-mirrored flow synchronization requires a write transaction");
+  }
+  const flowId = task.parentFlowId?.trim();
+  const stored = flowId ? readTaskFlowRecord(db, flowId) : undefined;
+  if (!stored) {
+    return { changed: false, flow: null };
+  }
+  const current = normalizeRestoredFlowRecord(stored);
+  if (current.syncMode !== "task_mirrored") {
+    return { changed: false, flow: current };
+  }
+  assertSelected?.(current);
+  const prepared = prepareTaskMirroredFlowSyncFromCurrent(task, current);
+  if (isTaskMirroredFlowSyncUnchanged(prepared)) {
+    return { changed: false, flow: current };
+  }
+  upsertTaskFlowRowInDatabase(db, bindTaskFlowRecord(prepared.next));
+  return { changed: true, flow: prepared.next, previous: current };
 }
 
 /** The caller holds the SQLite write transaction across the revision check and update. */

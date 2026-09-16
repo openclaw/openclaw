@@ -25,6 +25,7 @@ export type RequestBody = SqliteWorkerRequest extends infer Request
   : never;
 type DispatchState = { dispatched: boolean; openNotEntered?: boolean };
 export type Job = {
+  requireStateLifecycle?: boolean;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
   maintenanceSchemaFence?: { actor: Actor; delegate: StateLifecycleDelegate };
   createAdmission?: SqliteWorkerAdmissionFactory;
@@ -80,6 +81,7 @@ export type Actor = {
   pendingStateLifecycles: Set<StateLifecycleDelegate>;
 };
 export type OperationScope = {
+  requireStateLifecycle?: boolean;
   createAdmission?: SqliteWorkerAdmissionFactory;
   assertCurrent?: (commandType: PropertyKey) => void;
   active: boolean;

@@ -202,20 +202,19 @@ function getTaskRegistryRestoreState(admission: OpenClawStateDatabaseReadAdmissi
 }
 
 export function syncFlowFromTaskAfterTaskMutation(task: TaskRecord, operation: string): void {
-  syncTaskFlowWithLiveRetry(task, operation, (admission) => {
-    if (!isCurrentTaskRegistryDatabase(admission)) {
-      return undefined;
-    }
-    const current = tasks.get(task.taskId);
-    if (!current) {
-      return undefined;
-    }
-    ensureTaskRegistryReady();
-    const flowId = current.parentFlowId?.trim();
-    return flowId &&
-      listTasksFromIndex(tasks, taskIdsByParentFlowId, flowId)[0]?.taskId === task.taskId
-      ? current
-      : undefined;
+  const taskId = task.taskId;
+  syncTaskFlowWithLiveRetry(task, operation, {
+    prepare: prepareTaskRegistryProjectionAsync,
+    assertCurrent: assertTaskRegistryOwnerCurrent,
+    selectCurrent() {
+      const current = tasks.get(taskId);
+      const flowId = current?.parentFlowId?.trim();
+      return current &&
+        flowId &&
+        listTasksFromIndex(tasks, taskIdsByParentFlowId, flowId)[0]?.taskId === taskId
+        ? { taskId, flowId, createdAt: current.createdAt }
+        : undefined;
+    },
   });
 }
 

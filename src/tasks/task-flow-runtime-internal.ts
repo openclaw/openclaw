@@ -9,7 +9,6 @@ export {
   finishFlow,
   getTaskFlowById,
   listTaskFlowRecords,
-  prepareTaskMirroredFlowSync,
   publishTaskFlowAfterAtomicStore,
   requestFlowCancel,
   reconcileTaskFlowWorkerReceipts,

@@ -1,4 +1,5 @@
 // Defines storage contracts for task registry records and observer events.
+import type { TaskFlowSyncResult } from "./task-flow-registry.types.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 /** Full task registry snapshot used for persistence restore and replacement writes. */
@@ -21,4 +22,20 @@ export type TaskRegistryMutationScope = {
   flowId: string;
   runId?: string;
   childSessionKey?: string;
+};
+
+export type TaskLiveFlowSelection = {
+  taskId: string;
+  flowId: string;
+  createdAt: number;
+};
+
+export type TaskLiveFlowSyncOutcome =
+  | { kind: "not-selected" }
+  | { kind: "retry"; reason: "storage_contention" | "projection_changed" }
+  | { kind: "result"; result: TaskFlowSyncResult };
+
+export type TaskLiveFlowAuthority = {
+  assertCurrent(): void;
+  isSelected(selection: TaskLiveFlowSelection): boolean;
 };

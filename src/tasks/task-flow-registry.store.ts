@@ -1,15 +1,21 @@
 // Stores managed task-flow records and delivers registry observer snapshots.
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { cloneFlowRecord, snapshotFlowRecords } from "./task-flow-registry.records.js";
+import {
+  cloneFlowRecord,
+  snapshotFlowRecords,
+  type TaskFlowSyncInput,
+} from "./task-flow-registry.records.js";
 import {
   closeTaskFlowRegistryDatabase,
   deleteTaskFlowRegistryRecordFromSqlite,
   loadTaskFlowRegistryStateFromSqlite,
+  syncTaskMirroredFlowInSqlite,
   updateTaskFlowRegistryRecordInSqlite,
   upsertTaskFlowRegistryRecordToSqlite,
 } from "./task-flow-registry.store.sqlite.js";
 import type {
+  TaskFlowRegistryMirroredSync,
   TaskFlowRegistryObservedUpdate,
   TaskFlowRegistryStoreSnapshot,
   TaskFlowRegistryUpdate,
@@ -29,6 +35,10 @@ type TaskFlowRegistryStore = {
   ): Promise<TaskFlowRecord | undefined>;
   loadSnapshot: () => TaskFlowRegistryStoreSnapshot;
   upsertFlow: (flow: TaskFlowRecord) => void;
+  syncMirroredTask: (
+    task: TaskFlowSyncInput,
+    preparePublication: (result: TaskFlowRegistryMirroredSync) => TaskFlowRegistryUpdatePublication,
+  ) => TaskFlowRegistryMirroredSync;
   updateFlow: (
     params: TaskFlowRegistryUpdate,
     preparePublication: (
@@ -82,6 +92,7 @@ const defaultFlowRegistryStore: TaskFlowRegistryStore = {
   },
   loadSnapshot: loadTaskFlowRegistryStateFromSqlite,
   upsertFlow: upsertTaskFlowRegistryRecordToSqlite,
+  syncMirroredTask: syncTaskMirroredFlowInSqlite,
   updateFlow: updateTaskFlowRegistryRecordInSqlite,
   deleteFlow: deleteTaskFlowRegistryRecordFromSqlite,
   close: closeTaskFlowRegistryDatabase,

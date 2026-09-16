@@ -13,14 +13,19 @@ import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-adm
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOperations, T>(
-  client: StoreClient,
+  client: StoreClient | undefined,
   operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
   stateContext: SqliteWorkerStateContext | undefined,
   track: (pending: Promise<void>) => () => void,
   assertCurrent?: (commandType: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
+  requireStateLifecycle = false,
 ): Promise<T> {
+  if (!client || client.sealed) {
+    return Promise.reject(new SqliteWorkerError("SQLite worker store is closed", "closed"));
+  }
   const scope: OperationScope = {
+    requireStateLifecycle,
     createAdmission,
     assertCurrent,
     active: true,

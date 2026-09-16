@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { serialize } from "node:v8";
 import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.paths.js";
+import { runWithSqliteCoordinator } from "./sqlite-coordinator.js";
 import type {
   PreparedSqliteWorkerOpen,
   SqliteWorkerStoreOptions,
@@ -15,6 +16,7 @@ import { readDatabasePathIdentity, type DatabasePathIdentity } from "./sqlite-wo
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import {
+  acquireStateDatabaseCoordinator,
   tryCreateGatewaySchemaFenceDelegate,
   tryCreateStateLifecycleDelegate,
   withStateDatabaseCoordinatorRuntimeDirectory,
@@ -238,6 +240,9 @@ export function prepareSqliteWorkerActorContext(
 export function prepareSqliteWorkerLifecycle(job: Job, actor: Actor | undefined): void {
   const context = job.request.stateContext;
   if (!actor || !context) {
+    if (job.requireStateLifecycle) {
+      throw new Error("SQLite worker lifecycle custody requires its captured state owner");
+    }
     return;
   }
   const schemaFence = actor.gatewaySchemaFence
@@ -256,16 +261,34 @@ export function prepareSqliteWorkerLifecycle(job: Job, actor: Actor | undefined)
     job.request.type === "close"
       ? { ...context.coordinatorRuntime, keepAlive: false }
       : context.coordinatorRuntime;
-  const delegate = withStateDatabaseCoordinatorRuntimeDirectory(runtime, () =>
-    tryCreateStateLifecycleDelegate({
-      databasePath: actor.databasePath,
-      actorId: `${actor.id}:${job.request.id}`,
-    }),
-  );
-  if (delegate) {
-    job.stateLifecycle = { actor, delegate };
-    job.request.stateLifecycle = delegate.port;
-  }
+  withStateDatabaseCoordinatorRuntimeDirectory(runtime, () => {
+    const attach = () => {
+      if (job.requireStateLifecycle) {
+        job.assertCurrent?.();
+      }
+      const delegate = tryCreateStateLifecycleDelegate({
+        databasePath: actor.databasePath,
+        actorId: `${actor.id}:${job.request.id}`,
+      });
+      if (!delegate && job.requireStateLifecycle) {
+        throw new Error("SQLite worker did not retain its required lifecycle custody");
+      }
+      if (delegate) {
+        job.stateLifecycle = { actor, delegate };
+        job.request.stateLifecycle = delegate.port;
+      }
+    };
+    if (job.requireStateLifecycle) {
+      // Install the per-job delegate before releasing this temporary real reference.
+      runWithSqliteCoordinator(
+        acquireStateDatabaseCoordinator({ databasePath: actor.databasePath }),
+        "SQLite worker lifecycle delegation",
+        attach,
+      );
+    } else {
+      attach();
+    }
+  });
 }
 
 export function releaseSqliteWorkerLifecycle(job: Job): void {

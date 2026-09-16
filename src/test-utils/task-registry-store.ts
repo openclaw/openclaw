@@ -9,6 +9,7 @@ import {
 } from "../tasks/task-flow-registry.records.js";
 import type { getTaskFlowRegistryStore } from "../tasks/task-flow-registry.store.js";
 import type {
+  TaskFlowRegistryMirroredSync,
   TaskFlowRegistryObservedUpdate,
   TaskFlowRegistryStoreSnapshot,
 } from "../tasks/task-flow-registry.store.types.js";
@@ -83,6 +84,38 @@ export function createInMemoryTaskRegistryStore(
 ): TaskRegistryStore {
   const state = structuredClone(snapshot);
   return {
+    async syncLiveTaskFlowAsync(_context, params, authority) {
+      if (!flowStore) {
+        throw new Error(
+          "In-memory live task-flow synchronization requires an explicit flow store.",
+        );
+      }
+      authority.assertCurrent();
+      const task = structuredClone(state.tasks.get(params.taskId));
+      if (
+        !task ||
+        task.parentFlowId?.trim() !== params.flowId ||
+        !authority.isSelected({ ...params, createdAt: task.createdAt })
+      ) {
+        return { kind: "not-selected" };
+      }
+      authority.assertCurrent();
+      const current = flowStore.loadSnapshot().flows.get(params.flowId);
+      try {
+        const result = flowStore.syncMirroredTask(task, () => ({
+          stage() {},
+          rollback() {},
+          commit() {},
+          publish() {},
+        }));
+        return { kind: "result", result: { ok: true, flow: result.flow } };
+      } catch (error) {
+        if (!current) {
+          throw error;
+        }
+        return { kind: "result", result: { ok: false, reason: "persist_failed", current } };
+      }
+    },
     async withSnapshotAsync<T>(
       this: TaskRegistryStore,
       _context: OpenClawStateWorkerContext,
@@ -176,6 +209,26 @@ export function createInMemoryTaskFlowRegistryStore(
     loadSnapshot: () => structuredClone(state),
     upsertFlow: (flow) => {
       state.flows.set(flow.flowId, structuredClone(flow));
+    },
+    syncMirroredTask(task, preparePublication) {
+      const stored = state.flows.get(task.parentFlowId?.trim() ?? "");
+      let result: TaskFlowRegistryMirroredSync = { changed: false, flow: null };
+      if (stored) {
+        const current = normalizeRestoredFlowRecord(stored);
+        result = { changed: false, flow: current };
+        if (current.syncMode === "task_mirrored") {
+          const prepared = prepareTaskMirroredFlowSyncFromCurrent(task, current);
+          if (!isTaskMirroredFlowSyncUnchanged(prepared)) {
+            this.upsertFlow(prepared.next);
+            result = { changed: true, flow: prepared.next, previous: current };
+          }
+        }
+      }
+      const publication = preparePublication(result);
+      publication.stage();
+      publication.commit();
+      publication.publish();
+      return result;
     },
     updateFlow: (params, preparePublication) => {
       const publish = (result: TaskFlowRegistryObservedUpdate) => {

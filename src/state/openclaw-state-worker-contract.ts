@@ -39,6 +39,7 @@ import type { TaskRegistryStatusSnapshot } from "../tasks/task-registry.store.st
 import type {
   TaskRegistryMutationScope,
   TaskRegistryStoreSnapshot,
+  TaskLiveFlowSyncOutcome,
 } from "../tasks/task-registry.store.types.js";
 import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
 import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
@@ -110,6 +111,10 @@ export type OpenClawStateWorkerOperations = NativeHookRelayStoreWorkerOperations
     "flows.syncMirroredTask": {
       input: { taskId: string; expectedParentFlowId?: string };
       output: TaskMirroredFlowSyncOutcome;
+    };
+    "flows.syncLiveMirroredTask": {
+      input: { taskId: string; flowId: string };
+      output: TaskLiveFlowSyncOutcome;
     };
     "flows.snapshot": { input: undefined; output: TaskFlowRegistryStoreSnapshot };
     "tasks.statusSummary": {

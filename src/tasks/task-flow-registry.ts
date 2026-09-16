@@ -17,9 +17,7 @@ import {
   buildManagedTaskFlowPatch,
   buildTaskMirroredFlowCreateFields,
   cloneFlowRecord,
-  isTaskMirroredFlowSyncUnchanged,
   normalizeRestoredFlowRecord,
-  prepareTaskMirroredFlowSyncFromCurrent,
   type CreateFlowRecordParams,
   type FlowRecordCreateFields,
   type FlowRecordPatch,
@@ -38,6 +36,7 @@ import {
 import type {
   TaskFlowRegistryStoreSnapshot,
   TaskFlowRegistryUpdateResult,
+  TaskFlowRegistryUpdatePublication,
 } from "./task-flow-registry.store.types.js";
 import {
   isTerminalTaskFlow,
@@ -50,8 +49,6 @@ import {
 import { createAsyncRegistryRestore, createSyncRegistryReader } from "./task-registry-restore.js";
 
 export type { TaskFlowUpdateResult } from "./task-flow-registry.types.js";
-
-export type { PreparedTaskMirroredFlowSync } from "./task-flow-registry.records.js";
 
 const log = createSubsystemLogger("tasks/task-flow-registry");
 let flows = new Map<string, TaskFlowRecord>();
@@ -446,6 +443,62 @@ export function createTaskFlowForTask(
   return createFlowRecord(buildTaskMirroredFlowCreateFields(params));
 }
 
+function prepareFlowRecordPublication(
+  flowId: string,
+  cached: TaskFlowRecord | undefined,
+  current: TaskFlowRecord | undefined,
+  previous: TaskFlowRecord | undefined,
+  applied: boolean,
+): TaskFlowRegistryUpdatePublication {
+  const canonical = current ? cloneFlowRecord(current) : undefined;
+  const changed =
+    applied ||
+    !areTaskFlowRecordsEqual(cached ? normalizeRestoredFlowRecord(cached) : undefined, canonical);
+  const next = changed ? canonical : cached;
+  let committed: TaskFlowRecord | undefined;
+  return {
+    stage: () => {
+      projectionEpoch += 1;
+      if (next) {
+        flows.set(flowId, next);
+      } else {
+        flows.delete(flowId);
+      }
+    },
+    rollback: () => {
+      projectionEpoch += 1;
+      if (cached) {
+        flows.set(flowId, cached);
+      } else {
+        flows.delete(flowId);
+      }
+    },
+    commit: () => {
+      projectionEpoch += 1;
+      // Capture the final staged entry before any observer can reenter this owner.
+      committed = flows.get(flowId);
+    },
+    publish: () => {
+      if (!changed || flows.get(flowId) !== committed) {
+        return;
+      }
+      if (next) {
+        emitFlowRegistryObserverEvent(() => ({
+          kind: "upserted",
+          flow: next,
+          ...(previous ? { previous } : {}),
+        }));
+      } else if (previous) {
+        emitFlowRegistryObserverEvent(() => ({
+          kind: "deleted",
+          flowId,
+          previous,
+        }));
+      }
+    },
+  };
+}
+
 export function updateFlowRecordByIdExpectedRevision(params: {
   flowId: string;
   expectedRevision: number;
@@ -461,57 +514,13 @@ export function updateFlowRecordByIdExpectedRevision(params: {
         : observed.reason === "revision_conflict"
           ? observed.current
           : undefined;
-      const canonical = current ? cloneFlowRecord(current) : undefined;
-      const previous = observed.applied ? observed.previous : cached;
-      const changed =
-        observed.applied ||
-        !areTaskFlowRecordsEqual(
-          cached ? normalizeRestoredFlowRecord(cached) : undefined,
-          canonical,
-        );
-      const next = changed ? canonical : cached;
-      let committed: TaskFlowRecord | undefined;
-      return {
-        stage: () => {
-          projectionEpoch += 1;
-          if (next) {
-            flows.set(params.flowId, next);
-          } else {
-            flows.delete(params.flowId);
-          }
-        },
-        rollback: () => {
-          projectionEpoch += 1;
-          if (cached) {
-            flows.set(params.flowId, cached);
-          } else {
-            flows.delete(params.flowId);
-          }
-        },
-        commit: () => {
-          projectionEpoch += 1;
-          // Capture the final staged entry before any observer can reenter this owner.
-          committed = flows.get(params.flowId);
-        },
-        publish: () => {
-          if (!changed || flows.get(params.flowId) !== committed) {
-            return;
-          }
-          if (next) {
-            emitFlowRegistryObserverEvent(() => ({
-              kind: "upserted",
-              flow: next,
-              ...(previous ? { previous } : {}),
-            }));
-          } else if (previous) {
-            emitFlowRegistryObserverEvent(() => ({
-              kind: "deleted",
-              flowId: params.flowId,
-              previous,
-            }));
-          }
-        },
-      };
+      return prepareFlowRecordPublication(
+        params.flowId,
+        cached,
+        current,
+        observed.applied ? observed.previous : cached,
+        observed.applied,
+      );
     });
   } catch (error) {
     log.warn("Failed to persist task-flow registry update", { flowId: params.flowId, error });
@@ -621,32 +630,22 @@ export function syncFlowFromTaskResult(task: TaskFlowSyncInput): TaskFlowSyncRes
   if (flow.syncMode !== "task_mirrored") {
     return { ok: true, flow };
   }
-  const prepared = prepareTaskMirroredFlowSyncFromCurrent(task, flow);
-  if (isTaskMirroredFlowSyncUnchanged(prepared)) {
-    return { ok: true, flow };
+  const cached = flows.get(flowId);
+  try {
+    const result = getTaskFlowRegistryStore().syncMirroredTask(task, (observed) =>
+      prepareFlowRecordPublication(
+        flowId,
+        cached,
+        observed.flow ?? undefined,
+        observed.changed ? observed.previous : cached,
+        observed.changed,
+      ),
+    );
+    return { ok: true, flow: result.flow ? cloneFlowRecord(result.flow) : null };
+  } catch (error) {
+    log.warn("Failed to persist task-mirrored flow", { flowId, taskId: task.taskId, error });
+    return { ok: false, reason: "persist_failed", current: flow };
   }
-  const updated = writeFlowRecord(prepared.next, prepared.current);
-  if (!updated) {
-    return {
-      ok: false,
-      reason: "persist_failed",
-      current: flow,
-    };
-  }
-  return { ok: true, flow: updated };
-}
-
-export function prepareTaskMirroredFlowSync(
-  task: Parameters<typeof syncFlowFromTaskResult>[0],
-): PreparedTaskMirroredFlowSync | undefined {
-  const flowId = task.parentFlowId?.trim();
-  if (!flowId) {
-    return undefined;
-  }
-  const flow = getTaskFlowById(flowId);
-  return flow?.syncMode === "task_mirrored"
-    ? prepareTaskMirroredFlowSyncFromCurrent(task, flow)
-    : undefined;
 }
 
 /** Publishes a mirrored flow record already committed by a shared-state transaction. */

@@ -20,7 +20,10 @@ import {
   sameSqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import {
+  assertTransactionUsable,
+  runSqliteDeferredTransactionSync,
+} from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -61,6 +64,7 @@ import {
   upsertTaskFlowRowInDatabase,
 } from "../tasks/task-flow-registry.store.kernel.js";
 import { isTerminalTaskFlow, type TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
+import { syncLiveTaskFlowInDatabase } from "../tasks/task-registry-live-flow.worker.js";
 import {
   restoreTaskRegistryInDatabase,
   syncTaskMirroredFlowInDatabase,
@@ -392,6 +396,9 @@ function createSharedStateWorkerBackend(
       if (command.type === "flows.syncMirroredTask") {
         return syncTaskMirroredFlowInDatabase(database, command.input);
       }
+      if (command.type === "flows.syncLiveMirroredTask") {
+        return syncLiveTaskFlowInDatabase(database, command.input);
+      }
       if (command.type === "deliveryQueue.countFailed") {
         return countFailedDeliveryQueueEntriesInDatabase(database);
       }
@@ -536,6 +543,14 @@ function createSharedStateWorkerBackend(
             throw new Error("Unknown shared-state SQLite command");
         }
       });
+    },
+    assertSettled() {
+      if (nativeDatabase) {
+        assertTransactionUsable(nativeDatabase.db);
+        if (nativeDatabase.db.isOpen && nativeDatabase.db.isTransaction) {
+          throw new Error("Shared-state worker retained an unsettled transaction");
+        }
+      }
     },
     close() {
       closed = true;

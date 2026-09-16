@@ -33,6 +33,8 @@ type StoreOperations = OpenClawStateWorkerOperations & OpenClawStateWorkerInspec
 type Store = SqliteWorkerStore<StoreOperations>;
 type DomainScope = Pick<SqliteWorkerStore<OpenClawStateWorkerOperations>, "execute">;
 type OperationOptions = {
+  /** Acquire matching host lifecycle custody for each dispatched command. */
+  requireStateLifecycle?: boolean;
   assertCurrent?: (commandType?: PropertyKey) => void;
   createAdmission?: SqliteWorkerAdmissionFactory;
 };
@@ -271,6 +273,7 @@ async function runAdmittedOpenClawStateWorkerOperation<T>(
       operation,
       options?.assertCurrent,
       options?.createAdmission,
+      options?.requireStateLifecycle,
     );
   } catch (error) {
     if (error instanceof Error) {
@@ -326,6 +329,7 @@ async function runWithOpenClawStateWorkerStore<T>(
   operation: (scope: Pick<Store, "execute">) => Promise<T>,
   assertCurrent?: (commandType?: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
+  requireStateLifecycle = false,
 ): Promise<T> {
   const { admission } = context;
   try {
@@ -338,6 +342,7 @@ async function runWithOpenClawStateWorkerStore<T>(
         assertCurrent?.(commandType);
       },
       createAdmission,
+      requireStateLifecycle,
     );
   } catch (error) {
     if (!isSqliteWorkerStoreAvailable(store)) {

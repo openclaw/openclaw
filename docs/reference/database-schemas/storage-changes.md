@@ -201,6 +201,16 @@ precedence and bypass task preparation. Managed downloads repeat task preparatio
 and session authorization after transcript lookup; session, transcript, and media
 storage retain their existing owners.
 
+Live task-mirrored flow retries prepare the task projection asynchronously, then
+grant the worker transaction against the current live insertion order. The host
+retains its matching lifecycle coordinator through the existing per-command
+delegate and native settlement. Coordinator SQL remains on the host. Live retries
+and retained synchronous mirror updates reread the current flow inside their write
+transaction; initial synchronous observer ordering stays unchanged.
+Each live attempt bounds projection preparation to one pass. A superseded snapshot
+yields to the existing retry delays and budget before selection or dispatch.
+Restored retries retain their separate durable-row ordering and bounded retry policy.
+
 Routine status reads stream task audit metadata through the same shared worker
 and return fixed-size history aggregates plus candidates for live reconciliation.
 They do not decode retained task payloads or restore delivery-state maps. Reads

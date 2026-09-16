@@ -19,12 +19,19 @@ import type {
   TaskExecutionRestoreStore,
   TaskRegistryMutationScope,
   TaskRegistryStoreSnapshot,
+  TaskLiveFlowAuthority,
+  TaskLiveFlowSyncOutcome,
 } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 export type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 
 export type TaskRegistryStore = TaskExecutionRestoreStore & {
+  syncLiveTaskFlowAsync(
+    context: OpenClawStateWorkerContext,
+    params: { taskId: string; flowId: string },
+    authority: TaskLiveFlowAuthority,
+  ): Promise<TaskLiveFlowSyncOutcome>;
   withSnapshotAsync<T>(
     context: OpenClawStateWorkerContext,
     consume: (snapshot: TaskRegistryRestoreResult) => T,
@@ -70,6 +77,10 @@ type TaskRegistryObservers = {
 };
 
 const defaultTaskRegistryStore: TaskRegistryStore = {
+  async syncLiveTaskFlowAsync(context, params, authority) {
+    const { syncLiveTaskFlowWithWorker } = await import("./task-registry-live-flow-sync.js");
+    return syncLiveTaskFlowWithWorker(context, params, authority);
+  },
   async withSnapshotAsync(context, consume) {
     const { runOpenClawStateWorkerOperation } =
       await import("../state/openclaw-state-worker-store.js");

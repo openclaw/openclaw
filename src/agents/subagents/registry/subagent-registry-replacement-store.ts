@@ -3,13 +3,14 @@ import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-
 import { publishTaskRecordAfterAtomicStore } from "../../../tasks/runtime-internal.js";
 import type { PreparedCanonicalTaskActivation } from "../../../tasks/task-backing-authority-write.js";
 import { readTaskBackingInstance } from "../../../tasks/task-backing-authority.js";
+import { prepareTaskMirroredFlowSyncFromCurrent } from "../../../tasks/task-flow-registry.records.js";
 import {
   bindTaskFlowRecord,
   readTaskFlowRecord,
   upsertTaskFlowRowInDatabase,
 } from "../../../tasks/task-flow-registry.store.kernel.js";
 import {
-  prepareTaskMirroredFlowSync,
+  getTaskFlowById,
   publishTaskFlowAfterAtomicStore,
 } from "../../../tasks/task-flow-runtime-internal.js";
 import {
@@ -73,7 +74,12 @@ export function commitSubagentTaskReplacement(params: {
   const sourceRow = bindSubagentRunRecord(params.source);
   const currentTaskRow = bindTaskRecord(params.task.current);
   const taskRow = bindTaskRecord(params.task.next);
-  const flow = prepareTaskMirroredFlowSync(params.task.next);
+  const flowId = params.task.next.parentFlowId?.trim();
+  const currentFlow = flowId ? getTaskFlowById(flowId) : undefined;
+  const flow =
+    currentFlow?.syncMode === "task_mirrored"
+      ? prepareTaskMirroredFlowSyncFromCurrent(params.task.next, currentFlow)
+      : undefined;
   const currentFlowRow = flow ? bindTaskFlowRecord(flow.current) : undefined;
   const flowRow = flow ? bindTaskFlowRecord(flow.next) : undefined;
 
