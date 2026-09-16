@@ -122,6 +122,9 @@ function runMergeVerification(
   const localDir = join(fixtureRoot, ".local");
   const head = "a".repeat(40);
   mkdirSync(localDir);
+  const review = validReadyReview();
+  review.pr = { number: 42, headSha: head };
+  writeReviewArtifacts(fixtureRoot, review, { headSha: head, prNumber: 42 });
   writeFileSync(join(localDir, "prep.env"), `PREP_HEAD_SHA=${head}\n`);
   writeFileSync(join(localDir, "gates.env"), "GATES_MODE=full\n");
 
@@ -146,6 +149,7 @@ function runMergeVerification(
         'script_parent_dir=$(cd "$(dirname "$1")/.." && pwd)',
         'fixture_root="$2"',
         'source "$script_parent_dir/pr-lib/common.sh"',
+        'source "$script_parent_dir/pr-lib/review.sh"',
         'source "$script_parent_dir/pr-lib/worktree.sh"',
         'repo_root() { printf "%s\\n" "$fixture_root"; }',
         'enter_worktree() { cd "$fixture_root"; }',

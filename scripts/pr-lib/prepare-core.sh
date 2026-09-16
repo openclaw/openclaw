@@ -36,6 +36,10 @@ retire_prep_evidence() {
     .local/prepare-push-result.env \
     .local/prepare-sync-result.env \
     .local/prep.md \
+    .local/correction-review.json \
+    .local/correction-review.md \
+    .local/correction-incoming-review.json \
+    .local/correction-incoming-review.md \
     .local/gates-*.log; do
     if [ ! -e "$artifact" ] && [ ! -L "$artifact" ]; then
       continue
@@ -56,6 +60,10 @@ retire_prep_evidence() {
   rm -f \
     .local/gates.env \
     .local/prep.env \
+    .local/correction-review.json \
+    .local/correction-review.md \
+    .local/correction-incoming-review.json \
+    .local/correction-incoming-review.md \
     .local/prepare-push-result.env \
     .local/prepare-sync-result.env || return 1
   printf '%s\n' "- Prior preparation evidence retained at $archive." >> .local/prep.md || return 1
@@ -169,10 +177,19 @@ verify_prep_branch_matches_prepared_head() {
 }
 
 prepare_init() {
-  local pr="$1"
+  local pr="$1" review_mode="${2:-ready}"
+  local incoming_json_oid="" incoming_markdown_oid=""
   # Validate the exact reviewed head before taking the lock past its reversible phase.
   review_validate_artifacts "$pr" || return 1
-  require_ready_review_recommendation || return 1
+  case "$review_mode" in
+    ready) require_ready_review_recommendation || return 1 ;;
+    correction)
+      require_correction_review_recommendation || return 1
+      incoming_json_oid=$(git hash-object --no-filters .local/review.json) || return 1
+      incoming_markdown_oid=$(git hash-object --no-filters .local/review.md) || return 1
+      ;;
+    *) echo "Unknown preparation review mode: $review_mode" >&2; return 1 ;;
+  esac
   mark_pr_operation_side_effects_started
   enter_worktree "$pr" false || return 1
 
@@ -230,6 +247,9 @@ prepare_init() {
     PR_HEAD "$reviewed_head" \
     PR_HEAD_SHA_BEFORE "$reviewed_head_sha" \
     PREP_BRANCH "pr-$pr-prep" \
+    PREP_REVIEW_MODE "$review_mode" \
+    PREP_INCOMING_JSON_OID "$incoming_json_oid" \
+    PREP_INCOMING_MARKDOWN_OID "$incoming_markdown_oid" \
     PR_AUTHOR_ACCESS_AT_PREP "$author_access_at_prep" \
     PREP_STARTED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     > .local/prep-context.env
@@ -251,6 +271,16 @@ EOF_PREP
   echo "worktree=$PWD"
   echo "branch=$(git branch --show-current)"
   echo "wrote=.local/prep-context.env .local/prep.md"
+}
+
+prepare_correction_review_init() {
+  local pr="$1"
+  enter_worktree "$pr" false || return 1
+  mark_pr_operation_side_effects_started
+  checkout_prep_branch "$pr" || return 1
+  run_prepared_correction_review "$pr" init || return 1
+  echo "Complete independent review of this exact correction in .local/correction-review.json and .local/correction-review.md."
+  echo "The incoming review is unchanged; gates and publication require the corrected-candidate READY review."
 }
 
 prepare_validate_commit() {
@@ -321,8 +351,16 @@ resolve_prep_publication_target() {
   fi
 }
 
+verify_correction_publication_authority() {
+  [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ] || return 0
+  require_correction_publication_gates "$PREP_PUBLICATION_PR" "$(git rev-parse HEAD)" \
+    "$PREP_PUBLICATION_ALLOW_PENDING" || return 1
+  verify_correction_review_snapshot "$PREP_PUBLICATION_PR" "$PREP_PUBLICATION_REVIEW_SNAPSHOT"
+}
+
 prepare_push() {
   local pr="$1"
+  local PREP_PUBLICATION_REVIEW_SNAPSHOT="" PREP_PUBLICATION_PR="$pr" PREP_PUBLICATION_ALLOW_PENDING=true
   PR_MAIN_SHA=""
   enter_worktree "$pr" false || return 1
 
@@ -358,6 +396,9 @@ prepare_push() {
   local push_result_env=".local/prepare-push-result.env"
 
   verify_pr_head_branch_matches_expected "$pr" "$PR_HEAD"
+  require_prepared_review "$pr" || return 1
+  PREP_PUBLICATION_REVIEW_SNAPSHOT=$(correction_review_snapshot "$pr") || return 1
+  verify_correction_publication_authority || return 1
   push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" "$push_result_env" || return $?
   # shellcheck disable=SC1090
   source "$push_result_env"
@@ -426,6 +467,7 @@ EOF_PREP
 
 prepare_sync_head() {
   local pr="$1"
+  local PREP_PUBLICATION_REVIEW_SNAPSHOT="" PREP_PUBLICATION_PR="$pr" PREP_PUBLICATION_ALLOW_PENDING=false
   enter_worktree "$pr" false || return 1
 
   require_artifact .local/pr-meta.env
@@ -451,6 +493,9 @@ prepare_sync_head() {
   local push_result_env=".local/prepare-sync-result.env"
 
   verify_pr_head_branch_matches_expected "$pr" "$PR_HEAD"
+  require_prepared_review "$pr" || return 1
+  PREP_PUBLICATION_REVIEW_SNAPSHOT=$(correction_review_snapshot "$pr") || return 1
+  verify_correction_publication_authority || return 1
   push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" "$push_result_env" || return $?
   # shellcheck disable=SC1090
   source "$push_result_env"

@@ -240,6 +240,91 @@ require_ready_review_recommendation() {
   fi
 }
 
+require_correction_review_recommendation() {
+  if ! jq -e '.recommendation == "NEEDS WORK" and
+    any(.findings[]; .severity == "BLOCKER" or .severity == "IMPORTANT")' \
+    .local/review.json >/dev/null; then
+    echo "Correction preparation requires a validated NEEDS WORK review with actionable findings."
+    return 1
+  fi
+}
+
+run_prepared_correction_review() (
+  local pr="$1" command="$2"
+  require_artifact .local/prep-context.env || return 1
+  local PREP_REVIEW_MODE="" PREP_INCOMING_JSON_OID="" PREP_INCOMING_MARKDOWN_OID=""
+  local PR_NUMBER="" PR_HEAD_SHA_BEFORE="" PREP_BRANCH=""
+  # shellcheck disable=SC1091
+  source .local/prep-context.env || return 1
+  if [ "$PREP_REVIEW_MODE" != correction ] || [ "$PR_NUMBER" != "$pr" ] ||
+    [ -z "$PREP_INCOMING_JSON_OID" ] || [ -z "$PREP_INCOMING_MARKDOWN_OID" ] ||
+    [ -z "$PREP_BRANCH" ]; then
+    echo "Missing exact incoming review binding; run prepare-correction-init first." >&2
+    return 1
+  fi
+  local head branch_head
+  head=$(git rev-parse HEAD) || return 1
+  branch_head=$(git rev-parse "refs/heads/$PREP_BRANCH") || return 1
+  if [ "$head" != "$branch_head" ]; then
+    echo "Correction review requires the current preparation branch." >&2
+    return 1
+  fi
+  validate_review_artifact_data || return 1
+  node "$(dirname "$(review_artifacts_helper_path)")/correction-review.mjs" \
+    "$command" "$pr" "$PR_HEAD_SHA_BEFORE" "$head" \
+    "$PREP_INCOMING_JSON_OID" "$PREP_INCOMING_MARKDOWN_OID"
+)
+
+require_prepared_review() {
+  local pr="$1" mode=ready
+  validate_review_artifact_data || return 1
+  if [ -s .local/prep-context.env ]; then
+    mode=$(
+      unset PREP_REVIEW_MODE
+      # shellcheck disable=SC1091
+      source .local/prep-context.env || exit 1
+      printf '%s\n' "${PREP_REVIEW_MODE:-ready}"
+    ) || return 1
+  fi
+  case "$mode" in
+    ready) require_ready_review_recommendation ;;
+    correction) run_prepared_correction_review "$pr" validate ;;
+    *) echo "Unknown preparation review mode: $mode" >&2; return 1 ;;
+  esac
+}
+
+# A correction's review authority must survive every awaited admission read.
+# Normal READY preparation keeps its existing contract; the nonempty snapshot
+# also detects loss of correction mode during an operation.
+correction_review_snapshot() (
+  local pr="$1" PREP_REVIEW_MODE=""
+  [ -s .local/prep-context.env ] || return 0
+  source .local/prep-context.env || return 1
+  [ "$PREP_REVIEW_MODE" = correction ] || return 0
+  require_prepared_review "$pr" || return 1
+  local publication_receipt=()
+  if [ -e .local/prep.env ] || [ -L .local/prep.env ]; then
+    [ -f .local/prep.env ] && [ ! -L .local/prep.env ] || return 1
+    publication_receipt+=(.local/prep.env)
+  fi
+  git hash-object --no-filters -- \
+    .local/prep-context.env .local/pr-meta.json .local/pr-meta.env \
+    .local/review.json .local/review.md \
+    .local/correction-review.json .local/correction-review.md \
+    .local/correction-incoming-review.json .local/correction-incoming-review.md \
+    ${publication_receipt[@]+"${publication_receipt[@]}"}
+)
+
+verify_correction_review_snapshot() {
+  local pr="$1" expected="$2" current
+  [ -n "$expected" ] || return 0
+  current=$(correction_review_snapshot "$pr") || return 1
+  if [ "$expected" != "$current" ]; then
+    echo "Correction review authority changed during admission; no publication or merge is authorized." >&2
+    return 1
+  fi
+}
+
 review_validate_artifacts() {
   local pr="$1"
   # Callers use an OR-list to keep pre-mutation failures reversible; Bash disables

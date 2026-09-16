@@ -37,7 +37,7 @@ function reviewIdentityLine({ number, headSha }) {
   return `Review artifact for PR #${number} at ${headSha}`;
 }
 
-function createReviewMarkdownTemplate(identity) {
+export function createReviewMarkdownTemplate(identity) {
   return `${reviewIdentityLine(identity)}
 
 A) TL;DR recommendation
@@ -62,7 +62,7 @@ J) Suggested PR comment (optional)
 `;
 }
 
-function createReviewArtifactTemplate({ number, headSha }) {
+export function createReviewArtifactTemplate({ number, headSha }) {
   return {
     // Identity stamp, not reviewer input: validation refuses artifacts whose pr
     // disagrees with .local/pr-meta.json, so a review written for another PR (or
@@ -106,7 +106,7 @@ function jsonValue(value) {
   return JSON.stringify(value === undefined ? null : value);
 }
 
-function validateReviewArtifacts({ review, reviewMarkdown, prMeta }) {
+export function validateReviewArtifacts({ review, reviewMarkdown, prMeta }) {
   const violations = [];
   const add = (message) => {
     if (!violations.includes(message)) {
