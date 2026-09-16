@@ -8,16 +8,19 @@
 // Seatbelt profile with the scope's writable allowlist. Reads stay open,
 // writes are confined to the scope dirs (see srt-runtime-config.ts).
 //
-// Out of later-scope (S3+): the pinned-mutation fs bridge / AC4 live handles,
-// Linux (bwrap) and Windows backends. The fs-bridge factory is intentionally
-// not provided here.
-//
 // Stage S2 (worker-per-scope lifecycle / reaper, design v8 §S2): every
 // sandboxed command is spawned detached into its own process group and tracked
 // by a per-scope reaper (scope-reaper.ts); the macOS liveness-pipe launcher
 // covers parent death, scope teardown group-kills every tracked child, and
 // buffered commands sweep their own background descendants on completion —
 // no orphan sandbox process survives any of the four teardown scenarios.
+//
+// Stage S3 (AC4 pinned-mutation fs bridge, design v8 §1–§3): the handle now
+// exposes createFsBridge (fs-bridge.ts). The bridge's per-scope pin owner — a
+// persistent helper process — is launched INSIDE the SRT sandbox via the same
+// wrapWithSandboxArgv wrap, so its held directory fds and every mutation it
+// performs stay kernel-enforced against the scope's allowWrite policy; it is
+// tracked by the reaper like any sandbox child and reaped on scope teardown.
 import { SandboxManager, type SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import type {
   CreateSandboxBackendParams,
@@ -30,8 +33,15 @@ import type {
 import { shellEscape } from "openclaw/plugin-sdk/sandbox";
 import type { ResolvedSrtPluginConfig } from "./config.js";
 import { assertSrtSandboxAvailable } from "./dependency-probe.js";
+import { createSrtFsBridge } from "./fs-bridge.js";
+import { PinOwnerClient } from "./pin-owner-client.js";
+import { buildPinOwnerCommand } from "./pin-owner-source.js";
 import { ScopeChildReaper } from "./scope-reaper.js";
-import { buildSrtRuntimeConfig, type SrtScopePolicyInput } from "./srt-runtime-config.js";
+import {
+  buildSrtRuntimeConfig,
+  resolveWritableRoots,
+  type SrtScopePolicyInput,
+} from "./srt-runtime-config.js";
 
 /** Public backend id used with registerSandboxBackend() and agents.defaults.sandbox.backend. */
 export const SRT_SANDBOX_BACKEND_ID = "srt";
@@ -87,12 +97,19 @@ class SrtSandboxBackend {
   private readonly runtimeConfig: SandboxRuntimeConfig;
   /** Per-scope process-group reaper (S2). Owns every sandbox child's lifecycle. */
   private readonly reaper = new ScopeChildReaper();
+  /** Per-scope AC4 pin owner RPC client (S3). Lazily spawns the owner process. */
+  private readonly pinOwnerClient: PinOwnerClient;
+  private fsBridge: ReturnType<typeof createSrtFsBridge> | undefined;
 
   constructor(
     private readonly params: CreateSandboxBackendParams,
     private readonly deps: SrtBackendDependencies,
   ) {
     this.runtimeConfig = buildSrtRuntimeConfig(scopePolicyFromParams(params), deps.pluginConfig);
+    this.pinOwnerClient = new PinOwnerClient({
+      spawnOwner: () => this.spawnPinOwner(),
+      rpcTimeoutMs: deps.pluginConfig.commandTimeoutMs,
+    });
   }
 
   /** Scope this backend belongs to (used to reap by scope on teardown). */
@@ -100,10 +117,36 @@ class SrtSandboxBackend {
     return this.params.scopeKey;
   }
 
-  /** Tear down this scope: reap every tracked sandbox process group. */
+  /** Tear down this scope: reap every tracked sandbox process group, drop the pin owner. */
   dispose(): void {
+    this.pinOwnerClient.dispose();
+    this.fsBridge?.dispose();
+    this.fsBridge = undefined;
     this.reaper.dispose();
     liveScopeBackends.delete(this);
+  }
+
+  /**
+   * Launch the persistent per-scope pin owner inside the SRT sandbox (S3).
+   * The same wrapWithSandboxArgv wrap as every sandboxed command means the
+   * owner's held fds and mutations are kernel-enforced against the scope's
+   * allowWrite policy — the held-handle model composes with SRT enforcement.
+   * The reaper tracks it, so scope teardown / host death group-kills it.
+   */
+  private async spawnPinOwner() {
+    const ownerCommand = buildPinOwnerCommand();
+    const wrapped = await SandboxManager.wrapWithSandboxArgv(
+      ownerCommand,
+      this.deps.pluginConfig.binShell,
+      this.runtimeConfig,
+      undefined,
+      this.params.workspaceDir,
+    );
+    return this.reaper.spawnPersistent({
+      argv: wrapped.argv,
+      env: wrapped.env ?? {},
+      cwd: this.params.workspaceDir,
+    });
   }
 
   /** Wrap a command string with the scope's Seatbelt profile. */
@@ -164,6 +207,26 @@ class SrtSandboxBackend {
         };
       },
       runShellCommand,
+      // S3: AC4 pinned-mutation fs bridge backed by the per-scope pin owner.
+      createFsBridge: ({ sandbox }) => {
+        if (!this.fsBridge) {
+          const writableRoots = resolveWritableRoots(
+            {
+              workspaceDir: sandbox.workspaceDir,
+              agentWorkspaceDir: sandbox.agentWorkspaceDir,
+              skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
+              workspaceAccess: sandbox.workspaceAccess,
+            },
+            this.deps.pluginConfig.writablePaths,
+          );
+          this.fsBridge = createSrtFsBridge({
+            sandbox,
+            writableRoots,
+            client: this.pinOwnerClient,
+          });
+        }
+        return this.fsBridge;
+      },
     };
   }
 }

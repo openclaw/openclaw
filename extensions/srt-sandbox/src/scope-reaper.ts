@@ -59,6 +59,26 @@ export class ScopeReaperDisposedError extends Error {
   }
 }
 
+/** Inputs for a long-lived (persistent) reaped spawn — no buffering, no timeout. */
+export type PersistentSpawnParams = {
+  argv: string[];
+  env: NodeJS.ProcessEnv;
+  cwd: string;
+};
+
+/**
+ * Handle for a persistent reaped child (S3 pin owner). The child stays alive
+ * across many stdin/stdout exchanges; the reaper still owns its process-group
+ * lifecycle so it never outlives the scope or the host process.
+ */
+export type PersistentChildHandle = {
+  child: ChildProcess;
+  /** Owner request channel (child stdin, fd 0). */
+  stdin: NodeJS.WritableStream;
+  /** Owner response channel (child stdout, fd 1). */
+  stdout: NodeJS.ReadableStream;
+};
+
 /**
  * Wrap the outer sandbox command with the macOS liveness-pipe launcher.
  *
@@ -125,7 +145,10 @@ export class ScopeChildReaper {
       return Promise.reject(new ScopeReaperDisposedError());
     }
     if (params.signal?.aborted) {
-      return Promise.reject(params.signal.reason ?? new Error("aborted"));
+      const reason = params.signal.reason;
+      return Promise.reject(
+        reason instanceof Error ? reason : new Error("srt-sandbox command aborted."),
+      );
     }
     const [command, ...rest] = params.argv;
     if (!command) {
@@ -219,6 +242,65 @@ export class ScopeChildReaper {
         child.stdin?.end();
       }
     });
+  }
+
+  /**
+   * Launch a long-lived sandboxed helper (the S3 pin owner) into its own
+   * process group with the liveness launcher, and track it exactly like a
+   * buffered command so scope teardown / host death still group-kills it. The
+   * caller drives it over the returned stdin/stdout; unlike {@link spawn} there
+   * is no completion buffering and no timeout — the helper lives until it exits,
+   * is shut down by the caller, or the scope is disposed.
+   */
+  spawnPersistent(params: PersistentSpawnParams): PersistentChildHandle {
+    if (this.disposed) {
+      throw new ScopeReaperDisposedError();
+    }
+    const [command, ...rest] = params.argv;
+    if (!command) {
+      throw new Error("srt-sandbox produced an empty sandbox command.");
+    }
+    const wrappedArgs = [...rest];
+    const last = wrappedArgs.length - 1;
+    if (last < 0) {
+      throw new Error("srt-sandbox sandbox command is missing its script.");
+    }
+    wrappedArgs[last] = wrapWithLivenessLauncher(wrappedArgs[last]!);
+
+    const child = spawn(command, wrappedArgs, {
+      cwd: params.cwd,
+      env: params.env,
+      // Own session/process group so the whole helper subtree is reapable.
+      detached: true,
+      // fd3 is the liveness pipe (write end held only here); fd0/fd1 carry the
+      // request/response RPC, fd2 the helper's diagnostics.
+      stdio: ["pipe", "pipe", "pipe", "pipe"],
+    });
+
+    const livenessEnd = child.stdio[3];
+    livenessEnd?.on("error", () => {});
+    child.stdin?.on("error", () => {});
+    child.stdout?.on("error", () => {});
+
+    const forget = () => {
+      this.live.delete(child);
+      livenessEnd?.destroy();
+    };
+    // Sweep any descendant the helper spawned and drop it from the registry the
+    // instant it exits, so no survivor lingers and dispose() has nothing stale.
+    child.on("exit", () => {
+      killGroup(child.pid, "SIGKILL");
+      forget();
+    });
+    child.on("error", forget);
+
+    this.live.add(child);
+    if (!child.stdin || !child.stdout) {
+      killGroup(child.pid, "SIGKILL");
+      forget();
+      throw new Error("srt-sandbox pin owner is missing its stdio channels.");
+    }
+    return { child, stdin: child.stdin, stdout: child.stdout };
   }
 
   /**
