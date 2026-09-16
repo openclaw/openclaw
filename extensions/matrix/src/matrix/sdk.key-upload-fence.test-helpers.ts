@@ -10,6 +10,21 @@ import {
   seedDatabase,
 } from "./sdk/idb-persistence.test-helpers.js";
 
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
+
+export function clearTestUndiciRuntimeDepsOverride(): void {
+  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
+}
+
+export function stubRuntimeFetch(fetchImpl: typeof fetch): void {
+  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent: function MockAgent() {},
+    EnvHttpProxyAgent: function MockEnvHttpProxyAgent() {},
+    ProxyAgent: function MockProxyAgent() {},
+    fetch: fetchImpl,
+  };
+}
+
 export const KEY_UPLOAD_FENCE_MODES = [
   "fresh-device-restart",
   "existing-device-restart",
@@ -43,7 +58,14 @@ export async function runKeyUploadFenceCase(params: {
   ) => Promise<string | null>;
   stubRuntimeFetch: (fetchImpl: typeof fetch) => void;
 }): Promise<void> {
-  const { mode, MatrixClient, makeTempDir, getFetchFn, readSnapshot, stubRuntimeFetch } = params;
+  const {
+    mode,
+    MatrixClient,
+    makeTempDir,
+    getFetchFn,
+    readSnapshot,
+    stubRuntimeFetch: installRuntimeFetch,
+  } = params;
   const baseUrl = `http://127.0.0.1:8008${mode === "durable-prefixed" ? "/matrix" : ""}`;
   const root = makeTempDir();
   const prefix = path.basename(root);
@@ -78,7 +100,7 @@ export async function runKeyUploadFenceCase(params: {
       ]);
       return new Response('{"one_time_key_counts":{"signed_curve25519":1}}');
     });
-    stubRuntimeFetch(fetchMock as typeof fetch);
+    installRuntimeFetch(fetchMock as typeof fetch);
     const client = new MatrixClient(baseUrl, "token", {
       encryption: true,
       idbSnapshotPath: path.join(storageRoot, "crypto-idb-snapshot.json"),

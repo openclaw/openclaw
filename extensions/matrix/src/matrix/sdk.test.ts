@@ -38,10 +38,7 @@ import {
   readMatrixRecoveryKeyStateForPathAsync,
   type MatrixSnapshotStateRuntime,
 } from "./crypto-state-store.js";
-import {
-  KEY_UPLOAD_FENCE_MODES,
-  runKeyUploadFenceCase,
-} from "./sdk.key-upload-fence.test-helper.js";
+import * as keyUploadFence from "./sdk.key-upload-fence.test-helpers.js";
 import { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
 import { clearAllIndexedDbState } from "./sdk/idb-persistence.test-helpers.js";
 import { LogService } from "./sdk/logger.js";
@@ -181,21 +178,6 @@ function captureRecoveryCacheWrite() {
     new Uint8Array([1, 2, 3, 4]),
   );
   return { options, getSecretStorageKey };
-}
-
-const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-
-function clearTestUndiciRuntimeDepsOverride(): void {
-  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
-}
-
-function stubRuntimeFetch(fetchImpl: typeof fetch): void {
-  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-    Agent: function MockAgent() {},
-    EnvHttpProxyAgent: function MockEnvHttpProxyAgent() {},
-    ProxyAgent: function MockProxyAgent() {},
-    fetch: fetchImpl,
-  };
 }
 
 async function consumeMatrixSecretStorageKey(keyId = "SSSSKEY"): Promise<boolean> {
@@ -593,14 +575,14 @@ describe("MatrixClient request hardening", () => {
     lastCreateClientOpts = null;
     vi.useRealTimers();
     vi.unstubAllGlobals();
-    clearTestUndiciRuntimeDepsOverride();
+    keyUploadFence.clearTestUndiciRuntimeDepsOverride();
   });
 
   afterEach(async () => {
     await stopStartedClients();
     vi.useRealTimers();
     vi.unstubAllGlobals();
-    clearTestUndiciRuntimeDepsOverride();
+    keyUploadFence.clearTestUndiciRuntimeDepsOverride();
     resetPluginStateStoreForTests();
   });
 
@@ -1076,7 +1058,7 @@ describe("MatrixClient request hardening", () => {
       order.push("put");
       return Response.json({ event_id: "$sent" });
     });
-    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
+    keyUploadFence.stubRuntimeFetch(fetchMock as unknown as typeof fetch);
     const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       ssrfPolicy: { allowPrivateNetwork: true },
     });
@@ -1116,7 +1098,7 @@ describe("MatrixClient request hardening", () => {
         headers: { "content-type": "application/json" },
       });
     });
-    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
+    keyUploadFence.stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("https://matrix.example.org", "token");
     await expect(client.doRequest("GET", "https://matrix.example.org/start")).rejects.toThrow(
@@ -1125,15 +1107,17 @@ describe("MatrixClient request hardening", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it.each(KEY_UPLOAD_FENCE_MODES)("fences keys upload on durable crypto state: %s", async (mode) =>
-    runKeyUploadFenceCase({
-      mode,
-      MatrixClient,
-      makeTempDir: () => tempDirs.make("matrix-key-upload-"),
-      getFetchFn: () => lastCreateClientOpts?.fetchFn as typeof fetch,
-      readSnapshot: readMatrixIdbSnapshotJson,
-      stubRuntimeFetch,
-    }),
+  it.each(keyUploadFence.KEY_UPLOAD_FENCE_MODES)(
+    "fences keys upload on durable crypto state: %s",
+    async (mode) =>
+      keyUploadFence.runKeyUploadFenceCase({
+        mode,
+        MatrixClient,
+        makeTempDir: () => tempDirs.make("matrix-key-upload-"),
+        getFetchFn: () => lastCreateClientOpts?.fetchFn as typeof fetch,
+        readSnapshot: readMatrixIdbSnapshotJson,
+        stubRuntimeFetch: keyUploadFence.stubRuntimeFetch,
+      }),
   );
 
   it("injects a guarded fetchFn into matrix-js-sdk", async () => {
@@ -1181,7 +1165,7 @@ describe("MatrixClient request hardening", () => {
             : {},
         );
       });
-      stubRuntimeFetch(fetchMock as typeof fetch);
+      keyUploadFence.stubRuntimeFetch(fetchMock as typeof fetch);
       const client = new MatrixClient("http://127.0.0.1:8008", "token", {
         userId: "@bot:example.org",
         encryption: true,
@@ -1246,7 +1230,7 @@ describe("MatrixClient request hardening", () => {
       expect((await readStoredRecoveryKey(recoveryKeyPath))?.keyId).toBe("SSSSKEY");
       return Response.json({ version: "synthetic-backup" });
     });
-    stubRuntimeFetch(fetchMock as typeof fetch);
+    keyUploadFence.stubRuntimeFetch(fetchMock as typeof fetch);
     const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       encryption: true,
       recoveryKeyPath,
@@ -1303,7 +1287,7 @@ describe("MatrixClient request hardening", () => {
     const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(
       async () => new Response(payload, { status: 200 }),
     );
-    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
+    keyUploadFence.stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       ssrfPolicy: { allowPrivateNetwork: true },
@@ -1331,7 +1315,7 @@ describe("MatrixClient request hardening", () => {
       }
       return new Response(payload, { status: 200 });
     });
-    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
+    keyUploadFence.stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       ssrfPolicy: { allowPrivateNetwork: true },
@@ -1351,7 +1335,7 @@ describe("MatrixClient request hardening", () => {
   it("preserves encrypted media download limits through the crypto facade", async () => {
     const payload = Buffer.from([9, 10, 11, 12, 13]);
     const fetchMock = vi.fn(async () => new Response(payload, { status: 200 }));
-    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
+    keyUploadFence.stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       encryption: true,
@@ -1581,7 +1565,7 @@ describe("MatrixClient request hardening", () => {
         },
       });
     });
-    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
+    keyUploadFence.stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       ssrfPolicy: { allowPrivateNetwork: true },
@@ -1612,7 +1596,7 @@ describe("MatrixClient request hardening", () => {
         headers: { "content-type": "application/json" },
       });
     });
-    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
+    keyUploadFence.stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       ssrfPolicy: { allowPrivateNetwork: true },
@@ -1637,7 +1621,7 @@ describe("MatrixClient request hardening", () => {
         });
       });
     });
-    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
+    keyUploadFence.stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       localTimeoutMs: 25,
@@ -1660,7 +1644,7 @@ describe("MatrixClient request hardening", () => {
         });
       });
     });
-    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
+    keyUploadFence.stubRuntimeFetch(fetchMock as unknown as typeof fetch);
 
     const client = new MatrixClient("http://127.0.0.1:8008", "token", {
       localTimeoutMs: Number.NaN,

@@ -5,7 +5,7 @@ type MatrixCryptoRuntime = typeof import("./crypto-runtime.js");
 
 let loadedMatrixCryptoRuntime: MatrixCryptoRuntime | null = null;
 
-export const getLoadedMatrixCryptoRuntime = () => loadedMatrixCryptoRuntime;
+const getLoadedMatrixCryptoRuntime = () => loadedMatrixCryptoRuntime;
 
 export const loadMatrixCryptoRuntime = createLazyRuntimeModule(() =>
   import("./crypto-runtime.js").then((runtime) => {
