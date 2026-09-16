@@ -392,7 +392,7 @@ export async function persistCryptoBeforeKeyUpload(params: {
   encryptionEnabled: boolean;
   snapshotPath?: string;
   databasePrefix?: string;
-  stateRuntime?: MatrixSyncStateRuntime;
+  stateRuntime?: MatrixSnapshotStateRuntime;
 }): Promise<void> {
   const { resource, init } = params;
   const method = init?.method ?? (resource instanceof Request ? resource.method : "GET");
