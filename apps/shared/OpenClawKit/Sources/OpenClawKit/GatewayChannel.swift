@@ -431,8 +431,7 @@ public actor GatewayChannelActor {
             guard await self.sleepUnlessCancelled(
                 nanoseconds: UInt64(self.keepaliveIntervalSeconds * 1_000_000_000))
             else { return }
-            guard self.shouldReconnect else { return }
-            guard self.isConnected(connectionGeneration: connectionGeneration) else { return }
+            guard self.shouldReconnect, self.isConnected(connectionGeneration: connectionGeneration) else { return }
             guard let task = self.task else { continue }
             // Best-effort ping keeps NAT/proxy state alive without generating RPC load.
             do {
