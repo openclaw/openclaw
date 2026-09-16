@@ -1,5 +1,6 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
+import { emitDiagnosticsTimelineEvent } from "../../../infra/diagnostics-timeline.js";
 import {
   type AuthProfileFailureReason,
   markAuthProfileFailure,
@@ -220,16 +221,34 @@ export function createEmbeddedRunFailoverRetryController(input: {
         reason: FailoverReason;
       }) => void | Promise<void>;
     }): Promise<boolean> => {
+      const recordDecision = (
+        decision: "accepted" | "rejected",
+        reason:
+          | "non_transient"
+          | "long_window_rate_limit"
+          | "retry_budget_exhausted"
+          | "retry_delay_unavailable"
+          | "wait_interrupted"
+          | "backoff_completed",
+      ) =>
+        emitDiagnosticsTimelineEvent({
+          type: "mark",
+          name: "model.retry.decision",
+          runId: params.runId,
+          attributes: { decision, reason, retryCount: transientRetryCount },
+        });
       if (
         retry.reason !== "rate_limit" &&
         retry.reason !== "overloaded" &&
         retry.reason !== "server_error" &&
         retry.reason !== "timeout"
       ) {
+        recordDecision("rejected", "non_transient");
         return false;
       }
       const rateLimit = retry.reason === "rate_limit";
       if (rateLimit && hasLongWindowRateLimitEvidence(retry.message)) {
+        recordDecision("rejected", "long_window_rate_limit");
         return false;
       }
       rateLimitSeen ||= rateLimit;
@@ -239,6 +258,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         rateLimitSeen ? MAX_RATE_LIMIT_ATTEMPTS - 1 : Infinity,
       );
       if (retryCount >= retryBudget) {
+        recordDecision("rejected", "retry_budget_exhausted");
         return false;
       }
       const nowMs = Date.now();
@@ -249,6 +269,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         elapsedMs: rateLimit ? undefined : nowMs - transientRetryWindowStartMs,
       });
       if (delayMs === undefined) {
+        recordDecision("rejected", "retry_delay_unavailable");
         // The window in resolveTransientRetryDelayMs outranks the attempt budget when
         // requests are slow, so record the truncation: a configured maxRetries that
         // never runs must be diagnosable. Failover is the better recovery past here.
@@ -278,8 +299,12 @@ export function createEmbeddedRunFailoverRetryController(input: {
         }
         completed = true;
       } finally {
+        if (!completed) {
+          recordDecision("rejected", "wait_interrupted");
+        }
         closeRetryWait?.(completed);
       }
+      recordDecision("accepted", "backoff_completed");
       transientRetryCount += 1;
       return true;
     },

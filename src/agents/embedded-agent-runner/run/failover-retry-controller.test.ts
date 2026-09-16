@@ -4,6 +4,7 @@ import {
   createReplyOperation,
   isReplyRunEvidenceStale,
 } from "../../../auto-reply/reply/reply-run-registry.js";
+import * as diagnosticsTimeline from "../../../infra/diagnostics-timeline.js";
 import {
   closeDiagnosticEmbeddedRunOwner,
   createDiagnosticEmbeddedRunOwner,
@@ -77,6 +78,42 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     mocks.sleepWithAbort.mockReset().mockResolvedValue(undefined);
     mocks.warn.mockClear();
     rateLimitContext.logFallbackDecision.mockClear();
+  });
+
+  it("reports bounded retry-owner reasons without provider or credential metadata", async () => {
+    const emit = vi.spyOn(diagnosticsTimeline, "emitDiagnosticsTimelineEvent");
+    try {
+      const controller = createController(vi.fn(async () => false));
+      await expect(
+        controller.maybeRetryTransient({ reason: "auth", message: "private-error" }),
+      ).resolves.toBe(false);
+      await expect(
+        controller.maybeRetryTransient({
+          reason: "rate_limit",
+          message: "weekly usage limit exhausted private-error",
+        }),
+      ).resolves.toBe(false);
+      controller.setTransientRetryBudget(1);
+      await expect(controller.maybeRetryTransient({ reason: "timeout" })).resolves.toBe(true);
+      await expect(controller.maybeRetryTransient({ reason: "timeout" })).resolves.toBe(false);
+      const events = emit.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.name === "model.retry.decision");
+      expect(events.map((event) => event.attributes)).toEqual([
+        { decision: "rejected", reason: "non_transient", retryCount: 0 },
+        { decision: "rejected", reason: "long_window_rate_limit", retryCount: 0 },
+        { decision: "accepted", reason: "backoff_completed", retryCount: 0 },
+        { decision: "rejected", reason: "retry_budget_exhausted", retryCount: 1 },
+      ]);
+      expect(events.every((event) => event.runId === "run:failover-retry-controller-test")).toBe(
+        true,
+      );
+      expect(JSON.stringify(events)).not.toMatch(
+        /private-error|openai:p1|modelId|provider|sessionId/,
+      );
+    } finally {
+      emit.mockRestore();
+    }
   });
 
   it("retries rate limits for ten attempts with capped backoff and transient status", async () => {

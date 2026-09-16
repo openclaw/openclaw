@@ -2,6 +2,10 @@ import {
   areDiagnosticsEnabledForProcess,
   emitTrustedDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
+import {
+  emitDiagnosticsTimelineEvent,
+  isDiagnosticsTimelineEnabled,
+} from "../infra/diagnostics-timeline.js";
 import { markDiagnosticRunProgress } from "./diagnostic-run-activity.js";
 
 const MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS = 30_000;
@@ -11,6 +15,7 @@ const MODEL_CALL_STREAM_PROGRESS_REASON = "model_call:stream_progress";
 
 export type ModelCallStreamProgressTarget = {
   runId: string;
+  callId?: string;
   sessionKey?: string;
   sessionId?: string;
 };
@@ -25,7 +30,9 @@ export function createModelCallStreamProgressReporter(
     if (recordProgress && !recordProgress()) {
       return;
     }
-    if (!areDiagnosticsEnabledForProcess()) {
+    const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
+    const timelineEnabled = target.callId !== undefined && isDiagnosticsTimelineEnabled();
+    if (!diagnosticsEnabled && !timelineEnabled) {
       return;
     }
     const fields = {
@@ -34,7 +41,7 @@ export function createModelCallStreamProgressReporter(
       ...(target.sessionId ? { sessionId: target.sessionId } : {}),
       reason: MODEL_CALL_STREAM_PROGRESS_REASON,
     };
-    if (!recordProgress) {
+    if (diagnosticsEnabled && !recordProgress) {
       markDiagnosticRunProgress(fields);
     }
     const now = Date.now();
@@ -45,6 +52,17 @@ export function createModelCallStreamProgressReporter(
       return;
     }
     lastEmittedAtMs = now;
-    emitTrustedDiagnosticEvent({ type: "run.progress", ...fields });
+    if (diagnosticsEnabled) {
+      emitTrustedDiagnosticEvent({ type: "run.progress", ...fields });
+    }
+    if (timelineEnabled) {
+      emitDiagnosticsTimelineEvent({
+        type: "mark",
+        name: "provider.request.activity",
+        timestamp: new Date(now).toISOString(),
+        runId: target.runId,
+        spanId: target.callId,
+      });
+    }
   };
 }

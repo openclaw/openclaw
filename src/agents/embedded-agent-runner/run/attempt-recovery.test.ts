@@ -2,6 +2,7 @@ import { APIError } from "openai/core/error";
 import { describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
 import { sleepWithAbort } from "../../../infra/backoff.js";
+import * as diagnosticsTimeline from "../../../infra/diagnostics-timeline.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -44,6 +45,8 @@ vi.mock("../../../infra/backoff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../infra/backoff.js")>()),
   sleepWithAbort: vi.fn(async () => {}),
 }));
+
+const timelineEvent = vi.spyOn(diagnosticsTimeline, "emitDiagnosticsTimelineEvent");
 
 const disabledCompactionRuntime = {
   prepareRecoveryOwner: () => {
@@ -228,6 +231,37 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
 }
 
 describe("recoverEmbeddedRunAttempt", () => {
+  it.each([
+    { retryAvailable: true, decision: "accepted", reason: "transient_retry" },
+    { retryAvailable: false, decision: "rejected", reason: "replay_unsafe" },
+  ] as const)(
+    "records $decision recovery with prior tool settlement but no private content",
+    async ({ retryAvailable, decision, reason }) => {
+      timelineEvent.mockClear();
+      await recoverAfterTransportDrop({
+        retryAvailable,
+        errorMessage: "WebSocket error: private-provider-payload",
+      });
+      const events = timelineEvent.mock.calls
+        .map(([event]) => event)
+        .filter((event) => event.name === "model.recovery.decision");
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        type: "mark",
+        runId: "run:transport-drop",
+        attributes: {
+          decision,
+          reason,
+          allToolsProvenSettled: true,
+          allToolCallsRecorded: true,
+          replaySafe: false,
+        },
+      });
+      expect(JSON.stringify(events)).not.toMatch(
+        /private-provider-payload|synthetic-model|sessionFile|toolName|messagesSnapshot/,
+      );
+    },
+  );
   it.each(["validation", "success"])(
     "does not recover stale overflow after a completed %s response",
     async (completed) => {

@@ -92,6 +92,9 @@ export type ModelCallObservationState = {
   providerAcceptanceKind?: ProviderAcceptance["kind"];
   responseStatus?: number;
   responseStreamBytes: number;
+  /** Observed provider callbacks/chunks, not recovery or visible-content progress. */
+  lastProviderActivityAtMs?: number;
+  terminalReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
   timeToFirstByteMs?: number;
   modelContent?: DiagnosticModelCallContent;
   outputMessages?: unknown[];
@@ -160,8 +163,11 @@ function emitProviderRequestTimelineEvent(
   durationMs: number,
   ok: boolean,
   responseStatus: number | undefined,
-  providerAcceptanceKind: ModelCallObservationState["providerAcceptanceKind"],
+  state: ModelCallObservationState,
+  terminalAtMs: number,
+  terminalReason: string,
 ): void {
+  const { providerAcceptanceKind } = state;
   const provider = boundedTimelineAttribute(eventBase.provider);
   const model = boundedTimelineAttribute(eventBase.model);
   const api = boundedTimelineAttribute(eventBase.api);
@@ -181,6 +187,11 @@ function emitProviderRequestTimelineEvent(
       ...(model ? { model } : {}),
       ...(api ? { api } : {}),
       ...(transport ? { transport } : {}),
+      terminalAtMs,
+      ...(state.lastProviderActivityAtMs !== undefined
+        ? { lastProviderActivityAtMs: state.lastProviderActivityAtMs }
+        : {}),
+      terminalReason,
       providerAccepted: providerAcceptanceKind !== undefined,
       ...(providerAcceptanceKind ? { providerAcceptanceKind } : {}),
     },
@@ -293,7 +304,8 @@ function emitModelCallEnded(
     return;
   }
   observer.state.terminalEventEmitted = true;
-  const durationMs = Date.now() - startedAt;
+  const terminalAtMs = Date.now();
+  const durationMs = terminalAtMs - startedAt;
   const sizeTimingFields = observer.sizeTimingFields();
   const fields = failure ? modelCallErrorFields(failure.error) : undefined;
   const terminal = fields
@@ -308,7 +320,13 @@ function emitModelCallEnded(
     durationMs,
     failure === undefined,
     responseStatus,
-    observer.state.providerAcceptanceKind,
+    observer.state,
+    terminalAtMs,
+    failure
+      ? observer.state.terminalReason === "aborted"
+        ? "aborted"
+        : (fields?.failureKind ?? "error")
+      : (observer.state.terminalReason ?? "unknown"),
   );
   emitCoreModelRequestEndedDiagnosticEvent(
     {
@@ -358,7 +376,10 @@ function withDiagnosticRequestContext(
   const onResponse: NonNullable<ModelCallStreamOptions>["onResponse"] = (response, model) => {
     // Retrying providers can expose several responses; the terminal request status
     // is the latest response observed before the model call completes or fails.
-    observer.state.responseStatus = response.status;
+    if (!observer.state.terminalEventEmitted) {
+      observer.state.responseStatus = response.status;
+      observer.state.lastProviderActivityAtMs = Date.now();
+    }
     return originalOnResponse?.(response, model);
   };
 
@@ -380,6 +401,10 @@ function withDiagnosticRequestContext(
     onResponse,
   };
   return withProviderAcceptanceObserver(requestOptions, (acceptance) => {
+    if (observer.state.terminalEventEmitted) {
+      return;
+    }
+    observer.state.lastProviderActivityAtMs = Date.now();
     observer.state.providerAcceptanceKind = acceptance.kind;
     if (acceptance.kind === "http_response") {
       observer.state.responseStatus = acceptance.status;
@@ -408,6 +433,13 @@ export function createModelLifecycle(params: {
   }
   params.ctx.onStarted?.();
   const startedAt = Date.now();
+  emitDiagnosticsTimelineEvent({
+    type: "mark",
+    name: "provider.request.started",
+    timestamp: new Date(startedAt).toISOString(),
+    runId: eventBase.runId,
+    spanId: callId,
+  });
   const propagatedOptions = withDiagnosticRequestContext(params.options, trace, observer, callId);
   let terminalNotified = false;
   return {
