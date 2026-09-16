@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
@@ -17,7 +18,7 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 export function captureOpenClawStateWorkerContext(
   options: { path?: string; env?: NodeJS.ProcessEnv } = {},
 ): OpenClawStateWorkerContext {
-  const env = options.env ?? process.env;
+  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
   const environment: SqliteWorkerStateContext["environment"] = {
     OPENCLAW_STATE_DIR: resolveStateDir(env),
     ...(isGatewayExternallySupervised(env) ? { OPENCLAW_SUPERVISOR_MODE: "external" } : {}),
