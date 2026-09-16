@@ -1309,6 +1309,13 @@ jobs:
               return null;
             }
           })();
+          // A leaf-test-only PR needs its native tests, not two unrelated full
+          // suites. Source/support changes and uncertain consumers stay full.
+          const changedWindowsTests =
+            eventName === "pull_request" && !frozenTarget && changedPaths &&
+            typeof changedNodeTestPlan.resolveChangedWindowsTestTargets === "function"
+              ? changedNodeTestPlan.resolveChangedWindowsTestTargets(changedPaths)
+              : undefined;
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
           const releaseGate = parseBoolean(process.env.OPENCLAW_CI_RELEASE_GATE);
@@ -1822,11 +1829,18 @@ jobs:
             // single lane serializes the whole 226s body onto the wall.
             checks_windows_matrix: createMatrix(
               runWindows
-                ? [1, 2].map((part) => ({
-                    check_name: `checks-windows-node-test-${part}`,
-                    runtime: "node",
-                    task: `test-${part}`,
-                  }))
+                ? changedWindowsTests
+                  ? [{
+                      check_name: "checks-windows-node-test-selected",
+                      runtime: "node",
+                      task: "test-selected",
+                      targets: changedWindowsTests,
+                    }]
+                  : [1, 2].map((part) => ({
+                      check_name: `checks-windows-node-test-${part}`,
+                      runtime: "node",
+                      task: `test-${part}`,
+                    }))
                 : [],
             ),
             run_macos_node: runMacosNode,
@@ -4593,13 +4607,29 @@ jobs:
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
           TASK: ${{ matrix.task }}
+          SELECTED_TESTS_JSON: ${{ toJSON(matrix.targets) }}
         shell: bash
-        run: |
+        run: &windows_test_command |
           set -euo pipefail
           # Native allocation can be smaller than the runner label. Keep projects
           # serial within each machine; the two matrix jobs still run concurrently.
           export OPENCLAW_TEST_PROJECTS_PARALLEL=1
           case "$TASK" in
+            test-selected)
+              node --input-type=module <<'NODE'
+          import { spawnSync } from "node:child_process";
+          const targets = JSON.parse(process.env.SELECTED_TESTS_JSON);
+          if (!Array.isArray(targets) || targets.length === 0 ||
+              targets.some((target) => typeof target !== "string" || !target.endsWith(".test.ts"))) {
+            throw new Error("Selected Windows tests must be a nonempty test-file list");
+          }
+          const result = spawnSync(process.execPath, [
+            "--import", "./scripts/tsx.mjs", "scripts/test-projects.mts", ...targets,
+          ], { stdio: "inherit" });
+          if (result.error) throw result.error;
+          process.exitCode = result.status ?? 1;
+          NODE
+              ;;
             # Linux owns the full repo test suite. Keep the Windows runner focused on
             # Windows-native process/path wrappers so platform regressions fail fast.
             test-1)
@@ -4621,6 +4651,15 @@ jobs:
               exit 1
               ;;
           esac
+
+      # Mixed source/workflow PRs retain full suites, but must also exercise the
+      # selected command on Windows. Reuse the exact executor, not a substitute.
+      - name: Verify native selected-test execution
+        if: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.frozen_target != 'true' && matrix.task == 'test-1' }}
+        env:
+          TASK: test-selected
+          SELECTED_TESTS_JSON: '["extensions/canvas/scripts/pnpm-runner.test.ts"]'
+        run: *windows_test_command
 
   macos-node:
     permissions:
