@@ -41,7 +41,6 @@ import { createMatrixGuardedFetch } from "./transport.js";
 import type { MatrixClientEventMap, MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
 import type { MatrixVerificationSummary } from "./verification-manager.js";
 
-<<<<<<< HEAD
 type MatrixCryptoRuntime = typeof import("./crypto-runtime.js");
 
 const MATRIX_ENCRYPTED_STARTUP_TIMEOUT_MS = 60_000;
@@ -55,8 +54,6 @@ export const loadMatrixCryptoRuntime = createLazyRuntimeModule(() =>
   }),
 );
 
-=======
->>>>>>> ba6dd45a6e1 (fix(matrix): persist private crypto state before key uploads)
 export abstract class MatrixClientBase {
   abstract getUserId(): Promise<string>;
   abstract getJoinedRooms(): Promise<string[]>;
@@ -233,14 +230,6 @@ export abstract class MatrixClientBase {
       deviceId: opts.deviceId,
       logger: createMatrixJsSdkClientLogger("MatrixClient"),
       localTimeoutMs: this.localTimeoutMs,
-<<<<<<< HEAD
-      fetchFn: guardedFetch,
-<<<<<<< HEAD
-      scheduler: new MatrixSendScheduler((event) =>
-        this.messageWireDispatchGuards.wasCurrentnessRejected(event.getTxnId()),
-      ),
-=======
-=======
       fetchFn: (async (resource: RequestInfo | URL, init?: RequestInit) => {
         // The SDK cache callback is void; even stores without a key getter must
         // settle its admitted writes before another request reaches the wire.
@@ -259,8 +248,9 @@ export abstract class MatrixClientBase {
         }
         return await guardedFetch(resource, init);
       }) as typeof fetch,
->>>>>>> 591df8bff03 (fix(matrix): persist private crypto state before key uploads)
->>>>>>> ba6dd45a6e1 (fix(matrix): persist private crypto state before key uploads)
+      scheduler: new MatrixSendScheduler((event) =>
+        this.messageWireDispatchGuards.wasCurrentnessRejected(event.getTxnId()),
+      ),
       store: this.syncStore,
       cryptoCallbacks: cryptoCallbacks as never,
       verificationMethods: [

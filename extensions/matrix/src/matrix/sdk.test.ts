@@ -1107,18 +1107,13 @@ describe("MatrixClient request hardening", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it.each(keyUploadFence.KEY_UPLOAD_FENCE_MODES)(
-    "fences keys upload on durable crypto state: %s",
-    async (mode) =>
-      keyUploadFence.runKeyUploadFenceCase({
-        mode,
-        MatrixClient,
-        makeTempDir: () => tempDirs.make("matrix-key-upload-"),
-        getFetchFn: () => lastCreateClientOpts?.fetchFn as typeof fetch,
-        readSnapshot: readMatrixIdbSnapshotJson,
-        stubRuntimeFetch: keyUploadFence.stubRuntimeFetch,
-      }),
-  );
+  keyUploadFence.testKeyUploadFenceModes({
+    MatrixClient,
+    makeTempDir: () => tempDirs.make("matrix-key-upload-"),
+    getFetchFn: () => lastCreateClientOpts?.fetchFn as typeof fetch,
+    readSnapshot: readMatrixIdbSnapshotJson,
+    stubRuntimeFetch: keyUploadFence.stubRuntimeFetch,
+  });
 
   it("injects a guarded fetchFn into matrix-js-sdk", async () => {
     const client = new MatrixClient("https://matrix.example.org", "token");

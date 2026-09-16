@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { getMatrixRuntime, setMatrixRuntime } from "../runtime.js";
 import type { MatrixSnapshotStateRuntime } from "./crypto-state-store.js";
 import { restoreIdbFromDisk } from "./sdk/idb-persistence.js";
@@ -34,6 +34,14 @@ export const KEY_UPLOAD_FENCE_MODES = [
   "missing-database",
   "missing-account",
 ] as const;
+
+export function testKeyUploadFenceModes(
+  params: Omit<Parameters<typeof runKeyUploadFenceCase>[0], "mode">,
+): void {
+  it.each(KEY_UPLOAD_FENCE_MODES)("fences keys upload on durable crypto state: %s", async (mode) =>
+    runKeyUploadFenceCase({ ...params, mode }),
+  );
+}
 
 type MatrixClientConstructor = new (
   baseUrl: string,
