@@ -46,7 +46,7 @@ import { resolveDiscordChannelTopicSafe } from "./channel-access.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import { readDiscordInteractionPolicy } from "./live-policy-interaction.js";
-import { createDiscordLivePolicyReader, type DiscordLivePolicyReader } from "./live-policy.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
 import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js";
 import {
   buildDiscordCommandArgMenu,
@@ -73,6 +73,7 @@ import {
   resolveDiscordNativeChoiceContext,
   shouldOpenDiscordModelPickerFromCommand,
 } from "./native-command-model-picker-ui.js";
+import { resolveDiscordNativePolicyReader } from "./native-command-policy.js";
 import {
   DISCORD_EMPTY_VISIBLE_REPLY_WARNING,
   deliverDiscordInteractionReply,
@@ -104,22 +105,6 @@ import type { ThreadBindingManager } from "./thread-bindings.js";
 const log = createSubsystemLogger("discord/native-command");
 
 const NON_PLUGIN_COMMAND_DISPATCH = Object.freeze({ kind: "non-plugin" as const });
-
-function resolveDiscordNativePolicyReader(
-  params: Pick<DiscordCommandArgContext, "cfg" | "discordConfig" | "accountId" | "readPolicy">,
-): DiscordLivePolicyReader {
-  return (
-    params.readPolicy ??
-    createDiscordLivePolicyReader({
-      ...params,
-      readConfig: () => getRuntimeConfigSnapshot() ?? params.cfg,
-      resolvedAllowlist: {
-        guildEntries: params.discordConfig?.guilds,
-        allowFrom: params.discordConfig?.allowFrom ?? resolveDiscordAccountAllowFrom(params),
-      },
-    })
-  );
-}
 
 export function createDiscordNativeCommand(params: {
   readPolicy?: DiscordLivePolicyReader;
@@ -298,7 +283,6 @@ async function dispatchDiscordCommandInteraction(params: {
       await interaction.reply(payload);
     });
   };
-
   const useAccessGroups = true;
   const user = interaction.user;
   if (!user) {
@@ -761,6 +745,9 @@ async function dispatchDiscordCommandInteraction(params: {
     commandTargetSessionKey,
     channel: "discord",
     senderId: sender.id,
+    senderName: ctxPayload.SenderName,
+    senderUsername: ctxPayload.SenderUsername,
+    senderTag: ctxPayload.SenderTag,
     senderIsOwner: senderIsCommandOwner,
     isAuthorizedSender: commandAuthorized,
     isGroup: isGuild || isGroupDm,

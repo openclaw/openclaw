@@ -359,7 +359,7 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import {
   loadSessionEntry,
@@ -376,7 +376,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import type { ElevatedLevel } from "../thinking.js";
+import { modelDefinition } from "./directive-handling.model.fixtures.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 
 let handleDirectiveOnly: typeof import("./directive-handling.impl.js").handleDirectiveOnly;
@@ -540,18 +540,6 @@ function baseConfig(): OpenClawConfig {
     commands: { text: true },
     agents: { defaults: {} },
   } as unknown as OpenClawConfig;
-}
-
-function modelDefinition(id: string, name: string): ModelDefinitionConfig {
-  return {
-    id,
-    name,
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 8192,
-  };
 }
 
 function createSessionEntry(overrides?: Partial<InternalSessionEntry>): InternalSessionEntry {
@@ -769,6 +757,7 @@ async function persistModelDirectiveForTest(params: {
     initialModelLabel: params.initialModelLabel ?? `${provider}/${model}`,
     formatModelSwitchEvent: (label) => label,
     resolvedElevatedLevel: "off",
+    currentElevatedLevel: "off",
     defaultActivation: () => "always",
     contextTokens: 8192,
     effectiveModelDirective: directives.rawModelDirective,
@@ -820,6 +809,7 @@ function createDirectiveHandlingParams(
     sessionKey,
     elevatedEnabled: true,
     elevatedAllowed: true,
+    currentElevatedLevel: "off",
     defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-6",
     aliasIndex: baseAliasIndex(),
@@ -3221,13 +3211,13 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
     const statusReply = await runHandleCommand("/elevated", {
       ...base,
-      currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
+      currentElevatedLevel: "on",
     });
     expect(statusReply?.text).toContain("Current elevated level: on");
 
     const offReply = await runHandleCommand("/elevated off", {
       ...base,
-      currentElevatedLevel: sessionEntry.elevatedLevel as ElevatedLevel | undefined,
+      currentElevatedLevel: "on",
     });
     expect(offReply?.text).toContain("Elevated mode disabled");
     expect(sessionEntry.elevatedLevel).toBe("off");

@@ -360,6 +360,7 @@ export function resolveGatewayScopedTools(
     authProfileStore: params.authProfileStore,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    activeElevatedLevel: params.bashElevated?.defaultLevel,
     modelHasVision: params.modelHasVision,
     requesterModel: params.requesterModel,
     pairedNodeComputerUse: params.pairedNodeComputerUse,

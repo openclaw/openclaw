@@ -153,8 +153,7 @@ type OpenClawCodingToolsOptions = {
    * How this run shows a blocking question tool's prompt. Left unset by harnesses
    * whose tool lifecycle reserves the prompt for them.
    */
-  questionPrompt?: QuestionPromptDelivery;
-  /** Capabilities declared by the gateway client that originated this run. */
+  questionPrompt?: QuestionPromptDelivery /** Capabilities declared by the gateway client that originated this run. */;
   clientCaps?: string[];
   gatewayUiCommandTarget?: import("../gateway/ui-command-target.types.js").GatewayUiCommandTarget;
   /** Host-admitted dashboard authoring without an originating inline renderer. */
@@ -357,8 +356,9 @@ type OpenClawCodingToolsOptions = {
   authProfileStore?: AuthProfileStore;
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
-  /** Side-effect-free runtime completion claimant composed with the durable subagent claim. */
-  claimYieldCompletion?: () => boolean | Promise<boolean>;
+  /** Side-effect-free runtime completion claimant composed with the durable subagent claim. */ claimYieldCompletion?: () =>
+    | boolean
+    | Promise<boolean>;
   /** Optional instrumentation callback for tool preparation stage timing. */
   recordToolPrepStage?: (name: string) => void;
   /** Live observer called after wrapped tool outcomes are recorded. */
@@ -909,6 +909,7 @@ export function createOpenClawCodingToolsInternal(
             hasCurrentInboundAudio: options?.hasCurrentInboundAudio,
             modelProvider: options?.modelProvider,
             modelId: options?.modelId,
+            activeElevatedLevel: options?.exec?.elevated?.defaultLevel,
             modelContextWindowTokens: options?.modelContextWindowTokens,
             skillWorkshop: options?.skillWorkshop,
             replyToMode: options?.replyToMode,

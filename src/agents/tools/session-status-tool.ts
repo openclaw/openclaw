@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
+import { resolveEffectiveElevatedState } from "../../auto-reply/reply/reply-elevated.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -37,12 +38,6 @@ import {
 } from "../../sessions/session-state-events.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
-import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
-import {
-  formatTaskStatus,
-  formatTaskStatusDetail,
-  formatTaskStatusTitle,
-} from "../../tasks/task-status.js";
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
@@ -93,6 +88,7 @@ import {
   resolveSessionStatusEntry,
   resolveStoreScopedRequesterKey,
 } from "./session-status-session-resolve.js";
+import { formatSessionTaskLine } from "./session-status-task-line.js";
 import {
   formatSessionToolAccessDenial,
   resolveCurrentSessionClientAlias,
@@ -437,35 +433,6 @@ function withActiveStatusModelIdentity(
   return next;
 }
 
-function formatSessionTaskLine(params: {
-  relatedSessionKey: string;
-  callerOwnerKey: string;
-  callerAgentId: string;
-  config: OpenClawConfig;
-}): string | undefined {
-  const snapshot = buildTaskStatusSnapshotForRelatedSessionKeyForOwner({
-    relatedSessionKey: params.relatedSessionKey,
-    callerOwnerKey: params.callerOwnerKey,
-    callerAgentId: params.callerAgentId,
-    config: params.config,
-  });
-  const task = snapshot.focus;
-  if (!task) {
-    return undefined;
-  }
-  const headline =
-    snapshot.activeCount > 0
-      ? `${snapshot.activeCount} active`
-      : snapshot.recentFailureCount > 0
-        ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
-        : `latest ${formatTaskStatus(task).replaceAll("_", " ")}`;
-  const title = formatTaskStatusTitle(task);
-  const detail = formatTaskStatusDetail(task);
-  const blocked = formatTaskStatus(task) === "blocked" ? "blocked" : undefined;
-  const parts = [headline, blocked, task.runtime, title, detail].filter(Boolean);
-  return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
-}
-
 async function resolveModelOverride(params: {
   cfg: OpenClawConfig;
   raw: string;
@@ -579,6 +546,8 @@ export function createSessionStatusTool(opts?: {
   sandboxed?: boolean;
   activeModelProvider?: string;
   activeModelId?: string;
+  /** Effective elevated level prepared for the active live run. */
+  activeElevatedLevel?: ElevatedLevel;
   metadataSnapshot?: PluginMetadataSnapshot;
   callGateway?: AgentToolGatewayRequestCaller;
   /** Active live-run route, kept separate from the persisted/origin delivery route. */
@@ -1136,6 +1105,25 @@ export function createSessionStatusTool(opts?: {
               ? { workspaceDir: statusSessionEntry.spawnedWorkspaceDir }
               : {}),
           });
+          const liveSessionKeySet = new Set(
+            liveSessionKeys
+              .map((value) => value?.trim())
+              .filter((value): value is string => Boolean(value)),
+          );
+          const activeRouteRunSessionKey = opts?.runSessionKey?.trim();
+          const isLiveRouteSession = activeRouteRunSessionKey
+            ? agentId === requesterAgentId && scopedResolved.key.trim() === activeRouteRunSessionKey
+            : agentId === requesterAgentId && liveSessionKeySet.has(scopedResolved.key.trim());
+          const activeElevatedLevel = isLiveRouteSession ? opts?.activeElevatedLevel : undefined;
+          const elevatedStatus = resolveEffectiveElevatedState({
+            cfg,
+            agentId,
+            ctx: {},
+            provider: sessionDeliveryChannel(statusSessionEntry) ?? "",
+            // The scoped owner already loaded this exact row; do not reopen storage
+            // under a second identity just to render its immutable sandbox requirement.
+            sessionEntry: statusSessionEntry,
+          }).status;
           const { buildStatusText } = await loadCommandsStatusRuntime();
           const statusText = await buildStatusText({
             cfg,
@@ -1154,7 +1142,11 @@ export function createSessionStatusTool(opts?: {
             resolvedFastMode: statusSessionEntry.fastMode,
             resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
             resolvedReasoningLevel: (statusSessionEntry.reasoningLevel ?? "off") as ReasoningLevel,
-            resolvedElevatedLevel: statusSessionEntry.elevatedLevel as ElevatedLevel | undefined,
+            resolvedElevatedLevel: activeElevatedLevel,
+            elevatedStatus: {
+              ...elevatedStatus,
+              effective: activeElevatedLevel ?? elevatedStatus.effective,
+            },
             resolveDefaultThinkingLevel: () =>
               resolveThinkingDefaultWithRuntimeCatalogCore({
                 cfg,
@@ -1180,15 +1172,6 @@ export function createSessionStatusTool(opts?: {
             taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
           const resultOverrideProvider = statusSessionEntry.providerOverride?.trim();
           const resultOverrideModel = statusSessionEntry.modelOverride?.trim();
-          const liveSessionKeySet = new Set(
-            liveSessionKeys
-              .map((value) => value?.trim())
-              .filter((value): value is string => Boolean(value)),
-          );
-          const activeRouteRunSessionKey = opts?.runSessionKey?.trim();
-          const isLiveRouteSession = activeRouteRunSessionKey
-            ? agentId === requesterAgentId && scopedResolved.key.trim() === activeRouteRunSessionKey
-            : agentId === requesterAgentId && liveSessionKeySet.has(scopedResolved.key.trim());
           const routeDetails = buildSessionStatusRouteDetails({
             entry: statusSessionEntry,
             sessionKey: scopedResolved.key,

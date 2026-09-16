@@ -36,6 +36,8 @@ export type BuildStatusTextParams = {
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel?: ElevatedLevel;
+  /** Diagnostic setting and caller-effective state; not an execution grant. */
+  elevatedStatus?: { setting: ElevatedLevel; effective: ElevatedLevel | "unknown" };
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
   isGroup: boolean;
   defaultGroupActivation: () => "always" | "mention";

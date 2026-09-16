@@ -1968,7 +1968,7 @@ src/agents/tools/pdf-native-providers.ts	2
 src/agents/tools/pdf-tool.ts	3
 src/agents/tools/portal-tool.ts	1
 src/agents/tools/screen-tool.ts	1
-src/agents/tools/session-status-tool.ts	6
+src/agents/tools/session-status-tool.ts	5
 src/agents/tools/sessions-history-tool.ts	7
 src/agents/tools/sessions-list-tool.ts	5
 src/agents/tools/sessions-search-tool.ts	1
@@ -2045,7 +2045,7 @@ src/auto-reply/reply/commands-system-prompt.ts	2
 src/auto-reply/reply/config-mutations.ts	1
 src/auto-reply/reply/conversation-turn-capture.ts	2
 src/auto-reply/reply/directive-handling.impl.ts	2
-src/auto-reply/reply/directive-handling.levels.ts	9
+src/auto-reply/reply/directive-handling.levels.ts	7
 src/auto-reply/reply/directive-handling.parse.ts	2
 src/auto-reply/reply/directive-handling.shared.ts	2
 src/auto-reply/reply/directives.ts	2
@@ -2058,7 +2058,7 @@ src/auto-reply/reply/elevated-allowlist-matcher.ts	2
 src/auto-reply/reply/exec/directive.ts	1
 src/auto-reply/reply/followup-delivery-payloads.ts	1
 src/auto-reply/reply/followup-turn-execution.ts	1
-src/auto-reply/reply/get-reply-directives.ts	8
+src/auto-reply/reply/get-reply-directives.ts	6
 src/auto-reply/reply/get-reply-exec-overrides.ts	1
 src/auto-reply/reply/get-reply-fast-path.ts	1
 src/auto-reply/reply/get-reply-inline-actions.ts	5

@@ -250,7 +250,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("Runner:");
     expect(normalized).toContain("think medium");
     expect(normalized).not.toContain("verbose");
-    expect(normalized).toContain("elevated");
+    expect(normalized).not.toContain("elevated");
     expect(normalized).toContain("Queue: collect");
     expect(normalized).toContain("- active run");
   });
@@ -1326,23 +1326,6 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Execution: docker/all");
   });
 
-  it("shows verbose/elevated labels only when enabled", () => {
-    const text = buildStatusMessage({
-      modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-opus-4-6" }),
-      agent: { model: "anthropic/claude-opus-4-6" },
-      sessionEntry: { sessionId: "v1", updatedAt: 0 },
-      sessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      resolvedThink: "low",
-      resolvedVerbose: "on",
-      resolvedElevated: "on",
-      queue: { mode: "collect", depth: 0 },
-    });
-
-    expect(text).toContain("verbose");
-    expect(text).toContain("elevated");
-  });
-
   it("includes media understanding decisions when present", () => {
     const text = buildStatusMessage({
       modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-opus-4-6" }),
@@ -1482,7 +1465,6 @@ describe("buildStatusMessage", () => {
 
     expect(normalizeTestText(text)).not.toContain("Media:");
   });
-
   it("does not show elevated label when session explicitly disables it", () => {
     const text = buildStatusMessage({
       modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-opus-4-6" }),
@@ -2083,7 +2065,6 @@ describe("buildStatusMessage", () => {
             totalTokens: 36_000,
           },
         });
-
         const text = buildStatusMessage({
           modelRefs: statusModelRefs({ provider: "anthropic", model: "claude-opus-4-6" }),
           agent: {
@@ -2382,7 +2363,6 @@ describe("buildStatusMessage", () => {
 
   it("keeps provider-aware lookup for non-fallback runtime slash ids", () => {
     getContextWindowCaches().discoveredTokenCache.clear();
-
     const text = buildStatusMessage({
       modelRefs: statusModelRefs({ provider: "openai", model: "gpt-4o" }),
       config: {

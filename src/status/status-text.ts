@@ -676,6 +676,7 @@ export async function buildStatusReplyParts(
     resolvedVerbose: resolvedVerboseLevel,
     resolvedReasoning: resolvedReasoningLevel,
     resolvedElevated: resolvedElevatedLevel,
+    elevatedStatus: params.elevatedStatus,
     modelAuth: selectedModelAuth,
     activeModelAuth,
     uptimeValue: buildStatusUptimeValue(),

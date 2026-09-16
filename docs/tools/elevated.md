@@ -80,6 +80,21 @@ Send `/elevated` with no argument to see the current level.
 2. **Session override** (set by sending a directive-only message)
 3. **Global default** (`agents.defaults.elevatedDefault` in config)
 
+## Status reporting
+
+Status distinguishes the configured or requested elevated setting from the effective
+level available to the current caller. A stored `full` setting is not a permission
+grant. Disabled elevation, a known allowlist denial, or required sandbox isolation
+reports an effective level of `off`.
+
+Direct-status SDK callers may omit sender identity for source compatibility. When
+the configured allowlist needs an identity field the caller did not supply, status
+reports `unknown`, not `off` or an authorization grant. A wildcard allowlist can
+resolve without identity; explicit name, username, or tag entries need the matching
+trusted channel field. Supply the channel account and trusted sender fields to
+`resolveDirectStatusReplyForSession` for caller-specific reporting. Status values
+never authorize execution; execution retains its own fail-closed gates.
+
 ## Availability and allowlists
 
 - **Global gate**: `tools.elevated.enabled` (must be `true`)

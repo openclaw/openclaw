@@ -2,7 +2,8 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
-import { resolveElevatedPermissions } from "./reply-elevated.js";
+import type { ElevatedLevel } from "../thinking.js";
+import { resolveEffectiveElevatedState } from "./reply-elevated.js";
 
 function buildConfig(allowFrom: string[]): OpenClawConfig {
   return {
@@ -33,7 +34,7 @@ function expectAllowFromDecision(params: {
   ctx?: Partial<MsgContext>;
   allowed: boolean;
 }) {
-  const result = resolveElevatedPermissions({
+  const result = resolveEffectiveElevatedState({
     cfg: buildConfig(params.allowFrom),
     agentId: "main",
     provider: "whatsapp",
@@ -55,7 +56,7 @@ function expectAllowFromDecision(params: {
   ]);
 }
 
-describe("resolveElevatedPermissions", () => {
+describe("resolveEffectiveElevatedState permissions", () => {
   it("authorizes when sender matches allowFrom", () => {
     expectAllowFromDecision({
       allowFrom: ["+15550001111"],
@@ -115,6 +116,105 @@ describe("resolveElevatedPermissions", () => {
       ctx: {
         SenderUsername: "owner_username",
       },
+    });
+  });
+});
+
+describe("resolveEffectiveElevatedState", () => {
+  it.each<{
+    name: string;
+    configured?: ElevatedLevel;
+    session?: ElevatedLevel;
+    requested?: ElevatedLevel;
+    expected: ElevatedLevel;
+  }>([
+    { name: "published default", expected: "on" },
+    { name: "configured default", configured: "ask", expected: "ask" },
+    { name: "session override", configured: "ask", session: "full", expected: "full" },
+    {
+      name: "message directive",
+      configured: "ask",
+      session: "full",
+      requested: "off",
+      expected: "off",
+    },
+  ] as const)("resolves the $name", ({ configured, session, requested, expected }) => {
+    const cfg = buildConfig(["+15550001111"]);
+    cfg.agents = { defaults: { elevatedDefault: configured } };
+
+    const result = resolveEffectiveElevatedState({
+      cfg,
+      agentId: "main",
+      provider: "whatsapp",
+      ctx: buildContext(),
+      sessionEntry: { elevatedLevel: session },
+      requestedLevel: requested,
+    });
+
+    expect(result.currentLevel).toBe(session ?? configured ?? "on");
+    expect(result.level).toBe(expected);
+  });
+
+  it("keeps missing matcher identity unknown without granting execution", () => {
+    const result = resolveEffectiveElevatedState({
+      cfg: buildConfig(["username:owner"]),
+      agentId: "main",
+      provider: "whatsapp",
+      ctx: buildContext(),
+      sessionEntry: { elevatedLevel: "full" },
+    });
+    expect(result).toMatchObject({
+      allowed: false,
+      level: "off",
+      status: { setting: "full", effective: "unknown" },
+    });
+  });
+
+  it("lets a known agent denial outrank missing global identity", () => {
+    const cfg = buildConfig(["username:owner"]);
+    cfg.agents = {
+      entries: { main: { tools: { elevated: { allowFrom: { whatsapp: [] } } } } },
+    };
+    const result = resolveEffectiveElevatedState({
+      cfg,
+      agentId: "main",
+      provider: "whatsapp",
+      ctx: buildContext(),
+    });
+    expect(result).toMatchObject({
+      allowed: false,
+      level: "off",
+      status: { setting: "on", effective: "off" },
+    });
+  });
+
+  it("forces denied senders off", () => {
+    const result = resolveEffectiveElevatedState({
+      cfg: buildConfig(["+15550002222"]),
+      agentId: "main",
+      provider: "whatsapp",
+      ctx: buildContext(),
+      requestedLevel: "full",
+    });
+
+    expect(result).toMatchObject({ allowed: false, currentLevel: "off", level: "off" });
+  });
+
+  it("forces sessions requiring a sandbox off", () => {
+    const result = resolveEffectiveElevatedState({
+      cfg: buildConfig(["+15550001111"]),
+      agentId: "main",
+      provider: "whatsapp",
+      ctx: buildContext(),
+      sessionEntry: { sandbox: "required" },
+      requestedLevel: "full",
+    });
+
+    expect(result).toMatchObject({
+      allowed: false,
+      currentLevel: "off",
+      level: "off",
+      failures: [{ gate: "sandbox", key: "session.sandbox" }],
     });
   });
 });
