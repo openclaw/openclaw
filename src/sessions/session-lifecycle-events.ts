@@ -10,6 +10,8 @@ export type SessionLifecycleEvent = {
   scope?: "runtime" | "session-entry";
   /** The committed change affects model, account, or runtime catalog projection. */
   catalogChanged?: true;
+  /** Explicit committed reasoning write, including a same-value off or a cleared setting. */
+  reasoningLevel?: string | null;
 } & (
   | { reason: string; swarmGroupId?: never; kind?: never; text?: never }
   | { reason: "swarm-note"; swarmGroupId: string; kind: "phase" | "log"; text: string }

@@ -58,6 +58,8 @@ type InternalReplySessionOptions = {
   /** Host-minted original operator authority; never restored from session metadata. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
   extractedFileImages?: ExtractedFileImage[];
+  /** Register policy cleanup with the dispatcher after its queued delivery settles. */
+  registerReasoningVisibilityCleanup?: (cleanup: () => void) => void;
   /** Rechecks the live Gateway caller before a chat login has a durable effect. */
   assertProviderLoginAuthority?: () => void;
   getProviderLoginConfig?: () => OpenClawConfig;
