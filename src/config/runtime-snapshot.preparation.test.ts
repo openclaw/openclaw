@@ -211,9 +211,70 @@ describe("async cold runtime pin", () => {
     expect(load).not.toHaveBeenCalled();
   });
 
+  it.each(
+    (["resolves", "rejects"] as const).flatMap((completion) =>
+      (["unchanged", "replacement"] as const).map((change) => ({ completion, change })),
+    ),
+  )(
+    "retains selected runtime authority when a cold load $completion and publication is $change",
+    async ({ completion, change }) => {
+      const selected: OpenClawConfig = { gateway: { port: 18789 } };
+      const replacement: OpenClawConfig = { gateway: { port: 19001 } };
+      const failure = new Error("ordinary config read failure");
+      let assertSelectedCurrent: (() => void) | undefined;
+      const pending = loadPinnedRuntimeConfigAsync(
+        async () => {
+          if (completion === "rejects") {
+            throw failure;
+          }
+          return { config: selected };
+        },
+        { retainSnapshotCurrent: (assertCurrent) => (assertSelectedCurrent = assertCurrent) },
+      );
+      const replace = () => {
+        if (change === "replacement") {
+          setRuntimeConfigSnapshot(replacement);
+        }
+      };
+      // Register before the consumer so replacement wins the post-settlement microtask.
+      const replacementDone = pending.then(replace, replace);
+      if (completion === "resolves") {
+        expect(await pending).toBe(selected);
+      } else {
+        await expect(pending).rejects.toBe(failure);
+      }
+      await replacementDone;
+      expect(assertSelectedCurrent).toBeTypeOf("function");
+      if (change === "replacement") {
+        expect(assertSelectedCurrent).toThrow("superseded");
+      } else {
+        expect(assertSelectedCurrent).not.toThrow();
+      }
+    },
+  );
+
+  it("does not bless a cleared owner when a pending cold load rejects", async () => {
+    const gate = createDeferredCore<{ config: OpenClawConfig }>();
+    let assertSelectedCurrent: (() => void) | undefined;
+    const pending = loadPinnedRuntimeConfigAsync(() => gate.promise, {
+      retainSnapshotCurrent: (assertCurrent) => (assertSelectedCurrent = assertCurrent),
+    });
+    resetConfigRuntimeState();
+    const failure = new Error("ordinary config read failure");
+    const rejected = expect(pending).rejects.toBe(failure);
+    gate.reject(failure);
+    await rejected;
+
+    expect(getRuntimeConfigSnapshot()).toBeNull();
+    expect(assertSelectedCurrent).toThrow("superseded");
+  });
+
   it.each(["reset", "newer publication"])("discards a cold load after %s", async (change) => {
     const gate = createDeferredCore<{ config: OpenClawConfig }>();
-    const pending = loadPinnedRuntimeConfigAsync(() => gate.promise);
+    let assertSelectedCurrent: (() => void) | undefined;
+    const pending = loadPinnedRuntimeConfigAsync(() => gate.promise, {
+      retainSnapshotCurrent: (assertCurrent) => (assertSelectedCurrent = assertCurrent),
+    });
     const candidate: OpenClawConfig = { gateway: { port: 19001 } };
     const current: OpenClawConfig = { gateway: { port: 20001 } };
     if (change === "reset") {
@@ -222,11 +283,13 @@ describe("async cold runtime pin", () => {
       gate.resolve({ config: candidate });
       await rejected;
       expect(getRuntimeConfigSnapshot()).toBeNull();
+      expect(assertSelectedCurrent).toThrow("superseded");
     } else {
       setRuntimeConfigSnapshot(current);
       gate.resolve({ config: candidate });
       expect(await pending).toBe(current);
       expect(getRuntimeConfigSnapshot()).toBe(current);
+      expect(assertSelectedCurrent).not.toThrow();
     }
   });
 

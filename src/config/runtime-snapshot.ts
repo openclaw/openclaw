@@ -521,30 +521,54 @@ export function loadPinnedRuntimeConfig(loadFresh: () => OpenClawConfig): OpenCl
   return getRuntimeConfigSnapshot() ?? config;
 }
 
+function captureRuntimeConfigSnapshotCurrentness(message: string): () => void {
+  const generation = runtimeConfigSnapshotGeneration;
+  return () => {
+    if (runtimeConfigSnapshotGeneration !== generation) {
+      throw new Error(message);
+    }
+  };
+}
+
 /** Pin a strict cold load only while its original publication owner is still current. */
 export async function loadPinnedRuntimeConfigAsync(
   loadFresh: (assertCurrent: () => void) => Promise<{
     config: OpenClawConfig;
     runtimeEnv?: PreparedConfigRuntimeEnv;
   }>,
-  options: { assertCurrent?: () => void } = {},
+  options: {
+    assertCurrent?: () => void;
+    retainSnapshotCurrent?: (assertCurrent: () => void) => void;
+  } = {},
 ): Promise<OpenClawConfig> {
   options.assertCurrent?.();
+  const assertSnapshotCurrent = captureRuntimeConfigSnapshotCurrentness(
+    "Runtime config load was superseded before publication",
+  );
+  // Failure retains the original absence; only a returned snapshot replaces its guard.
+  options.retainSnapshotCurrent?.(assertSnapshotCurrent);
   if (runtimeConfigSnapshot) {
     return runtimeConfigSnapshot;
   }
-  const generation = runtimeConfigSnapshotGeneration;
   const assertCurrent = () => {
     options.assertCurrent?.();
-    if (runtimeConfigSnapshotGeneration !== generation) {
-      throw new Error("Runtime config load was superseded before publication");
+    assertSnapshotCurrent();
+  };
+  const retainReturnedSnapshot = (config: OpenClawConfig): OpenClawConfig => {
+    if (config === runtimeConfigSnapshot) {
+      options.retainSnapshotCurrent?.(
+        captureRuntimeConfigSnapshotCurrentness(
+          "Runtime config snapshot was superseded after selection",
+        ),
+      );
     }
+    return config;
   };
   try {
     const { config, runtimeEnv } = await loadFresh(assertCurrent);
     options.assertCurrent?.();
     if (runtimeConfigSnapshot) {
-      return runtimeConfigSnapshot;
+      return retainReturnedSnapshot(runtimeConfigSnapshot);
     }
     assertCurrent();
     const commit = await prepareRuntimeConfigSnapshot(
@@ -554,7 +578,7 @@ export async function loadPinnedRuntimeConfigAsync(
     );
     options.assertCurrent?.();
     if (runtimeConfigSnapshot) {
-      return runtimeConfigSnapshot;
+      return retainReturnedSnapshot(runtimeConfigSnapshot);
     }
     assertCurrent();
     const publication = runtimeEnv?.publish();
@@ -568,11 +592,11 @@ export async function loadPinnedRuntimeConfigAsync(
       publication?.();
       throw error;
     }
-    return getRuntimeConfigSnapshot() ?? config;
+    return retainReturnedSnapshot(getRuntimeConfigSnapshot() ?? config);
   } catch (error) {
     options.assertCurrent?.();
     if (runtimeConfigSnapshot) {
-      return runtimeConfigSnapshot;
+      return retainReturnedSnapshot(runtimeConfigSnapshot);
     }
     throw error;
   }
