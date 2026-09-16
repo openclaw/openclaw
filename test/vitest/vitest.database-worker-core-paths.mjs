@@ -351,6 +351,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-db.integrity-lease.test.ts",
   "src/state/openclaw-agent-execution.integrity.test.ts",
   "src/state/openclaw-agent-execution-cleanup.test.ts",
+  "src/state/openclaw-state-worker-context.env-capture.test.ts",
   "src/sessions/session-state-events.test.ts",
   "src/sessions/session-created.test.ts",
   "src/sessions/session-upstream-links.test.ts",
