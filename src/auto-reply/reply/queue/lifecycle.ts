@@ -6,7 +6,7 @@ import {
   startFollowupRunPreAdoptionHeartbeatWithCustody,
   updateFollowupRetryHeartbeatsWithCustody,
 } from "./pre-adoption-heartbeat.js";
-import type { FollowupRun } from "./types.js";
+import { isFollowupRunAborted, type FollowupRun } from "./types.js";
 
 type FollowupLifecycleSource = Pick<
   FollowupRun,
@@ -127,6 +127,7 @@ export function markFollowupRunEnqueued(run: FollowupRun): boolean {
     retainQueuedDeliveryCorrelations(run, state);
     startFollowupRunPreAdoptionHeartbeat(run);
   }
+  run.run.reasoningVisibility?.retainForQueue(() => isFollowupRunAborted(run));
   return true;
 }
 export function retireFollowupRunCancellation(run: FollowupRun): void {

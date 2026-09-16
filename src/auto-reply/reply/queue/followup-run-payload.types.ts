@@ -35,6 +35,7 @@ import type {
   VerboseLevel,
 } from "../../thinking.shared.js";
 import type { GoalContinuation } from "../goal-continuation.types.js";
+import type { ReplyReasoningVisibility } from "../reasoning-visibility.js";
 import type {
   ScheduledSessionAutomation,
   SessionEventExecution,
@@ -211,6 +212,8 @@ export type FollowupRunPayload = {
     fastModeAutoOnSecondsOverride?: boolean;
     /** Explicit turn choice; absent queued replies follow live session verbosity. */
     verboseLevelOverride?: VerboseLevel;
+    /** Producing turn policy retained until queued delivery or abandonment settles. */
+    reasoningVisibility?: ReplyReasoningVisibility;
     elevatedLevel?: ElevatedLevel;
     execOverrides?: ExecToolRoutingDefaults;
     bashElevated?: {

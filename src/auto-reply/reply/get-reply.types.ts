@@ -82,6 +82,8 @@ type InternalReplySessionOptions = {
   /** Live channel policy retained from ingress through awaited lifecycle mutations. */
   assertChannelAuthority?: () => void;
   extractedFileImages?: ExtractedFileImage[];
+  /** Register policy cleanup with the dispatcher after its queued delivery settles. */
+  registerReasoningVisibilityCleanup?: (cleanup: () => void) => void;
   /** Rechecks the live Gateway caller before a chat login has a durable effect. */
   assertProviderLoginAuthority?: () => void;
   getProviderLoginConfig?: () => OpenClawConfig;

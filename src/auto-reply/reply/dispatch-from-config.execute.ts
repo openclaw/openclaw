@@ -37,7 +37,7 @@ import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.
 import { runReplyDispatchHook } from "./dispatch-from-config.reply-dispatch-hook.js";
 import { requireQueuedReplyDelivery } from "./dispatch-from-config.turn-ledger.js";
 import { runWithCommandNativeSubagents } from "./dispatch-native-subagent.js";
-import type { PendingContinuationSettlement } from "./get-reply.types.js";
+import type { InternalGetReplyOptions, PendingContinuationSettlement } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
@@ -199,6 +199,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
               sessionPromptSourceReplyDeliveryMode: state.sessionStableSourceReplyDeliveryMode,
               ...state.sourceReplyDeliveryRuntimeOptions,
               mediaNormalizationOwner: state.isInternalWebchatTurn ? "gateway" : undefined,
+              ...({
+                registerReasoningVisibilityCleanup: (cleanup) =>
+                  registerReplyDispatcherSettledTask(dispatcher, cleanup),
+              } satisfies Pick<InternalGetReplyOptions, "registerReasoningVisibilityCleanup">),
               onPendingContinuation: (settlement) => {
                 pendingContinuation = true;
                 pendingContinuationSettlement ??= settlement;

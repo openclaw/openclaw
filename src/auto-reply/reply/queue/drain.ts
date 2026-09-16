@@ -136,6 +136,7 @@ function resolveCollectedRun(items: readonly FollowupRun[], source: FollowupRun[
     senderE164: undefined,
     senderIsOwner: false,
     traceAuthorized: false,
+    reasoningVisibility: undefined,
     ownerNumbers: [],
   };
 }

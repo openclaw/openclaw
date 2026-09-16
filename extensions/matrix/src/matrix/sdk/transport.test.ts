@@ -1,6 +1,7 @@
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
+import { withMatrixSendCurrentness } from "./send-currentness.js";
 import { createMatrixGuardedFetch, performMatrixRequest } from "./transport.js";
 import { clearTestUndiciRuntimeDepsOverride, stubRuntimeFetch } from "./undici.test-support.js";
 
@@ -107,6 +108,101 @@ describe("performMatrixRequest", () => {
       }
     });
   });
+
+  it.each(["room preparation", "redirect"] as const)(
+    "rechecks message authority after %s without blocking unrelated sends",
+    async (revokeDuring) => {
+      const { MatrixClient } = await import("../sdk.js");
+      let allowed = true;
+      const puts: Array<{ path: string; body: string }> = [];
+      const server = http.createServer((request, response) => {
+        const requestPath = request.url ?? "";
+        if (request.method === "GET" && requestPath.includes("/state/m.room.encryption")) {
+          if (revokeDuring === "room preparation") {
+            allowed = false;
+          }
+          response.writeHead(404, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({ errcode: "M_NOT_FOUND", error: "Unencrypted fixture room" }),
+          );
+          return;
+        }
+        if (request.method === "PUT") {
+          let body = "";
+          request.setEncoding("utf8");
+          request.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          request.on("end", () => {
+            puts.push({ path: requestPath, body });
+            if (revokeDuring === "redirect" && allowed) {
+              allowed = false;
+              response.writeHead(307, { location: "/redirected-message" });
+              response.end();
+              return;
+            }
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(JSON.stringify({ event_id: "$accepted" }));
+          });
+          return;
+        }
+        response.writeHead(404, { "content-type": "application/json" });
+        response.end(JSON.stringify({ errcode: "M_NOT_FOUND", error: "Unknown fixture endpoint" }));
+      });
+      let client: InstanceType<typeof MatrixClient> | undefined;
+      try {
+        await new Promise<void>((resolve) => {
+          server.listen(0, "127.0.0.1", resolve);
+        });
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("expected loopback server address");
+        }
+        client = new MatrixClient(`http://127.0.0.1:${address.port}`, "fixture-token", {
+          userId: "@fixture:example.org",
+          encryption: false,
+          autoBootstrapCrypto: false,
+          ssrfPolicy: { allowPrivateNetwork: true },
+        });
+        const assertBeforeSend = () => {
+          if (!allowed) {
+            throw new DOMException("Reasoning visibility revoked", "AbortError");
+          }
+        };
+
+        await expect(
+          withMatrixSendCurrentness(client, assertBeforeSend, () =>
+            client.sendMessage("!guarded:example.org", {
+              msgtype: "m.notice",
+              body: "Guarded reasoning",
+            }),
+          ),
+        ).rejects.toThrow("Reasoning visibility revoked");
+        expect(puts).toHaveLength(revokeDuring === "redirect" ? 1 : 0);
+        expect(puts.some((request) => request.path === "/redirected-message")).toBe(false);
+
+        await expect(
+          client.sendMessage("!guarded:example.org", {
+            msgtype: "m.text",
+            body: "Unrelated answer",
+          }),
+        ).resolves.toBe("$accepted");
+        expect(puts).toHaveLength(revokeDuring === "redirect" ? 2 : 1);
+        expect(JSON.parse(puts.at(-1)?.body ?? "null")).toMatchObject({
+          msgtype: "m.text",
+          body: "Unrelated answer",
+        });
+      } finally {
+        try {
+          await client?.stopWithoutPersist();
+        } finally {
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
+        }
+      }
+    },
+  );
 
   it("preserves an encoded nested proxy prefix through the real HTTP transport", async () => {
     await withJsonServer({ user_id: "@bot:example.org" }, async (url, requests) => {

@@ -11,6 +11,15 @@ Channel-specific runtime helpers, available when a channel plugin is loaded. Par
 
 ## Channel namespaces
 
+Channels that opt into durable reasoning with `replyOptions.reasoningPayloadsEnabled`
+can register `replyOptions.onReasoningVisibility(isVisible)` on the shared reply
+dispatcher. Core supplies `isVisible(payload)` for the exact reasoning payload;
+check it immediately before each platform request, including chunks and retries.
+The predicate honors the producing turn's authorized `/reasoning on` choice and
+later disablement. Off, stream, unbound payloads, and settled or revoked turns
+return false. Preserve core payload metadata when transforming a reply. Plugins
+must not reconstruct this policy from session settings or configuration defaults.
+
 <AccordionGroup>
   <Accordion title="api.runtime.channel">
     Channel-specific runtime helpers (available when a channel plugin is loaded). Grouped by concern:

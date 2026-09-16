@@ -111,6 +111,10 @@ Matrix notices. Long reasoning is split into messages without replacing the answ
 preview. `/reasoning off` hides it. Matrix does not display `/reasoning stream`
 updates; use `on` for completed reasoning messages.
 
+Reasoning follows the sender's command authorization and any inline setting for
+the current turn. Turning it off stops unsent reasoning chunks; notices already
+delivered remain in the room.
+
 ## Voice messages
 
 Inbound Matrix voice notes are transcribed before the room mention gate, so a voice note saying the bot name can trigger the agent in a `requireMention: true` room, and the agent gets the transcript instead of only an audio attachment placeholder.

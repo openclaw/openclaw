@@ -562,6 +562,11 @@ export function completeSessionControllerSourceLifecycle(
     return;
   }
   state.completed = true;
+  try {
+    run.run.reasoningVisibility?.close();
+  } catch (error) {
+    state.failure = error;
+  }
   state.stopHeartbeat?.();
   // Void callbacks run before the next cancellation effect; actual promises
   // retain custody until they settle. Do not insert a synthetic await between

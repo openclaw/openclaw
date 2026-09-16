@@ -56,6 +56,7 @@ import { HISTORY_CONTEXT_MARKER, RECENT_HISTORY_CONTEXT_MARKER } from "./history
 import { stripMentions } from "./mentions.js";
 import { createModelSelectionState } from "./model-selection.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
+import { canUseReasoningState as isReasoningStateAuthorized } from "./reasoning-visibility.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { extractInlineSimpleCommand, stripInlineStatus } from "./reply-inline.js";
 import { createReplyModelLevelResolver } from "./reply-model-levels.js";
@@ -484,10 +485,7 @@ export async function resolveReplyDirectives(params: {
     agentEntry?.verboseDefault ??
     agentCfg?.verboseDefault;
   const configuredReasoningDefault = agentEntry?.reasoningDefault ?? agentCfg?.reasoningDefault;
-  const canUseReasoningState =
-    command.isAuthorizedSender ||
-    command.senderIsOwner ||
-    (Array.isArray(ctx.GatewayClientScopes) && ctx.GatewayClientScopes.includes("operator.admin"));
+  const canUseReasoningState = isReasoningStateAuthorized(command, ctx.GatewayClientScopes);
   const rawSessionReasoningLevel = targetSessionEntry?.reasoningLevel as
     | ReasoningLevel
     | null

@@ -57,6 +57,7 @@ import {
 import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { canUseReasoningState, createReplyReasoningVisibility } from "./reasoning-visibility.js";
 import { resolveReplySteeringIntent } from "./reply-steering-intent.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
@@ -431,6 +432,22 @@ export async function executePreparedReplyRun(
             { isCurrent: isCurrentOwner, ...cronOwner },
           )
       : undefined;
+  const reasoningVisibility =
+    opts?.onReasoningVisibility && opts.registerReasoningVisibilityCleanup
+      ? await createReplyReasoningVisibility({
+          agentId,
+          sessionKey,
+          storePath,
+          sessionEntry: preparedSessionState.sessionEntry,
+          authorized: canUseReasoningState(command, ctx.GatewayClientScopes),
+          resolvedLevel: resolvedReasoningLevel,
+          override: params.directives.reasoningLevel,
+          abortSignal: opts.abortSignal,
+        })
+      : undefined;
+  if (reasoningVisibility) {
+    opts?.registerReasoningVisibilityCleanup?.(reasoningVisibility.releaseDispatch);
+  }
   const followupRun = {
     createChannelCronAuthority,
     prompt: queuedBody,
@@ -612,6 +629,7 @@ export async function executePreparedReplyRun(
       })(),
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
+      reasoningVisibility,
       elevatedLevel: resolvedElevatedLevel,
       execOverrides,
       bashElevated: {
