@@ -1277,7 +1277,7 @@ describe("CI changed Node test plan", () => {
     expect(bundles.length).toBeGreaterThan(0);
     for (const bundle of bundles) {
       expect(bundle.groups!.length).toBeGreaterThan(1);
-      expect(bundle.predictedSeconds).toBeLessThanOrEqual(240);
+      expect(bundle.predictedSeconds).toBeLessThanOrEqual(248);
       expect(bundle.configs).toEqual([]);
       expect(bundle.pretestBuildMode).toBeUndefined();
       expect(bundle.groups!.every((group) => !group.pretestBuildMode)).toBe(true);
@@ -1293,7 +1293,7 @@ describe("CI changed Node test plan", () => {
           !other.pretestBuildMode &&
           shard.runner === other.runner &&
           shard.requiresDist === other.requiresDist &&
-          shard.predictedSeconds! + other.predictedSeconds! <= 240;
+          shard.predictedSeconds! + other.predictedSeconds! <= 248;
         expect(canShareJob, `${shard.shardName} and ${other.shardName} fit one job`).toBe(false);
       }
     }
@@ -1420,6 +1420,25 @@ describe("CI changed Node test plan", () => {
     expect(createChangedExtensionFallbackShards(["docs/ci.md"])).toEqual([]);
   });
 
+  it("keeps core-impact extension fallback under the PR matrix headroom", () => {
+    const compactNodeRows = createNodeTestShardBundles({
+      changedPaths: ["src/config/types.ts"],
+      compact: true,
+      compactMode: "pull-request",
+      includeReleaseOnlyPluginShards: false,
+      runnerBackend: "github",
+    }).filter((shard) => !shard.requiresDist);
+    const fallbackRows = createChangedExtensionFallbackShards(["src/config/types.ts"]);
+    expect(
+      hasCoreExtensionImpact(["src/config/types.ts"]),
+      "fixture should exercise core impact",
+    ).toBe(true);
+    expect(fallbackRows.length).toBeGreaterThan(0);
+    expect(
+      compactNodeRows.length + fallbackRows.filter((shard) => !shard.requiresDist).length,
+    ).toBeLessThanOrEqual(120);
+  });
+
   it.each([
     { name: "helper alone", changedPaths: [githubActivityHelper] },
     {
@@ -1493,7 +1512,7 @@ describe("CI changed Node test plan", () => {
 
       expect(shards.length).toBeLessThan(groups.length);
       expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
-      expect(shards.every((shard) => shard.predictedSeconds! <= 240)).toBe(true);
+      expect(shards.every((shard) => shard.predictedSeconds! <= 248)).toBe(true);
       expect(
         groups.every(
           (group) =>
