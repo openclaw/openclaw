@@ -2,11 +2,15 @@ import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
-import type {
-  WorktreeRecord,
-  WorktreesRemoveResult,
+import { Value } from "typebox/value";
+import {
+  WorktreesGcReportSchema,
+  type WorktreeRecord,
+  type WorktreesGcResult,
+  type WorktreesGcReport,
+  type WorktreesRemoveResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
@@ -58,14 +62,17 @@ class WorktreesPage extends OpenClawLightDomElement {
   @state() private createBranches: string[] = [];
   @state() private creating = false;
   @state() private gcLoading = false;
+  @state() private gcResult: WorktreesGcResult | WorktreesGcReport | null = null;
   private listClient: GatewayBrowserClient | null = null;
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => {
       this.records = [];
       this.error = null;
+      this.gcResult = null;
     },
     invalidateRequests: (change) => {
+      this.gcResult = null;
       if (change.snapshot.phase !== "connected" || !change.snapshot.client) {
         this.listClient = null;
         void this.listTask.run([null]);
@@ -163,6 +170,7 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private async runOperation(scope: GatewayConnectionScope, action: () => Promise<unknown>) {
     this.error = null;
+    this.gcResult = null;
     try {
       await action();
     } catch (error) {
@@ -244,7 +252,26 @@ class WorktreesPage extends OpenClawLightDomElement {
       return;
     }
     this.gcLoading = true;
-    await this.runOperation(scope, () => scope.client.request("worktrees.gc", {}));
+    await this.runOperation(scope, async () => {
+      try {
+        const result = await scope.client.request<WorktreesGcResult>("worktrees.gc", {});
+        if (this.gateway.isCurrent(scope)) {
+          this.gcResult = result;
+        }
+      } catch (error) {
+        if (
+          error instanceof GatewayRequestError &&
+          error.code === "UNAVAILABLE" &&
+          Value.Check(WorktreesGcReportSchema, error.details)
+        ) {
+          if (this.gateway.isCurrent(scope)) {
+            this.gcResult = error.details;
+          }
+          return;
+        }
+        throw error;
+      }
+    });
   }
 
   private toggleCreate() {
@@ -419,6 +446,52 @@ class WorktreesPage extends OpenClawLightDomElement {
     });
   }
 
+  private renderGcResult() {
+    const result = this.gcResult;
+    if (!result) {
+      return nothing;
+    }
+    const report = "outcome" in result ? result : null;
+    const outcome = report?.outcome ?? "completed";
+    const failed = report?.issues.reduce(
+      (count, issue) => count + (issue.outcome === "failed" ? issue.count : 0),
+      0,
+    );
+    const deferred = report?.issues.reduce(
+      (count, issue) => count + (issue.outcome === "deferred" ? issue.count : 0),
+      0,
+    );
+    return html`<div
+      class=${outcome === "partial" ? "callout danger" : "callout info"}
+      role=${outcome === "partial" ? "alert" : "status"}
+    >
+      ${t(`worktrees.gcOutcome.${outcome}`)}
+      ${t("worktrees.gcSummary", {
+        removed: String(result.removed.length),
+        orphans: String(result.orphansDeleted),
+        snapshots: String(result.snapshotsPruned),
+      })}
+      ${
+        report
+          ? html`
+              ${t("worktrees.gcReportSummary", {
+                protected: String(report.protectedCount),
+                failed: String(failed ?? 0),
+                deferred: String(deferred ?? 0),
+              })}
+              ${
+                report.limitsSatisfied === null
+                  ? t("worktrees.gcLimitsUnknown")
+                  : report.limitsSatisfied
+                    ? t("worktrees.gcLimitsSatisfied")
+                    : t("worktrees.gcLimitsExceeded")
+              }
+            `
+          : nothing
+      }
+    </div>`;
+  }
+
   override render() {
     const actions = html`
       <button
@@ -454,6 +527,7 @@ class WorktreesPage extends OpenClawLightDomElement {
             : nothing
         }
         ${this.error ? html`<div class="callout danger" role="alert">${this.error}</div>` : nothing}
+        ${this.renderGcResult()}
         ${renderSettingsSection(
           { title: t("worktrees.title"), description: t("worktrees.subtitle"), actions },
           rows,

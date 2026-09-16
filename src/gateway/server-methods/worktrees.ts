@@ -9,6 +9,7 @@ import {
   validateWorktreesRemoveParams,
   validateWorktreesRestoreParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { formatWorktreeGcResult } from "../../agents/worktrees/gc-result.js";
 import { createManagedWorktreeOwnerPolicy } from "../../agents/worktrees/owner-protection.js";
 import {
   managedWorktrees,
@@ -154,14 +155,26 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
       }
       const cfg = context.getRuntimeConfig();
       const limits = resolveWorktreeCleanupLimits();
-      respond(
-        true,
-        await service.gc({
-          limits,
-          ...createManagedWorktreeOwnerPolicy(cfg),
-        }),
-        undefined,
-      );
+      const result = await service.gc({
+        limits,
+        ...createManagedWorktreeOwnerPolicy(cfg),
+      });
+      if (result.outcome !== "completed") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, formatWorktreeGcResult(result), {
+            details: result,
+            // Some deletions may already have committed. A client must not
+            // replay this administrative mutation as a transient RPC failure.
+            retryable: false,
+          }),
+        );
+        return;
+      }
+      // Published clients may validate this closed three-field success schema.
+      const { removed, orphansDeleted, snapshotsPruned } = result;
+      respond(true, { removed, orphansDeleted, snapshotsPruned }, undefined);
     },
   };
 }

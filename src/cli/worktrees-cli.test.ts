@@ -1,10 +1,23 @@
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
+import { runCliWithExitFinalization } from "./one-shot-exit.js";
 import { parseCliProfileArgs } from "./profile.js";
 import { registerWorktreesCli } from "./worktrees-cli.js";
+
+const completedGc: ManagedWorktreeGcResult = {
+  removed: [],
+  orphansDeleted: 0,
+  snapshotsPruned: 0,
+  outcome: "completed",
+  issues: [],
+  protectedCount: 0,
+  limitsSatisfied: true,
+};
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -182,11 +195,7 @@ describe("worktrees cli", () => {
 
   it("passes session owner activity and built-in limits to gc", async () => {
     setRuntimeConfigSnapshot({}, {});
-    const gc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue({
-      removed: [],
-      orphansDeleted: 0,
-      snapshotsPruned: 0,
-    });
+    const gc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue(completedGc);
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     const program = new Command().name("openclaw");
     registerWorktreesCli(program);
@@ -199,4 +208,98 @@ describe("worktrees cli", () => {
       shouldRemoveOwner: expect.any(Function),
     });
   });
+
+  it.each([false, true])("prints partial progress before exiting 1 (json=%s)", async (json) => {
+    setRuntimeConfigSnapshot({}, {});
+    const result: ManagedWorktreeGcResult = {
+      ...completedGc,
+      removed: ["removed-id"],
+      orphansDeleted: 2,
+      snapshotsPruned: 3,
+      outcome: "partial",
+      issues: [{ stage: "idle", outcome: "failed", count: 4 }],
+      limitsSatisfied: null,
+    };
+    vi.spyOn(managedWorktrees, "gc").mockResolvedValue(result);
+    const output: unknown[] = [];
+    let stdout = "";
+    let releaseStdout: (() => void) | undefined;
+    if (json) {
+      // Hold the real finalizer's drain callback. A direct process exit would
+      // discard this JSON while a piped stdout write is still pending.
+      vi.spyOn(process.stdout, "write").mockImplementation((...args) => {
+        stdout += String(args[0]);
+        const callback = args.at(-1);
+        if (typeof callback === "function") {
+          releaseStdout = () => callback();
+        }
+        return true;
+      });
+    }
+    vi.spyOn(defaultRuntime, "log").mockImplementation((value) => output.push(value));
+    const exited = createDeferred();
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+      output.push(code);
+      exited.resolve();
+    });
+    const onError = vi.fn();
+    const program = new Command().name("openclaw");
+    registerWorktreesCli(program);
+
+    await runCliWithExitFinalization({
+      run: async () => {
+        await program.parseAsync(["worktrees", "gc", ...(json ? ["--json"] : [])], {
+          from: "user",
+        });
+      },
+      onError,
+      env: {},
+      execArgv: [],
+      platform: "linux",
+      markers: {},
+    });
+    if (json) {
+      expect(JSON.parse(stdout)).toEqual(result);
+      expect(exit).not.toHaveBeenCalled();
+      expect(releaseStdout).toBeTypeOf("function");
+      releaseStdout?.();
+    }
+    await withTestTimeout(exited.promise, 1_000, "partial GC did not exit");
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(output).toEqual(
+      json
+        ? [1]
+        : [
+            "Cleanup partial: worktrees removed: 1; orphans deleted: 2; snapshots pruned: 3; protected 0; limits unknown. idle failed=4.",
+            1,
+          ],
+    );
+  });
+
+  it.each(["completed", "deferred"] as const)(
+    "keeps %s cleanup successful and visible",
+    async (outcome) => {
+      setRuntimeConfigSnapshot({}, {});
+      const result: ManagedWorktreeGcResult = {
+        ...completedGc,
+        outcome,
+        protectedCount: 1,
+        limitsSatisfied: false,
+        issues: outcome === "deferred" ? [{ stage: "limits", outcome: "deferred", count: 1 }] : [],
+      };
+      vi.spyOn(managedWorktrees, "gc").mockResolvedValue(result);
+      const output = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
+      const program = new Command().name("openclaw");
+      registerWorktreesCli(program);
+
+      await program.parseAsync(["worktrees", "gc"], { from: "user" });
+
+      expect(exit).not.toHaveBeenCalled();
+      expect(output).toHaveBeenCalledWith(expect.stringContaining(`Cleanup ${outcome}:`));
+      expect(output).toHaveBeenCalledWith(expect.stringContaining("protected 1; limits exceeded"));
+    },
+  );
 });

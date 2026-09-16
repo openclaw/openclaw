@@ -82,4 +82,15 @@ export type ManagedWorktreeGcResult = {
   removed: string[];
   orphansDeleted: number;
   snapshotsPruned: number;
+  outcome: "completed" | "deferred" | "partial";
+  /** Aggregated operation outcomes, bounded by stage and outcome rather than worktree count. */
+  issues: {
+    stage: "idle" | "templates" | "limits" | "size" | "orphans" | "snapshots";
+    outcome: "failed" | "deferred";
+    count: number;
+  }[];
+  /** Unique managed worktrees retained by an automatic-removal guard during this pass. */
+  protectedCount: number;
+  /** Null when incomplete inventory or size measurements prevent a conclusion. */
+  limitsSatisfied: boolean | null;
 };

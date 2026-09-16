@@ -1,10 +1,12 @@
 import { Option, type Command } from "commander";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { managedWorktrees, resolveWorktreeCleanupLimits } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
+import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 type JsonOption = { json?: boolean };
@@ -158,9 +160,10 @@ export function registerWorktreesCli(program: Command): void {
       if (opts.json) {
         printJson(result);
       } else {
-        defaultRuntime.log(
-          `Removed ${result.removed.length}; deleted ${result.orphansDeleted} orphans; pruned ${result.snapshotsPruned} snapshots.`,
-        );
+        defaultRuntime.log(formatWorktreeGcResult(result));
+      }
+      if (result.outcome === "partial") {
+        exitCliAfterOutput(defaultRuntime, 1);
       }
     });
 

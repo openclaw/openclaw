@@ -711,9 +711,12 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     now += IDLE_GC_MS + 1;
     const warnings = createWarnLogCapture("openclaw-worktree-invalid-template");
     try {
-      expect((await service.gc()).removed).toEqual([]);
-      expect(await warnings.findText("worktree template cleanup deferred:")).toBe(
-        "worktree template cleanup deferred: Error: Invalid worktree template status: invalid",
+      const result = await service.gc();
+      expect(result.removed).toEqual([]);
+      expect(result.outcome).toBe("partial");
+      expect(result.issues).toEqual([{ stage: "templates", outcome: "failed", count: 1 }]);
+      expect(await warnings.findText("worktree template cleanup incomplete:")).toBe(
+        "worktree template cleanup incomplete: Error: Invalid worktree template status: invalid",
       );
       expect(await fs.readFile(path.join(template.path, "README.md"), "utf8")).toBe("base\n");
       expect(await fs.readFile(path.join(invalid.path, "preserved.txt"), "utf8")).toBe(

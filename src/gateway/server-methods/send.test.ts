@@ -1264,7 +1264,15 @@ describe("gateway send mirroring", () => {
     const maintenance = startGatewayMaintenanceTimers({
       ...createGatewayMaintenanceStateForTest(),
       dedupe: context.dedupe,
-      runWorktreeGc: vi.fn(async () => undefined),
+      runWorktreeGc: vi.fn(async () => ({
+        removed: [],
+        orphansDeleted: 0,
+        snapshotsPruned: 0,
+        outcome: "completed" as const,
+        issues: [],
+        protectedCount: 0,
+        limitsSatisfied: true,
+      })),
     });
     const actionDeferred = createDeferred<{ details: { action: string } }>();
     mocks.dispatchChannelMessageAction.mockReturnValueOnce(actionDeferred.promise);
@@ -1323,7 +1331,15 @@ describe("gateway send mirroring", () => {
     const maintenance = startGatewayMaintenanceTimers({
       ...createGatewayMaintenanceStateForTest(),
       dedupe: context.dedupe,
-      runWorktreeGc: vi.fn(async () => undefined),
+      runWorktreeGc: vi.fn(async () => ({
+        removed: [],
+        orphansDeleted: 0,
+        snapshotsPruned: 0,
+        outcome: "completed" as const,
+        issues: [],
+        protectedCount: 0,
+        limitsSatisfied: true,
+      })),
     });
     const operationCount = Math.floor(DEDUPE_MAX / 2) + 1;
     const invoke = (idempotencyKey: string, respond: ReturnType<typeof vi.fn>) =>

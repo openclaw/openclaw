@@ -949,6 +949,18 @@ export const en: TranslationMap & {
     title: "Managed Worktrees",
     subtitle: "Isolated repository checkouts owned by OpenClaw.",
     cleanNow: "Clean up now",
+    gcOutcome: {
+      completed: "Cleanup completed.",
+      deferred: "Cleanup deferred by another operation. Scheduled cleanup will retry.",
+      partial: "Cleanup incomplete. Check the Gateway logs before retrying.",
+    },
+    gcSummary:
+      "Worktrees removed: {removed}; orphans deleted: {orphans}; snapshots pruned: {snapshots}.",
+    gcReportSummary:
+      "Protected worktrees retained: {protected}. Failed operations: {failed}; deferred operations: {deferred}.",
+    gcLimitsUnknown: "Cleanup limit status is unknown because inventory was incomplete.",
+    gcLimitsSatisfied: "Cleanup limits are satisfied.",
+    gcLimitsExceeded: "Cleanup limits remain exceeded.",
     name: "Name",
     namePlaceholder: "auto",
     baseBranch: "Base branch",

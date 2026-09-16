@@ -4,6 +4,9 @@ import {
   SessionsCreateResultSchema,
   WorktreesBranchesResultSchema,
   WorktreesRemoveResultSchema,
+  WorktreesGcResultSchema,
+  WorktreesGcReportSchema,
+  ErrorShapeSchema,
   validateSessionsCreateParams,
   validateFsListDirParams,
   validateWorktreesBranchesParams,
@@ -13,6 +16,51 @@ import {
 } from "../index.js";
 
 describe("managed worktree protocol schemas", () => {
+  it("preserves closed GC success and puts incomplete reports in open error details", () => {
+    const counts = { removed: ["removed-id"], orphansDeleted: 2, snapshotsPruned: 3 };
+    expect(Value.Check(WorktreesGcResultSchema, counts)).toBe(true);
+    const result = {
+      ...counts,
+      outcome: "partial",
+      issues: [{ stage: "size", outcome: "failed", count: 1 }],
+      protectedCount: 4,
+      limitsSatisfied: null,
+    };
+    expect(Value.Check(WorktreesGcResultSchema, result)).toBe(false);
+    expect(Value.Check(WorktreesGcReportSchema, result)).toBe(true);
+    expect(
+      Value.Check(ErrorShapeSchema, {
+        code: "UNAVAILABLE",
+        message: "Cleanup incomplete",
+        details: result,
+        retryable: false,
+      }),
+    ).toBe(true);
+    expect(Value.Check(WorktreesGcReportSchema, { ...result, outcome: "completed" })).toBe(false);
+    expect(Value.Check(WorktreesGcReportSchema, { ...result, issues: [] })).toBe(false);
+    expect(
+      Value.Check(WorktreesGcReportSchema, {
+        ...result,
+        issues: [{ stage: "unknown", outcome: "failed", count: 1 }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(WorktreesGcReportSchema, {
+        ...result,
+        issues: [{ stage: "idle", outcome: "failed", count: 0 }],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(WorktreesGcReportSchema, { ...result, issues: Array(13).fill(result.issues[0]) }),
+    ).toBe(false);
+    expect(
+      Value.Check(WorktreesGcReportSchema, {
+        ...result,
+        issues: [{ ...result.issues[0], path: "/private" }],
+      }),
+    ).toBe(false);
+  });
+
   it("accepts the additive worktree method payloads", () => {
     expect(
       validateWorktreesCreateParams({ repoRoot: "/repo", name: "task-one", baseRef: "main" }),

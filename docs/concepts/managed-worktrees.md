@@ -267,6 +267,31 @@ openclaw worktrees restore <id> [--json]
 openclaw worktrees gc [--json]
 ```
 
+Garbage collection reports `outcome: "completed"`, `"deferred"`, or `"partial"` alongside
+the existing `removed`, `orphansDeleted`, and `snapshotsPruned` counts. Counts record confirmed
+progress, including when a later operation fails; they are not a claim that every candidate
+was inspected or removed. `partial` takes precedence when a pass has both failures and deferrals.
+The CLI prints the report before exiting with status 1 for partial cleanup. Completed and
+deferred passes exit 0. A deferred pass encountered a competing owner or an allocation-lease
+timeout; operational failures, interrupted operations, and incomplete inventories are partial.
+
+`issues` aggregates counts by cleanup stage (`idle`, `templates`, `limits`, `size`, `orphans`,
+or `snapshots`) and `failed` or `deferred` outcome. It contains at most 12 entries and no paths
+or raw errors. Detailed diagnostics remain in the Gateway or CLI logs.
+`protectedCount` counts each managed worktree retained by an automatic-removal guard once,
+even if both idle and limit cleanup inspect it. Protected retention is a successful safety
+decision, not a failure. Manual worktrees that are never eviction candidates are not included.
+`limitsSatisfied` is `true` when the measured live inventory fits the configured limits
+(or there are no limits), `false` when it exceeds them, and `null` when inventory or size
+coverage is incomplete. A completed pass can leave limits exceeded by manual or protected work.
+
+The Control UI displays the returned outcome and confirmed progress. Scheduled cleanup logs
+partial and deferred reports and keeps its normal retry cadence. The `worktrees.gc` RPC preserves
+its three-field success result for completed passes. Partial and deferred passes return an
+`UNAVAILABLE` error with `retryable: false` and the report in `error.details`. Clients must not
+automatically replay this mutation: earlier deletions may already have completed.
+These reports do not change which worktrees or snapshots cleanup may remove.
+
 The Control UI **Worktrees** page under Settings provides the same actions plus creation with a base-branch picker, shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
 
 `--if-lossless --json` returns `removed` plus the recorded `cleanup` outcome. A retained checkout returns `removed: false`; it is not a successful deletion. The explicit `--if-lossless` option is CLI-only; Gateway removal retains its archival behavior and result format.
