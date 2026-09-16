@@ -71,7 +71,7 @@ describe("Matrix reasoning delivery failures", () => {
         ...context,
         draftStream: draft,
         draftController: controller,
-        prefixOptions: {},
+        prefixOptions: { responsePrefixContextProvider: () => ({}) },
         humanDelay: undefined,
         typingCallbacks,
         runtime,
