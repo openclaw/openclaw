@@ -251,23 +251,39 @@ appear without a plugin update. For locally hosted models, use the
 
 ### Token Plan catalog
 
-Token Plan uses a separate exact-string allowlist. The built-in catalog shows
-Alibaba's currently recommended plan models and keeps the newer Qwen3-Coder
-compatibility tier selectable but hidden. Other allowlisted model IDs remain
-available as custom model refs. Image-generation-only plan models are not
-included here because they use different APIs.
+Token Plan uses a separate exact-string allowlist. The built-in catalog lists the
+current evidence-derived Token Plan chat models, including exact IDs that are
+directly callable even when an authenticated `/models` response omits them.
+Additional models returned by the endpoint can appear through refreshable discovery.
+Image-generation-only plan models are not included here because they use
+different APIs.
 
-| Model ref                          | Input       | Context   | Picker status |
-| ---------------------------------- | ----------- | --------- | ------------- |
-| `qwen-token-plan/qwen3.7-plus`     | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3.8-max`      | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3.8-flash`    | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3.6-plus`     | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3-coder-next` | text        | 262,144   | hidden        |
-| `qwen-token-plan/kimi-k2.5`        | text, image | 262,144   | visible       |
-| `qwen-token-plan/glm-5`            | text        | 202,752   | visible       |
-| `qwen-token-plan/MiniMax-M2.5`     | text        | 196,608   | visible       |
+| Model ref                                | Input       | Context   | Picker status |
+|------------------------------------------|-------------|-----------|---------------|
+| `qwen-token-plan/qwen3.7-plus`           | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.8-max`            | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.8-flash`          | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.6-plus`           | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.7-max`            | text        | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.6-flash`          | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/deepseek-v4-pro`        | text        | 1,000,000 | visible       |
+| `qwen-token-plan/deepseek-v4-pro-0813`   | text        | 1,000,000 | visible       |
+| `qwen-token-plan/deepseek-v4-flash`      | text        | 1,000,000 | visible       |
+| `qwen-token-plan/deepseek-v4-flash-0731` | text        | 1,000,000 | visible       |
+| `qwen-token-plan/deepseek-v4.1-flash`    | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/deepseek-v3.2`          | text        | 131,072   | visible       |
+| `qwen-token-plan/kimi-k2.7-code`         | text, image | 262,144   | visible       |
+| `qwen-token-plan/kimi-k2.6`              | text, image | 262,144   | visible       |
+| `qwen-token-plan/kimi-k2.5`              | text, image | 262,144   | visible       |
+| `qwen-token-plan/glm-5.2`                | text        | 1,000,000 | visible       |
+| `qwen-token-plan/glm-5.1`                | text        | 202,752   | visible       |
+| `qwen-token-plan/glm-5`                  | text        | 202,752   | visible       |
+| `qwen-token-plan/MiniMax-M2.5`           | text        | 196,608   | visible       |
 
+`deepseek-v4-pro-0813` is included because the project records direct exact-ID
+service for it even when the model list omits it. Treat the model-list omission
+as a discovery/visibility distinction, not evidence that the exact ID is
+unavailable.
 ## Thinking controls
 
 Agent runs and standalone completions use the same model-specific thinking
