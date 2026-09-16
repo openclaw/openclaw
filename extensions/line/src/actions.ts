@@ -12,7 +12,8 @@ type Message = messagingApi.Message;
 type ImagemapAction = messagingApi.ImagemapAction;
 type ImagemapVideo = messagingApi.ImagemapVideo;
 const LINE_ACTION_LABEL_LIMIT = 20;
-const LINE_ACTION_DATA_LIMIT = 300;
+/** Ceiling for postback `data` (UTF-16 units) and action text fields (code points). */
+export const LINE_ACTION_DATA_LIMIT = 300;
 const LINE_ACTION_URI_LIMIT = 1000;
 const LINE_CLIPBOARD_TEXT_LIMIT = 1000;
 const LINE_RICH_MENU_ALIAS_LIMIT = 32;

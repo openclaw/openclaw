@@ -19,6 +19,7 @@ import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-run
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { shouldSuppressLocalLineExecApprovalPrompt } from "./approval-native.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import {
@@ -51,6 +52,10 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
   presentationCapabilities: LINE_PRESENTATION_CAPABILITIES,
   renderPresentation: ({ payload, presentation, sourcePresentation, ctx }) =>
     renderLinePresentation(payload, presentation, ctx.to, sourcePresentation),
+  // A live native approval route owns the prompt, so the local `/approve` text would
+  // duplicate the card this channel already delivers to the approver.
+  shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
+    shouldSuppressLocalLineExecApprovalPrompt({ cfg, accountId, payload, hint }),
   sendPayload: async ({ to, payload, accountId, cfg, replyToId, onDeliveryResult }) => {
     const runtime = getLineRuntime();
     const outboundRuntime = await loadLineOutboundRuntime();

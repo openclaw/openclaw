@@ -1,9 +1,12 @@
 // Line plugin module implements gateway behavior.
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { clearAccountFieldsFromConfigSection } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { ChannelPlugin, PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
+import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
+import { isLineNativeApprovalClientEnabled } from "./approval-native.js";
 import { getLineRuntime } from "./runtime.js";
 import { describeLineWebhookDelivery } from "./status.js";
 import type { ResolvedLineAccount } from "./types.js";
@@ -55,6 +58,19 @@ export const lineGatewayAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>[
     }
 
     ctx.log?.info(`[${account.accountId}] starting LINE provider${lineBotLabel}`);
+
+    // The approval bootstrap starts the native handler only for accounts that
+    // registered this context; without it approvals fall back to /approve text.
+    if (isLineNativeApprovalClientEnabled({ cfg: ctx.cfg, accountId: account.accountId })) {
+      registerChannelRuntimeContext({
+        channelRuntime: ctx.channelRuntime,
+        channelId: "line",
+        accountId: account.accountId,
+        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+        context: {},
+        abortSignal: ctx.abortSignal,
+      });
+    }
 
     const monitorLineProvider =
       getLineRuntime().channel.line?.monitorLineProvider ??

@@ -85,3 +85,13 @@ export async function resolveLineQuestionPostback(params: {
     return { status: "failed" };
   }
 }
+
+/** What a tap that did not answer the question has to tell the person who tapped. */
+export function lineQuestionOutcomeNotice(status: "already-terminal" | "failed"): string {
+  if (status === "already-terminal") {
+    // The Gateway reports one terminal state for answered, cancelled and expired
+    // questions alike, so the notice claims only what it knows.
+    return "That question is no longer waiting for an answer.";
+  }
+  return "Could not record that answer. Reply with the option text instead.";
+}

@@ -163,6 +163,11 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
 }));
 const downloadLineMediaMock = vi.hoisted(() => vi.fn());
 const getUserDisplayNameMock = vi.hoisted(() => vi.fn(async (userId: string) => userId));
+const resolveLineApprovalPostbackTapMock = vi.hoisted(() =>
+  vi.fn<typeof import("./approval-postback.js").resolveLineApprovalPostbackTap>(
+    async () => undefined,
+  ),
+);
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   resolvePairingIdLabel: () => "lineUserId",
@@ -211,6 +216,12 @@ vi.mock("./question-postback.js", async (importOriginal) => ({
   // Parsing stays real so the routing decision is the one production makes.
   ...(await importOriginal<typeof import("./question-postback.js")>()),
   resolveLineQuestionPostback: resolveLineQuestionPostbackMock,
+}));
+
+vi.mock("./approval-postback.js", async (importOriginal) => ({
+  // The namespace check stays real so the routing decision is the one production makes.
+  ...(await importOriginal<typeof import("./approval-postback.js")>()),
+  resolveLineApprovalPostbackTap: resolveLineApprovalPostbackTapMock,
 }));
 
 vi.mock("./bot-message-context.js", async (importOriginal) => ({
@@ -1225,6 +1236,107 @@ describe("handleLineWebhookEvents", () => {
     );
     expect(processMessage).not.toHaveBeenCalled();
   });
+
+  it("records an approval decision instead of starting a turn when a card button is tapped", async () => {
+    resolveLineApprovalPostbackTapMock.mockClear();
+    const processMessage = vi.fn();
+    const arrived = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
+    // The approver list can change while the event waits, so the tap reads authority from
+    // the current config, not from the config the event arrived with.
+    const current = { ...arrived.cfg, approvals: { exec: { enabled: true } } };
+    const context = { ...arrived, resolveConfig: () => current };
+    const data = "line.approval=approval-1&line.approvalKind=exec&line.decision=allow-once";
+
+    await handleLineWebhookEvents(
+      [
+        {
+          type: "postback",
+          replyToken: "reply-token",
+          timestamp: Date.now(),
+          source: { type: "user", userId: "user-one" },
+          mode: "active",
+          webhookEventId: "evt-approval",
+          deliveryContext: { isRedelivery: false },
+          postback: { data },
+        } as never,
+      ],
+      context,
+    );
+
+    expect(resolveLineApprovalPostbackTapMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data,
+        senderId: "user-one",
+        account: expect.objectContaining({ accountId: "default", channelSecret: "secret" }),
+      }),
+    );
+    expect(resolveLineApprovalPostbackTapMock.mock.calls[0]?.[0].resolveConfig()).toBe(current);
+    // Approval data must never reach the agent as turn text.
+    expect(buildLinePostbackContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  // The notice is the tapper's only feedback, and the Gateway call before it can outlast
+  // the sender's access, so it goes out only if the sender is still admitted.
+  it.each(
+    [false, true].flatMap((revoked) =>
+      (["reply", "push"] as const).map((transport) => ({ revoked, transport })),
+    ),
+  )(
+    "sends the approval tap notice only while still admitted, revoked=$revoked over $transport",
+    async ({ revoked, transport }) => {
+      const userId = "U0123456789abcdef0123456789abcdef";
+      const processMessage = vi.fn();
+      const notice = "That approval is no longer waiting for a decision.";
+      readAllowFromStoreMock.mockResolvedValue([userId]);
+      resolveLineApprovalPostbackTapMock.mockImplementationOnce(async () => {
+        if (revoked) {
+          readAllowFromStoreMock.mockResolvedValue([]);
+        }
+        return notice;
+      });
+      pairingDeliveryMocks.replyMessageLine.mockResolvedValueOnce(undefined);
+      pairingDeliveryMocks.pushMessageLine.mockResolvedValueOnce(undefined);
+      await handleLineWebhookEvents(
+        [
+          {
+            type: "postback",
+            replyToken: transport === "reply" ? "reply-token" : "",
+            timestamp: Date.now(),
+            source: { type: "user", userId },
+            mode: "active",
+            webhookEventId: `approval-notice-${revoked}-${transport}`,
+            deliveryContext: { isRedelivery: false },
+            postback: {
+              data: "line.approval=approval-1&line.approvalKind=exec&line.decision=deny",
+            },
+          },
+        ],
+        createLineWebhookTestContext({ processMessage, dmPolicy: "pairing" }),
+      );
+
+      if (!revoked && transport === "reply") {
+        expect(pairingDeliveryMocks.replyMessageLine).toHaveBeenCalledWith(
+          "reply-token",
+          [{ type: "text", text: notice }],
+          expect.anything(),
+        );
+      } else {
+        expect(pairingDeliveryMocks.replyMessageLine).not.toHaveBeenCalled();
+      }
+      if (!revoked && transport === "push") {
+        expect(pairingDeliveryMocks.pushMessageLine).toHaveBeenCalledWith(
+          `line:${userId}`,
+          notice,
+          expect.anything(),
+        );
+      } else {
+        expect(pairingDeliveryMocks.pushMessageLine).not.toHaveBeenCalled();
+      }
+      expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+      expect(processMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it("still routes an ordinary postback to the agent", async () => {
     resolveLineQuestionPostbackMock.mockClear();

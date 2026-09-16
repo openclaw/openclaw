@@ -1,8 +1,10 @@
 // Line tests cover gateway startup plugin behavior.
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import {
   createPluginRuntimeMock,
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { lineGatewayAdapter } from "./gateway.js";
 import { setLineRuntime } from "./runtime.js";
@@ -91,6 +93,51 @@ describe("lineGatewayAdapter.startAccount", () => {
       expect(monitorLineProviderMock).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("registers the approval runtime before monitor startup only when native delivery is enabled", async () => {
+    probeLineBotMock.mockResolvedValue({ ok: false, error: "timeout" });
+    const channelRuntime = createPluginRuntimeMock().channel;
+    const register = vi.spyOn(channelRuntime.runtimeContexts, "register");
+    const controller = new AbortController();
+    const cfg: OpenClawConfig = {
+      approvals: { exec: { enabled: true } },
+      channels: {
+        line: {
+          channelAccessToken: "token",
+          channelSecret: "secret",
+          allowFrom: ["U0123456789abcdef0123456789abcdef"],
+        },
+      },
+    };
+    const startAccount = async (config: OpenClawConfig) =>
+      await lineGatewayAdapter.startAccount?.({
+        ...createStartAccountContext({ account: lineAccount(), cfg: config }),
+        abortSignal: controller.signal,
+        channelRuntime,
+      });
+
+    try {
+      await startAccount(cfg);
+
+      expect(register).toHaveBeenCalledWith({
+        channelId: "line",
+        accountId: "default",
+        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+        context: {},
+        abortSignal: controller.signal,
+      });
+      expect(register.mock.invocationCallOrder[0]).toBeLessThan(
+        monitorLineProviderMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+
+      await startAccount({ ...cfg, approvals: { exec: { enabled: false } } });
+
+      expect(register).toHaveBeenCalledOnce();
+      expect(monitorLineProviderMock).toHaveBeenCalledTimes(2);
+    } finally {
+      controller.abort();
+    }
+  });
 
   // The startup warning reaches gateway logs, which are read far more widely than
   // authenticated status. An operator using an unguessable route as a weak secret
