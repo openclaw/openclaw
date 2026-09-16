@@ -219,7 +219,9 @@ function makeAttemptForFault(
         errorMessage:
           "This request would exceed your account's rate limit. Please try again later.",
         errorType: "rate_limit_error",
-        errorBody: { headers: { "retry-after": String(fault.retryAfterSeconds) } },
+        // errorBody is the raw provider response body string, which is what the
+        // runtime stores; resolveRetryAfterMs parses it back to the same record.
+        errorBody: JSON.stringify({ headers: { "retry-after": String(fault.retryAfterSeconds) } }),
       }),
     });
   }
