@@ -16531,6 +16531,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "ios-screenshot-shard",
       "ios-screenshot-evidence",
       "android",
+      "android-access-native",
       "docker-seed-e2e",
     ];
 
