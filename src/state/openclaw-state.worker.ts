@@ -25,6 +25,8 @@ import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
+import { isNodeWorkerJournalCommand } from "../node-host/node-worker-journal.worker-contract.js";
+import { executeNodeWorkerJournalCommand } from "../node-host/node-worker-journal.worker.js";
 import { isPluginStateWorkerCommand } from "../plugin-state/plugin-state-worker-contract.js";
 import { executePluginStateCommand } from "../plugin-state/plugin-state.worker.js";
 import { readPluginMetadataStateRowSync } from "../plugins/installed-plugin-index-row.js";
@@ -381,6 +383,9 @@ function createSharedStateWorkerBackend(
         path: context.databasePath,
         env: getSqliteWorkerStateContext().environment,
       };
+      if (isNodeWorkerJournalCommand(command)) {
+        return executeNodeWorkerJournalCommand(command, writeOptions);
+      }
       if (command.type === "backup.recordOutcome") {
         return runOpenClawStateWriteTransaction(
           ({ db }) => recordBackupRunInDatabase(db, command.input),

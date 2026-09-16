@@ -274,6 +274,7 @@ export async function removeNodeWorkerWorkspaceEntry(
   target: string,
   kind: "directory" | "file",
   canDelete: () => boolean = () => true,
+  prepareDelete?: () => Promise<void>,
 ): Promise<boolean> {
   try {
     const [stats, parent, resolved] = await Promise.all([
@@ -289,6 +290,7 @@ export async function removeNodeWorkerWorkspaceEntry(
     ) {
       return false;
     }
+    await prepareDelete?.();
     if (!canDelete()) {
       return false;
     }

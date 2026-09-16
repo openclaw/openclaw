@@ -1,5 +1,8 @@
 import { isGatewayLoopbackHost } from "../../packages/gateway-client/src/websocket-transport.js";
-import { createChildAdapter } from "../process/supervisor/adapters/child.js";
+import {
+  createChildAdapter,
+  type AwaitedStdoutChildAdapter,
+} from "../process/supervisor/adapters/child.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import { parseNodeWorkerConnectionFailureMessage } from "../worker/node-supervisor-protocol.js";
 import {
@@ -25,7 +28,7 @@ import {
 } from "./node-worker-output.js";
 import type { NodeWorkerLaunchInput } from "./node-worker-supervisor-contract.js";
 
-export type NodeWorkerChildAdapter = Awaited<ReturnType<typeof createChildAdapter>>["adapter"];
+export type NodeWorkerChildAdapter = AwaitedStdoutChildAdapter;
 
 type NodeWorkerLaunchTransportOptions = {
   bundleRoot: string;
@@ -64,6 +67,7 @@ export async function prepareNodeWorkerLaunchTransport(
       env: options.workerEnv,
       exactEnv: true,
       ownedWorker: true,
+      stdoutConsumption: "awaited",
       onWorkerMessage: (message) => {
         const diagnostic = parseNodeWorkerConnectionFailureMessage(message);
         if (!diagnostic) {
@@ -113,7 +117,7 @@ export async function prepareNodeWorkerLaunchTransport(
       env: options.workerEnv,
       ...(options.containerImage ? { image: options.containerImage } : {}),
     });
-    const claimed = options.store.get(options.input.launchId);
+    const claimed = await options.store.get(options.input.launchId);
     if (claimed?.state !== "pending") {
       await lifecycle.remove(container, options.input);
       if (!claimed) {
@@ -126,6 +130,7 @@ export async function prepareNodeWorkerLaunchTransport(
       env: options.containerEngine.env ?? options.engineEnv,
       exactEnv: true,
       stdinMode: "pipe-open",
+      stdoutConsumption: "awaited",
     });
     await ready;
     return { kind: "started", adapter, container };

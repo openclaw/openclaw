@@ -7,7 +7,10 @@ import {
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
 } from "../infra/node-commands.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import type { NodeHostClient } from "./client.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import {
@@ -45,11 +48,13 @@ vi.mock("./skills.js", () => ({
   resolveNodeHostedSkillDirectory: vi.fn(() => null),
 }));
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 describe("node-host runtime worker supervisor lifetime", () => {
   it("keeps a claimed worker alive across invoke cancel and reconnect until runtime close", async () => {
@@ -107,11 +112,13 @@ describe("node-host runtime worker supervisor lifetime", () => {
         command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
         paramsJSON: JSON.stringify(input),
       });
-      await vi.waitFor(() => expect(store.get(input.launchId)?.state).toBe("running"));
+      await vi.waitFor(async () =>
+        expect((await store.get(input.launchId))?.state).toBe("running"),
+      );
 
       runtime.cancel("invoke-launch");
       runtime.cancelAll();
-      expect(store.get(input.launchId)?.state).toBe("running");
+      expect((await store.get(input.launchId))?.state).toBe("running");
       releaseLaunchResponse();
       await launching;
 
@@ -137,12 +144,12 @@ describe("node-host runtime worker supervisor lifetime", () => {
         command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
         paramsJSON: JSON.stringify(input),
       });
-      expect(store.get(input.launchId)?.state).toBe("running");
+      expect((await store.get(input.launchId))?.state).toBe("running");
     } finally {
       releaseLaunchResponse();
       await runtime.close();
     }
 
-    expect(store.get(input.launchId)?.state).toBe("interrupted");
+    expect((await store.get(input.launchId))?.state).toBe("interrupted");
   });
 });

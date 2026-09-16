@@ -14,6 +14,7 @@ import type { SessionDeliveryWorkerOperations } from "../infra/session-delivery-
 import type { PreparedSqliteAuditRecord } from "../infra/sqlite-audit-record.kernel.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import type { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
+import type { NodeWorkerJournalWorkerOperations } from "../node-host/node-worker-journal.worker-contract.js";
 import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
 import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-index-row.js";
 import type { TaskFlowView } from "../plugins/runtime/task-domain-types.js";
@@ -59,7 +60,8 @@ export type OpenClawStateWorkerOperations = NativeHookRelayStoreWorkerOperations
   CronStoreWorkerOperations &
   CronStoreSaveWorkerOperations &
   SessionDeliveryWorkerOperations &
-  DeliveryQueueWorkerOperations & {
+  DeliveryQueueWorkerOperations &
+  NodeWorkerJournalWorkerOperations & {
     "subagents.sessionList": {
       input: undefined;
       output: Map<string, SubagentRunReadRecord> | undefined;

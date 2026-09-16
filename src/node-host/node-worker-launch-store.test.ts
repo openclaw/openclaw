@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -11,16 +12,18 @@ import { writeNodeWorkerFixture } from "./node-worker-supervisor.test-support.js
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const NOW_MS = 10 * DAY_MS;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
-
-function fixture() {
+async function fixture() {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("node-worker-launch-store-") };
   const store = new NodeWorkerLaunchStore({ env });
-  store.get("schema-probe");
+  await store.get("schema-probe");
   return { database: openOpenClawStateDatabase({ env }).db, env, store };
 }
 
@@ -83,22 +86,23 @@ function launchIds(database: ReturnType<typeof openOpenClawStateDatabase>["db"])
 }
 
 describe("node worker launch store pruning", () => {
-  it("lazily ensures the terminal expiry index for existing databases", () => {
-    const { database, env } = fixture();
+  it("lazily ensures the terminal expiry index for existing databases", async () => {
+    const { database, env } = await fixture();
     expect(hasTerminalExpiryIndex(database)).toBe(true);
     database.exec("DROP INDEX idx_node_worker_launches_terminal_completed");
     expect(hasTerminalExpiryIndex(database)).toBe(false);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
     const reopenedStore = new NodeWorkerLaunchStore({ env });
-    reopenedStore.get("schema-probe");
+    await reopenedStore.get("schema-probe");
     const reopened = openOpenClawStateDatabase({ env }).db;
 
     expect(hasTerminalExpiryIndex(reopened)).toBe(true);
   });
 
-  it("uses the terminal expiry index for the ordered pruning query", () => {
-    const { database } = fixture();
+  it("uses the terminal expiry index for the ordered pruning query", async () => {
+    const { database } = await fixture();
     const plan = database
       .prepare(
         `EXPLAIN QUERY PLAN
@@ -116,8 +120,8 @@ describe("node worker launch store pruning", () => {
     );
   });
 
-  it("prunes only the oldest expired terminal receipts in bounded batches", () => {
-    const { database, store } = fixture();
+  it("prunes only the oldest expired terminal receipts in bounded batches", async () => {
+    const { database, store } = await fixture();
     insertLaunch({ database, launchId: "old-completed", state: "completed", completedAtMs: 1 });
     insertLaunch({ database, launchId: "old-failed", state: "failed", completedAtMs: 2 });
     insertLaunch({ database, launchId: "old-cancelled", state: "cancelled", completedAtMs: 3 });
@@ -135,7 +139,7 @@ describe("node worker launch store pruning", () => {
       containerId: "a".repeat(64),
       engineTarget: "b".repeat(64),
     } as const;
-    store.markRunning({
+    await store.markRunning({
       launchId: "running",
       planHash: "a".repeat(64),
       supervisor,
@@ -156,7 +160,7 @@ describe("node worker launch store pruning", () => {
           .all() as Array<{ launch_id: string }>
       ).map((row) => row.launch_id);
 
-    expect(store.pruneExpiredTerminal({ nowMs: NOW_MS, limit: 2 })).toBe(2);
+    expect(await store.pruneExpiredTerminal({ nowMs: NOW_MS, limit: 2 })).toBe(2);
     expect(launchIds(database)).toEqual([
       "old-cancelled",
       "pending",
@@ -165,7 +169,7 @@ describe("node worker launch store pruning", () => {
     ]);
     expect(containerLaunchIds()).toEqual(["old-cancelled", "recent-completed", "running"]);
 
-    expect(store.pruneExpiredTerminal({ nowMs: NOW_MS, limit: 2 })).toBe(1);
+    expect(await store.pruneExpiredTerminal({ nowMs: NOW_MS, limit: 2 })).toBe(1);
     expect(launchIds(database)).toEqual(["pending", "recent-completed", "running"]);
     expect(containerLaunchIds()).toEqual(["recent-completed", "running"]);
   });
@@ -173,7 +177,7 @@ describe("node worker launch store pruning", () => {
   it("prunes expired terminal receipts after restart reconciliation", async () => {
     const workerFixture = writeNodeWorkerFixture(tempDirs.make("node-worker-launch-restart-"));
     const store = new NodeWorkerLaunchStore({ env: workerFixture.env });
-    store.get("schema-probe");
+    await store.get("schema-probe");
     const database = openOpenClawStateDatabase({ env: workerFixture.env }).db;
     insertLaunch({
       database,
@@ -188,12 +192,12 @@ describe("node worker launch store pruning", () => {
 
     await supervisor.initialize();
 
-    expect(store.get("expired-after-restart")).toBeUndefined();
+    expect(await store.get("expired-after-restart")).toBeUndefined();
     await supervisor.close();
   });
 
-  it("keeps the exact replay fence while a new claim prunes unrelated receipts", () => {
-    const { database, store } = fixture();
+  it("keeps the exact replay fence while a new claim prunes unrelated receipts", async () => {
+    const { database, store } = await fixture();
     const planHash = "b".repeat(64);
     insertLaunch({
       database,
@@ -206,7 +210,7 @@ describe("node worker launch store pruning", () => {
     const supervisor = requireNodeWorkerProcessIdentity(process.pid);
 
     expect(
-      store.claim(
+      await store.claim(
         {
           launchId: "replayed-launch",
           planHash,
@@ -227,10 +231,10 @@ describe("node worker launch store pruning", () => {
 });
 
 describe("node worker launch store container identity", () => {
-  function claimLaunch(store: NodeWorkerLaunchStore, launchId: string) {
+  async function claimLaunch(store: NodeWorkerLaunchStore, launchId: string) {
     const supervisor = requireNodeWorkerProcessIdentity(process.pid);
     const planHash = "a".repeat(64);
-    const result = store.claim(
+    const result = await store.claim(
       {
         launchId,
         planHash,
@@ -249,7 +253,9 @@ describe("node worker launch store container identity", () => {
     return { planHash, supervisor };
   }
 
-  function hasContainerIdentityTable(database: ReturnType<typeof fixture>["database"]): boolean {
+  function hasContainerIdentityTable(
+    database: Awaited<ReturnType<typeof fixture>>["database"],
+  ): boolean {
     return Boolean(
       database
         .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -257,12 +263,12 @@ describe("node worker launch store container identity", () => {
     );
   }
 
-  it("keeps the container companion table absent for existing bare-worker journals", () => {
-    const { database, env, store } = fixture();
+  it("keeps the container companion table absent for existing bare-worker journals", async () => {
+    const { database, env, store } = await fixture();
     expect(hasContainerIdentityTable(database)).toBe(false);
-    const { planHash, supervisor } = claimLaunch(store, "bare-launch");
+    const { planHash, supervisor } = await claimLaunch(store, "bare-launch");
 
-    const receipt = store.markRunning({
+    const receipt = await store.markRunning({
       launchId: "bare-launch",
       planHash,
       supervisor,
@@ -272,25 +278,26 @@ describe("node worker launch store container identity", () => {
 
     expect(hasContainerIdentityTable(database)).toBe(false);
     expect(Object.hasOwn(receipt, "container")).toBe(false);
-    expect(store.get("bare-launch")).toEqual(receipt);
+    expect(await store.get("bare-launch")).toEqual(receipt);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
-    expect(new NodeWorkerLaunchStore({ env }).get("bare-launch")).toEqual(receipt);
+    expect(await new NodeWorkerLaunchStore({ env }).get("bare-launch")).toEqual(receipt);
     expect(hasContainerIdentityTable(openOpenClawStateDatabase({ env }).db)).toBe(false);
   });
 
-  it("lazily persists container identity across reopen without advancing the schema", () => {
-    const { database, env, store } = fixture();
+  it("lazily persists container identity across reopen without advancing the schema", async () => {
+    const { database, env, store } = await fixture();
     expect(hasContainerIdentityTable(database)).toBe(false);
     const initialSchemaVersion = database.prepare("PRAGMA user_version").get();
-    const { planHash, supervisor } = claimLaunch(store, "container-launch");
+    const { planHash, supervisor } = await claimLaunch(store, "container-launch");
     const container = {
       engine: "docker",
       containerId: "a".repeat(64),
       engineTarget: "b".repeat(64),
     } as const;
 
-    const receipt = store.markRunning({
+    const receipt = await store.markRunning({
       launchId: "container-launch",
       planHash,
       supervisor,
@@ -302,9 +309,10 @@ describe("node worker launch store container identity", () => {
     expect(receipt.container).toEqual(container);
     expect(hasContainerIdentityTable(database)).toBe(true);
     expect(database.prepare("PRAGMA user_version").get()).toEqual(initialSchemaVersion);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
 
-    expect(new NodeWorkerLaunchStore({ env }).get("container-launch")).toEqual(receipt);
+    expect(await new NodeWorkerLaunchStore({ env }).get("container-launch")).toEqual(receipt);
   });
 
   it.each([
@@ -351,10 +359,10 @@ describe("node worker launch store container identity", () => {
         extra: true,
       }),
     ],
-  ])("fails closed when a persisted container identity has %s", (_reason, malformed) => {
-    const { database, store } = fixture();
-    const { planHash, supervisor } = claimLaunch(store, "corrupt-container-launch");
-    store.markRunning({
+  ])("fails closed when a persisted container identity has %s", async (_reason, malformed) => {
+    const { database, store } = await fixture();
+    const { planHash, supervisor } = await claimLaunch(store, "corrupt-container-launch");
+    await store.markRunning({
       launchId: "corrupt-container-launch",
       planHash,
       supervisor,
@@ -366,7 +374,7 @@ describe("node worker launch store container identity", () => {
       .prepare("UPDATE node_worker_launch_containers SET container_json = ? WHERE launch_id = ?")
       .run(malformed, "corrupt-container-launch");
 
-    expect(() => store.listNonterminal()).toThrow(
+    await expect(store.listNonterminal()).rejects.toThrow(
       /node worker container (identity|id|engine target)/u,
     );
   });

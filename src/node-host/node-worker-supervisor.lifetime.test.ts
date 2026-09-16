@@ -7,7 +7,10 @@ import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gate
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import * as processTree from "../process/kill-tree.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { completeWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import {
   buildWorkerProcessTurn,
@@ -35,12 +38,17 @@ import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 
 type NodeWorkerSupervisor = ReturnType<typeof createNodeWorkerSupervisor>;
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 afterEach(() => {
   vi.restoreAllMocks();
   resetSecretRedactionRegistryForTest();
-  closeOpenClawStateDatabaseForTest();
 });
 
 function fixture(options: Parameters<typeof createNodeWorkerSupervisor>[0] = {}) {
@@ -110,6 +118,31 @@ function expectBackgroundRetired(
 }
 
 describe("node worker environment lifetime", () => {
+  it("never signals a running worker for a mismatched immutable cancel identity", async () => {
+    const { supervisor, workspaceDir } = fixture();
+    const input = launchInput(workspaceDir, "identity-cancel-launch", "wait");
+    const running = await supervisor.launch(input, TEST_WORKER_ENDPOINT);
+    const expected = testNodeWorkerLaunchIdentity(input);
+    const mismatches = [
+      { ...expected, launchId: "launch-other" },
+      { ...expected, planHash: "b".repeat(64) },
+      { ...expected, environmentId: "environment-other" },
+      { ...expected, sessionId: "session-other" },
+      { ...expected, ownerEpoch: expected.ownerEpoch + 1 },
+      { ...expected, placementGeneration: expected.placementGeneration + 1 },
+      { ...expected, runId: "run-other" },
+    ];
+
+    for (const mismatch of mismatches) {
+      await expect(supervisor.cancel(mismatch)).resolves.toBeUndefined();
+      expect(inspectNodeWorkerProcessIdentity(running.worker!)).toBe("live");
+      expect((await supervisor.status(input.launchId))?.state).toBe("running");
+    }
+
+    await expect(supervisor.cancel(expected)).resolves.toMatchObject({ state: "cancelled" });
+    await supervisor.close();
+  });
+
   it("reuses a retained worker at capacity across turns and cancellation until its environment stops", async () => {
     const capacitySnapshots: Array<{ total: number; available: number }> = [];
     const { env, supervisor, workspaceDir } = fixture({
@@ -142,7 +175,10 @@ describe("node worker environment lifetime", () => {
       const server = requireNodeWorkerProcessIdentity(background.pid);
       connection = await observeBackgroundConnection(background.url);
       expect(completed.state).toBe("completed");
-      expect(store.get(first.launchId)).toMatchObject({ state: "running", worker: running.worker });
+      expect(await store.get(first.launchId)).toMatchObject({
+        state: "running",
+        worker: running.worker,
+      });
       expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
       expect(await (await fetch(background.url)).text()).toBe("preview-ready");
 
@@ -200,7 +236,7 @@ describe("node worker environment lifetime", () => {
         worker: running.worker,
       });
       expect((await waitForTerminal(supervisor, afterCancel.launchId)).state).toBe("completed");
-      expect(store.listNonterminal()).toHaveLength(1);
+      expect(await store.listNonterminal()).toHaveLength(1);
       expect(capacitySnapshots.at(-1)).toEqual({ total: 1, available: 0 });
 
       for (const mismatch of [
@@ -264,7 +300,7 @@ describe("node worker environment lifetime", () => {
       await vi.waitFor(() =>
         expect(fs.existsSync(path.join(workspaceDir, `${next.launchId}.started.json`))).toBe(true),
       );
-      turns.claim({
+      await turns.claim({
         claim: { ...testNodeWorkerLaunchIdentity(next), gatewayNamespace: next.gatewayNamespace },
         ownerLaunchId: first.launchId,
         supervisor: running.supervisor,
@@ -272,8 +308,8 @@ describe("node worker environment lifetime", () => {
         nowMs: completed.completedAtMs! + 24 * 60 * 60 * 1_000 + 1,
       });
 
-      expect(turns.get(first.launchId)).toBeUndefined();
-      expect(new NodeWorkerLaunchStore({ env }).get(first.launchId)).toMatchObject({
+      expect(await turns.get(first.launchId)).toBeUndefined();
+      expect(await new NodeWorkerLaunchStore({ env }).get(first.launchId)).toMatchObject({
         state: "running",
         worker: running.worker,
       });
@@ -288,7 +324,7 @@ describe("node worker environment lifetime", () => {
 
       await supervisor.cancel(testNodeWorkerLaunchIdentity(next));
       await expect(supervisor.launch(first, TEST_WORKER_ENDPOINT)).rejects.toThrow();
-      expect(turns.get(first.launchId)).toBeUndefined();
+      expect(await turns.get(first.launchId)).toBeUndefined();
       expect(inspectNodeWorkerProcessIdentity(running.worker!)).toBe("live");
     } finally {
       await supervisor.close();
@@ -544,7 +580,7 @@ describe("node worker environment lifetime", () => {
         owner = await supervisor.launch(first, TEST_WORKER_ENDPOINT);
         const completed = await waitForTerminal(supervisor, first.launchId);
         const unrelated = await supervisor.launch(sibling, TEST_WORKER_ENDPOINT);
-        expect(store.get(first.launchId)?.state).toBe("running");
+        expect((await store.get(first.launchId))?.state).toBe("running");
         expect(inspectNodeWorkerProcessIdentity(owner.worker!)).toBe("live");
 
         const readOwner = vi.spyOn(NodeWorkerLaunchStore.prototype, "get");
@@ -580,7 +616,7 @@ describe("node worker environment lifetime", () => {
           },
           { timeout: 3_000 },
         );
-        expect(store.get(first.launchId)?.state).toBe("interrupted");
+        expect((await store.get(first.launchId))?.state).toBe("interrupted");
         expect(await supervisor.status(first.launchId)).toEqual(completed);
         expect(await supervisor.status(next.launchId)).toBeUndefined();
         expect(fs.existsSync(path.join(workspaceDir, `${next.launchId}.started.json`))).toBe(false);
@@ -592,7 +628,7 @@ describe("node worker environment lifetime", () => {
           });
         } else {
           expect(inspectNodeWorkerProcessIdentity(unrelated.worker!)).not.toBe("live");
-          expect(store.listNonterminal()).toEqual([]);
+          expect(await store.listNonterminal()).toEqual([]);
         }
       } finally {
         // Break the injected retirement stall even when the pre-fix admission never aborts.

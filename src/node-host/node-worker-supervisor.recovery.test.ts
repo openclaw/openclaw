@@ -7,6 +7,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -28,34 +29,37 @@ import {
 } from "./node-worker-supervisor.test-support.js";
 import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const spawned = new Set<ChildProcess>();
 const ownedProcessGroups: NodeWorkerProcessIdentity[] = [];
 
-afterEach(async () => {
-  for (const child of spawned) {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-    }
-  }
-  if (process.platform !== "win32") {
-    for (const identity of ownedProcessGroups) {
-      if (inspectNodeWorkerProcessIdentity(identity) === "reused") {
-        continue;
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const child of spawned) {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
       }
-      try {
-        process.kill(-identity.pid, "SIGKILL");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-          throw error;
+    }
+    if (process.platform !== "win32") {
+      for (const identity of ownedProcessGroups) {
+        if (inspectNodeWorkerProcessIdentity(identity) === "reused") {
+          continue;
+        }
+        try {
+          process.kill(-identity.pid, "SIGKILL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+            throw error;
+          }
         }
       }
     }
-  }
-  spawned.clear();
-  ownedProcessGroups.length = 0;
-  closeOpenClawStateDatabaseForTest();
-});
+    spawned.clear();
+    ownedProcessGroups.length = 0;
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 function fixture(label: string) {
   return writeNodeWorkerFixture(tempDirs.make(label));
@@ -74,7 +78,7 @@ function planHash(input: ReturnType<typeof testWorkerLaunchInput>): string {
     .digest("hex");
 }
 
-function insertLaunch(params: {
+async function insertLaunch(params: {
   env: NodeJS.ProcessEnv;
   input: ReturnType<typeof testWorkerLaunchInput>;
   state: "pending" | "running";
@@ -109,7 +113,7 @@ function insertLaunch(params: {
       state === "running" ? (params.worker?.startTime ?? null) : null,
     );
   if (params.turn) {
-    new NodeWorkerTurnStore({ env: params.env }).claim({
+    await new NodeWorkerTurnStore({ env: params.env }).claim({
       claim: {
         ...testNodeWorkerLaunchIdentity(params.input),
         gatewayNamespace: params.input.gatewayNamespace,
@@ -118,7 +122,7 @@ function insertLaunch(params: {
       supervisor: params.supervisor,
     });
     if (params.state === "running") {
-      new NodeWorkerLaunchStore({ env: params.env }).markRunning({
+      await new NodeWorkerLaunchStore({ env: params.env }).markRunning({
         launchId: params.input.launchId,
         planHash: planHash(params.input),
         supervisor: params.supervisor,
@@ -229,7 +233,7 @@ describe("node worker supervisor recovery", () => {
     });
     const reconciliation = vi
       .spyOn(NodeWorkerLaunchStore.prototype, "listNonterminal")
-      .mockImplementationOnce(() => {
+      .mockImplementationOnce(async () => {
         throw new Error("temporary launch journal failure");
       });
 
@@ -259,7 +263,7 @@ describe("node worker supervisor recovery", () => {
     const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
     await supervisor.status("schema-probe");
     const input = testWorkerLaunchInput(workspaceDir, "stale-pending-launch");
-    insertLaunch({
+    await insertLaunch({
       env,
       input,
       state: "pending",
@@ -278,9 +282,9 @@ describe("node worker supervisor recovery", () => {
 
   it("releases a stale pending slot during restart reconciliation", async () => {
     const { bundleRoot, env, workspaceDir } = fixture("node-worker-restart-pending-");
-    new NodeWorkerLaunchStore({ env }).get("schema-probe");
+    await new NodeWorkerLaunchStore({ env }).get("schema-probe");
     const input = testWorkerLaunchInput(workspaceDir, "restart-pending-launch");
-    insertLaunch({
+    await insertLaunch({
       env,
       input,
       state: "pending",
@@ -335,7 +339,7 @@ describe("node worker supervisor recovery", () => {
       const input = testWorkerLaunchInput(workspaceDir, "stale-running-launch", "wait");
       const supervisor = createNodeWorkerSupervisor({ bundleRoot, env });
       await supervisor.status("schema-probe");
-      insertLaunch({
+      await insertLaunch({
         env,
         input,
         state: "running",
@@ -470,14 +474,14 @@ describe("node worker supervisor recovery", () => {
         const store = new NodeWorkerLaunchStore({ env });
         const claim = JSON.parse(fs.readFileSync(claimPath, "utf8"));
         const supervisor = requireNodeWorkerProcessIdentity(process.pid);
-        const result = store.claim(
+        const result = (await store.claim(
           claim,
           supervisor,
           2,
-        );
-        const turn = new NodeWorkerTurnStore({ env }).claim({
+        ));
+        const turn = (await new NodeWorkerTurnStore({ env }).claim({
           claim, ownerLaunchId: result.receipt.launchId, supervisor,
-        });
+        }));
         process.stdout.write(JSON.stringify(turn.receipt) + "\\n");
         setInterval(() => {}, 1000);
       `,
@@ -504,11 +508,11 @@ describe("node worker supervisor recovery", () => {
     async (state) => {
       const { bundleRoot, env, workspaceDir } = fixture("node-worker-recovery-reread-");
       const store = new NodeWorkerLaunchStore({ env });
-      store.get("schema-probe");
+      await store.get("schema-probe");
       const input = testWorkerLaunchInput(workspaceDir, "recovery-reread");
       const stale = { pid: 2_147_483_647, startTime: 1 };
       const current = requireNodeWorkerProcessIdentity(process.pid);
-      insertLaunch({ env, input, state: "pending", supervisor: stale });
+      await insertLaunch({ env, input, state: "pending", supervisor: stale });
       const engine = { id: "docker", command: process.execPath, target: "b".repeat(64) } as const;
       const container = {
         engine: engine.id,
@@ -516,7 +520,7 @@ describe("node worker supervisor recovery", () => {
         engineTarget: engine.target,
       } as const;
       if (state === "running") {
-        store.markRunning({
+        await store.markRunning({
           launchId: input.launchId,
           planHash: planHash(input),
           supervisor: stale,
@@ -524,7 +528,7 @@ describe("node worker supervisor recovery", () => {
           container,
         });
       }
-      const receipt = store.get(input.launchId)!;
+      const receipt = (await store.get(input.launchId))!;
       const lifecycle = new NodeWorkerContainerLifecycle(engine, bundleRoot, store);
       const replaceOwner = async () => {
         await Promise.resolve();
@@ -552,7 +556,7 @@ describe("node worker supervisor recovery", () => {
           }),
         ).resolves.toMatchObject({ state, supervisor: current });
         expect(remove).not.toHaveBeenCalled();
-        expect(store.nonterminalCount()).toBe(1);
+        expect(await store.nonterminalCount()).toBe(1);
       } finally {
         initialize.mockRestore();
         inspect.mockRestore();

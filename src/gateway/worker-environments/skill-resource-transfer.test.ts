@@ -263,10 +263,13 @@ describe("remote-exec skill resources", () => {
           sequence: 1,
           retain: [{ ...carrier.binding, manifestRefs: null }],
         };
-        await restarted.applyRetainSnapshot(retention, () => []);
+        await restarted.applyRetainSnapshot(retention, async () => []);
         expect((await fs.stat(allocated!)).isDirectory()).toBe(true);
         if (failure === "retired") {
-          await restarted.applyRetainSnapshot({ ...retention, sequence: 2, retain: [] }, () => []);
+          await restarted.applyRetainSnapshot(
+            { ...retention, sequence: 2, retain: [] },
+            async () => [],
+          );
           await expect(fs.stat(allocated!)).rejects.toMatchObject({ code: "ENOENT" });
         } else {
           const next = await transferSkillResources({

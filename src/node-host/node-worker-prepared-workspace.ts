@@ -168,6 +168,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
     gatewayNamespace: string,
     isProtected: (generationKey: string) => boolean,
     signal?: AbortSignal,
+    prepareProtection?: () => Promise<void>,
   ) {
     const generationKeys: string[] = [];
     let deleted = 0;
@@ -188,11 +189,14 @@ export class NodeWorkerPreparedWorkspaceRuntime {
         sessionId: row.session_id,
         ownerEpoch: row.owner_epoch,
       });
+      await prepareProtection?.();
       if (isProtected(generationKey)) {
         continue;
       }
       const ownerRoot = path.join(this.root, row.gateway_namespace, row.cache_key);
       await serializeNodeWorkerWorkspace(ownerRoot, async () => {
+        signal?.throwIfAborted();
+        await prepareProtection?.();
         signal?.throwIfAborted();
         if (isProtected(generationKey)) {
           return;
