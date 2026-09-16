@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 // Daemon install integration tests cover service install paths with filesystem fixtures.
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -105,7 +106,14 @@ async function createInstalledServiceCommand() {
   };
 }
 
-describe("runDaemonInstall integration", () => {
+// Skip the bus scenarios when no systemd user session is reachable; the production
+// probe throws before `execBusctlUser`, so the bus mock never fires and the assertions fail spuriously.
+const describeIfSystemdUserBus =
+  process.platform === "win32" ||
+  !existsSync(path.posix.join(process.env.XDG_RUNTIME_DIR ?? "", "bus"))
+    ? describe.skip
+    : describe;
+describeIfSystemdUserBus("runDaemonInstall integration", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let accountHome: string;
   let tempHome: string;

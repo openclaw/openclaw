@@ -425,7 +425,7 @@ A liveness probe sent to your own number can therefore become agent input with `
   <Accordion title="Outbound media behavior">
     - supports image, video, audio (PTT voice-note), and document payloads
     - audio is sent as the Baileys `audio` payload with `ptt: true`, rendering as a push-to-talk voice note; `audioAsVoice` is preserved on reply payloads so TTS voice-note output stays on this path regardless of the provider's source format
-    - native Ogg/Opus audio sends as `audio/ogg; codecs=opus`; anything else (including Microsoft Edge TTS MP3/WebM output) is transcoded with `ffmpeg` to 48 kHz mono Ogg/Opus before PTT delivery
+    - native Ogg/Opus audio at 16 kHz passes through as `audio/ogg; codecs=opus`; anything else (including Microsoft Edge TTS MP3/WebM output) is transcoded with `ffmpeg` to 16 kHz mono Ogg/Opus with the OpusTags vendor set to `WhatsApp` before PTT delivery (WhatsApp mobile refuses voice notes encoded at 48 kHz or tagged by ffmpeg)
     - `/tts latest` sends the latest assistant reply as one voice note and suppresses repeat sends for the same reply; `/tts chat on|off|default` controls auto-TTS for the current chat
     - `gifPlayback: true` on video sends enables animated GIF playback
     - `forceDocument`/`asDocument` routes outbound images, GIFs, and videos through the Baileys document payload to avoid WhatsApp's media compression, preserving the resolved filename and MIME type
