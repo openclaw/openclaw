@@ -11,17 +11,52 @@ function assertNoSystemdLineBreaks(value: string, label: string): void {
   }
 }
 
-function systemdEscapeArg(value: string): string {
+function systemdEscapeArgWithOptions(value: string, escapePercent: boolean): string {
   assertNoSystemdLineBreaks(value, "Systemd unit values");
-  if (!/[\s"\\]/.test(value)) {
+  if (!/[\s"\\%]/.test(value)) {
     return value;
   }
   // systemd ExecStart/Environment parsing consumes one backslash before the next
   // character, so every backslash and quote must be escaped for the value to
   // survive the round-trip byte-for-byte. Escaping only backslash pairs left a
   // lone backslash unescaped, and the reader then swallowed the byte after it.
-  const escaped = value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  // The manager also expands % specifiers (%s, %n, ...) in inline directives, so
+  // raw installation values must double each %; the reader only reverses %% and %h.
+  const escaped = value
+    .replaceAll("\\", "\\\\")
+    .replaceAll('"', '\\"')
+    .replaceAll("%", escapePercent ? "%%" : "%");
   return `"${escaped}"`;
+}
+
+function systemdEscapeArg(value: string): string {
+  return systemdEscapeArgWithOptions(value, true);
+}
+
+/**
+ * Scalar directives (WorkingDirectory, EnvironmentFile paths) expand specifiers
+ * without ExecStart argument semantics. A trailing backslash would merge the
+ * next directive through systemd's logical-line continuation and cannot be
+ * escaped away, so refuse it. Double % so literal specifiers survive.
+ */
+function systemdEscapeScalarPath(value: string): string {
+  assertNoSystemdLineBreaks(value, "Systemd unit values");
+  if (/\\$/.test(value)) {
+    throw new Error(
+      "Systemd scalar path values cannot end in a backslash: it would continue the next directive line",
+    );
+  }
+  return value.replaceAll("%", "%%");
+}
+
+/**
+ * Re-renders a key/value pair parsed back from an existing unit line. The value
+ * is already in serialized form (%% encoded, intentional %h intact), so % must
+ * be preserved verbatim — re-escaping would corrupt preserved settings during
+ * metadata refresh and backup sanitization.
+ */
+export function renderSystemdEnvAssignment(key: string, value: string): string {
+  return systemdEscapeArgWithOptions(`${key}=${value}`, false);
 }
 
 function renderEnvLines(env: Record<string, string | undefined> | undefined): string[] {
@@ -49,7 +84,13 @@ function renderEnvironmentFileLines(environmentFiles: string[] | undefined): str
   }
   return normalizeStringEntries(environmentFiles).map((entry) => {
     assertNoSystemdLineBreaks(entry, "Systemd EnvironmentFile values");
-    return `EnvironmentFile=-${systemdEscapeArg(entry)}`;
+    const scalar = systemdEscapeScalarPath(entry);
+    if (/\s/.test(scalar)) {
+      throw new Error(
+        "Systemd EnvironmentFile entries cannot contain whitespace: entries are space-separated and systemd does not strip quotes from the path",
+      );
+    }
+    return `EnvironmentFile=-${scalar}`;
   });
 }
 
@@ -65,7 +106,7 @@ export function buildSystemdUnit({
   assertNoSystemdLineBreaks(descriptionValue, "Systemd Description");
   const descriptionLine = `Description=${descriptionValue}`;
   const workingDirLine = workingDirectory
-    ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
+    ? `WorkingDirectory=${systemdEscapeScalarPath(workingDirectory)}`
     : null;
   const envLines = renderEnvLines(environment);
   const environmentFileLines = renderEnvironmentFileLines(environmentFiles);
@@ -152,8 +193,4 @@ export function splitSystemdLogicalLines(content: string): string[] {
     }
   }
   return continued ? [...lines, continued] : lines;
-}
-
-export function renderSystemdEnvAssignment(key: string, value: string): string {
-  return systemdEscapeArg(`${key}=${value}`);
 }

@@ -73,6 +73,49 @@ describe("systemd unit value round-trips", () => {
       value,
     ]);
   });
+
+  it.each([
+    { name: "already-encoded %% specifier", value: "100%%s" },
+    { name: "intentional %h expansion", value: "%h/cache" },
+  ])("rewrite re-render preserves $name verbatim", ({ value }) => {
+    expect(renderSystemdEnvAssignment("OTHER_SETTING", value)).toBe(`"OTHER_SETTING=${value}"`);
+  });
+
+  it("keeps scalar paths unquoted while doubling % specifiers", () => {
+    const unit = buildSystemdUnit({
+      description: "OpenClaw Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      workingDirectory: "/srv/state%h",
+      environmentFiles: ["/srv/state%h/env"],
+      environment: {},
+    });
+    expect(unit).toContain("WorkingDirectory=/srv/state%%h");
+    expect(unit).toContain("EnvironmentFile=-/srv/state%%h/env");
+    expect(unit).not.toContain('WorkingDirectory="');
+    expect(unit).not.toContain('EnvironmentFile=-"');
+  });
+
+  it("refuses EnvironmentFile entries containing whitespace (systemd ignores quoted paths)", () => {
+    expect(() =>
+      buildSystemdUnit({
+        description: "OpenClaw Gateway",
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        environmentFiles: ["/srv/Open Claw/env"],
+        environment: {},
+      }),
+    ).toThrow(/whitespace/);
+  });
+
+  it("refuses scalar paths ending in a backslash", () => {
+    expect(() =>
+      buildSystemdUnit({
+        description: "OpenClaw Gateway",
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/srv/trailing\\",
+        environment: {},
+      }),
+    ).toThrow(/backslash/);
+  });
 });
 
 describe("buildSystemdUnit", () => {
@@ -105,6 +148,19 @@ describe("buildSystemdUnit", () => {
     });
     const execStart = unit.split("\n").find((line) => line.startsWith("ExecStart="));
     expect(execStart).toBe('ExecStart=/usr/bin/openclaw gateway --name "My Bot"');
+  });
+
+  it("doubles % specifiers in Environment and ExecStart so systemd preserves them", () => {
+    const programArguments = ["/usr/bin/openclaw", "run", "tail%s%name"];
+    const unit = buildSystemdUnit({
+      description: "OpenClaw Gateway",
+      programArguments,
+      environment: { OPENCLAW_PROXY_URL: "http://proxy/%2fapi" },
+    });
+    const environmentLine = unit.split("\n").find((line) => line.startsWith("Environment="));
+    expect(environmentLine).toBe('Environment="OPENCLAW_PROXY_URL=http://proxy/%%2fapi"');
+    const execStart = unit.split("\n").find((line) => line.startsWith("ExecStart="));
+    expect(execStart).toContain("tail%%s%%name");
   });
 
   it("drains through the main process while retaining final child-process cleanup", () => {

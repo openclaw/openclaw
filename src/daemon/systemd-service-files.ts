@@ -421,8 +421,9 @@ export async function readSystemdServiceExecStart(
       if (directive === "ExecStart") {
         execStart = value;
       } else if (directive === "WorkingDirectory") {
-        const parsed = parseSystemdExecStart(value)[0] ?? "";
-        workingDirectory = expandSystemdSpecifier(parsed.replace(/^-/, ""), env);
+        // Scalar directive: systemd consumes the whole line as the path (no
+        // ExecStart argument splitting), so keep spaces verbatim.
+        workingDirectory = expandSystemdSpecifier(value.replace(/^-/, ""), env);
       } else if (directive === "Environment") {
         if (!value) {
           inlineEnvironment = {};
