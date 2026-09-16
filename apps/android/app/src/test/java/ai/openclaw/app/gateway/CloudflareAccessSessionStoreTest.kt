@@ -118,6 +118,8 @@ class CloudflareAccessSessionStoreTest {
           grant.await()
         }, retireTransports = { storage.events += "retire" })
       val cancelled = store.signIn(application) {}
+      assertEquals(0, transfers)
+      cancelled.cancel()
       store.cancelSignIn(application.origin)
       val fresh = store.signIn(application) {}
       assertNotSame(cancelled, fresh)
@@ -144,6 +146,7 @@ class CloudflareAccessSessionStoreTest {
         }, retireTransports = { storage.events += "retire" })
       val attempt = store.signIn(application) {}
       assertEquals(0, transfers)
+      attempt.cancel()
       store.forget(application.origin)
       attempt.join()
       assertTrue(attempt.isCancelled)
