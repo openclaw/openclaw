@@ -8,10 +8,16 @@
 // Seatbelt profile with the scope's writable allowlist. Reads stay open,
 // writes are confined to the scope dirs (see srt-runtime-config.ts).
 //
-// Out of S1 scope (later stages): the pinned-mutation fs bridge / AC4 live
-// handles (S3), a worker-per-scope reaper (S2), and Linux/Windows backends.
-// The fs-bridge factory is intentionally not provided here.
-import { spawn } from "node:child_process";
+// Out of later-scope (S3+): the pinned-mutation fs bridge / AC4 live handles,
+// Linux (bwrap) and Windows backends. The fs-bridge factory is intentionally
+// not provided here.
+//
+// Stage S2 (worker-per-scope lifecycle / reaper, design v8 §S2): every
+// sandboxed command is spawned detached into its own process group and tracked
+// by a per-scope reaper (scope-reaper.ts); the macOS liveness-pipe launcher
+// covers parent death, scope teardown group-kills every tracked child, and
+// buffered commands sweep their own background descendants on completion —
+// no orphan sandbox process survives any of the four teardown scenarios.
 import { SandboxManager, type SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import type {
   CreateSandboxBackendParams,
@@ -24,6 +30,7 @@ import type {
 import { shellEscape } from "openclaw/plugin-sdk/sandbox";
 import type { ResolvedSrtPluginConfig } from "./config.js";
 import { assertSrtSandboxAvailable } from "./dependency-probe.js";
+import { ScopeChildReaper } from "./scope-reaper.js";
 import { buildSrtRuntimeConfig, type SrtScopePolicyInput } from "./srt-runtime-config.js";
 
 /** Public backend id used with registerSandboxBackend() and agents.defaults.sandbox.backend. */
@@ -32,6 +39,31 @@ export const SRT_SANDBOX_BACKEND_ID = "srt";
 type SrtBackendDependencies = {
   pluginConfig: ResolvedSrtPluginConfig;
 };
+
+/**
+ * Live per-scope backend instances, so scope teardown (manager.removeRuntime)
+ * and plugin lifecycle cleanup can reap each scope's sandbox process groups.
+ * A scope may have more than one live handle across re-creations, so this is a
+ * set filtered by scopeKey rather than a map.
+ */
+const liveScopeBackends = new Set<SrtSandboxBackend>();
+
+/** Dispose every live SRT scope backend (plugin disable/restart teardown). */
+export function disposeAllSrtScopeBackends(): void {
+  // Snapshot: dispose() removes the backend from the set as it runs.
+  for (const backend of Array.from(liveScopeBackends)) {
+    backend.dispose();
+  }
+}
+
+/** Dispose the live SRT scope backends for one scope (manager.removeRuntime). */
+export function disposeSrtScopeBackends(scopeKey: string): void {
+  for (const backend of Array.from(liveScopeBackends)) {
+    if (backend.scopeKey === scopeKey) {
+      backend.dispose();
+    }
+  }
+}
 
 function scopePolicyFromParams(params: CreateSandboxBackendParams): SrtScopePolicyInput {
   return {
@@ -53,12 +85,25 @@ function withPositionalArgs(script: string, args: readonly string[] | undefined)
 
 class SrtSandboxBackend {
   private readonly runtimeConfig: SandboxRuntimeConfig;
+  /** Per-scope process-group reaper (S2). Owns every sandbox child's lifecycle. */
+  private readonly reaper = new ScopeChildReaper();
 
   constructor(
     private readonly params: CreateSandboxBackendParams,
     private readonly deps: SrtBackendDependencies,
   ) {
     this.runtimeConfig = buildSrtRuntimeConfig(scopePolicyFromParams(params), deps.pluginConfig);
+  }
+
+  /** Scope this backend belongs to (used to reap by scope on teardown). */
+  get scopeKey(): string {
+    return this.params.scopeKey;
+  }
+
+  /** Tear down this scope: reap every tracked sandbox process group. */
+  dispose(): void {
+    this.reaper.dispose();
+    liveScopeBackends.delete(this);
   }
 
   /** Wrap a command string with the scope's Seatbelt profile. */
@@ -78,67 +123,20 @@ class SrtSandboxBackend {
     params.signal?.throwIfAborted();
     const script = withPositionalArgs(params.script, params.args);
     const { argv, env } = await this.wrap(script, params.signal);
-    const result = await this.spawnBuffered(argv, env, params);
+    const result = await this.reaper.spawn({
+      argv,
+      env,
+      cwd: this.params.workspaceDir,
+      stdin: params.stdin,
+      timeoutMs: this.deps.pluginConfig.commandTimeoutMs,
+      signal: params.signal,
+    });
     if (!params.allowFailure && result.code !== 0) {
       throw new Error(
         `srt-sandbox command failed (exit ${result.code}): ${result.stderr.toString("utf8").trim()}`,
       );
     }
     return result;
-  }
-
-  private spawnBuffered(
-    argv: string[],
-    env: NodeJS.ProcessEnv,
-    params: SandboxBackendCommandParams,
-  ): Promise<SandboxBackendCommandResult> {
-    const [command, ...commandArgs] = argv;
-    if (!command) {
-      return Promise.reject(new Error("srt-sandbox produced an empty sandbox command."));
-    }
-    return new Promise<SandboxBackendCommandResult>((resolve, reject) => {
-      const child = spawn(command, commandArgs, {
-        cwd: this.params.workspaceDir,
-        env,
-      });
-      const stdout: Buffer[] = [];
-      const stderr: Buffer[] = [];
-      const timeoutMs = this.deps.pluginConfig.commandTimeoutMs;
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (!settled) {
-          child.kill("SIGKILL");
-        }
-      }, timeoutMs);
-      const onAbort = () => child.kill("SIGKILL");
-      params.signal?.addEventListener("abort", onAbort, { once: true });
-      const finish = (fn: () => void) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timer);
-        params.signal?.removeEventListener("abort", onAbort);
-        fn();
-      };
-      child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
-      child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
-      child.on("error", (err) => finish(() => reject(err)));
-      child.on("close", (code) =>
-        finish(() =>
-          resolve({
-            stdout: Buffer.concat(stdout),
-            stderr: Buffer.concat(stderr),
-            code: code ?? 1,
-          }),
-        ),
-      );
-      if (params.stdin !== undefined) {
-        child.stdin?.end(params.stdin);
-      } else {
-        child.stdin?.end();
-      }
-    });
   }
 
   asHandle(): SandboxBackendHandle {
@@ -176,19 +174,26 @@ export function createSrtSandboxBackendFactory(
 ): SandboxBackendFactory {
   return async (params) => {
     await assertSrtSandboxAvailable();
-    return new SrtSandboxBackend(params, deps).asHandle();
+    const backend = new SrtSandboxBackend(params, deps);
+    liveScopeBackends.add(backend);
+    return backend.asHandle();
   };
 }
 
 /**
  * Lifecycle manager. The local SRT backend owns no external runtime (no
- * container/host to reconcile), so a scope is reported running and removal is a
- * no-op — there is nothing to tear down beyond the process itself.
+ * container/host to reconcile), so a scope is reported running and removal
+ * reaps the scope's live sandbox process groups (S2 reaper) — there is nothing
+ * else to tear down beyond the processes themselves.
  */
 export function createSrtSandboxBackendManager(): SandboxBackendManager {
   return {
     describeRuntime: async () => ({ running: true, configLabelMatch: true }),
-    removeRuntime: async () => {},
+    removeRuntime: async ({ entry }) => {
+      // entry.containerName === backend.runtimeId === scopeKey (see
+      // createSandboxBackend's toEntry mapping).
+      disposeSrtScopeBackends(entry.containerName);
+    },
   };
 }
 

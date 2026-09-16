@@ -10,6 +10,7 @@ import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import {
   createSrtSandboxBackendFactory,
   createSrtSandboxBackendManager,
+  disposeAllSrtScopeBackends,
   resolveSrtSandboxWorkdir,
   SRT_SANDBOX_BACKEND_ID,
 } from "./src/backend.js";
@@ -39,6 +40,9 @@ export default definePluginEntry({
           return;
         }
         if (reason === "disable" || reason === "restart") {
+          // Reap every live scope's sandbox process groups (S2) before the
+          // backend retires, so no orphan sandbox process outlives the plugin.
+          disposeAllSrtScopeBackends();
           unregister();
         }
       },
