@@ -284,7 +284,11 @@ export async function sendMessageMSTeams(
       const siteId = await resolveUploadSiteId({
         configuredSiteId: sharePointSiteId,
         teamId: ctx.ref.teamId,
+        channelId: conversationType === "channel" ? conversationId : undefined,
         tokenProvider,
+        getTeamDetails: ctx.app.api?.teams?.getById
+          ? (teamId) => ctx.app.api.teams.getById(teamId)
+          : undefined,
       });
       log.debug?.("uploading to SharePoint for native file card", {
         fileName,

@@ -13,14 +13,23 @@ import { teamsMarkdownDeliveryCases } from "./format.test-fixtures.js";
 const graphUploadMockState = vi.hoisted(() => ({
   uploadAndShareSharePoint: vi.fn(),
   getDriveItemProperties: vi.fn(),
+  resolveUploadSiteId: vi.fn(),
 }));
 
 vi.mock("./graph-upload.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./graph-upload.js")>();
+  graphUploadMockState.resolveUploadSiteId.mockImplementation(async (params) => {
+    const explicit = params.configuredSiteId?.trim();
+    if (explicit) {
+      return explicit;
+    }
+    throw new Error("No SharePoint site ID available for file upload.");
+  });
   return {
     ...actual,
     uploadAndShareSharePoint: graphUploadMockState.uploadAndShareSharePoint,
     getDriveItemProperties: graphUploadMockState.getDriveItemProperties,
+    resolveUploadSiteId: graphUploadMockState.resolveUploadSiteId,
   };
 });
 
@@ -138,6 +147,14 @@ describe("msteams messenger", () => {
     setMSTeamsRuntime(runtimeStub);
     graphUploadMockState.uploadAndShareSharePoint.mockReset();
     graphUploadMockState.getDriveItemProperties.mockReset();
+    graphUploadMockState.resolveUploadSiteId.mockReset();
+    graphUploadMockState.resolveUploadSiteId.mockImplementation(async (params) => {
+      const explicit = params.configuredSiteId?.trim();
+      if (explicit) {
+        return explicit;
+      }
+      throw new Error("No SharePoint site ID available for file upload.");
+    });
   });
 
   describe("renderReplyPayloadsToMessages", () => {
@@ -474,6 +491,65 @@ describe("msteams messenger", () => {
           { nextAttempt: 2, delayMs: 0 },
           { nextAttempt: 3, delayMs: 0 },
         ]);
+      } finally {
+        await rm(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it("passes the SDK team lookup into SharePoint site resolution for channel files", async () => {
+      const tmpDir = await mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "msteams-site-"));
+      const localFile = path.join(tmpDir, "report.txt");
+      await writeFile(localFile, "report");
+      const getById = vi.fn(async () => ({ aadGroupId: "aad-group" }));
+      graphUploadMockState.resolveUploadSiteId.mockImplementation(async (params) => {
+        const teamId = params.teamId;
+        if (!teamId) {
+          throw new Error("missing teamId");
+        }
+        await params.getTeamDetails?.(teamId);
+        return "resolved-site";
+      });
+      graphUploadMockState.uploadAndShareSharePoint.mockResolvedValue({
+        itemId: "item-cold",
+        webUrl: "https://sharepoint.example.com/item-cold",
+        shareUrl: "https://sharepoint.example.com/share/item-cold",
+        name: "report.txt",
+      });
+      graphUploadMockState.getDriveItemProperties.mockResolvedValue({
+        eTag: '"{ITEM-COLD},1"',
+        webDavUrl: "https://sharepoint.example.com/item-cold",
+        name: "report.txt",
+      });
+
+      try {
+        await sendMSTeamsMessages({
+          replyStyle: "top-level",
+          app: createMockApp({ getById }),
+          appId: "app123",
+          conversationRef: {
+            ...baseRef,
+            teamId: "team-1",
+            conversation: {
+              id: "19:channel@thread.tacv2",
+              conversationType: "channel",
+            },
+          },
+          messages: [{ text: "report", mediaUrl: localFile }],
+          tokenProvider: {
+            getAccessToken: async () => "token",
+          },
+        });
+
+        const resolveCall = graphUploadMockState.resolveUploadSiteId.mock.calls[0]?.[0] as {
+          teamId?: string;
+          channelId?: string;
+        };
+        expect(resolveCall.teamId).toBe("team-1");
+        expect(resolveCall.channelId).toBe("19:channel@thread.tacv2");
+        expect(getById).toHaveBeenCalledWith("team-1");
+        expect(graphUploadMockState.uploadAndShareSharePoint.mock.calls[0]?.[0]).toMatchObject({
+          siteId: "resolved-site",
+        });
       } finally {
         await rm(tmpDir, { recursive: true, force: true });
       }

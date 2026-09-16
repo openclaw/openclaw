@@ -91,10 +91,11 @@ export const MSTeamsConfigSchema = z
     requireMentionInBotThreads: z.boolean().optional(),
     replyStyle: MSTeamsReplyStyleSchema.optional(),
     teams: z.record(z.string(), MSTeamsTeamSchema.optional()).optional(),
-    /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2").
-     *  When omitted, the team's own SharePoint site is resolved automatically via Graph. */
+    /** SharePoint site ID for file uploads in group chats and channels (e.g., "contoso.sharepoint.com,guid1,guid2").
+     *  When omitted, standard team channels resolve the team's own site via Graph. Group chats and
+     *  private/shared channels still require this value. */
     sharePointSiteId: z.string().optional(),
-    /** Folder name for bot-uploaded files on the SharePoint site (default: "OpenClawShared"). */
+    /** Single folder name for bot-uploaded files (default: "OpenClawShared"). Path separators are rejected. */
     sharePointFolder: z.string().optional(),
     welcomeCard: z.boolean().optional(),
     promptStarters: z.array(z.string()).optional(),

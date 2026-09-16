@@ -49,9 +49,9 @@ export type MSTeamsProactiveContext = {
   sdkCloudOptions: MSTeamsSdkCloudOptions;
   /** Token provider for Graph API / SharePoint operations */
   tokenProvider: MSTeamsAccessTokenProvider;
-  /** SharePoint site ID for file uploads in group chats/channels */
+  /** SharePoint site ID override. Required for group chats and private/shared channels. */
   sharePointSiteId?: string;
-  /** Folder name for bot-uploaded files on the SharePoint site */
+  /** Single folder name for bot-uploaded files on the SharePoint site */
   sharePointFolder?: string;
   /** Resolved media max bytes from config (default: 100MB) */
   mediaMaxBytes?: number;

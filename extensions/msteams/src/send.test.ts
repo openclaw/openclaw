@@ -25,6 +25,7 @@ const mockState = vi.hoisted(() => ({
   deleteMSTeamsActivityWithReference: vi.fn(async () => {}),
   uploadAndShareSharePoint: vi.fn(),
   getDriveItemProperties: vi.fn(),
+  resolveUploadSiteId: vi.fn(),
   buildTeamsFileInfoCard: vi.fn(),
   createMSTeamsTokenProvider: vi.fn(),
 }));
@@ -98,10 +99,18 @@ vi.mock("./runtime.js", () => ({
 
 vi.mock("./graph-upload.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./graph-upload.js")>();
+  mockState.resolveUploadSiteId.mockImplementation(async (params) => {
+    const explicit = params.configuredSiteId?.trim();
+    if (explicit) {
+      return explicit;
+    }
+    throw new Error("No SharePoint site ID available for file upload.");
+  });
   return {
     ...actual,
     uploadAndShareSharePoint: mockState.uploadAndShareSharePoint,
     getDriveItemProperties: mockState.getDriveItemProperties,
+    resolveUploadSiteId: mockState.resolveUploadSiteId,
   };
 });
 
@@ -118,6 +127,31 @@ vi.mock("./sdk-proactive.js", () => ({
   updateMSTeamsActivityWithReference: mockState.updateMSTeamsActivityWithReference,
   deleteMSTeamsActivityWithReference: mockState.deleteMSTeamsActivityWithReference,
 }));
+
+function createMockApp(overrides?: {
+  send?: ReturnType<typeof vi.fn>;
+  update?: ReturnType<typeof vi.fn>;
+  delete?: ReturnType<typeof vi.fn>;
+  getById?: ReturnType<typeof vi.fn>;
+}) {
+  const sendFn = overrides?.send ?? vi.fn(async () => ({ id: "message-1" }));
+  const updateFn = overrides?.update ?? vi.fn(async () => ({ id: "updated" }));
+  const deleteFn = overrides?.delete ?? vi.fn(async () => {});
+  const getById = overrides?.getById ?? vi.fn(async () => ({ aadGroupId: "aad-group" }));
+  return {
+    send: sendFn,
+    api: {
+      teams: { getById },
+      conversations: {
+        activities: () => ({
+          create: sendFn,
+          update: updateFn,
+          delete: deleteFn,
+        }),
+      },
+    },
+  };
+}
 
 function mockProactiveSendContextFailure(error: string) {
   mockState.sendMSTeamsActivityWithReference.mockRejectedValue(new Error(error));
@@ -230,6 +264,14 @@ describe("sendMessageMSTeams", () => {
     mockState.deleteMSTeamsActivityWithReference.mockReset();
     mockState.uploadAndShareSharePoint.mockReset();
     mockState.getDriveItemProperties.mockReset();
+    mockState.resolveUploadSiteId.mockReset();
+    mockState.resolveUploadSiteId.mockImplementation(async (params) => {
+      const explicit = params.configuredSiteId?.trim();
+      if (explicit) {
+        return explicit;
+      }
+      throw new Error("No SharePoint site ID available for file upload.");
+    });
     mockState.buildTeamsFileInfoCard.mockReset();
 
     mockState.extractFilename.mockResolvedValue("fallback.bin");
@@ -565,6 +607,47 @@ describe("sendMessageMSTeams", () => {
       }),
     ).rejects.toThrow("No SharePoint site ID available");
     expect(mockState.uploadAndShareSharePoint).not.toHaveBeenCalled();
+  });
+
+  it("passes the SDK team lookup into SharePoint site resolution", async () => {
+    const getById = vi.fn(async () => ({ aadGroupId: "aad-group" }));
+    mockState.resolveUploadSiteId.mockImplementation(async (params) => {
+      const teamId = params.teamId;
+      if (!teamId) {
+        throw new Error("missing teamId");
+      }
+      await params.getTeamDetails?.(teamId);
+      return "resolved-site";
+    });
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      ...createSharePointSendContext({
+        conversationId: "19:channel@thread.tacv2",
+        siteId: "unused",
+      }),
+      app: createMockApp({ getById }),
+      conversationType: "channel",
+      sharePointSiteId: undefined,
+      ref: { teamId: "team-1" },
+    });
+    mockSharePointPdfUpload({
+      bufferSize: 50,
+      fileName: "report.pdf",
+      itemId: "item-cold",
+      uniqueId: "{GUID-COLD}",
+    });
+
+    await sendMessageMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: "conversation:19:channel@thread.tacv2",
+      text: "report",
+      mediaUrl: "https://example.com/report.pdf",
+    });
+
+    const resolveArgs = firstObjectArg(mockState.resolveUploadSiteId);
+    expect(resolveArgs.teamId).toBe("team-1");
+    expect(resolveArgs.channelId).toBe("19:channel@thread.tacv2");
+    expect(getById).toHaveBeenCalledWith("team-1");
+    expect(firstObjectArg(mockState.uploadAndShareSharePoint).siteId).toBe("resolved-site");
   });
 });
 
