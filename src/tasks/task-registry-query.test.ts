@@ -6,16 +6,18 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import {
   getTaskById,
-  listTaskRecordPage,
   listFreshTasksForOwnerKey,
+  listTaskRecordPage,
   resetTaskRegistryForTests,
 } from "./task-registry-query.js";
 import { markTaskTerminalById, updateTaskNotifyPolicyById } from "./task-registry-record-api.js";
+import * as taskRegistryState from "./task-registry-state.js";
 import {
   reloadTaskRegistryFromStoreAsync,
+  runTaskRegistryWorkerMutation,
   tasks as authoritativeTasks,
 } from "./task-registry-state.js";
-import { configureTaskRegistryRuntime } from "./task-registry.store.js";
+import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 afterEach(() => {
@@ -23,15 +25,25 @@ afterEach(() => {
   resetTaskRegistryForTests();
 });
 
-function configureTaskSnapshot(tasks: Iterable<TaskRecord>): void {
+function configureTaskSnapshot(tasks: Iterable<TaskRecord>) {
   const snapshotTasks = new Map([...tasks].map((task) => [task.taskId, task]));
-  configureTaskRegistryRuntime({
-    store: createInMemoryTaskRegistryStore({ tasks: snapshotTasks, deliveryStates: new Map() }),
+  const store = createInMemoryTaskRegistryStore({
+    tasks: snapshotTasks,
+    deliveryStates: new Map(),
   });
+  configureTaskRegistryRuntime({ store });
+  return store;
 }
 
-async function readTaskPage(params: Parameters<typeof listTaskRecordPage>[0]) {
-  const result = await listTaskRecordPage(params);
+function captureTaskPageRead() {
+  return { readContext: captureOpenClawStateWorkerContext(), store: getTaskRegistryStore() };
+}
+
+async function readTaskPage(
+  params: Omit<Parameters<typeof listTaskRecordPage>[0], "readContext" | "store">,
+  read = captureTaskPageRead(),
+) {
+  const result = await listTaskRecordPage({ ...params, ...read });
   expect(result.ok).toBe(true);
   if (!result.ok) {
     throw new Error(`task page failed: ${result.error}`);
@@ -40,6 +52,135 @@ async function readTaskPage(params: Parameters<typeof listTaskRecordPage>[0]) {
 }
 
 describe("listTaskRecordPage", () => {
+  it.each(["converging", "exhausted"] as const)(
+    "bounds %s projection preparation without losing pending publication",
+    async (change) => {
+      const task: TaskRecord = {
+        taskId: "preparation-task",
+        runtime: "cli",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        task: "Bounded preparation",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: 1,
+      };
+      const store = configureTaskSnapshot([task]);
+      const published: string[] = [];
+      let reads = 0;
+      const invalidations = change === "converging" ? 1 : 3;
+      configureTaskRegistryRuntime({
+        store: {
+          ...store,
+          async loadMutationSnapshotAsync() {
+            const snapshot = store.loadSnapshot();
+            if (reads++ < invalidations) {
+              markTaskTerminalById({
+                taskId: task.taskId,
+                status: "succeeded",
+                endedAt: reads + 10,
+              });
+            }
+            return snapshot;
+          },
+        },
+        observers: {
+          onEvent: (event) => {
+            if (event.kind === "upserted") {
+              published.push(event.task.notifyPolicy);
+            }
+          },
+        },
+      });
+      const read = captureTaskPageRead();
+      await readTaskPage({ offset: 0, limit: 1 }, read);
+      const release = createDeferred();
+      const mutation = runTaskRegistryWorkerMutation(
+        {
+          admission: read.readContext.admission,
+          scope: { taskId: task.taskId, flowId: "preparation-flow" },
+        },
+        async () => {
+          await release.promise;
+          const current = expectDefined(
+            store.loadSnapshot().tasks.get(task.taskId),
+            "pending preparation task",
+          );
+          store.upsertTaskWithDeliveryState({
+            task: { ...current, notifyPolicy: "state_changes" },
+          });
+        },
+        async () => store.loadSnapshot(),
+      );
+      try {
+        const page = await listTaskRecordPage({ ...read, offset: 0, limit: 1 });
+        if (change === "exhausted") {
+          expect(page).toEqual({ ok: false, error: "registry_changed" });
+        } else {
+          expect(page.ok).toBe(true);
+          if (page.ok) {
+            expect(page.value.tasks).toMatchObject([{ taskId: task.taskId, status: "succeeded" }]);
+          }
+        }
+      } finally {
+        release.resolve();
+        await mutation;
+      }
+      expect(getTaskById(task.taskId)?.notifyPolicy).toBe("state_changes");
+      expect(published.filter((policy) => policy === "state_changes")).toEqual(["state_changes"]);
+    },
+  );
+
+  it.each(["page scan", "page cursor", "owner lookup", "empty owner key"] as const)(
+    "revalidates the captured owner before %s after preparation settles",
+    async (operation) => {
+      const task: TaskRecord = {
+        taskId: "prepared-task",
+        runtime: "cli",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        task: "Prepared owner read",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: 1,
+      };
+      const lookup = vi.fn(async () => [task]);
+      const store = { ...configureTaskSnapshot([task]), listTasksForOwnerKey: lookup };
+      configureTaskRegistryRuntime({ store });
+      const read = captureTaskPageRead();
+      const prepare = taskRegistryState.prepareTaskRegistryProjectionAsync;
+      vi.spyOn(taskRegistryState, "prepareTaskRegistryProjectionAsync").mockImplementation(
+        (...args) =>
+          prepare(...args).then((prepared) => {
+            queueMicrotask(() => configureTaskSnapshot([]));
+            return prepared;
+          }),
+      );
+      const prepareFilter = vi.fn(() => () => true);
+      const pending =
+        operation === "page scan" || operation === "page cursor"
+          ? listTaskRecordPage({
+              ...read,
+              offset: 0,
+              limit: 1,
+              ...(operation === "page cursor" ? { expectedRevision: -1 } : {}),
+              prepareFilter,
+            })
+          : listFreshTasksForOwnerKey(
+              read.readContext,
+              operation === "empty owner key" ? " " : task.ownerKey,
+            );
+
+      await expect(pending).rejects.toThrow("Task registry read owner is no longer current.");
+      expect(prepareFilter).not.toHaveBeenCalled();
+      expect(lookup).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps missing indexed IDs bounded across a yielded registry replacement", async () => {
     let workMs = 0;
     vi.spyOn(performance, "now").mockImplementation(() => workMs);
@@ -56,7 +197,8 @@ describe("listTaskRecordPage", () => {
       notifyPolicy: "silent",
       createdAt: 1,
     }));
-    configureTaskSnapshot(records);
+    const store = configureTaskSnapshot(records);
+    const read = captureTaskPageRead();
     getTaskById("task-0");
     let reads = 0;
     const readsPerTurn: number[] = [];
@@ -73,27 +215,33 @@ describe("listTaskRecordPage", () => {
       readsPerTurn.push(reads);
       reads = 0;
       if (!replaced) {
-        configureTaskSnapshot([
-          { ...expectDefined(records[0], "replacement fixture"), taskId: "replacement" },
-        ]);
-        replacement = reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+        for (const task of records) {
+          store.deleteTaskWithDeliveryState(task.taskId);
+        }
+        store.upsertTaskWithDeliveryState({
+          task: { ...expectDefined(records[0], "replacement fixture"), taskId: "replacement" },
+        });
+        replacement = reloadTaskRegistryFromStoreAsync(read.readContext);
         replaced = true;
       }
       pending = setImmediate(tick);
     };
     let pending = setImmediate(tick);
     try {
-      const page = await readTaskPage({
-        offset: 0,
-        limit: 10,
-        sessionKey,
-        prepareFilter: (batch) => {
-          if (replaced) {
-            preparedAfterReplacement.push(...batch.map((task) => task.taskId));
-          }
-          return () => true;
+      const page = await readTaskPage(
+        {
+          offset: 0,
+          limit: 10,
+          sessionKey,
+          prepareFilter: (batch) => {
+            if (replaced) {
+              preparedAfterReplacement.push(...batch.map((task) => task.taskId));
+            }
+            return () => true;
+          },
         },
-      });
+        read,
+      );
       readsPerTurn.push(reads);
       expect(page.tasks.map((task) => task.taskId)).toEqual(["replacement"]);
       expect(preparedAfterReplacement).toEqual(["replacement"]);
@@ -107,6 +255,84 @@ describe("listTaskRecordPage", () => {
       }
     }
   });
+
+  it.each(["store", "admission", "carried cursor", "cursorless retry"] as const)(
+    "handles a bounded yielded page with %s",
+    async (change) => {
+      let workMs = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => workMs);
+      configureTaskSnapshot(
+        Array.from({ length: 33 }, (_, index): TaskRecord => ({
+          taskId: `task-${index}`,
+          runtime: "cli",
+          requesterSessionKey: "agent:main:main",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          task: "Captured page authority",
+          status: "running",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+          createdAt: 1,
+        })),
+      );
+      const read = captureTaskPageRead();
+      const first = await readTaskPage({ offset: 0, limit: 1 }, read);
+      const retired = new Error("page admission retired");
+      let preparedSlices = 0;
+      let mutation: TaskRecord | null | undefined;
+      const pending = listTaskRecordPage({
+        ...read,
+        offset: 0,
+        limit: 1,
+        ...(change === "carried cursor" ? { expectedRevision: first.revision } : {}),
+        prepareFilter: () => {
+          preparedSlices += 1;
+          workMs += 20;
+          if (preparedSlices === 1) {
+            queueMicrotask(() => {
+              if (change === "store") {
+                configureTaskSnapshot([]);
+              } else if (change === "admission") {
+                vi.spyOn(read.readContext.admission, "assertCurrent").mockImplementation(() => {
+                  throw retired;
+                });
+              } else {
+                mutation = markTaskTerminalById({
+                  taskId: "task-32",
+                  status: "succeeded",
+                  endedAt: 1_000,
+                });
+              }
+            });
+          }
+          return () => true;
+        },
+      });
+      if (change === "store") {
+        await expect(pending).rejects.toThrow("Task registry read owner is no longer current.");
+      } else if (change === "admission") {
+        await expect(pending).rejects.toBe(retired);
+      } else {
+        const page = await pending;
+        expect(mutation).toMatchObject({ taskId: "task-32", status: "succeeded" });
+        if (change === "carried cursor") {
+          expect(page).toEqual({ ok: false, error: "cursor_stale" });
+        } else {
+          expect(page.ok).toBe(true);
+          if (page.ok) {
+            expect(page.value.tasks.map((task) => task.taskId)).toEqual(["task-32"]);
+            expect(page.value.revision).toBeGreaterThan(first.revision);
+            expect(page.value.hasMore).toBe(true);
+          }
+        }
+      }
+      if (change === "cursorless retry") {
+        expect(preparedSlices).toBeGreaterThan(2);
+      } else {
+        expect(preparedSlices).toBe(1);
+      }
+    },
+  );
 
   it.each([
     { scope: "sparse", matching: 1 },
@@ -139,6 +365,7 @@ describe("listTaskRecordPage", () => {
     let pending = setImmediate(update);
     try {
       const page = await listTaskRecordPage({
+        ...captureTaskPageRead(),
         offset: 0,
         limit: 1,
         sessionKey: "agent:main:requested",
@@ -199,6 +426,7 @@ describe("listTaskRecordPage", () => {
       update();
       try {
         const page = await listTaskRecordPage({
+          ...captureTaskPageRead(),
           offset: 0,
           limit: 25,
           prepareFilter: () => {
@@ -271,6 +499,7 @@ describe("listTaskRecordPage", () => {
     let mutation: TaskRecord | null | undefined;
     const accessFailure = new Error("canonical-store collision in a later slice");
     const pendingPage = listTaskRecordPage({
+      ...captureTaskPageRead(),
       offset: continuation ? 25 : 0,
       limit: 25,
       ...(continuation ? { expectedRevision: first.revision } : {}),

@@ -18,7 +18,10 @@ import {
   retrySubagentCompletionDelivery,
 } from "../../agents/subagents/completion/subagent-completion-delivery.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
+import { assertTaskRegistryOwnerCurrent } from "../../tasks/task-registry-state.js";
+import { getTaskRegistryStore } from "../../tasks/task-registry.store.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -200,7 +203,11 @@ export const tasksHandlers: GatewayRequestHandlers = {
     // and only the bounded wire page pays for defensive record cloning.
     const prepareFilter = (tasks: readonly Readonly<TaskRecord>[]) =>
       prepareTaskSessionReadFilter({ cfg, client }, tasks);
+    const readContext = captureOpenClawStateWorkerContext();
+    const store = getTaskRegistryStore();
     const pageParams = {
+      readContext,
+      store,
       offset: cursor?.offset ?? 0,
       limit,
       expectedRevision: cursor?.taskRevision,
@@ -221,6 +228,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
         return;
       }
       const pageResult = await listTaskRecordPage(pageParams);
+      assertTaskRegistryOwnerCurrent(readContext, store);
       if (!pageResult.ok) {
         // A cursor bound to an older revision can never succeed on retry, so it
         // restarts the caller. Transient registry churn gets another attempt.
@@ -244,8 +252,10 @@ export const tasksHandlers: GatewayRequestHandlers = {
         continue;
       }
       const nextOffset = pageParams.offset + page.tasks.length;
+      const summaries = page.tasks.map((task) => mapTaskSummary(task));
+      assertTaskRegistryOwnerCurrent(readContext, store);
       respond(true, {
-        tasks: page.tasks.map((task) => mapTaskSummary(task)),
+        tasks: summaries,
         ...(page.hasMore
           ? {
               nextCursor: encodeTaskListCursor({

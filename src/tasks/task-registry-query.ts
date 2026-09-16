@@ -55,6 +55,7 @@ import {
   tryPersistTaskDelete,
   getTaskRegistryStore,
   resetTaskRegistryRuntimeForTests,
+  type TaskRegistryStore,
 } from "./task-registry.store.js";
 import type { TaskRecord, TaskStatus } from "./task-registry.types.js";
 import { resolveTaskSessionAgentId } from "./task-session-identity.js";
@@ -170,6 +171,8 @@ const TASK_PAGE_MAX_ATTEMPTS = 3;
 const TASK_PAGE_YIELD_INTERVAL_MS = 12;
 
 export async function listTaskRecordPage(params: {
+  readContext: OpenClawStateWorkerContext;
+  store: TaskRegistryStore;
   offset: number;
   limit: number;
   expectedRevision?: number;
@@ -188,7 +191,9 @@ export async function listTaskRecordPage(params: {
     "cursor_stale" | "registry_changed"
   >
 > {
-  ensureTaskRegistryReady();
+  const { readContext, store } = params;
+  const assertCurrent = () => assertTaskRegistryOwnerCurrent(readContext, store);
+  assertCurrent();
   const statuses = params.statuses ? new Set(params.statuses) : null;
   const agentId = normalizeOptionalString(params.agentId);
   const sessionKey = normalizeOptionalString(params.sessionKey);
@@ -197,12 +202,17 @@ export async function listTaskRecordPage(params: {
   // Filtering and ordering stay registry-owned so authoritative records never
   // cross the boundary; only the bounded selected page is defensively cloned.
   const windowSize = params.offset + params.limit;
-  let workStartedAt = performance.now();
   for (let attempt = 0; attempt < TASK_PAGE_MAX_ATTEMPTS; attempt += 1) {
+    const prepared = await prepareTaskRegistryProjectionAsync(readContext, store, 1);
+    assertCurrent();
     const revision = readTaskRegistryRevision();
     if (params.expectedRevision !== undefined && params.expectedRevision !== revision) {
       return err("cursor_stale");
     }
+    if (!prepared) {
+      continue;
+    }
+    let workStartedAt = performance.now();
     // Session pages scan only related candidates; exact owner/agent checks still run below.
     const source = sessionKey ? taskIdsByRelatedSessionKey.get(sessionKey) : tasks;
     const scanLimit = source?.size ?? 0;
@@ -217,6 +227,7 @@ export async function listTaskRecordPage(params: {
       // scans share the event loop without charging time queued behind other work.
       if (scannedCount > 0 && performance.now() - workStartedAt >= TASK_PAGE_YIELD_INTERVAL_MS) {
         await yieldToEventLoop();
+        assertCurrent();
         workStartedAt = performance.now();
         // A carried revision cannot recover; skip unrelated reads once it is stale.
         // Cursorless scans still finish their attempt before retrying.
@@ -266,6 +277,7 @@ export async function listTaskRecordPage(params: {
         }
       }
     }
+    assertCurrent();
     if (revision !== readTaskRegistryRevision()) {
       if (params.expectedRevision !== undefined) {
         return err("cursor_stale");
@@ -364,6 +376,7 @@ export async function listFreshTasksForOwnerKey(
 ): Promise<TaskRecord[]> {
   const store = getTaskRegistryStore();
   await prepareTaskRegistryProjectionAsync(context, store);
+  assertTaskRegistryOwnerCurrent(context, store);
   const key = normalizeOptionalString(ownerKey);
   if (!key) {
     return [];

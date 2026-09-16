@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { createRunningTaskRun } from "../../../tasks/detached-task-runtime.js";
 import { createSubagentTaskBackingDetail } from "../../../tasks/task-backing-authority.js";
 import { listTaskRecordPage } from "../../../tasks/task-registry-query.js";
@@ -82,6 +83,8 @@ export function registerSubagentOrphanTaskCases({
       endedAt: expect.any(Number),
     });
     const activePage = await listTaskRecordPage({
+      readContext: captureOpenClawStateWorkerContext(),
+      store: getTaskRegistryStore(),
       offset: 0,
       limit: 100,
       statuses: ["running", "queued"],

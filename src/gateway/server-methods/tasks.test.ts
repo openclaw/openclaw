@@ -13,6 +13,11 @@ import { addSessionMember } from "../../config/sessions/session-sharing-store.js
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import {
+  closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
+} from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -40,6 +45,55 @@ import {
 const { cancelSessionMock } = useTaskGatewayFixture();
 
 describe("tasks gateway handlers", () => {
+  it("pages persisted tasks for an admin without parent SQLite through close", async () => {
+    seedTaskRegistryRowsForTests(
+      [30, 20, 30].map((lastEventAt, index) =>
+        createSnapshotTask({
+          taskId: `task-${index}`,
+          runId: `run-${index}`,
+          task: `Admin page ${index}`,
+          status: "succeeded",
+          deliveryStatus: "not_applicable",
+          createdAt: 10,
+          startedAt: 10,
+          lastEventAt,
+          endedAt: lastEventAt,
+        }),
+      ),
+    );
+    closeOpenClawStateDatabase();
+    const context = createContext();
+    const client = identifiedClient(["operator.admin"]);
+    const native = requireNodeSqlite();
+    const counters = [
+      vi.spyOn(native.DatabaseSync.prototype, "prepare"),
+      vi.spyOn(native.DatabaseSync.prototype, "exec"),
+      ...(["iterate", "get", "all", "run"] as const).map((method) =>
+        vi.spyOn(native.StatementSync.prototype, method),
+      ),
+    ];
+    try {
+      const first = await runTaskHandler("tasks.list", { limit: 2 }, {}, client, context);
+      expect(first.calls[0]?.[0]).toBe(true);
+      expect(first.payload?.tasks?.map((task) => task.taskId)).toEqual(["task-0", "task-2"]);
+      expect(first.payload?.tasks?.[0]).toMatchObject({
+        title: "Admin page 0",
+        status: "completed",
+      });
+      const cursor = expectDefined(first.payload?.nextCursor, "admin page cursor");
+      const second = await runTaskHandler("tasks.list", { limit: 2, cursor }, {}, client, context);
+      expect(second.calls[0]?.[0]).toBe(true);
+      expect(second.payload?.tasks?.map((task) => task.taskId)).toEqual(["task-1"]);
+      expect(second.payload?.nextCursor).toBeUndefined();
+      await closeOpenClawStateDatabaseAsync();
+      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    } finally {
+      for (const counter of counters) {
+        counter.mockRestore();
+      }
+    }
+  });
+
   it("lists task summaries with SDK-facing statuses and filters", async () => {
     const running = createTaskFixture("subagent", {
       taskKind: "investigation",
