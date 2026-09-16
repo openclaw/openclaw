@@ -33,7 +33,6 @@ export {
   listTaskRecordPage,
   listTaskRecords,
   listTaskRecordsUnsorted,
-  listTasksForAgentId,
   listTasksForFlowId,
   listTasksForOwnerKey,
   listTasksForRelatedSessionKey,

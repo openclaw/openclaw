@@ -1,12 +1,23 @@
 // Tests task command routing and persisted task state replies.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import {
   completeTaskRunByRunIdCore,
   createQueuedTaskRunCore,
   createRunningTaskRunCore,
   failTaskRunByRunIdCore,
 } from "../../tasks/task-executor.js";
+import { runTaskRegistryWorkerMutation } from "../../tasks/task-registry-state.js";
+import {
+  configureTaskRegistryRuntime,
+  type TaskRegistryStore,
+  type TaskRegistryStoreSnapshot,
+} from "../../tasks/task-registry.store.js";
+import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { createInMemoryTaskRegistryStore } from "../../test-utils/task-registry-store.js";
 import { handleTasksCommand } from "./commands-tasks.js";
 import {
   baseCommandTestConfig,
@@ -47,6 +58,125 @@ describe("handleTasksCommand task board", () => {
 
   afterEach(() => {
     resetTaskRegistryForTests({ persist: false });
+  });
+
+  function preparedStatusStore() {
+    const task: TaskRecord = {
+      taskId: "prepared-status-task",
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      agentId: "main",
+      scopeKind: "session",
+      task: "before preparation",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: Date.now(),
+    };
+    const snapshot = (): TaskRegistryStoreSnapshot => ({
+      tasks: new Map([[task.taskId, { ...task }]]),
+      deliveryStates: new Map(),
+    });
+    const store: TaskRegistryStore = {
+      ...createInMemoryTaskRegistryStore(),
+      async withSnapshotAsync(_context, consume) {
+        return consume({ snapshot: snapshot(), settledTasks: [], flowSyncs: [] });
+      },
+      loadSnapshot() {
+        throw new Error("status attempted a synchronous registry read");
+      },
+      async loadMutationSnapshotAsync() {
+        return snapshot();
+      },
+    };
+    return { task, store, snapshot };
+  }
+
+  it.each(["progress", "store replacement", "retired admission"] as const)(
+    "awaits status preparation and rechecks %s before replying",
+    async (change) => {
+      const fixture = preparedStatusStore();
+      const started = createDeferred<OpenClawStateWorkerContext>();
+      const release = createDeferred();
+      configureTaskRegistryRuntime({
+        store: {
+          ...fixture.store,
+          async withSnapshotAsync(context, consume) {
+            started.resolve(context);
+            await release.promise;
+            return consume({ snapshot: fixture.snapshot(), settledTasks: [], flowSyncs: [] });
+          },
+        },
+      });
+      const pending = buildTasksReplyForTest();
+      // Observe rejection immediately, including the pre-fix synchronous-read failure.
+      const result = pending.then(
+        (reply) => ({ reply }),
+        (error: unknown) => ({ error }),
+      );
+      const context = await Promise.race([started.promise, pending.then(() => undefined)]);
+      if (!context) {
+        throw new Error("status returned before preparing its registry");
+      }
+      const retired =
+        change === "retired admission"
+          ? vi.spyOn(context.admission, "assertCurrent").mockImplementation(() => {
+              throw new Error("retired status admission");
+            })
+          : undefined;
+      try {
+        fixture.task.task = "current prepared task";
+        if (change === "store replacement") {
+          configureTaskRegistryRuntime({ store: createInMemoryTaskRegistryStore() });
+        }
+        release.resolve();
+        const outcome = await result;
+        if (change === "progress") {
+          expect(outcome).toMatchObject({
+            reply: { text: expect.stringContaining("current prepared task") },
+          });
+          expect("reply" in outcome && outcome.reply.text).not.toContain("before preparation");
+        } else {
+          expect(outcome).toMatchObject({
+            error: expect.objectContaining({
+              message: expect.stringContaining(
+                change === "store replacement" ? "no longer current" : "retired status admission",
+              ),
+            }),
+          });
+        }
+      } finally {
+        release.resolve();
+        retired?.mockRestore();
+      }
+    },
+  );
+
+  it("reads current status while worker mutation publication is pending without synchronous refresh", async () => {
+    const fixture = preparedStatusStore();
+    const store = fixture.store;
+    configureTaskRegistryRuntime({ store });
+    await buildTasksReplyForTest();
+    const context = captureOpenClawStateWorkerContext();
+    const release = createDeferred();
+    const mutation = runTaskRegistryWorkerMutation(
+      {
+        admission: context.admission,
+        scope: { taskId: fixture.task.taskId, flowId: "status-test" },
+      },
+      () => release.promise,
+      () => store.loadMutationSnapshotAsync(context),
+    );
+    try {
+      fixture.task.task = "current pending mutation";
+      const reply = await buildTasksReplyForTest();
+      expect(reply.text).toContain("current pending mutation");
+      expect(reply.text).not.toContain("before preparation");
+    } finally {
+      release.resolve();
+      await mutation;
+    }
   });
 
   it("lists active and recent tasks for the current session", async () => {

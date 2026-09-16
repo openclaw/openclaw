@@ -1,19 +1,29 @@
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   getAllActiveGeneratedMediaSessionKeys,
   getLatestGeneratedMediaTaskAdmissionIdForSessionKey,
   listActiveGeneratedMediaTaskIdsForSessionKey,
 } from "./generated-media-task-activity.js";
+import {
+  selectTaskRecordsForAgentId,
+  selectTasksForRelatedSessionKey,
+} from "./task-registry-query.js";
+import {
+  assertTaskRegistryOwnerCurrent,
+  prepareTaskRegistryProjectionAsync,
+} from "./task-registry-state.js";
 // Filters task status visibility by requester, owner, and flow scope.
 import {
   findTaskByRunId,
   getTaskById,
   listTaskRecords,
   listTaskRecordsUnsorted,
-  listTasksForAgentId,
   listTasksForRelatedSessionKey,
 } from "./task-registry.js";
+import { getTaskRegistryStore } from "./task-registry.store.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
+import { buildTaskStatusSnapshot } from "./task-status.js";
 
 const GENERATED_MEDIA_TASK_KINDS = new Set([
   "image_generation",
@@ -52,8 +62,24 @@ export function listTasksForOwnerOrRequesterSessionKeyForStatus(sessionKey: stri
   );
 }
 
-export function listTasksForAgentIdForStatus(agentId: string): TaskRecord[] {
-  return listTasksForAgentId(agentId);
+/** Consume one prepared projection without reentering synchronous dirty refresh. */
+export async function readTaskStatusSnapshots(params: { sessionKey?: string; agentId: string }) {
+  const context = captureOpenClawStateWorkerContext();
+  const store = getTaskRegistryStore();
+  await prepareTaskRegistryProjectionAsync(context, store);
+  assertTaskRegistryOwnerCurrent(context, store);
+  const session = buildTaskStatusSnapshot(
+    params.sessionKey === undefined
+      ? []
+      : selectTasksForRelatedSessionKey(params.sessionKey, params.agentId),
+  );
+  return {
+    session,
+    agent:
+      session.totalCount === 0
+        ? buildTaskStatusSnapshot(selectTaskRecordsForAgentId(params.agentId))
+        : undefined,
+  };
 }
 
 export function findTaskByRunIdForStatus(runId: string): TaskRecord | undefined {

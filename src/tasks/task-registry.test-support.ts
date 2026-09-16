@@ -1,7 +1,13 @@
 import { clearTaskRegistrySqliteForTests } from "../test-utils/task-registry-sqlite.js";
+import {
+  createInMemoryTaskRegistryStore,
+  createInMemoryTaskFlowRegistryStore,
+} from "../test-utils/task-registry-store.js";
+import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.test-support.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
 import type { TaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
 import { createTaskRecord as createTaskRecordOrNull } from "./task-registry.js";
+import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import type { TaskEventRecord, TaskRecord } from "./task-registry.types.js";
 
 type CreateTaskRecordParams = Parameters<typeof createTaskRecordOrNull>[0];
@@ -88,4 +94,13 @@ export function resetTaskRegistryControlRuntimeForTests(): void {
 
 export function setTaskRegistryControlRuntimeForTests(runtime: TaskRegistryControlRuntime): void {
   getTestApi().setTaskRegistryControlRuntimeForTests(runtime);
+}
+
+export function configureInMemoryTaskStoresForTests() {
+  configureTaskRegistryRuntime({
+    store: createInMemoryTaskRegistryStore(),
+  });
+  configureTaskFlowRegistryRuntime({
+    store: createInMemoryTaskFlowRegistryStore(),
+  });
 }

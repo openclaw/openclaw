@@ -64,6 +64,7 @@ import {
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
+import { selectTaskRecordsForAgentId } from "./task-registry-query.js";
 import { updateTaskStateByRunId } from "./task-registry-record-api.js";
 import {
   readTaskRegistryRevision,
@@ -76,7 +77,6 @@ import {
   findTaskByRunId,
   getTaskById,
   isParentFlowLinkError,
-  listTasksForAgentId,
   listTasksForOwnerKey,
   listTasksForRelatedSessionKey,
   listTaskRecords,
@@ -105,7 +105,11 @@ import {
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
-import { createAcpTaskRecord, createTaskFixture } from "./task-registry.test-support.js";
+import {
+  configureInMemoryTaskStoresForTests,
+  createAcpTaskRecord,
+  createTaskFixture,
+} from "./task-registry.test-support.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 import { bindTaskRunOwner, getTaskRunOwner } from "./task-run-owner.js";
 import {
@@ -413,15 +417,6 @@ function finalizeSubagentTask(
   params: Omit<Parameters<typeof finalizeTaskRecordByRunId>[0], "runId" | "runtime">,
 ) {
   return finalizeTaskRecordByRunId({ runId: task.runId!, runtime: "subagent", ...params });
-}
-
-function configureInMemoryTaskStoresForTests() {
-  configureTaskRegistryRuntime({
-    store: createInMemoryTaskRegistryStore(),
-  });
-  configureTaskFlowRegistryRuntime({
-    store: createInMemoryTaskFlowRegistryStore(),
-  });
 }
 
 async function withTaskRegistryTempDir<T>(
@@ -3312,7 +3307,9 @@ describe("task-registry", () => {
       });
 
       expect(created.agentId).toBe("main");
-      expect(listTasksForAgentId("main").map((task) => task.taskId)).toEqual([created.taskId]);
+      expect(selectTaskRecordsForAgentId("main").map((task) => task.taskId)).toEqual([
+        created.taskId,
+      ]);
     });
   });
 
@@ -3326,8 +3323,10 @@ describe("task-registry", () => {
       });
 
       expect(created.agentId).toBe("worker");
-      expect(listTasksForAgentId("worker").map((task) => task.taskId)).toEqual([created.taskId]);
-      expect(listTasksForAgentId("main")).toEqual([]);
+      expect(selectTaskRecordsForAgentId("worker").map((task) => task.taskId)).toEqual([
+        created.taskId,
+      ]);
+      expect(selectTaskRecordsForAgentId("main")).toEqual([]);
     });
   });
 

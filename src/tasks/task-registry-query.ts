@@ -350,8 +350,7 @@ export function findTaskByRunId(runId: string): TaskRecord | undefined {
   return task ? cloneTaskRecord(task) : undefined;
 }
 
-export function listTasksForAgentId(agentId: string): TaskRecord[] {
-  ensureTaskRegistryReady();
+export function selectTaskRecordsForAgentId(agentId: string): TaskRecord[] {
   const lookup = agentId.trim();
   if (!lookup) {
     return [];
@@ -425,6 +424,13 @@ export function listTasksForRelatedSessionKey(
   sessionAgentId?: string,
 ): TaskRecord[] {
   ensureTaskRegistryReady();
+  return selectTasksForRelatedSessionKey(sessionKey, sessionAgentId);
+}
+
+export function selectTasksForRelatedSessionKey(
+  sessionKey: string,
+  sessionAgentId?: string,
+): TaskRecord[] {
   const key = normalizeOptionalString(sessionKey);
   if (!key) {
     return [];

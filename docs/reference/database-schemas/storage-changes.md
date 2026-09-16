@@ -190,6 +190,11 @@ provider or plugin runtime ownership. Kernels and their transaction callbacks
 remain synchronous. The asynchronous task and flow read facade runs these read
 kernels in the shared-state worker.
 
+Chat `/tasks` and the task section of `/status` await registry restoration and
+dirty-projection reads through that worker owner before selecting current records
+in memory. Session visibility, recent-task windows, and agent-local fallback counts
+retain their existing behavior; synchronous plugin readers keep their contract.
+
 Routine status reads stream task audit metadata through the same shared worker
 and return fixed-size history aggregates plus candidates for live reconciliation.
 They do not decode retained task payloads or restore delivery-state maps. Reads
