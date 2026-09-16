@@ -1,7 +1,10 @@
 // Artifact method tests cover collection from transcript messages, run/task
 // session lookup, list/get/download responses, and validation errors.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
+import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { createInMemoryTaskRegistryStore } from "../../test-utils/task-registry-store.js";
 import { artifactsHandlers } from "./artifacts.js";
 import {
   assistantFileMessage,
@@ -17,7 +20,7 @@ import {
 } from "./artifacts.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
-  getTaskSessionLookupByIdForStatus: vi.fn(),
+  selectTaskSessionLookupByIdForStatus: vi.fn(),
   loadSessionEntry: vi.fn(),
   resolveManagedArtifactDownload: vi.fn(),
   resolveManagedUrlDownload: vi.fn(),
@@ -26,7 +29,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 vi.mock("../../tasks/task-status-access.js", () => ({
-  getTaskSessionLookupByIdForStatus: hoisted.getTaskSessionLookupByIdForStatus,
+  selectTaskSessionLookupByIdForStatus: hoisted.selectTaskSessionLookupByIdForStatus,
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -88,9 +91,7 @@ async function invokeArtifactHandler(
   options: { id?: string; context?: unknown } = {},
 ) {
   const responder = createResponder();
-  const defaultContext = {
-    getRuntimeConfig: () => ({ agents: { entries: { main: { default: true } } } }),
-  };
+  const defaultContext = runtimeContext({ agents: { entries: { main: { default: true } } } });
   await artifactsHandlers[method]?.({
     req: { type: "req", id: options.id ?? method, method, params: {} },
     params,
@@ -128,7 +129,7 @@ function expectArtifactScopeNotFound(
   params: { message?: string } = {},
 ): void {
   expect(calls[0]?.ok).toBe(false);
-  expect(hoisted.getTaskSessionLookupByIdForStatus).toHaveBeenCalledWith("task-1");
+  expect(hoisted.selectTaskSessionLookupByIdForStatus).toHaveBeenCalledWith("task-1");
   expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
   expect(hoisted.resolveSessionKeyForRun).not.toHaveBeenCalled();
   if (params.message) {
@@ -138,12 +139,15 @@ function expectArtifactScopeNotFound(
 }
 
 describe("artifacts RPC handlers", () => {
+  afterEach(() => resetTaskRegistryForTests({ persist: false }));
   beforeEach(() => {
+    resetTaskRegistryForTests({ persist: false });
+    configureTaskRegistryRuntime({ store: createInMemoryTaskRegistryStore() });
     vi.clearAllMocks();
     hoisted.resolveSessionKeyForRun.mockReset();
     hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
     hoisted.resolveManagedUrlDownload.mockResolvedValue(null);
-    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue(undefined);
+    hoisted.selectTaskSessionLookupByIdForStatus.mockReturnValue(undefined);
     hoisted.loadSessionEntry.mockReturnValue({
       storePath: "/tmp/sessions.json",
       entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
@@ -311,7 +315,7 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("uses the compatibility owner instead of the executor for a global task requester", async () => {
-    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+    hoisted.selectTaskSessionLookupByIdForStatus.mockReturnValue({
       agentId: "work",
       requesterSessionKey: "global",
       ownerKey: "global",
@@ -334,7 +338,7 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("returns typed selection-required instead of adopting the task executor", async () => {
-    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+    hoisted.selectTaskSessionLookupByIdForStatus.mockReturnValue({
       agentId: "work",
       requesterSessionKey: "global",
       ownerKey: "global",
@@ -360,7 +364,7 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("translates a keyless task selection failure into INVALID_REQUEST", async () => {
-    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({ runId: "run-keyless" });
+    hoisted.selectTaskSessionLookupByIdForStatus.mockReturnValue({ runId: "run-keyless" });
 
     const { calls } = await listArtifacts(
       { taskId: "task-keyless" },
@@ -652,7 +656,7 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("preserves task agent scope when taskId resolves through runId", async () => {
-    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+    hoisted.selectTaskSessionLookupByIdForStatus.mockReturnValue({
       runId: "run-for-task-1",
       agentId: "work",
     });
@@ -670,7 +674,7 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("resolves taskId queries through task status access and filters artifacts by messageTaskId", async () => {
-    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+    hoisted.selectTaskSessionLookupByIdForStatus.mockReturnValue({
       requesterSessionKey: "agent:main:main",
       runId: "run-for-task-1",
       agentId: "main",
@@ -704,7 +708,7 @@ describe("artifacts RPC handlers", () => {
     });
 
     expect(list.calls[0]?.ok).toBe(true);
-    expect(hoisted.getTaskSessionLookupByIdForStatus).toHaveBeenCalledWith("task-1");
+    expect(hoisted.selectTaskSessionLookupByIdForStatus).toHaveBeenCalledWith("task-1");
     expect(hoisted.resolveSessionKeyForRun).not.toHaveBeenCalled();
     expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:main:main");
     const listPayload = list.calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
@@ -747,7 +751,7 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("does not resolve taskId artifact queries when agentId does not match the task", async () => {
-    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+    hoisted.selectTaskSessionLookupByIdForStatus.mockReturnValue({
       requesterSessionKey: "agent:work:main",
       runId: "run-for-task-1",
       agentId: "work",
@@ -763,7 +767,7 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("keeps cross-agent task artifacts scoped to the requester transcript", async () => {
-    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+    hoisted.selectTaskSessionLookupByIdForStatus.mockReturnValue({
       requesterSessionKey: "agent:main:main",
       ownerKey: "agent:main:main",
       runId: "run-for-task-1",
@@ -788,7 +792,7 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("uses the requester agent store for cross-agent global task artifacts", async () => {
-    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+    hoisted.selectTaskSessionLookupByIdForStatus.mockReturnValue({
       requesterSessionKey: "global",
       ownerKey: "global",
       runId: "run-for-task-1",
@@ -818,7 +822,7 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("derives taskId artifact scope from requesterSessionKey when task agentId is absent", async () => {
-    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+    hoisted.selectTaskSessionLookupByIdForStatus.mockReturnValue({
       requesterSessionKey: "agent:work:main",
       runId: "run-for-task-1",
     });
@@ -831,7 +835,7 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("treats legacy task requester session keys as the main agent for artifact scope", async () => {
-    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+    hoisted.selectTaskSessionLookupByIdForStatus.mockReturnValue({
       requesterSessionKey: "main",
       runId: "run-for-task-1",
     });
@@ -844,7 +848,7 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("uses the configured default agent for legacy task requester session keys", async () => {
-    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+    hoisted.selectTaskSessionLookupByIdForStatus.mockReturnValue({
       requesterSessionKey: "main",
       runId: "run-for-task-1",
     });
@@ -1033,9 +1037,7 @@ describe("artifacts RPC handlers", () => {
     const { calls } = await listArtifacts({ sessionKey: "agent:main:main" });
     const artifacts = expectArtifactList(calls).artifacts;
     expect(artifacts).toHaveLength(1);
-    expectFields(artifacts?.[0], {
-      title: "bad.png",
-    });
+    expectFields(artifacts?.[0], { title: "bad.png" });
     expectFields(artifacts?.[0]?.download, { mode: "unsupported" });
     expect(artifacts?.[0]).not.toHaveProperty("data");
   });
@@ -1087,9 +1089,7 @@ describe("artifacts RPC handlers", () => {
 
     const { calls } = await listArtifacts({ sessionKey: "agent:main:main" });
     const artifacts = expectArtifactList(calls).artifacts;
-    expectFields(artifacts?.[0], {
-      title: "secret.txt",
-    });
+    expectFields(artifacts?.[0], { title: "secret.txt" });
     expectFields(artifacts?.[0]?.download, { mode: "unsupported" });
     expect(artifacts?.[0]).not.toHaveProperty("url");
   });

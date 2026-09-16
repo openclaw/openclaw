@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../tasks/task-status-access.js", () => ({
-  getTaskSessionLookupByIdForStatus: mocks.getTaskSession,
+  selectTaskSessionLookupByIdForStatus: mocks.getTaskSession,
 }));
 
 vi.mock("../server-session-key.js", () => ({

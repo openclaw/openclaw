@@ -195,6 +195,12 @@ dirty-projection reads through that worker owner before selecting current record
 in memory. Session visibility, recent-task windows, and agent-local fallback counts
 retain their existing behavior; synchronous plugin readers keep their contract.
 
+Artifact RPCs selected by task ID await the same task projection owner before
+resolving the current requester session. Session and run selectors keep their
+precedence and bypass task preparation. Managed downloads repeat task preparation
+and session authorization after transcript lookup; session, transcript, and media
+storage retain their existing owners.
+
 Routine status reads stream task audit metadata through the same shared worker
 and return fixed-size history aggregates plus candidates for live reconciliation.
 They do not decode retained task payloads or restore delivery-state maps. Reads

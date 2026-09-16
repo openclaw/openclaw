@@ -13,7 +13,7 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
-import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
+import { selectTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -117,7 +117,7 @@ function resolveQuerySession(
   if (!query.taskId) {
     return undefined;
   }
-  const task = getTaskSessionLookupByIdForStatus(query.taskId);
+  const task = selectTaskSessionLookupByIdForStatus(query.taskId);
   const requesterSessionKey = normalizeOptionalString(task?.requesterSessionKey);
   const ownerAgentId = parseAgentSessionKey(task?.ownerKey)?.agentId;
   const persistedRequesterOwner = requesterSessionKey

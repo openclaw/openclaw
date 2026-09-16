@@ -26,6 +26,12 @@ import {
   ASSISTANT_DISPLAY_CONTENT_FIELD,
   readAssistantDisplayContent,
 } from "../../shared/assistant-display-content.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  assertTaskRegistryOwnerCurrent,
+  prepareTaskRegistryProjectionAsync,
+} from "../../tasks/task-registry-state.js";
+import { getTaskRegistryStore } from "../../tasks/task-registry.store.js";
 import {
   parseManagedOutgoingArtifactId,
   resolveManagedOutgoingMediaArtifactDownload,
@@ -49,7 +55,12 @@ import {
   type ArtifactQuery,
   resolveAuthorizedArtifactSession,
 } from "./artifacts-session-resolution.js";
-import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+  RespondFn,
+} from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ArtifactDownloadMode = ArtifactSummary["download"]["mode"];
@@ -477,12 +488,39 @@ function respondArtifactNotFound(respond: RespondFn, requestedArtifactId: string
   );
 }
 
-async function runArtifactSessionOperation<T>(
-  respond: RespondFn,
-  operation: () => Promise<T> | T,
+async function runArtifactSessionOperation<Q extends ArtifactQuery, T>(
+  request: GatewayRequestHandlerOptions,
+  query: Q,
+  operation: (query: Q, cfg: OpenClawConfig | undefined) => Promise<T> | T,
 ): Promise<{ ok: true; value: T } | { ok: false }> {
+  const { context, client, respond, signal, hasCurrentClientAuthority } = request;
   try {
-    return { ok: true, value: await operation() };
+    const taskOwner =
+      !query.sessionKey && !query.runId && query.taskId
+        ? { context: captureOpenClawStateWorkerContext(), store: getTaskRegistryStore() }
+        : undefined;
+    if (taskOwner) {
+      await prepareTaskRegistryProjectionAsync(taskOwner.context, taskOwner.store);
+      assertTaskRegistryOwnerCurrent(taskOwner.context, taskOwner.store);
+      if (
+        signal?.aborted ||
+        client?.connectionSignal?.aborted ||
+        context.requestEntryLifetime?.signal.aborted ||
+        client?.invalidated ||
+        !(hasCurrentClientAuthority?.() ?? true)
+      ) {
+        return { ok: false };
+      }
+    }
+    const cfg = context.getRuntimeConfig?.();
+    if (taskOwner) {
+      assertTaskRegistryOwnerCurrent(taskOwner.context, taskOwner.store);
+    }
+    const admittedQuery = admitArtifactQuery(query, cfg, respond);
+    if (!admittedQuery) {
+      return { ok: false };
+    }
+    return { ok: true, value: await operation(admittedQuery, cfg) };
   } catch (error) {
     if (error instanceof ArtifactSessionResolutionError) {
       respond(false, undefined, error.shape);
@@ -518,31 +556,29 @@ function toSummary(artifact: ArtifactRecord): ArtifactSummary {
 }
 
 async function respondManagedArtifactDownload(
+  request: GatewayRequestHandlerOptions,
   query: ArtifactsGetParams,
-  cfg: OpenClawConfig | undefined,
-  client: GatewayClient | null,
-  respond: RespondFn,
   matched?: ArtifactRecord,
 ): Promise<void> {
-  const resolvedResult = await runArtifactSessionOperation(respond, () =>
-    resolveAuthorizedArtifactSession(query, cfg, client),
-  );
-  if (!resolvedResult.ok) {
-    return;
-  }
-  const resolved = resolvedResult.value;
-  const defaultAgentId = resolved
-    ? tryResolveSessionCompatibilityOwnerAgentId(cfg ?? {}, resolved.sessionKey)
-    : undefined;
-  const managed =
-    resolved && (!matched || matched.sessionKey === resolved.sessionKey)
-      ? await resolveManagedOutgoingMediaArtifactDownload({
+  const { client, respond } = request;
+  const result = await runArtifactSessionOperation(request, query, (admittedQuery, cfg) => {
+    const resolved = resolveAuthorizedArtifactSession(admittedQuery, cfg, client);
+    const defaultAgentId = resolved
+      ? tryResolveSessionCompatibilityOwnerAgentId(cfg ?? {}, resolved.sessionKey)
+      : undefined;
+    return resolved && (!matched || matched.sessionKey === resolved.sessionKey)
+      ? resolveManagedOutgoingMediaArtifactDownload({
           sessionKey: resolved.sessionKey,
           ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
           ...(defaultAgentId ? { defaultAgentId } : {}),
-          artifactId: query.artifactId,
+          artifactId: admittedQuery.artifactId,
         })
       : null;
+  });
+  if (!result.ok) {
+    return;
+  }
+  const managed = result.value;
   if (!managed) {
     respondArtifactNotFound(respond, query.artifactId);
     return;
@@ -568,7 +604,8 @@ async function respondManagedArtifactDownload(
 
 /** Gateway handlers for listing, summarizing, and downloading transcript artifacts. */
 export const artifactsHandlers: GatewayRequestHandlers = {
-  "artifacts.list": async ({ params, respond, context, client }) => {
+  "artifacts.list": async (request) => {
+    const { params, respond, client } = request;
     if (!assertValidParams(params, validateArtifactsListParams, "artifacts.list", respond)) {
       return;
     }
@@ -583,13 +620,8 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const cfg = context.getRuntimeConfig?.();
-    const admittedQuery = admitArtifactQuery(params, cfg, respond);
-    if (!admittedQuery) {
-      return;
-    }
-    const loaded = await runArtifactSessionOperation(respond, () =>
-      loadArtifacts(admittedQuery, cfg, { includeDownloadData: false }, client),
+    const loaded = await runArtifactSessionOperation(request, params, (query, cfg) =>
+      loadArtifacts(query, cfg, { includeDownloadData: false }, client),
     );
     if (!loaded.ok) {
       return;
@@ -609,20 +641,16 @@ export const artifactsHandlers: GatewayRequestHandlers = {
       ...(omittedOversized ? { omittedOversized: true } : {}),
     });
   },
-  "artifacts.get": async ({ params, respond, context, client }) => {
+  "artifacts.get": async (request) => {
+    const { params, respond, client } = request;
     if (!assertValidParams(params, validateArtifactsGetParams, "artifacts.get", respond)) {
       return;
     }
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const cfg = context.getRuntimeConfig?.();
-    const admittedQuery = admitArtifactQuery(params, cfg, respond);
-    if (!admittedQuery) {
-      return;
-    }
-    const found = await runArtifactSessionOperation(respond, () =>
-      findArtifact(admittedQuery, cfg, { includeDownloadData: false }, client),
+    const found = await runArtifactSessionOperation(request, params, (query, cfg) =>
+      findArtifact(query, cfg, { includeDownloadData: false }, client),
     );
     if (!found.ok) {
       return;
@@ -634,7 +662,8 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     respond(true, { artifact: toSummary(artifact) });
   },
-  "artifacts.download": async ({ params, respond, context, client }) => {
+  "artifacts.download": async (request) => {
+    const { params, respond, client } = request;
     if (
       !assertValidParams(params, validateArtifactsDownloadParams, "artifacts.download", respond)
     ) {
@@ -643,23 +672,18 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const cfg = context.getRuntimeConfig?.();
-    const admittedQuery = admitArtifactQuery(params, cfg, respond);
-    if (!admittedQuery) {
-      return;
-    }
     if (
-      admittedQuery.sessionKey &&
-      !admittedQuery.runId &&
-      !admittedQuery.taskId &&
-      !admittedQuery.messageRole &&
+      params.sessionKey &&
+      !params.runId &&
+      !params.taskId &&
+      !params.messageRole &&
       parseManagedOutgoingArtifactId(params.artifactId)
     ) {
-      await respondManagedArtifactDownload(admittedQuery, cfg, client, respond);
+      await respondManagedArtifactDownload(request, params);
       return;
     }
-    const found = await runArtifactSessionOperation(respond, () =>
-      findArtifact(admittedQuery, cfg, { downloadArtifactId: params.artifactId }, client),
+    const found = await runArtifactSessionOperation(request, params, (query, cfg) =>
+      findArtifact(query, cfg, { downloadArtifactId: params.artifactId }, client),
     );
     if (!found.ok) {
       return;
@@ -672,7 +696,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (parseManagedOutgoingArtifactId(artifact.id)) {
       // Filters prove transcript membership; the managed ID still owns the bytes.
       // Never retarget a stale ID through inline data or another block URL.
-      await respondManagedArtifactDownload(admittedQuery, cfg, client, respond, artifact);
+      await respondManagedArtifactDownload(request, params, artifact);
       return;
     }
     if (artifact.download.mode === "unsupported") {

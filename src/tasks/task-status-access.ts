@@ -12,11 +12,11 @@ import {
 import {
   assertTaskRegistryOwnerCurrent,
   prepareTaskRegistryProjectionAsync,
+  tasks,
 } from "./task-registry-state.js";
 // Filters task status visibility by requester, owner, and flow scope.
 import {
   findTaskByRunId,
-  getTaskById,
   listTaskRecords,
   listTaskRecordsUnsorted,
   listTasksForRelatedSessionKey,
@@ -31,13 +31,13 @@ const GENERATED_MEDIA_TASK_KINDS = new Set([
   "video_generation",
 ]);
 
-/** Returns only the session lookup fields needed by task status commands. */
-export function getTaskSessionLookupByIdForStatus(
+/** Selects session lookup fields from the prepared task projection. */
+export function selectTaskSessionLookupByIdForStatus(
   taskId: string,
 ):
   | Pick<TaskRecord, "requesterSessionKey" | "ownerKey" | "runId" | "agentId" | "requesterAgentId">
   | undefined {
-  const task = getTaskById(taskId);
+  const task = tasks.get(taskId.trim());
   return task
     ? {
         requesterSessionKey: task.requesterSessionKey,
