@@ -254,7 +254,8 @@ describe("provider local service", () => {
     firstLease.release();
     expect((await fetch(healthUrl)).ok).toBe(true);
     secondLease.release();
-    await waitForProbeFailure(healthUrl);
+    // Join the idle stop: a closed listener can precede completed process-tree teardown.
+    await waitForProbeFailure(healthUrl).then(stopManagedProviderLocalServices);
     expect(hasManagedProviderLocalServices()).toBe(false);
   });
 

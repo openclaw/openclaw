@@ -4,6 +4,7 @@ import fs, { type BigIntStats } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { resolveCommandEnv } from "openclaw/plugin-sdk/process-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveLlamaCppDataDir } from "./defaults.js";
 import {
@@ -245,12 +246,22 @@ async function runServerCommand(
   args: string[],
   signal?: AbortSignal,
   timeoutMs = VERSION_TIMEOUT_MS,
+  context: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
 ): Promise<string> {
+  signal?.throwIfAborted();
   return await new Promise((resolve, reject) => {
     execFile(
       command,
       args,
-      { timeout: timeoutMs, signal, windowsHide: true },
+      {
+        timeout: timeoutMs,
+        signal,
+        windowsHide: true,
+        ...(context.cwd === undefined ? {} : { cwd: context.cwd }),
+        ...(context.env === undefined
+          ? {}
+          : { env: resolveCommandEnv({ argv: [command, ...args], env: context.env }) }),
+      },
       (error, stdout, stderr) => {
         if (error) {
           reject(new Error(error.message, { cause: error }));
@@ -260,6 +271,59 @@ async function runServerCommand(
       },
     );
   });
+}
+
+export type LlamaServerDevice = {
+  id: string;
+  name: string;
+  totalMemoryBytes: number;
+  availableMemoryBytes: number;
+};
+
+/** Read the installed backend's device names under the eventual service environment. */
+export async function listLlamaServerDevices(options: {
+  command: string;
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  signal?: AbortSignal;
+}): Promise<LlamaServerDevice[]> {
+  const output = await runServerCommand(
+    options.command,
+    ["--list-devices"],
+    options.signal,
+    VERSION_TIMEOUT_MS,
+    options,
+  );
+  options.signal?.throwIfAborted();
+  const devices: LlamaServerDevice[] = [];
+  const seen = new Set<string>();
+  for (const line of output.split(/\r?\n/u)) {
+    const match = /^\s*(\S+): (.+) \((\d+) MiB, (\d+) MiB free\)$/u.exec(line);
+    if (!match) {
+      continue;
+    }
+    const [, id, name, total, available] = match;
+    const totalMemoryBytes = Number(total) * 1024 ** 2;
+    const availableMemoryBytes = Number(available) * 1024 ** 2;
+    if (
+      !id ||
+      !name ||
+      !Number.isSafeInteger(totalMemoryBytes) ||
+      totalMemoryBytes <= 0 ||
+      !Number.isSafeInteger(availableMemoryBytes) ||
+      availableMemoryBytes < 0
+    ) {
+      continue;
+    }
+    if (seen.has(id)) {
+      throw new Error(
+        `llama-server reported duplicate device ${id}. Check the runtime and retry setup.`,
+      );
+    }
+    seen.add(id);
+    devices.push({ id, name, totalMemoryBytes, availableMemoryBytes });
+  }
+  return devices;
 }
 
 function formatRuntimeDependencyError(error: unknown): Error {
@@ -304,8 +368,8 @@ async function validateInstalledServer(
   if (asset.backend === "cuda") {
     // --version succeeds even if a dynamically loaded CUDA backend fails. Device
     // enumeration must prove CUDA is usable before this installation is published.
-    const devices = await runServerCommand(command, ["--list-devices"], signal);
-    if (!/^\s*CUDA\d+: .+\(\d+ MiB, \d+ MiB free\)$/mu.test(devices)) {
+    const devices = await listLlamaServerDevices({ command, signal });
+    if (!devices.some((device) => /^CUDA\d+$/u.test(device.id))) {
       throw new Error(
         "The verified llama-server could not initialize an NVIDIA CUDA device. Update the NVIDIA driver and rerun setup, or configure a compatible llama-server manually. CPU fallback was not activated.",
       );
@@ -344,6 +408,7 @@ async function installLlamaServer(
       url: assetUrl(asset),
       destination: archivePath,
       expectedSha256: asset.sha256,
+      expectedSize: asset.sizeBytes,
       signal: options.signal,
       onProgress: options.onProgress,
     });
@@ -362,6 +427,7 @@ async function installLlamaServer(
         url: assetUrl(dependency),
         destination: dependencyArchive,
         expectedSha256: dependency.sha256,
+        expectedSize: dependency.sizeBytes,
         signal: options.signal,
         onProgress: options.onProgress,
       });

@@ -168,14 +168,24 @@ export function buildLlamaCppProviderConfig(
     ...(managed
       ? {
           localService: {
+            ...existing?.localService,
             command: managed.command,
             args: managed.args,
             healthUrl: managed.healthUrl,
-            readyTimeoutMs: LLAMA_CPP_READY_TIMEOUT_MS,
-            idleStopMs: LLAMA_CPP_IDLE_STOP_MS,
+            readyTimeoutMs: existing?.localService?.readyTimeoutMs ?? LLAMA_CPP_READY_TIMEOUT_MS,
+            idleStopMs: existing?.localService?.idleStopMs ?? LLAMA_CPP_IDLE_STOP_MS,
           },
         }
       : {}),
-    models,
+    // Every setup mode can move the managed router. Retain independent endpoints,
+    // but move model rows that explicitly used the previous provider endpoint.
+    models:
+      managed && existing?.localService
+        ? models.map((model) =>
+            model.baseUrl === existing.baseUrl
+              ? Object.assign({}, model, { baseUrl: managed.baseUrl })
+              : model,
+          )
+        : models,
   };
 }
