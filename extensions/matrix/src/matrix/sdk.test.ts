@@ -1184,7 +1184,7 @@ describe("MatrixClient request hardening", () => {
           ...getMatrixRuntime(),
           state: {
             ...stateRuntime,
-            openSyncKeyedStore: () => {
+            openKeyedStore: () => {
               throw new Error("ambient Matrix runtime is unavailable");
             },
           },
