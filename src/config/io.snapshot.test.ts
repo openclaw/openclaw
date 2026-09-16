@@ -46,6 +46,59 @@ function createContext(root: string) {
 }
 
 describe("config snapshot plugin metadata", () => {
+  it("leaves an absent config without authored provenance or a new file", async () => {
+    const root = tempDirs.make("openclaw-config-absent-authored-");
+    const context = createContext(root);
+    const snapshot = await readConfigFileSnapshotFromContext(context);
+    expect(snapshot).toMatchObject({
+      path: context.configPath,
+      exists: false,
+      raw: null,
+      parsed: {},
+    });
+    expect(snapshot.authoredConfig).toBeUndefined();
+    expect(snapshot.sourceConfig.plugins).toBeUndefined();
+    expect(fs.existsSync(context.configPath)).toBe(false);
+  });
+
+  it.each([false, true])(
+    "pairs authored include references with their resolved read (invalid: %s)",
+    async (invalid) => {
+      const root = tempDirs.make("openclaw-config-authored-snapshot-");
+      const context = createContext(root);
+      context.deps.env.PLUGIN_TOKEN = "read-time-token";
+      const plugins = {
+        enabled: false,
+        entries: { retired: { config: { token: "${PLUGIN_TOKEN}" } } },
+      };
+      fs.writeFileSync(path.join(root, "plugins.json"), JSON.stringify(plugins));
+      fs.writeFileSync(
+        context.configPath,
+        JSON.stringify({
+          gateway: { auth: { token: "${PLUGIN_TOKEN}" } },
+          plugins: { $include: "plugins.json" },
+          ...(invalid ? { nodeHost: { browserProxy: { enabled: "invalid" } } } : {}),
+        }),
+      );
+
+      const snapshot = await readConfigFileSnapshotFromContext(context);
+      const hash = snapshot.hash;
+      context.deps.env.PLUGIN_TOKEN = "later-token";
+      fs.writeFileSync(path.join(root, "plugins.json"), "{}");
+
+      expect(snapshot.valid).toBe(!invalid);
+      expect(snapshot.authoredConfig?.plugins).toEqual(plugins);
+      expect(snapshot.authoredConfig?.gateway?.auth?.token).toBe("${PLUGIN_TOKEN}");
+      expect(snapshot.sourceConfigBeforeMigrations?.gateway?.auth?.token).toBe("read-time-token");
+      expect(snapshot.sourceConfigBeforeMigrations?.plugins?.entries?.retired?.config).toEqual({
+        token: "read-time-token",
+      });
+      expect(snapshot.parsed).toMatchObject({ plugins: { $include: "plugins.json" } });
+      expect(snapshot.hash).toBe(hash);
+      expect(snapshot.path).toBe(context.configPath);
+    },
+  );
+
   it.each(["full", "core-only"] as const)(
     "keeps legacy roster channel discovery owned by %s validation",
     async (pluginValidation) => {
