@@ -709,9 +709,9 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
       runId,
       ...(onBlockReply
         ? {
-            onBlockReply: (payload, context) => {
-              bindReplyReasoningVisibility(payload, reasoningVisibility);
-              return onBlockReply(payload, context);
+            onBlockReply: (...args) => {
+              bindReplyReasoningVisibility(args[0], reasoningVisibility);
+              return onBlockReply(...args);
             },
           }
         : {}),
