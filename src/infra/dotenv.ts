@@ -1,5 +1,4 @@
 // Loads dotenv files while blocking unsafe workspace env keys.
-import path from "node:path";
 import {
   listKnownProviderAuthEnvVarNames,
   listKnownProviderAuthEnvVarNamesAsync,
@@ -10,12 +9,12 @@ import {
   readDotEnvFile,
   readDotEnvFileAsync,
 } from "./dotenv-global.js";
+import { resolveWorkspaceDotEnvPath } from "./dotenv-paths.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "./host-env-security.js";
-import { tryProcessCwd } from "./safe-cwd.js";
 
 const BLOCKED_PROVIDER_AUTH_WORKSPACE_DOTENV_KEYS = [
   "AI_GATEWAY_API_KEY",
@@ -346,9 +345,9 @@ export async function loadDotEnvAsync(opts: {
   cwd?: string;
 }): Promise<void> {
   const quiet = opts.quiet ?? true;
-  const cwd = Object.hasOwn(opts, "cwd") ? opts.cwd : tryProcessCwd();
-  if (cwd) {
-    await loadWorkspaceDotEnvFileAsync(path.join(cwd, ".env"), { env: opts.env, quiet });
+  const workspaceEnvPath = resolveWorkspaceDotEnvPath(opts);
+  if (workspaceEnvPath) {
+    await loadWorkspaceDotEnvFileAsync(workspaceEnvPath, { env: opts.env, quiet });
   }
   await loadGlobalRuntimeDotEnvFilesAsync({ env: opts.env, quiet });
 }
@@ -357,9 +356,9 @@ export { loadGlobalRuntimeDotEnvFiles };
 
 export function loadDotEnv(opts?: { quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;
-  const cwd = tryProcessCwd();
-  if (cwd) {
-    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet });
+  const workspaceEnvPath = resolveWorkspaceDotEnvPath();
+  if (workspaceEnvPath) {
+    loadWorkspaceDotEnvFile(workspaceEnvPath, { quiet });
   }
 
   // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
