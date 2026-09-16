@@ -1,5 +1,6 @@
 package ai.openclaw.app.gateway
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
@@ -10,6 +11,7 @@ import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -60,6 +62,96 @@ class CloudflareAccessSessionStoreTest {
       assertEquals(listOf("retire", "delete", "save"), storage.events)
       assertSame(snapshot, store.snapshot(application.origin))
       assertEquals(CloudflareAccessSessionStore.State.Authenticated, store.states.value[application.origin])
+    }
+
+  @Test fun cancelledDeferredBeforeDispatchAllowsFreshCoalescedSignIn() =
+    runTest {
+      val storage = Storage()
+      val grant = CompletableDeferred<CloudflareAccessSession>()
+      var transfers = 0
+      var browsers = 0
+      val store =
+        CloudflareAccessSessionStore(backgroundScope, storage.persistence, authenticate = { _, openBrowser ->
+          transfers++
+          openBrowser("https://gateway.example.test/cdn-cgi/access/cli")
+          grant.await()
+        }, retireTransports = { storage.events += "retire" })
+      val cancelled = store.signIn(application) { browsers++ }
+      assertEquals(CloudflareAccessSessionStore.State.SigningIn, store.states.value[application.origin])
+      assertEquals(0, transfers)
+      assertEquals(0, browsers)
+      cancelled.cancel()
+      runCurrent()
+      cancelled.join()
+      assertTrue(cancelled.isCancelled)
+      assertTrue(runCatching { cancelled.await() }.exceptionOrNull() is CancellationException)
+      assertEquals(0, transfers)
+      assertEquals(0, browsers)
+      assertTrue(storage.events.isEmpty())
+      assertTrue(storage.values.isEmpty())
+      assertNull(store.snapshot(application.origin))
+      assertEquals(CloudflareAccessSessionStore.State.ReauthenticationRequired, store.states.value[application.origin])
+
+      val fresh = store.signIn(application) { browsers++ }
+      assertNotSame(cancelled, fresh)
+      assertTrue(fresh.isActive)
+      assertSame(fresh, store.signIn(application) { browsers++ })
+      runCurrent()
+      assertEquals(1, transfers)
+      assertEquals(1, browsers)
+      grant.complete(CloudflareAccessTestTokens.session())
+      val snapshot = fresh.await()
+      assertEquals(listOf("retire", "delete", "save"), storage.events)
+      assertEquals(snapshot.session.encode(), storage.values[application.origin])
+      assertSame(snapshot, store.snapshot(application.origin))
+      assertEquals(CloudflareAccessSessionStore.State.Authenticated, store.states.value[application.origin])
+    }
+
+  @Test fun cancelledAttemptBeforeDispatchCannotClearReplacement() =
+    runTest {
+      val storage = Storage()
+      val grant = CompletableDeferred<CloudflareAccessSession>()
+      var transfers = 0
+      val store =
+        CloudflareAccessSessionStore(backgroundScope, storage.persistence, authenticate = { _, _ ->
+          transfers++
+          grant.await()
+        }, retireTransports = { storage.events += "retire" })
+      val cancelled = store.signIn(application) {}
+      store.cancelSignIn(application.origin)
+      val fresh = store.signIn(application) {}
+      assertNotSame(cancelled, fresh)
+      assertEquals(0, transfers)
+      runCurrent()
+      cancelled.join()
+      assertTrue(cancelled.isCancelled)
+      assertEquals(1, transfers)
+      assertEquals(CloudflareAccessSessionStore.State.SigningIn, store.states.value[application.origin])
+      assertSame(fresh, store.signIn(application) {})
+      grant.complete(CloudflareAccessTestTokens.session())
+      assertSame(fresh.await(), store.snapshot(application.origin))
+      assertEquals(listOf("retire", "delete", "save"), storage.events)
+    }
+
+  @Test fun forgetBeforeDispatchStaysSignedOutWhenCancelledAttemptCompletes() =
+    runTest {
+      val storage = Storage()
+      var transfers = 0
+      val store =
+        CloudflareAccessSessionStore(backgroundScope, storage.persistence, authenticate = { _, _ ->
+          transfers++
+          CloudflareAccessTestTokens.session()
+        }, retireTransports = { storage.events += "retire" })
+      val attempt = store.signIn(application) {}
+      assertEquals(0, transfers)
+      store.forget(application.origin)
+      attempt.join()
+      assertTrue(attempt.isCancelled)
+      assertEquals(0, transfers)
+      assertEquals(listOf("retire", "delete"), storage.events)
+      assertTrue(storage.values.isEmpty())
+      assertNull(store.snapshot(application.origin))
+      assertEquals(CloudflareAccessSessionStore.State.SignedOut, store.states.value[application.origin])
     }
 
   @Test fun grantExpiringDuringRetirementIsNeverPersistedOrPublished() =

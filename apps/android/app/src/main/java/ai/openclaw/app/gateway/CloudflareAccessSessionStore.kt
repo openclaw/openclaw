@@ -98,8 +98,11 @@ internal class CloudflareAccessSessionStore(
       attempts[origin]?.let { return@withLock it.task }
       val id = UUID.randomUUID()
       val task =
-        scope.async(start = CoroutineStart.LAZY) {
+        scope.async(start = CoroutineStart.UNDISPATCHED) {
           try {
+            // Enter cleanup before cancellation can skip dispatch. This first lock suspends
+            // behind signIn until the attempt is registered, before any browser or transfer work.
+            mutex.withLock { checkAttempt(origin, id) }
             val session = authenticate(application, openBrowser)
             val retirement =
               mutex.withLock {
@@ -139,7 +142,6 @@ internal class CloudflareAccessSessionStore(
       attempts[origin] = Attempt(id, task)
       setState(origin, State.SigningIn)
       ++revision
-      task.start()
       task
     }
 
