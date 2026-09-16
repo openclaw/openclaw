@@ -114,9 +114,9 @@ describe("Feishu bot-menu lifecycle", () => {
   afterEach(async () => {
     try {
       await stopFeishuLifecycleMonitors();
+      restoreFeishuLifecycleStateDir(originalStateDir);
     } finally {
       vi.useRealTimers();
-      restoreFeishuLifecycleStateDir(originalStateDir);
     }
   });
 

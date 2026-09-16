@@ -10,7 +10,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveAgentRoute, type ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import "./bot.cleanup.test-support.js";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage, parseFeishuMessageEvent } from "./bot.js";
@@ -494,18 +495,6 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
       touch: mockTouchBinding,
     }),
   };
-});
-
-afterAll(() => {
-  vi.doUnmock("./reply-dispatcher.js");
-  vi.doUnmock("./reasoning-preview.js");
-  vi.doUnmock("./send.js");
-  vi.doUnmock("./media.js");
-  vi.doUnmock("./audio-preflight.runtime.js");
-  vi.doUnmock("./client.js");
-  vi.doUnmock("./bot-name.js");
-  vi.doUnmock("openclaw/plugin-sdk/conversation-runtime");
-  vi.resetModules();
 });
 
 async function dispatchMessage(params: {

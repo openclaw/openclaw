@@ -271,7 +271,7 @@ afterEach(async () => {
   preAuthInFlightLimit.value = undefined;
   webhookBodyTimeoutMs.value = 50;
   feishuWebhookRateLimiter.clear();
-  cleanupFeishuMonitorStateForTests();
+  await cleanupFeishuMonitorStateForTests();
 });
 
 afterAll(() => {

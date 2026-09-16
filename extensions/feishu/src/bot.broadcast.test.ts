@@ -1,5 +1,6 @@
 // Feishu tests cover bot.broadcast plugin behavior.
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { feishuGroupNameCache } from "./bot-group-name-state.js";
@@ -327,7 +328,8 @@ describe("broadcast dispatch", () => {
     setFeishuRuntime(runtimeStub);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     vi.restoreAllMocks();
     feishuDedupeState.reset();
   });

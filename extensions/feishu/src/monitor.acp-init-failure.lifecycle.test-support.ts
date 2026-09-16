@@ -157,9 +157,9 @@ describe("Feishu ACP-init failure lifecycle", () => {
   afterEach(async () => {
     try {
       await stopFeishuLifecycleMonitors();
+      restoreFeishuLifecycleStateDir(originalStateDir);
     } finally {
       vi.useRealTimers();
-      restoreFeishuLifecycleStateDir(originalStateDir);
     }
   });
 

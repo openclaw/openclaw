@@ -173,9 +173,9 @@ describe("Feishu broadcast reply-once lifecycle", () => {
   afterEach(async () => {
     try {
       await stopFeishuLifecycleMonitors();
+      restoreFeishuLifecycleStateDir(originalStateDir);
     } finally {
       vi.useRealTimers();
-      restoreFeishuLifecycleStateDir(originalStateDir);
     }
   });
 

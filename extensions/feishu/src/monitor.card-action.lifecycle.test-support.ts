@@ -186,11 +186,11 @@ describe("Feishu card-action lifecycle", () => {
   afterEach(async () => {
     try {
       await stopFeishuLifecycleMonitors();
-    } finally {
-      vi.useRealTimers();
       processedCardActions.clear();
       resolvedCardActionChatTypes.clear();
       restoreFeishuLifecycleStateDir(originalStateDir);
+    } finally {
+      vi.useRealTimers();
     }
   });
 

@@ -194,35 +194,60 @@ describe("scripts/test-extension.mts", () => {
     expect(plan.hasTests).toBe(true);
   });
 
-  it("splits the iMessage batch between persistence and channel owners without double counting", () => {
-    const batch = resolveExtensionBatchPlan({ extensionIds: ["imessage"] });
-    const files = listExtensionTestFilesForRoots(["extensions/imessage"]);
-    const workerFiles = databaseWorkerExtensionTestFiles.filter((file) =>
-      file.startsWith("extensions/imessage/"),
-    );
-    expect(batch.extensionIds).toEqual(["imessage"]);
-    expect(batch.testFileCount).toBe(files.length);
-    expect(batch.planGroups).toEqual([
-      expect.objectContaining({
-        config: "test/vitest/vitest.extension-database-workers.config.ts",
-        roots: workerFiles,
-        extensionIds: ["imessage"],
-        testFileCount: workerFiles.length,
-      }),
-      expect.objectContaining({
-        config: "test/vitest/vitest.extension-imessage.config.ts",
-        roots: ["extensions/imessage"],
-        extensionIds: ["imessage"],
-        testFileCount: files.length - workerFiles.length,
-      }),
-    ]);
-    expect(listExtensionTestFilesForRoots(batch.planGroups[0]!.roots)).toEqual(
-      workerFiles.toSorted(),
-    );
-    const shards = createExtensionTestShards({ extensionIds: ["imessage"], shardCount: 2 });
-    expect(shards).toHaveLength(1);
-    expect(shards[0]?.planGroups).toEqual(batch.planGroups);
-  });
+  it.each([
+    {
+      extensionId: "imessage",
+      workerFiles: databaseWorkerExtensionTestFiles.filter((file) =>
+        file.startsWith("extensions/imessage/"),
+      ),
+    },
+    {
+      extensionId: "feishu",
+      workerFiles: [
+        "bot.broadcast.test.ts",
+        "bot.test.ts",
+        "dedup.test.ts",
+        "feishu-ingress.test.ts",
+        "monitor.bot-menu.test.ts",
+        "monitor.dedupe-lifecycle.test.ts",
+        "monitor.helpers.test.ts",
+        "monitor.lifecycle.test.ts",
+        "monitor.reaction.test.ts",
+        "monitor.startup.test.ts",
+        "monitor.webhook-e2e.test.ts",
+        "monitor.webhook-security.test.ts",
+      ].map((file) => `extensions/feishu/src/${file}`),
+    },
+  ])(
+    "splits the $extensionId batch between persistence and channel owners without double counting",
+    ({ extensionId, workerFiles }) => {
+      const root = `extensions/${extensionId}`;
+      const batch = resolveExtensionBatchPlan({ extensionIds: [extensionId] });
+      const files = listExtensionTestFilesForRoots([root]);
+      expect(batch.extensionIds).toEqual([extensionId]);
+      expect(batch.testFileCount).toBe(files.length);
+      expect(batch.planGroups).toEqual([
+        expect.objectContaining({
+          config: "test/vitest/vitest.extension-database-workers.config.ts",
+          roots: workerFiles,
+          extensionIds: [extensionId],
+          testFileCount: workerFiles.length,
+        }),
+        expect.objectContaining({
+          config: `test/vitest/vitest.extension-${extensionId}.config.ts`,
+          roots: [root],
+          extensionIds: [extensionId],
+          testFileCount: files.length - workerFiles.length,
+        }),
+      ]);
+      expect(listExtensionTestFilesForRoots(batch.planGroups[0]!.roots)).toEqual(
+        workerFiles.toSorted(),
+      );
+      const shards = createExtensionTestShards({ extensionIds: [extensionId], shardCount: 2 });
+      expect(shards).toHaveLength(1);
+      expect(shards[0]?.planGroups).toEqual(batch.planGroups);
+    },
+  );
 
   it.each([
     {

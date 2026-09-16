@@ -6,6 +6,7 @@ import {
 import { hasControlCommand, isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
@@ -47,6 +48,26 @@ vi.mock("./monitor.transport.js", () => ({
 vi.mock("./thread-bindings.js", () => ({
   createFeishuThreadBindingManager: createFeishuThreadBindingManagerMock,
 }));
+
+afterEach(async () => {
+  try {
+    const results = await Promise.allSettled([stopDebounceMonitor?.()]);
+    results.push(...(await Promise.allSettled([closeOpenClawStateDatabaseAsync()])));
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Feishu reaction test cleanup failed");
+    }
+    stopDebounceMonitor = undefined;
+    vi.restoreAllMocks();
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
 afterAll(() => {
   vi.doUnmock("./client.js");
@@ -639,16 +660,6 @@ describe("Feishu inbound debounce regressions", () => {
     handlers = {};
     handleFeishuMessageMock.mockClear();
     setFeishuRuntime(createFeishuMonitorRuntime());
-  });
-
-  afterEach(async () => {
-    try {
-      await stopDebounceMonitor?.();
-    } finally {
-      stopDebounceMonitor = undefined;
-      vi.useRealTimers();
-      vi.restoreAllMocks();
-    }
   });
 
   it("keeps root-less topic threads in separate debounce buckets", async () => {

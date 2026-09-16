@@ -5,6 +5,7 @@ import {
   createTestInboundDebounceFlush,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { expect, vi, type Mock } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
 import { getFeishuLifecycleTestMocks } from "../lifecycle.test-support.js";
@@ -16,16 +17,19 @@ const activeMonitors = new Set<{ controller: AbortController; completion: Promis
 
 export async function stopFeishuLifecycleMonitors(): Promise<void> {
   const monitors = [...activeMonitors];
-  activeMonitors.clear();
   for (const monitor of monitors) {
     monitor.controller.abort();
   }
   const results = await Promise.allSettled(monitors.map((monitor) => monitor.completion));
-  for (const result of results) {
-    if (result.status === "rejected") {
-      throw result.reason;
-    }
+  results.push(...(await Promise.allSettled([closeOpenClawStateDatabaseAsync()])));
+  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+  if (errors.length === 1) {
+    throw errors[0];
   }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "Feishu lifecycle test cleanup failed");
+  }
+  activeMonitors.clear();
 }
 type InboundDebounceFlush = ReturnType<
   Parameters<PluginRuntime["channel"]["debounce"]["createInboundDebouncer"]>[0]["onFlush"]

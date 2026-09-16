@@ -86,8 +86,8 @@ async function waitForStartedAccount(started: string[], accountId: string) {
   );
 }
 
-afterEach(() => {
-  cleanupFeishuMonitorStateForTests();
+afterEach(async () => {
+  await cleanupFeishuMonitorStateForTests();
 });
 
 afterAll(() => {
@@ -477,6 +477,7 @@ describe("Feishu monitor startup preflight", () => {
       expect(started).toEqual(["alpha"]);
     } finally {
       abortController.abort();
+      await monitorPromise;
     }
   });
 });
