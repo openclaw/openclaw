@@ -142,10 +142,17 @@ internal class CloudflareAccessClient(
       request: Request,
       maximumBytes: Int,
       timeoutSeconds: Long,
+    ): Reply = send(request, maximumBytes, timeoutSeconds, client)
+
+    suspend fun send(
+      request: Request,
+      maximumBytes: Int,
+      timeoutSeconds: Long,
+      transport: OkHttpClient,
     ): Reply =
       suspendCancellableCoroutine { continuation ->
         val call =
-          client
+          transport
             .newBuilder()
             .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .readTimeout(timeoutSeconds, TimeUnit.SECONDS)

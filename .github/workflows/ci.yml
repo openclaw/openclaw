@@ -5847,21 +5847,27 @@ jobs:
             test "$(adb -s emulator-5554 shell getprop bionic.linker.16kb.app_compat.enabled | tr -d '\r')" = false
             test "$(adb -s emulator-5554 shell getprop pm.16kb.app_compat.disabled | tr -d '\r')" = true
           fi
+          export ACCESS_NATIVE_TEST_CLASSES=ai.openclaw.app.gateway.CloudflareAccessNativeTest,ai.openclaw.app.gateway.CloudflareAccessPersistenceNativeTest
+          # AGP 9.4 splits instrumentation values on commas; quote the exact regex for adb's remote shell.
+          native_test_filter="-Pandroid.testInstrumentationRunnerArguments.tests_regex='^ai[.]openclaw[.]app[.]gateway[.](CloudflareAccessNativeTest#packagedSodiumLoadsAndDecryptsTheGoTransferVector|CloudflareAccessPersistenceNativeTest#encryptedGrantRestoresAndDeletesWithoutChangingGatewayPairing)$'"
           node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
             :app:connectedPlayDebugAndroidTest \
             -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE" \
-            -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest \
+            "$native_test_filter" \
             -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           apk="$(python3 - <<'PY'
           from pathlib import Path
           import json
+          import os
           import xml.etree.ElementTree as ET
           import zipfile
           reports = Path('apps/android/app/build/outputs/androidTest-results/connected').rglob('*.xml')
-          cases = [case for report in reports for case in ET.parse(report).getroot().iter('testcase')
-                   if case.get('classname') == 'ai.openclaw.app.gateway.CloudflareAccessNativeTest']
-          assert len(cases) == 1, 'The packaged native test must execute exactly once'
-          assert all(case.find(tag) is None for case in cases for tag in ('failure', 'error', 'skipped')), 'The packaged native test failed or skipped'
+          cases = [case for report in reports for case in ET.parse(report).getroot().iter('testcase')]
+          expected_classes = os.environ['ACCESS_NATIVE_TEST_CLASSES'].split(',')
+          assert len(cases) == len(expected_classes), 'Every selected native test must execute exactly once'
+          for expected in expected_classes:
+              assert sum(case.get('classname') == expected for case in cases) == 1, f'Missing or duplicate native test: {expected}'
+          assert all(case.find(tag) is None for case in cases for tag in ('failure', 'error', 'skipped')), 'A packaged native test failed or skipped'
           directory = Path('apps/android/app/build/outputs/apk/play/debug')
           metadata = json.loads((directory / 'output-metadata.json').read_text())
           assert metadata['variantName'] == 'playDebug' and metadata['artifactType']['type'] == 'APK'
