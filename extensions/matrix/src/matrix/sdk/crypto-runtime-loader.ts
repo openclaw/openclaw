@@ -1,4 +1,5 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { MatrixSnapshotStateRuntime } from "../crypto-state-store.js";
 
 type MatrixCryptoRuntime = typeof import("./crypto-runtime.js");
 
@@ -12,3 +13,19 @@ export const loadMatrixCryptoRuntime = createLazyRuntimeModule(() =>
     return runtime;
   }),
 );
+
+export async function getOrLoadMatrixCryptoRuntime(): Promise<MatrixCryptoRuntime> {
+  return getLoadedMatrixCryptoRuntime() ?? (await loadMatrixCryptoRuntime());
+}
+
+export async function persistCryptoBeforeKeyUpload(params: {
+  resource: RequestInfo | URL;
+  init?: RequestInit;
+  encryptionEnabled: boolean;
+  snapshotPath: string;
+  databasePrefix: string;
+  stateRuntime: MatrixSnapshotStateRuntime;
+}): Promise<void> {
+  const runtime = await loadMatrixCryptoRuntime();
+  await runtime.persistCryptoBeforeKeyUpload(params);
+}

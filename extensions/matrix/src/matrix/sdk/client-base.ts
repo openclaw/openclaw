@@ -27,7 +27,7 @@ import {
 import { quiesceMatrixClientSync } from "./client-sync-quiesce.js";
 import { waitForMatrixInitialSyncReady } from "./client-sync-ready.js";
 import type { MatrixCryptoFacade } from "./crypto-facade.js";
-import { getLoadedMatrixCryptoRuntime, loadMatrixCryptoRuntime } from "./crypto-runtime-loader.js";
+import * as cryptoRuntimeLoader from "./crypto-runtime-loader.js";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { matrixEventToRaw } from "./event-helpers.js";
 import { MatrixAuthedHttpClient } from "./http-client.js";
@@ -245,8 +245,7 @@ export abstract class MatrixClientBase {
         // The SDK cache callback is void; even stores without a key getter must
         // settle its admitted writes before another request reaches the wire.
         await this.recoveryKeyStore.drainPendingPersistence();
-        const runtime = await loadMatrixCryptoRuntime();
-        await runtime.persistCryptoBeforeKeyUpload({
+        await cryptoRuntimeLoader.persistCryptoBeforeKeyUpload({
           resource,
           init,
           encryptionEnabled: this.encryptionEnabled,
@@ -311,7 +310,7 @@ export abstract class MatrixClientBase {
       return;
     }
 
-    const runtime = await loadMatrixCryptoRuntime();
+    const runtime = await cryptoRuntimeLoader.loadMatrixCryptoRuntime();
     this.decryptBridge ??= new runtime.MatrixDecryptBridge<MatrixRawEvent>({
       client: this.client,
       toRaw: (event) => matrixEventToRaw(event, { contentMode: "original" }),
@@ -603,7 +602,7 @@ export abstract class MatrixClientBase {
       }
       await Promise.all([this.recoveryKeyStore.close(), activePeriodicPersist]);
       if (persist) {
-        const runtime = getLoadedMatrixCryptoRuntime() ?? (await loadMatrixCryptoRuntime());
+        const runtime = await cryptoRuntimeLoader.getOrLoadMatrixCryptoRuntime();
         await runtime.persistIdbToDisk({
           snapshotPath: this.idbSnapshotPath,
           databasePrefix: this.cryptoDatabasePrefix,

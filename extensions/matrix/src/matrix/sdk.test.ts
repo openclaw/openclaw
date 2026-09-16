@@ -30,7 +30,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 // Matrix tests cover sdk plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getMatrixRuntime, setMatrixRuntime } from "../runtime.js";
+import { getMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";
 import {
@@ -38,13 +38,12 @@ import {
   readMatrixRecoveryKeyStateForPathAsync,
   type MatrixSnapshotStateRuntime,
 } from "./crypto-state-store.js";
-import { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
-import { restoreIdbFromDisk } from "./sdk/idb-persistence.js";
 import {
-  clearAllIndexedDbState,
-  readDatabaseRecords,
-  seedDatabase,
-} from "./sdk/idb-persistence.test-helpers.js";
+  KEY_UPLOAD_FENCE_MODES,
+  runKeyUploadFenceCase,
+} from "./sdk.key-upload-fence.test-helper.js";
+import { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
+import { clearAllIndexedDbState } from "./sdk/idb-persistence.test-helpers.js";
 import { LogService } from "./sdk/logger.js";
 
 vi.mock("./sdk/joined-room-encryption.js", () => ({
@@ -1126,117 +1125,16 @@ describe("MatrixClient request hardening", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "fresh-device-restart",
-    "existing-device-restart",
-    "durable-prefixed",
-    "deferred-runtime",
-    "storage-failure",
-    "missing-database",
-    "missing-account",
-  ] as const)("fences keys upload on durable crypto state: %s", async (mode) => {
-    const baseUrl = `http://127.0.0.1:8008${mode === "durable-prefixed" ? "/matrix" : ""}`;
-    const root = tempDirs.make("matrix-key-upload-");
-    const prefix = path.basename(root);
-    const storageRoot = path.join(root, "state-root");
-    if (mode === "storage-failure") {
-      fs.writeFileSync(storageRoot, "not a directory");
-    }
-    const record = { key: "account", value: { pendingKey: "fixture-private-material" } };
-    const records = [
-      record,
-      ...(mode === "existing-device-restart"
-        ? [{ key: "session::existing-room", value: { session: "retained-session" } }]
-        : []),
-    ];
-    if (mode !== "missing-database") {
-      await seedDatabase({
-        name: `${prefix}::matrix-sdk-crypto`,
-        storeName: "core",
-        records: mode === "missing-account" ? [] : records,
-      });
-    }
-    try {
-      const stateRuntime = getMatrixRuntime().state;
-      const fetchMock = vi.fn(async () => {
-        const snapshot = await readMatrixIdbSnapshotJson(storageRoot, stateRuntime);
-        expect(snapshot).not.toBeNull();
-        expect(JSON.parse(snapshot!)).toEqual([
-          expect.objectContaining({
-            name: `${prefix}::matrix-sdk-crypto`,
-            stores: [expect.objectContaining({ name: "core", records })],
-          }),
-        ]);
-        return new Response('{"one_time_key_counts":{"signed_curve25519":1}}');
-      });
-      stubRuntimeFetch(fetchMock as typeof fetch);
-      const client = new MatrixClient(baseUrl, "token", {
-        encryption: true,
-        idbSnapshotPath: path.join(storageRoot, "crypto-idb-snapshot.json"),
-        cryptoDatabasePrefix: prefix,
-        ssrfPolicy: { allowPrivateNetwork: true },
-        stateRuntime,
-      });
-      expect(client).toBeInstanceOf(MatrixClient);
-      const fetchFn = lastCreateClientOpts?.fetchFn as typeof fetch;
-      if (mode === "deferred-runtime") {
-        setMatrixRuntime({
-          ...getMatrixRuntime(),
-          state: {
-            ...stateRuntime,
-            openKeyedStore: () => {
-              throw new Error("ambient Matrix runtime is unavailable");
-            },
-          },
-        });
-      }
-      const upload = fetchFn(`${baseUrl}/_matrix/client/v3/keys/upload`, {
-        method: "POST",
-        body: '{"one_time_keys":{"signed_curve25519:fixture":{"key":"public"}}}',
-      });
-      if (
-        mode === "fresh-device-restart" ||
-        mode === "existing-device-restart" ||
-        mode === "durable-prefixed" ||
-        mode === "deferred-runtime"
-      ) {
-        await expect(upload).resolves.toBeInstanceOf(Response);
-        expect(fetchMock).toHaveBeenCalledTimes(1);
-        if (mode.endsWith("-restart")) {
-          await clearAllIndexedDbState({ databasePrefix: prefix });
-          await expect(
-            restoreIdbFromDisk(path.join(storageRoot, "crypto-idb-snapshot.json")),
-          ).resolves.toBe(true);
-          await expect(
-            readDatabaseRecords({
-              name: `${prefix}::matrix-sdk-crypto`,
-              storeName: "core",
-            }),
-          ).resolves.toEqual(records);
-          const restartedClient = new MatrixClient(baseUrl, "token", {
-            encryption: true,
-            idbSnapshotPath: path.join(storageRoot, "crypto-idb-snapshot.json"),
-            cryptoDatabasePrefix: prefix,
-            ssrfPolicy: { allowPrivateNetwork: true },
-          });
-          expect(restartedClient).toBeInstanceOf(MatrixClient);
-          const restartedFetch = lastCreateClientOpts?.fetchFn as typeof fetch;
-          await expect(
-            restartedFetch(`${baseUrl}/_matrix/client/v3/keys/upload`, {
-              method: "POST",
-              body: '{"one_time_keys":{"signed_curve25519:fixture":{"key":"public"}}}',
-            }),
-          ).resolves.toBeInstanceOf(Response);
-          expect(fetchMock).toHaveBeenCalledTimes(2);
-        }
-      } else {
-        await expect(upload).rejects.toThrow();
-        expect(fetchMock).not.toHaveBeenCalled();
-      }
-    } finally {
-      await clearAllIndexedDbState({ databasePrefix: prefix });
-    }
-  });
+  it.each(KEY_UPLOAD_FENCE_MODES)("fences keys upload on durable crypto state: %s", async (mode) =>
+    runKeyUploadFenceCase({
+      mode,
+      MatrixClient,
+      makeTempDir: () => tempDirs.make("matrix-key-upload-"),
+      getFetchFn: () => lastCreateClientOpts?.fetchFn as typeof fetch,
+      readSnapshot: readMatrixIdbSnapshotJson,
+      stubRuntimeFetch,
+    }),
+  );
 
   it("injects a guarded fetchFn into matrix-js-sdk", async () => {
     const client = new MatrixClient("https://matrix.example.org", "token");
