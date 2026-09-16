@@ -735,7 +735,7 @@ extension GatewayNodeSession {
         credentials: GatewayNodeSessionCredentials = .init(),
         options: GatewayConnectOptions,
         session: FakeGatewayWebSocketSession,
-        extraHeadersProvider: (@Sendable () -> [String: String])? = nil,
+        extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void = {},
         onDisconnected: @escaping @Sendable (String) async -> Void = { _ in },
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse = {
@@ -773,6 +773,14 @@ private func nodeInvokePush(id: String, command: String) -> GatewayPush {
         seq: nil,
         stateversion: nil))
 }
+
+#if DEBUG
+extension GatewayChannelActor {
+    fileprivate func recordConnectRunCompletion(_ capture: StringCapture) {
+        self.testConnectRunFinishedHandler = { Task { await capture.set("finished") } }
+    }
+}
+#endif
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
@@ -2158,6 +2166,93 @@ struct GatewayNodeSessionTests {
 
         await gateway.disconnect()
     }
+
+    enum ConnectEntryPoint: CaseIterable, Sendable {
+        case connect, request, send
+    }
+
+    private enum UpgradeAuthorizationFailure: LocalizedError, Equatable, Sendable {
+        case rejected(profile: String, revision: Int)
+
+        var errorDescription: String? {
+            switch self {
+            case let .rejected(profile, revision):
+                "Authorization rejected for \(profile) at revision \(revision)"
+            }
+        }
+
+        var recoverySuggestion: String? {
+            "Authorize the selected profile again."
+        }
+    }
+
+    @Test(arguments: ConnectEntryPoint.allCases)
+    func `connect entry points preserve upgrade provider errors`(entryPoint: ConnectEntryPoint) async throws {
+        let session = FakeGatewayWebSocketSession()
+        let expected = UpgradeAuthorizationFailure.rejected(profile: "test-profile", revision: 7)
+        let channel = try GatewayChannelActor(
+            url: testURL("wss://gateway.example.invalid"), token: nil,
+            session: WebSocketSessionBox(session: session), connectOptions: nodeConnectOptions(),
+            extraHeadersProvider: { throw expected })
+        var caught: (any Error)?
+        do {
+            switch entryPoint {
+            case .connect:
+                try await channel.connect()
+            case .request:
+                _ = try await channel.request(method: "health", params: nil)
+            case .send:
+                try await channel.send(method: "health", params: nil)
+            }
+        } catch {
+            caught = error
+        }
+        #expect(session.snapshotMakeCount() == 0)
+        #expect(await channel.currentConnectionGeneration() == nil)
+        await channel.shutdown()
+
+        let error = try #require(caught)
+        #expect(error as? UpgradeAuthorizationFailure == expected)
+        #expect(error.localizedDescription == expected.localizedDescription)
+        let localizedError = try #require(error as? any LocalizedError)
+        #expect(localizedError.recoverySuggestion == expected.recoverySuggestion)
+    }
+
+    #if DEBUG
+    @Test
+    func `disconnect fences a suspended upgrade authorization before creating a socket`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gate = AsyncGate()
+        let finished = StringCapture()
+        let channel = try GatewayChannelActor(
+            url: testURL("wss://gateway.example.invalid"), token: nil,
+            session: WebSocketSessionBox(session: session), connectOptions: nodeConnectOptions(),
+            extraHeadersProvider: {
+                await gate.wait()
+                return ["Cf-Access-Token": "test-only-grant"]
+            })
+        await channel.recordConnectRunCompletion(finished)
+        let pending = Task { try await channel.connect() }
+        do {
+            try await waitUntil("upgrade authorization is suspended") { await gate.hasStarted() }
+            await channel.shutdown()
+            await gate.release()
+            // shutdown releases the public waiter first. Observe the owning run after
+            // the cancellation-ignoring provider returns before asserting no socket.
+            try await waitUntil("owning connect run finished") { await finished.get() == "finished" }
+            let result = await pending.result
+            if case .success = result { Issue.record("disconnected authorization unexpectedly connected") }
+            #expect(session.snapshotMakeCount() == 0)
+            #expect(await channel.currentConnectionGeneration() == nil)
+        } catch {
+            await gate.release()
+            await channel.shutdown()
+            pending.cancel()
+            _ = await pending.result
+            throw error
+        }
+    }
+    #endif
 
     @Test
     func `cleartext upgrade never reads or attaches custom headers`() async throws {
