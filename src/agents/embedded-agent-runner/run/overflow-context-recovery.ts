@@ -339,8 +339,10 @@ export async function recoverEmbeddedRunOverflow(
       const tokensBefore = compactResult.result?.tokensBefore;
       const tokensAfter = compactResult.result?.tokensAfter;
       // Equal counts prove no measured reduction, not necessarily an uncommitted
-      // compaction, so the transcript stays as-is; only the run-level budget is
-      // refunded and the log stays honest.
+      // compaction, so the transcript stays as-is and the retry proceeds. The
+      // attempt stays charged until a successful model completion renews the
+      // budget; refunding here would let repeated no-reduction compactions
+      // recycle attempts without ever making progress.
       const noMeasuredReduction =
         typeof tokensBefore === "number" &&
         Number.isFinite(tokensBefore) &&
@@ -348,14 +350,10 @@ export async function recoverEmbeddedRunOverflow(
         Number.isFinite(tokensAfter) &&
         tokensAfter >= tokensBefore;
       if (noMeasuredReduction) {
-        input.state.overflowCompactionAttempts = Math.max(
-          0,
-          input.state.overflowCompactionAttempts - 1,
-        );
         log.warn(
           `[context-overflow-recovery] context engine compaction reported no measured token reduction for ` +
             `${input.modelSelection.provider}/${input.modelSelection.model} ` +
-            `(tokensBefore=${tokensBefore} tokensAfter=${tokensAfter}); refunding the recovery attempt`,
+            `(tokensBefore=${tokensBefore} tokensAfter=${tokensAfter}); keeping the recovery attempt charged`,
         );
       }
       if (preflightRecovery?.route === "compact_then_truncate") {
