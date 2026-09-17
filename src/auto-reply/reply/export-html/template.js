@@ -74,15 +74,13 @@
       (parent ? parent.children : roots).push(node);
     }
 
-    function sortChildren(node) {
+    for (const node of nodeMap.values()) {
       node.children.sort(
         (a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime(),
       );
-      node.children.forEach(sortChildren);
     }
-    roots.forEach(sortChildren);
 
-    return roots;
+    return { roots, nodeMap };
   }
 
   function getPath(targetId) {
@@ -107,13 +105,7 @@
    */
   function findNewestLeaf(nodeId) {
     if (!treeNodeMap) {
-      treeNodeMap = new Map();
-      const tree = buildTree();
-      function mapNodes(node) {
-        treeNodeMap.set(node.entry.id, node);
-        node.children.forEach(mapNodes);
-      }
-      tree.forEach(mapNodes);
+      treeNodeMap = buildTree().nodeMap;
     }
 
     const node = treeNodeMap.get(nodeId);
@@ -191,20 +183,9 @@
   /** Flatten the full tree with the active branch first at each level. */
   function flattenTree(roots, activePathIds) {
     const result = [];
-    const containsActive = new Map();
-    function markActive(node) {
-      let has = activePathIds.has(node.entry.id);
-      for (const child of node.children) {
-        if (markActive(child)) {
-          has = true;
-        }
-      }
-      containsActive.set(node, has);
-      return has;
-    }
-    roots.forEach(markActive);
-
-    const activeFirst = (a, b) => Number(containsActive.get(b)) - Number(containsActive.get(a));
+    // The active path already includes every ancestor of the selected leaf.
+    const activeFirst = (a, b) =>
+      Number(activePathIds.has(b.entry.id)) - Number(activePathIds.has(a.entry.id));
     layoutTree(
       roots.toSorted(activeFirst),
       (node) => node.children.toSorted(activeFirst),
@@ -651,7 +632,7 @@
   let treeRendered = false;
 
   function renderTree() {
-    const tree = buildTree();
+    const { roots: tree } = buildTree();
     const activePathIds = new Set(getPath(currentLeafId).map((entry) => entry.id));
     const flatNodes = flattenTree(tree, activePathIds);
     const filtered = filterNodes(flatNodes, currentLeafId);
