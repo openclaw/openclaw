@@ -526,43 +526,34 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
     selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
-    compact: isMobileNavLayout(),
     view: controller.filterMenuView,
     onViewChange: (view) => controller.setFilterMenuView(view),
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
-      controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onSortModeChange: (mode) => {
       host.setSessionSortMode(mode);
-      controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onStatusFilterChange: (statusFilter) => {
       host.sessionOrganizer.setSessionsStatusFilter(statusFilter);
-      controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onOwnerFilterChange: (ownerId, involvingMe = false) => {
       host.setSessionOwnerFilter(ownerId, involvingMe);
-      controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onShowCronChange: (show) => {
       host.sessionOrganizer.setSessionsShowCron(show);
-      controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onShowPreviewChange: (show) => {
       host.sessionOrganizer.setSessionsShowPreview(show);
-      controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onShowSystemChange: (show) => {
       host.sessionOrganizer.setSessionsShowSystem(show);
-      controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onEmptyGroupsModeChange: (mode) => {
       if (controller.sessionSortMenuPosition !== position) {
         return;
       }
       host.setSessionsEmptyGroupsMode(mode);
-      controller.closeSessionSortMenu({ restoreFocus: true });
     },
     onOpenSessionSources: () => {
       controller.closeSessionSortMenu();

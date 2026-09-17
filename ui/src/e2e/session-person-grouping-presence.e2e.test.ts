@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { Locator } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -15,17 +14,6 @@ import {
 const suite = createControlUiE2eSuite({
   name: "Control UI person-grouped session presence",
 });
-
-async function selectMenuValue(menu: Locator, value: string) {
-  await menu.evaluate((element, selectedValue) => {
-    element.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: selectedValue } },
-      }),
-    );
-  }, value);
-}
 
 function sessionsList() {
   const ada = {
@@ -99,7 +87,11 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       await page.getByText("Ada research", { exact: true }).first().waitFor();
       const menu = await openSidebarSortMenu(page);
-      await selectMenuValue(menu, "grouping:person");
+      await menu
+        .getByRole("group", { name: "Group by", exact: true })
+        .getByRole("button", { name: "Person", exact: true })
+        .click();
+      await page.keyboard.press("Escape");
       const adaSection = page.locator('[data-session-section="person:profile:profile-ada"]');
       const bobSection = page.locator('[data-session-section="person:profile:profile-bob"]');
       await expectBrowser(adaSection).toContainText("Ada research");

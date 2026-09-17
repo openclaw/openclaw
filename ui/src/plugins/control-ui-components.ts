@@ -240,6 +240,42 @@ export function createControlUiComponents(options: {
           };
         },
       ),
+    mountFilterChoices: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          const { FilterChoices } = await import("../components/filter-controls.ts");
+          return new FilterChoices();
+        },
+        (element, next, current) => {
+          element.props = {
+            ...next,
+            onChange: (value) => {
+              current();
+              next.onChange(value);
+            },
+          };
+        },
+      ),
+    mountFilterSwitch: (container, props) =>
+      mount(
+        container,
+        props,
+        async () => {
+          const { FilterSwitch } = await import("../components/filter-controls.ts");
+          return new FilterSwitch();
+        },
+        (element, next, current) => {
+          element.props = {
+            ...next,
+            onChange: (checked) => {
+              current();
+              next.onChange(checked);
+            },
+          };
+        },
+      ),
     mountSessionSummary: (container, props) =>
       mount(
         container,

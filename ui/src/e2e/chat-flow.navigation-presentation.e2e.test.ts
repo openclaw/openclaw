@@ -783,16 +783,31 @@ suite.define(() => {
 
       const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
       await filterAndSort.click();
-      await page.getByRole("menuitemradio", { name: "Last updated" }).click();
+      await page
+        .getByRole("group", { name: "Sort by", exact: true })
+        .getByRole("button", { name: "Last updated", exact: true })
+        .click();
+      await page.keyboard.press("Escape");
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
 
       await filterAndSort.click();
-      await page.getByRole("menuitemradio", { name: "Created" }).click();
+      await page
+        .getByRole("group", { name: "Sort by", exact: true })
+        .getByRole("button", { name: "Created", exact: true })
+        .click();
+      await page.keyboard.press("Escape");
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
       await filterAndSort.click();
       await page.getByRole("main").click();
-      await expect.poll(() => page.getByRole("menuitemradio", { name: "Created" }).count()).toBe(0);
+      await expect
+        .poll(() =>
+          page
+            .getByRole("group", { name: "Sort by", exact: true })
+            .getByRole("button", { name: "Created", exact: true })
+            .count(),
+        )
+        .toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
     }

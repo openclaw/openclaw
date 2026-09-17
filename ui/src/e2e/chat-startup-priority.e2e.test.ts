@@ -397,8 +397,10 @@ suite.define(() => {
       await page.getByRole("button", { name: "Filter & sort" }).click();
       await page
         .locator(".sidebar-session-sort-menu")
-        .getByRole("menuitemradio", { name: "Archived", exact: true })
+        .getByRole("group", { name: "Status", exact: true })
+        .getByRole("button", { name: "Archived", exact: true })
         .click();
+      await page.keyboard.press("Escape");
       await gateway.waitForRequest("sessions.list", {
         match: { agentId: "research", archived: true },
       });

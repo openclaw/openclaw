@@ -78,14 +78,18 @@ suite.define(() => {
       await page.getByRole("button", { name: "Filter & sort" }).click();
       await page
         .locator(".sidebar-session-sort-menu")
-        .getByRole("menuitemradio", { name: "Archived" })
+        .getByRole("group", { name: "Status", exact: true })
+        .getByRole("button", { name: "Archived" })
         .click();
+      await page.keyboard.press("Escape");
       await row.waitFor({ state: "visible" });
       await page.getByRole("button", { name: "Filter & sort" }).click();
       await page
         .locator(".sidebar-session-sort-menu")
-        .getByRole("menuitemradio", { name: "Active", exact: true })
+        .getByRole("group", { name: "Status", exact: true })
+        .getByRole("button", { name: "Active", exact: true })
         .click();
+      await page.keyboard.press("Escape");
       await row.waitFor({ state: "detached" });
 
       await gateway.setSessionsListResponse(sessionsListResponse([main, target]));
@@ -127,8 +131,10 @@ suite.define(() => {
       await page.getByRole("button", { name: "Filter & sort" }).click();
       await page
         .locator(".sidebar-session-sort-menu")
-        .getByRole("menuitemradio", { name: "Archived" })
+        .getByRole("group", { name: "Status", exact: true })
+        .getByRole("button", { name: "Archived" })
         .click();
+      await page.keyboard.press("Escape");
 
       const sidebar = page.locator("openclaw-app-sidebar");
       const archivedRow = sidebar.locator(`[data-session-key="${archived.key}"]`);

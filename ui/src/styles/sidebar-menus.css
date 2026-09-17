@@ -20,42 +20,9 @@ wa-dropdown-item.session-menu__item--compact-details {
   min-width: 0;
 }
 
-/* A compact preference row stacks its value so the established 220px menu
-   still fits both the full label and the current choice. */
-wa-dropdown-item[value="compact:open-empty-groups"]::part(label) {
-  flex-direction: column;
-  align-items: flex-start;
-}
-
-wa-dropdown-item[value="compact:open-empty-groups"] {
-  min-height: 44px;
-}
-
 wa-dropdown.sidebar-session-sort-menu::part(menu) {
   box-sizing: border-box;
   width: min(220px, calc(100dvw - 16px));
-}
-
-wa-dropdown.sidebar-session-sort-menu--preferences::part(menu) {
-  width: min(300px, calc(100dvw - 16px));
-}
-
-.sidebar-session-empty-groups-value {
-  display: block;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-session-sort-menu__item > a {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  color: inherit;
-  text-decoration: none;
 }
 
 wa-dropdown-item.sidebar-session-choice-submenu::part(submenu) {
@@ -137,4 +104,56 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar-session-sort-menu .sidebar-session-filter-panel {
+  max-height: min(calc(100dvh - 24px), var(--auto-size-available-height, 100dvh));
+  overscroll-behavior: contain;
+}
+
+.sidebar-session-owner-filter {
+  gap: 6px;
+  padding: 0 6px 12px;
+}
+
+.sidebar-session-visibility .filter-switch {
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 34px;
+}
+
+.sidebar-session-empty-groups-filter {
+  padding-block: 6px;
+}
+
+.sidebar-session-filter-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  margin-top: 6px;
+  padding: 8px 6px 2px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.76rem;
+  text-decoration: none;
+}
+
+.sidebar-session-filter-footer:hover {
+  color: var(--text);
+}
+
+.sidebar-session-filter-footer svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sidebar-session-filter-footer:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+
+.sidebar-session-owner-picker::part(menu) {
+  box-sizing: border-box;
+  width: min(300px, calc(100dvw - 24px));
 }

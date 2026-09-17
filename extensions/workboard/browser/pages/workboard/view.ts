@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
-import { renderSelectPicker } from "../../components/host-components.ts";
+import { renderFilterSwitch, renderSelectPicker } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
 import { renderWorkboardToast } from "../../components/toast.ts";
 import { t } from "../../i18n/index.ts";
@@ -446,14 +446,14 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
               }
             </button>
             <div
-              class="workboard-filter-popover"
+              class="workboard-filter-popover filter-popover"
               ${ref(workboardPopoverRef("end"))}
               id=${workboardFilterPopoverId}
               popover="auto"
               role="dialog"
               aria-label=${t("workboard.filters")}
             >
-              <div class="workboard-filter-popover__panel">
+              <div class="workboard-filter-popover__panel filter-popover__panel">
                 <div class="workboard-filter-heading">
                   <strong>${t("workboard.filters")}</strong>
                   ${
@@ -484,14 +484,12 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                 ${
                   agentControl === nothing
                     ? nothing
-                    : html`<div class="workboard-filter-agent workboard-filter-choice">
-                        <span class="workboard-filter-section__label"
-                          >${t("workboard.fieldAgent")}</span
-                        >
+                    : html`<div class="workboard-filter-agent filter-choice">
+                        <span class="filter-section__label">${t("workboard.fieldAgent")}</span>
                         ${agentControl}
                       </div>`
                 }
-                <div class="workboard-filter-display">
+                <div class="filter-display">
                   ${renderFilterChoices({
                     label: t("workboard.filterLayout"),
                     value: state.viewMode,
@@ -567,7 +565,7 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                   wide: true,
                   onChange: () => props.onRequestUpdate?.(),
                 })}
-                <div class="workboard-filter-fields">
+                <div class="filter-fields">
                   ${renderFilterSelect({
                     value: state.donePeriod,
                     options: [
@@ -594,21 +592,17 @@ export function renderWorkboard(props: WorkboardProps & { onRefresh: () => void 
                         })
                       : nothing
                   }
-                  <label class="workboard-filter-row workboard-filter-archived">
-                    <span>${t("workboard.showArchived")}</span>
-                    <input
-                      type="checkbox"
-                      role="switch"
-                      .checked=${state.showArchived}
-                      @change=${(event: Event) => {
-                        if (!(event.currentTarget instanceof HTMLInputElement)) {
-                          return;
-                        }
-                        state.showArchived = event.currentTarget.checked;
+                  ${renderFilterSwitch(
+                    {
+                      label: t("workboard.showArchived"),
+                      checked: state.showArchived,
+                      onChange: (checked) => {
+                        state.showArchived = checked;
                         props.onRequestUpdate?.();
-                      }}
-                    />
-                  </label>
+                      },
+                    },
+                    "workboard-filter-archived",
+                  )}
                 </div>
               </div>
             </div>

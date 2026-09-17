@@ -3171,7 +3171,7 @@ ui/src/components/app-sidebar-nav-menus.ts	6
 ui/src/components/app-sidebar-render.ts	4
 ui/src/components/app-sidebar-session-catalog-render.ts	4
 ui/src/components/app-sidebar-session-list-render.ts	1
-ui/src/components/app-sidebar-session-menu-renderers.ts	4
+ui/src/components/app-sidebar-session-menu-renderers.ts	1
 ui/src/components/app-sidebar-session-narration.ts	5
 ui/src/components/app-sidebar-session-row-render.ts	2
 ui/src/components/app-sidebar-session-section-header.ts	6

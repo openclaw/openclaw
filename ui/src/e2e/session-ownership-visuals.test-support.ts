@@ -111,10 +111,12 @@ export async function captureSessionOwnerPageProof(
 export async function openSidebarSortMenu(page: Page) {
   const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
   await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
-  await filterAndSort.click();
   const menu = page.locator(".sidebar-session-sort-menu");
-  await waitForControlUiProofSurface(menu.locator('[part="menu"]'), [
-    menu.locator("wa-dropdown-item").first(),
+  if (!(await menu.isVisible())) {
+    await filterAndSort.click();
+  }
+  await waitForControlUiProofSurface(menu.locator(".sidebar-session-filter-panel"), [
+    menu.getByRole("group").first(),
   ]);
   return menu;
 }

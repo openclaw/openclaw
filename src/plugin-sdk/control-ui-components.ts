@@ -74,6 +74,27 @@ export type ControlUiAppearanceGlyphProps = {
   fallback: string;
 };
 
+export type ControlUiFilterChoicesProps = {
+  label: string;
+  value: string;
+  options: readonly {
+    value: string;
+    label: string;
+    title?: string;
+    /** Plugin-owned presentation, mounted inside the option's decorative icon. */
+    icon?: HTMLElement;
+  }[];
+  onChange: (value: string) => void;
+  keyboardNavigation?: boolean;
+  columns?: number;
+};
+
+export type ControlUiFilterSwitchProps = {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+};
+
 export type ControlUiAppearancePickerProps = {
   icon: string | null;
   color: string | null;
@@ -110,6 +131,14 @@ export type ControlUiComponents = {
     container: HTMLElement,
     props: ControlUiSelectPickerProps,
   ) => ControlUiComponentHandle<ControlUiSelectPickerProps>;
+  mountFilterChoices: (
+    container: HTMLElement,
+    props: ControlUiFilterChoicesProps,
+  ) => ControlUiComponentHandle<ControlUiFilterChoicesProps>;
+  mountFilterSwitch: (
+    container: HTMLElement,
+    props: ControlUiFilterSwitchProps,
+  ) => ControlUiComponentHandle<ControlUiFilterSwitchProps>;
   mountSessionSummary: (
     container: HTMLElement,
     props: ControlUiSessionSummaryProps,

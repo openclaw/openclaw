@@ -1,4 +1,3 @@
-import type { Locator } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -9,17 +8,6 @@ import {
 } from "./session-ownership-visuals.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI person header owner filter" });
-
-async function selectMenuValue(menu: Locator, value: string) {
-  await menu.evaluate((element, selectedValue) => {
-    element.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: selectedValue } },
-      }),
-    );
-  }, value);
-}
 
 function sessionsList() {
   const ada = {
@@ -92,7 +80,11 @@ suite.define(() => {
       ]);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       const menu = await openSidebarSortMenu(page);
-      await selectMenuValue(menu, "grouping:person");
+      await menu
+        .getByRole("group", { name: "Group by", exact: true })
+        .getByRole("button", { name: "Person", exact: true })
+        .click();
+      await page.keyboard.press("Escape");
       const adaSection = page.locator('[data-session-section="person:profile:profile-ada"]');
       const bobSection = page.locator('[data-session-section="person:profile:profile-bob"]');
       await expectBrowser(adaSection).toBeVisible();

@@ -86,7 +86,7 @@ export function renderSidebarSessionFilter(
     class="${className} sidebar-session-sort ${filtered ? "sidebar-session-sort--filtered" : ""}"
     title=${t("chat.sidebar.sortSessions")}
     aria-label=${t("chat.sidebar.sortSessions")}
-    aria-haspopup="menu"
+    aria-haspopup="dialog"
     aria-expanded=${String(host.sidebarMenus.sessionSortMenuPosition !== null)}
     @click=${(event: MouseEvent) => {
       if (event.currentTarget instanceof HTMLElement) {

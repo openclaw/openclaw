@@ -136,8 +136,10 @@ suite.define(() => {
           await page.getByRole("button", { name: "Filter & sort" }).click();
           await page
             .locator(".sidebar-session-sort-menu")
-            .getByRole("menuitemradio", { name: label, exact: true })
+            .getByRole("group", { name: "Status", exact: true })
+            .getByRole("button", { name: label, exact: true })
             .click();
+          await page.keyboard.press("Escape");
         };
         await selectFilter(statusFilter);
         await page.getByText("Archived planning", { exact: true }).first().waitFor();

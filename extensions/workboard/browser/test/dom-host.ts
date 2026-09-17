@@ -3,6 +3,48 @@ import { vi } from "vitest";
 
 /** The fixture exposes only the DOM-mount contract; host component internals have their own tests. */
 export function installDomComponents(host: ControlUiHost): void {
+  host.components.mountFilterChoices = vi.fn<ControlUiHost["components"]["mountFilterChoices"]>(
+    (container, initial) => {
+      const element = document.createElement("div");
+      element.setAttribute("role", "group");
+      const apply = (props: typeof initial) => {
+        element.setAttribute("aria-label", props.label);
+        element.replaceChildren(
+          ...props.options.map((option) => {
+            const button = document.createElement("button");
+            button.textContent = option.label;
+            button.setAttribute("aria-label", option.title ?? option.label);
+            button.setAttribute("aria-pressed", String(props.value === option.value));
+            button.addEventListener("click", () => props.onChange(option.value));
+            return button;
+          }),
+        );
+      };
+      apply(initial);
+      container.append(element);
+      return { update: vi.fn(apply), dispose: vi.fn(() => element.remove()) };
+    },
+  );
+  host.components.mountFilterSwitch = vi.fn<ControlUiHost["components"]["mountFilterSwitch"]>(
+    (container, initial) => {
+      const element = document.createElement("label");
+      const label = document.createElement("span");
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.setAttribute("role", "switch");
+      element.append(label, input);
+      let props = initial;
+      input.addEventListener("change", () => props.onChange(input.checked));
+      const apply = (next: typeof initial) => {
+        props = next;
+        label.textContent = next.label;
+        input.checked = next.checked;
+      };
+      apply(initial);
+      container.append(element);
+      return { update: vi.fn(apply), dispose: vi.fn(() => element.remove()) };
+    },
+  );
   host.components.mountDialog = vi.fn((container, initial) => {
     const element = document.createElement("section");
     element.dataset.testDialog = "";

@@ -138,8 +138,10 @@ suite.define(() => {
       await sidebar.getByRole("button", { name: "Filter & sort" }).click();
       await sidebar
         .locator(".sidebar-session-sort-menu")
-        .getByRole("menuitemradio", { name: label, exact: true })
+        .getByRole("group", { name: "Status", exact: true })
+        .getByRole("button", { name: label, exact: true })
         .click();
+      await page.keyboard.press("Escape");
     };
     const pageKeys = () =>
       page.evaluate(() => {

@@ -479,13 +479,10 @@ suite.define(() => {
         );
       }
       await page.locator(".sidebar-session-toolbar .sidebar-session-sort").click();
-      const previewToggle = page.locator('wa-dropdown-item[value="show-preview"]');
-      expect(
-        await previewToggle.evaluate(
-          (item) => (item as HTMLElement & { checked: boolean }).checked,
-        ),
-      ).toBe(false);
+      const previewToggle = page.getByRole("switch", { name: "Show message preview", exact: true });
+      expect(await previewToggle.isChecked()).toBe(false);
       await previewToggle.click();
+      await page.keyboard.press("Escape");
       await busyRow.locator(".sidebar-recent-session__subtitle").waitFor();
       const sidebar = page.locator("openclaw-app-sidebar");
       expect(await sidebar.getByRole("img", { name: "Dashboard available" }).count()).toBe(0);

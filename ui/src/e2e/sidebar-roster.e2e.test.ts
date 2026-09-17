@@ -307,13 +307,23 @@ suite.define(() => {
         await expect.poll(() => sessionRows.count()).toBe(8);
         await sidebar.locator(".sidebar-session-sort").click();
         expect(
-          await sidebar.locator('.sidebar-session-sort-menu [value^="grouping:"]').count(),
+          await sidebar
+            .locator(".sidebar-session-sort-menu")
+            .getByRole("group", { name: "Group by", exact: true })
+            .count(),
         ).toBe(0);
         expect(
-          await sidebar.locator('.sidebar-session-sort-menu [value="hide-empty-groups"]').count(),
+          await sidebar
+            .locator(".sidebar-session-sort-menu")
+            .getByRole("button", { name: /^Hide empty groups:/ })
+            .count(),
         ).toBe(0);
-        await sidebar.locator(".sidebar-session-sort-menu .sidebar-session-owner-submenu").hover();
-        await sidebar.locator('.sidebar-session-sort-menu [value="owner:profile-riley"]').click();
+        await sidebar.getByRole("button", { name: /^Owners:/ }).click();
+        await sidebar.getByRole("option", { name: /^Specific owner/ }).click();
+        await sidebar
+          .locator('.sidebar-session-owner-picker [value="owner:profile-riley"]')
+          .click();
+        await page.keyboard.press("Escape");
         await expect.poll(() => sessionRows.count()).toBe(4);
         expect(await sessionRows.allTextContents()).toEqual([
           expect.stringContaining("Harbor project"),
@@ -322,7 +332,9 @@ suite.define(() => {
           expect.stringContaining("Bloom project"),
         ]);
         await sidebar.locator(".sidebar-session-sort").click();
-        await sidebar.locator('.sidebar-session-sort-menu [value="owner:"]').click();
+        await sidebar.getByRole("button", { name: /^Owners:/ }).click();
+        await sidebar.getByRole("option", { name: "All owners", exact: true }).click();
+        await page.keyboard.press("Escape");
         await expect.poll(() => sessionRows.count()).toBe(8);
 
         await sidebar.locator('[data-agent-collapse="bloom"]').click();

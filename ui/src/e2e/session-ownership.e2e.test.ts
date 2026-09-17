@@ -1,4 +1,4 @@
-import type { Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -8,7 +8,11 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
-import { sessionsList } from "./session-ownership-fixtures.test-support.ts";
+import {
+  collaborativeSessionsList,
+  draftSessionsList,
+  sessionsList,
+} from "./session-ownership-fixtures.test-support.ts";
 import {
   avatarLabelCenterDelta,
   captureSessionOwnerPageProof,
@@ -25,83 +29,6 @@ const suite = createControlUiE2eSuite({
 });
 
 let page: Page | undefined;
-
-async function selectMenuValue(menu: Locator, value: string) {
-  await menu.evaluate((element, selectedValue) => {
-    element.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: selectedValue } },
-      }),
-    );
-  }, value);
-}
-
-function draftSessionsList() {
-  const result = sessionsList(["profile-ada", "profile-bob"]);
-  for (const session of result.sessions) {
-    Object.assign(session, { visibility: "draft", sharingRole: "admin" });
-  }
-  return result;
-}
-
-function collaborativeSessionsList() {
-  const ada = {
-    type: "human" as const,
-    id: "profile-ada",
-    identity: { type: "profile" as const, id: "profile-ada" },
-    label: "Ada",
-    avatarUrl: "/api/users/profile-ada/avatar?v=1",
-  };
-  const bob = {
-    type: "human" as const,
-    id: "profile-bob",
-    identity: { type: "profile" as const, id: "profile-bob" },
-    label: "Bob",
-    avatarUrl: "/api/users/profile-bob/avatar?v=1",
-  };
-  const carol = { type: "human" as const, id: "profile-carol", label: "Carol" };
-  return {
-    count: 3,
-    owners: [ada, bob, carol],
-    defaults: { contextTokens: null, model: null, modelProvider: null },
-    path: "",
-    sessions: [
-      {
-        key: "agent:main:collaboration",
-        kind: "direct",
-        label: "Fix issue #127689",
-        createdActor: ada,
-        owner: { actor: ada },
-        participants: [{ identity: bob.identity, label: bob.label, avatarUrl: bob.avatarUrl }],
-        participantCount: 1,
-        updatedAt: 3,
-      },
-      {
-        key: "agent:main:release-planning",
-        kind: "direct",
-        label: "Release planning",
-        createdActor: bob,
-        owner: { actor: bob },
-        participants: [
-          { identity: ada.identity, label: ada.label, avatarUrl: ada.avatarUrl },
-          { identity: { type: "agent" as const, id: "research" }, label: "Research" },
-        ],
-        participantCount: 2,
-        updatedAt: 2,
-      },
-      {
-        key: "agent:main:single-owner",
-        kind: "direct",
-        label: "Single-owner baseline",
-        createdActor: carol,
-        owner: { actor: carol },
-        updatedAt: 1,
-      },
-    ],
-    ts: 1,
-  };
-}
 
 suite.define(() => {
   afterEach(async () => {
@@ -257,15 +184,28 @@ suite.define(() => {
     const ownerMenu = await openSidebarSortMenu(currentPage);
     await captureUiProof(
       suite,
-      ownerMenu.locator('[part="menu"]'),
+      ownerMenu.locator(".sidebar-session-filter-panel"),
       "00-people-controls-from-session-owners.png",
-      [ownerMenu.locator('[value="grouping:person"]')],
+      [
+        ownerMenu
+          .getByRole("group", { name: "Group by", exact: true })
+          .getByRole("button", { name: "Person", exact: true }),
+      ],
     );
-    await expectBrowser(ownerMenu.locator('[value="grouping:person"]')).toBeVisible();
-    await expectBrowser(ownerMenu.locator('[value="sort:people"]')).toBeVisible();
-    const ownerSubmenu = ownerMenu.getByRole("menuitem", { name: /Specific owner/ });
-    await ownerSubmenu.hover();
-    const ownerRows = ownerSubmenu.locator('[slot="submenu"][value^="owner:"]');
+    await expectBrowser(
+      ownerMenu
+        .getByRole("group", { name: "Group by", exact: true })
+        .getByRole("button", { name: "Person", exact: true }),
+    ).toBeVisible();
+    await expectBrowser(
+      ownerMenu
+        .getByRole("group", { name: "Sort by", exact: true })
+        .getByRole("button", { name: "Owners", exact: true }),
+    ).toBeVisible();
+    await ownerMenu.getByRole("button", { name: /^Owners:/ }).click();
+    await ownerMenu.getByRole("option", { name: /^Specific owner/ }).click();
+    const ownerSubmenu = ownerMenu.locator(".sidebar-session-owner-picker");
+    const ownerRows = ownerSubmenu.getByRole("menuitemradio");
     await expectBrowser(ownerRows).toHaveCount(3);
     await expectBrowser(ownerRows.first()).toBeVisible();
     await expectBrowser(ownerRows.first()).toHaveAttribute("value", "owner:profile-patrick");
@@ -273,12 +213,17 @@ suite.define(() => {
     await expectBrowser(ownerRows.locator("openclaw-session-owner-chip img")).toHaveCount(3);
     await captureUiProof(
       suite,
-      ownerSubmenu.locator('[part="submenu"]'),
+      ownerSubmenu.locator('[part="menu"]'),
       "00-people-sort-available.png",
       [ownerRows.first()],
     );
     expect(await avatarLabelCenterDelta(ownerRows.first())).toBeLessThanOrEqual(0.5);
-    await selectMenuValue(ownerMenu, "grouping:person");
+    await ownerSubmenu.getByRole("menuitem", { name: "Back", exact: true }).click();
+    await ownerMenu
+      .getByRole("group", { name: "Group by", exact: true })
+      .getByRole("button", { name: "Person", exact: true })
+      .click();
+    await currentPage.keyboard.press("Escape");
     await expectBrowser(
       currentPage.locator('[data-session-section="person:profile:profile-ada"]'),
     ).toContainText("Ada research");
@@ -287,24 +232,38 @@ suite.define(() => {
     ).toContainText("Bob operations");
 
     const groupedMenu = await openSidebarSortMenu(currentPage);
-    await expectBrowser(groupedMenu.locator('[value="grouping:person"]')).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
-    await selectMenuValue(groupedMenu, "grouping:category");
+    await expectBrowser(
+      groupedMenu
+        .getByRole("group", { name: "Group by", exact: true })
+        .getByRole("button", { name: "Person", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await groupedMenu
+      .getByRole("group", { name: "Group by", exact: true })
+      .getByRole("button", { name: "Custom groups", exact: true })
+      .click();
+    await currentPage.keyboard.press("Escape");
 
     const sortableMenu = await openSidebarSortMenu(currentPage);
-    await selectMenuValue(sortableMenu, "sort:people");
+    await sortableMenu
+      .getByRole("group", { name: "Sort by", exact: true })
+      .getByRole("button", { name: "Owners", exact: true })
+      .click();
+    await currentPage.keyboard.press("Escape");
     const peopleMenu = await openSidebarSortMenu(currentPage);
-    await expectBrowser(peopleMenu.locator('[value="sort:people"]')).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
+    await expectBrowser(
+      peopleMenu
+        .getByRole("group", { name: "Sort by", exact: true })
+        .getByRole("button", { name: "Owners", exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
     await captureUiProof(
       suite,
-      peopleMenu.locator('[part="menu"]'),
+      peopleMenu.locator(".sidebar-session-filter-panel"),
       "01-people-sort-selected.png",
-      [peopleMenu.locator('[value="sort:people"]')],
+      [
+        peopleMenu
+          .getByRole("group", { name: "Sort by", exact: true })
+          .getByRole("button", { name: "Owners", exact: true }),
+      ],
     );
     const expectOwnerFilter = async (after: number) => {
       // The chat title survives a sidebar refresh; wait for the filtered row itself.
@@ -330,8 +289,10 @@ suite.define(() => {
         );
     };
     const beforeSelection = (await gateway.getRequests("sessions.list")).length;
-    await peopleMenu.getByRole("menuitem", { name: /Specific owner/ }).hover();
-    await peopleMenu.locator('[slot="submenu"][value="owner:profile-ada"]').click();
+    await peopleMenu.getByRole("button", { name: /^Owners:/ }).click();
+    await peopleMenu.getByRole("option", { name: /^Specific owner/ }).click();
+    await peopleMenu.locator('.sidebar-session-owner-picker [value="owner:profile-ada"]').click();
+    await currentPage.keyboard.press("Escape");
     await expectOwnerFilter(beforeSelection);
     await captureSessionOwnerProof(suite, currentPage, "04-owner-filter-selected.png");
 
@@ -343,24 +304,26 @@ suite.define(() => {
       .toBeGreaterThan(initialConnections);
     await expectOwnerFilter(beforeReconnect);
     const reconnectedMenu = await openSidebarSortMenu(currentPage);
-    await expectBrowser(reconnectedMenu.locator('[value="owner:profile-ada"]')).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
+    await reconnectedMenu.getByRole("button", { name: /^Owners:/ }).click();
+    await reconnectedMenu.getByRole("option", { name: /^Specific owner/ }).click();
+    await expectBrowser(
+      reconnectedMenu.locator('.sidebar-session-owner-picker [value="owner:profile-ada"]'),
+    ).toHaveAttribute("aria-checked", "true");
 
     await currentPage.reload();
     // Reload starts a new in-page request log, so no earlier traffic can satisfy this.
     await expectOwnerFilter(0);
     const reloadedMenu = await openSidebarSortMenu(currentPage);
-    await expectBrowser(reloadedMenu.locator('[value="owner:profile-ada"]')).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
+    await reloadedMenu.getByRole("button", { name: /^Owners:/ }).click();
+    await reloadedMenu.getByRole("option", { name: /^Specific owner/ }).click();
+    await expectBrowser(
+      reloadedMenu.locator('.sidebar-session-owner-picker [value="owner:profile-ada"]'),
+    ).toHaveAttribute("aria-checked", "true");
     await captureSessionOwnerPageProof(
       suite,
-      reloadedMenu.locator('[part="menu"]'),
+      reloadedMenu.locator(".sidebar-session-filter-panel"),
       "05-owner-filter-restored-after-reload.png",
-      [reloadedMenu.getByRole("menuitem", { name: /Specific owner/ })],
+      [reloadedMenu.getByRole("menuitemradio", { name: "Ada", exact: true })],
     );
   });
 
@@ -385,7 +348,9 @@ suite.define(() => {
       sessions: allSessions.sessions.filter((session) => session.key === "agent:main:ada"),
     });
     const menu = await openSidebarSortMenu(currentPage);
-    await selectMenuValue(menu, "involving-me");
+    await menu.getByRole("button", { name: /^Owners:/ }).click();
+    await menu.getByRole("option", { name: "Involving me", exact: true }).click();
+    await currentPage.keyboard.press("Escape");
     await expect
       .poll(() => currentPage.locator('[data-session-key="agent:main:bob"]').count())
       .toBe(0);
@@ -417,10 +382,9 @@ suite.define(() => {
       .toBe(0);
     await expectBrowser(currentPage.locator('[data-session-key="agent:main:ada"]')).toBeVisible();
     const filteredMenu = await openSidebarSortMenu(currentPage);
-    await expectBrowser(filteredMenu.locator('[value="involving-me"]')).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
+    await expectBrowser(
+      filteredMenu.getByRole("button", { name: "Owners: Involving me", exact: true }),
+    ).toBeVisible();
     await captureSessionOwnerProof(suite, currentPage, "03-involving-me-after-active-event.png");
   });
 
@@ -496,13 +460,23 @@ suite.define(() => {
     await currentPage.locator('[data-session-key="agent:main:ada"] a').click();
     await currentPage.getByText("Ready.", { exact: true }).waitFor();
     const ownerMenu = await openSidebarSortMenu(currentPage);
-    await captureUiProof(suite, ownerMenu.locator('[part="menu"]'), "00-people-sort-hidden.png", [
-      ownerMenu.getByRole("menuitemradio", { name: "None" }),
-    ]);
+    await captureUiProof(
+      suite,
+      ownerMenu.locator(".sidebar-session-filter-panel"),
+      "00-people-sort-hidden.png",
+      [
+        ownerMenu
+          .getByRole("group", { name: "Group by", exact: true })
+          .getByRole("button", { name: "None", exact: true }),
+      ],
+    );
     expect(
-      await ownerMenu.locator(".sidebar-session-sort-menu__title", { hasText: "People" }).count(),
+      await ownerMenu
+        .getByRole("group", { name: "Sort by", exact: true })
+        .getByRole("button", { name: "Owners", exact: true })
+        .count(),
     ).toBe(0);
-    expect(await ownerMenu.locator('[value^="owner:"]').count()).toBe(0);
+    expect(await ownerMenu.getByRole("button", { name: /^Owners:/ }).count()).toBe(0);
     expect(await currentPage.locator("openclaw-session-owner-chip").count()).toBe(0);
   });
 
@@ -527,8 +501,12 @@ suite.define(() => {
 
     const menu = currentPage.locator(".sidebar-session-sort-menu");
     await menu.waitFor();
-    expect(await menu.locator('[value^="owner:"]').count()).toBe(0);
-    await menu.getByRole("menuitemradio", { name: "None" }).click();
+    expect(await menu.getByRole("button", { name: /^Owners:/ }).count()).toBe(0);
+    await menu
+      .getByRole("group", { name: "Group by", exact: true })
+      .getByRole("button", { name: "None", exact: true })
+      .click();
+    await currentPage.keyboard.press("Escape");
 
     await expect
       .poll(() => currentPage.locator('[data-session-section^="category:"]').count())

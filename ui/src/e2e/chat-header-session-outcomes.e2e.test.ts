@@ -152,8 +152,10 @@ suite.define(() => {
           await page.getByRole("button", { name: "Filter & sort" }).click();
           await page
             .locator(".sidebar-session-sort-menu")
-            .getByRole("menuitemradio", { name: "All", exact: true })
+            .getByRole("group", { name: "Status", exact: true })
+            .getByRole("button", { name: "All", exact: true })
             .click();
+          await page.keyboard.press("Escape");
         }
         const sidebarRow = page.locator(
           `.sidebar-recent-session[data-session-key="${sessionKey}"]`,

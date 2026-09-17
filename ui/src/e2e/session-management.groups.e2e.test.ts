@@ -691,45 +691,40 @@ suite.define(() => {
       // global toolbar remains available without revealing a section action.
       const filterAndSortButton = page.getByRole("button", { name: "Filter & sort" });
       await filterAndSortButton.click();
-      const showAutomationSessions = page.getByRole("menuitemcheckbox", {
+      const showAutomationSessions = page.getByRole("switch", {
         name: "Show automation sessions",
       });
-      await activateSelfRemovingControl(showAutomationSessions);
-      await expect.poll(() => filterAndSortButton.getAttribute("aria-expanded")).toBe("false");
-
-      await filterAndSortButton.click();
-      await expect.poll(() => showAutomationSessions.getAttribute("aria-checked")).toBe("true");
-      await page.getByRole("menuitemradio", { name: "None" }).waitFor({ state: "visible" });
-      await captureUiProof(suite, page, "sidebar-groupby-sort-menu.png");
-      const groupingCheck = page
-        .getByRole("menuitemradio", { name: "Custom groups" })
-        .locator(".session-menu__check");
-      const nativeAutomationCheck = showAutomationSessions.locator('[part="checkmark"]');
-      await expect.poll(() => nativeAutomationCheck.count()).toBe(1);
-      expect(await nativeAutomationCheck.boundingBox()).toBeNull();
-      const automationCheck = showAutomationSessions.locator(".session-menu__check");
-      await expect.poll(() => automationCheck.count()).toBe(1);
+      await showAutomationSessions.click();
+      await expect.poll(() => showAutomationSessions.isChecked()).toBe(true);
+      await expect.poll(() => filterAndSortButton.getAttribute("aria-expanded")).toBe("true");
+      const groupBy = page.getByRole("group", { name: "Group by", exact: true });
+      await groupBy.getByRole("button", { name: "None", exact: true }).waitFor();
       await expect
-        .poll(async () => {
-          const [groupingBounds, automationBounds] = await Promise.all([
-            groupingCheck.boundingBox(),
-            automationCheck.boundingBox(),
-          ]);
-          if (!groupingBounds || !automationBounds) {
-            return Number.POSITIVE_INFINITY;
-          }
-          const groupingRight = groupingBounds.x + groupingBounds.width;
-          const automationRight = automationBounds.x + automationBounds.width;
-          return Math.abs(automationRight - groupingRight);
-        })
-        .toBeLessThanOrEqual(1);
+        .poll(() =>
+          groupBy
+            .getByRole("button", { name: "Custom groups", exact: true })
+            .getAttribute("aria-pressed"),
+        )
+        .toBe("true");
+      await captureUiProof(suite, page, "sidebar-groupby-sort-menu.png");
       await filterAndSortButton.click();
       await expect.poll(() => filterAndSortButton.getAttribute("aria-expanded")).toBe("false");
-      await expect.poll(() => page.getByRole("menuitemradio", { name: "None" }).count()).toBe(0);
+      await expect
+        .poll(() =>
+          page
+            .getByRole("group", { name: "Group by", exact: true })
+            .getByRole("button", { name: "None", exact: true })
+            .count(),
+        )
+        .toBe(0);
       await captureUiProof(suite, page, "sidebar-groupby-sort-menu-closed.png");
 
       await filterAndSortButton.click();
-      await activateSelfRemovingControl(page.getByRole("menuitemradio", { name: "None" }));
+      await page
+        .getByRole("group", { name: "Group by", exact: true })
+        .getByRole("button", { name: "None", exact: true })
+        .click();
+      await page.keyboard.press("Escape");
       await expect.poll(() => groups.count()).toBe(1);
       await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(3);
     } finally {
@@ -953,7 +948,11 @@ suite.define(() => {
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
       const filterAndSortButton = page.getByRole("button", { name: "Filter & sort" });
       await filterAndSortButton.click();
-      await activateSelfRemovingControl(page.getByRole("menuitemradio", { name: "None" }));
+      await page
+        .getByRole("group", { name: "Group by", exact: true })
+        .getByRole("button", { name: "None", exact: true })
+        .click();
+      await page.keyboard.press("Escape");
       const flatSection = page.locator('[data-session-section="ungrouped"]');
       await flatSection
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-1"]')
