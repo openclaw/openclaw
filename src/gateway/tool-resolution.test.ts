@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   McpLoopbackToolCache,
@@ -8,6 +8,13 @@ import {
   resolveMcpLoopbackScopedTools,
 } from "./mcp-http.runtime.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
+
+const createOpenClawToolsAsync = vi.hoisted(() => vi.fn());
+vi.mock("../agents/openclaw-tools.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/openclaw-tools.js")>();
+  createOpenClawToolsAsync.mockImplementation(actual.createOpenClawToolsAsync);
+  return { ...actual, createOpenClawToolsAsync };
+});
 
 async function resolveTools(
   overrides: Partial<Parameters<typeof resolveGatewayScopedTools>[0]> = {},
@@ -54,6 +61,26 @@ describe("resolveGatewayScopedTools", () => {
     const grantBound = await resolveTools({ cfg, agentDir: "/agents/cli" });
     expect(unbound.tools.some((tool) => tool.name === "view_image")).toBe(false);
     expect(grantBound.tools.some((tool) => tool.name === "view_image")).toBe(true);
+  });
+
+  it("hands the computer tool the caller's cleanup registrar and execution id", async () => {
+    const registerRunCleanup = vi.fn();
+    const result = await resolveTools({
+      cfg: { tools: { allow: ["computer"] } },
+      senderIsOwner: true,
+      modelHasVision: true,
+      registerRunCleanup,
+      computerExecutionId: "0f4a2a7c-2d0e-4c7d-9b41-8a1b6a4b9c11",
+    });
+    expect(result.tools.some((tool) => tool.name === "computer")).toBe(true);
+    expect(createOpenClawToolsAsync).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        registerRunCleanup,
+        computerExecutionId: "0f4a2a7c-2d0e-4c7d-9b41-8a1b6a4b9c11",
+      }),
+      expect.anything(),
+    );
+    expect(registerRunCleanup).toHaveBeenCalledWith(expect.any(Function));
   });
 
   it("keeps unknown and disabled model vision distinct in cached tools", async () => {

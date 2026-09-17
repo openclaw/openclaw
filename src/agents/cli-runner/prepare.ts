@@ -24,6 +24,7 @@ import {
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
   transferMcpLoopbackClientGrant,
+  type McpLoopbackClientGrantCloseReason,
 } from "../../gateway/mcp-grant-store.js";
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
@@ -937,7 +938,7 @@ async function prepareCliRunContextWithinReadFence(
     bootstrapTruncationNotice,
     contextFiles,
   });
-  let cleanupPreparedResources: (() => Promise<void>) | undefined;
+  let cleanupPreparedResources: PreparedCliRunContext["preparedBackend"]["cleanup"];
   let preparedExecution: PrivateCliBackendPreparedExecution | undefined;
   try {
     const mcpClientGrant =
@@ -990,8 +991,8 @@ async function prepareCliRunContextWithinReadFence(
                 }
                 activeToken = processToken;
               },
-              revokeProcessToken: () => {
-                revokeMcpLoopbackClientGrant(activeToken);
+              revokeProcessToken: (closeReason?: McpLoopbackClientGrantCloseReason) => {
+                revokeMcpLoopbackClientGrant(activeToken, closeReason);
               },
               activate: (captureKey: string, assertCurrent: () => void) => {
                 const activated = activateMcpLoopbackClientGrantCapture({
@@ -1049,12 +1050,17 @@ async function prepareCliRunContextWithinReadFence(
         : undefined;
     let mcpClientGrantRevoked = false;
     const cleanupMcpClientGrant = mcpClientGrant
-      ? async () => {
+      ? async (outcome?: McpLoopbackClientGrantCloseReason) => {
           if (mcpClientGrantRevoked) {
             return;
           }
           mcpClientGrantRevoked = true;
-          revokeMcpLoopbackClientGrant(mcpClientGrant.token);
+          // After adoption the minted token is gone; the process bearer holds this turn's grant.
+          if (mcpClientGrantCapture) {
+            mcpClientGrantCapture.revokeProcessToken(outcome);
+            return;
+          }
+          revokeMcpLoopbackClientGrant(mcpClientGrant.token, outcome);
         }
       : undefined;
     cleanupPreparedResources = cleanupMcpClientGrant;
@@ -1114,11 +1120,11 @@ async function prepareCliRunContextWithinReadFence(
     });
     const cleanupPreparedBackend =
       preparedBackend.cleanup || cleanupMcpClientGrant
-        ? async () => {
+        ? async (outcome?: McpLoopbackClientGrantCloseReason) => {
             try {
               await preparedBackend.cleanup?.();
             } finally {
-              await cleanupMcpClientGrant?.();
+              await cleanupMcpClientGrant?.(outcome);
             }
           }
         : undefined;
@@ -1173,7 +1179,7 @@ async function prepareCliRunContextWithinReadFence(
     const pluginExecutionConsumer = retainCliPluginExecutionConsumer(preparedExecution?.execute);
     const preparedBackendCleanup =
       cleanupPreparedBackend || preparedExecution?.cleanup || pluginExecutionConsumer
-        ? async () => {
+        ? async (outcome?: McpLoopbackClientGrantCloseReason) => {
             try {
               const cleanupExecution = () => preparedExecution?.cleanup?.();
               await (pluginExecutionConsumer
@@ -1181,7 +1187,7 @@ async function prepareCliRunContextWithinReadFence(
                 : cleanupExecution());
             } finally {
               try {
-                await cleanupPreparedBackend?.();
+                await cleanupPreparedBackend?.(outcome);
               } finally {
                 pluginExecutionConsumer?.release();
               }
@@ -1255,13 +1261,13 @@ async function prepareCliRunContextWithinReadFence(
         : undefined;
     const preparedCleanup =
       preparedBackendCleanup || claudeSkillsPlugin.args.length > 0
-        ? async () => {
+        ? async (outcome?: McpLoopbackClientGrantCloseReason) => {
             try {
               if (!claudeSkillsPluginClaimed) {
                 await claudeSkillsPlugin.cleanup();
               }
             } finally {
-              await preparedBackendCleanup?.();
+              await preparedBackendCleanup?.(outcome);
             }
           }
         : undefined;
@@ -1748,7 +1754,7 @@ async function prepareCliRunContextWithinReadFence(
         disposalHolds.add(promise);
         void promise.finally(() => disposalHolds.delete(promise)).catch(() => {});
       };
-      cleanupPreparedResources = async () => {
+      cleanupPreparedResources = async (outcome) => {
         try {
           if (disposalHolds.size > 0) {
             // Queued maintenance may need this foreground turn to release its lane first.
@@ -1764,7 +1770,7 @@ async function prepareCliRunContextWithinReadFence(
             await ownedEngine.dispose?.();
           }
         } finally {
-          await previousCleanup?.();
+          await previousCleanup?.(outcome);
         }
       };
       preparedBackendFinal.cleanup = cleanupPreparedResources;
@@ -1825,7 +1831,7 @@ async function prepareCliRunContextWithinReadFence(
   } catch (err) {
     try {
       await runCliCleanup(params, "cli-prepare-failure", async () => {
-        await cleanupPreparedResources?.();
+        await cleanupPreparedResources?.("error");
       });
     } catch (cleanupErr) {
       cliBackendLog.warn(`cli backend cleanup after prepare failure failed: ${String(cleanupErr)}`);

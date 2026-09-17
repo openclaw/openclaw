@@ -1421,7 +1421,7 @@ describe("prepareCliRunContext", () => {
 
     expect(generatedSystemSettingsPath).toBeTruthy();
     expect(fs.existsSync(generatedSystemSettingsPath ?? "")).toBe(false);
-    expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
+    expect(revokeMcpLoopbackClientGrant.mock.calls).toEqual([["loopback-token", "error"]]);
   });
 
   it("cleans prepared MCP and skills plugin dirs when mid-prepare reference lookup fails", async () => {
@@ -1460,7 +1460,7 @@ describe("prepareCliRunContext", () => {
       ).rejects.toThrow("reference path lookup failed");
 
       expect(skillsCleanup).toHaveBeenCalledOnce();
-      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
+      expect(revokeMcpLoopbackClientGrant.mock.calls).toEqual([["loopback-token", "error"]]);
       expect(fs.existsSync(skillsPluginDir)).toBe(false);
       expect(
         fs.readdirSync(tempRoot).filter((entry) => entry.startsWith("openclaw-cli-mcp-")),
@@ -2910,16 +2910,22 @@ describe("prepareCliRunContext", () => {
       runtimeOwnerToken: "loopback-owner-token",
       captureKey: "capture-test",
     });
-    context.preparedBackend.mcpClientGrantCapture?.revokeProcessToken();
-    expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("stable-loopback-token");
+    context.preparedBackend.mcpClientGrantCapture?.revokeProcessToken("completion");
+    expect(revokeMcpLoopbackClientGrant.mock.calls).toEqual([
+      ["stable-loopback-token", "completion"],
+    ]);
     expect(context.mcpDeliveryCapture).toBe(true);
     expect(context.systemPrompt).toContain(
       "`send`: `target` + `message`; target required this turn",
     );
     expect(context.systemPrompt).not.toContain("current source is default target");
-    await context.preparedBackend.cleanup?.();
+    // After adoption the terminal cleanup revokes the process bearer this turn owns.
+    await context.preparedBackend.cleanup?.("completion");
     expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledTimes(2);
-    expect(revokeMcpLoopbackClientGrant).toHaveBeenLastCalledWith("loopback-token");
+    expect(revokeMcpLoopbackClientGrant).toHaveBeenLastCalledWith(
+      "stable-loopback-token",
+      "completion",
+    );
   });
 
   it.each([
@@ -4558,10 +4564,10 @@ describe("prepareCliRunContext", () => {
     expect(releaseSkills).toEqual(expect.any(Function));
     expect(context.preparedBackend.claimLiveSessionResources?.()).toBeUndefined();
     try {
-      await context.preparedBackend.cleanup?.();
+      await context.preparedBackend.cleanup?.("completion");
       expect(fs.existsSync(skillPath)).toBe(true);
       expect(preparedExecutionCleanup).toHaveBeenCalledOnce();
-      expect(revokeMcpLoopbackClientGrant).toHaveBeenCalledExactlyOnceWith("loopback-token");
+      expect(revokeMcpLoopbackClientGrant.mock.calls).toEqual([["loopback-token", "completion"]]);
 
       const nextTurn = await fixture.prepare({
         provider: "claude-cli",

@@ -163,6 +163,8 @@ export type OpenClawToolsOptions = {
   /** Fail closed instead of posting same-channel thread-originated replies at the root. */
   sameChannelThreadRequired?: boolean;
   pairedNodeComputerUse?: PreparedPairedComputerUse;
+  /** Stable computer execution identity for tool sets an owner rebuilds within one run. */
+  computerExecutionId?: string;
   /** If true, nodes action="invoke" can call media-returning commands directly. */
   allowMediaInvokeCommands?: boolean;
   /** Server-owned operation-local origin for conversation-read visibility policy. */

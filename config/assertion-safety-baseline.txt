@@ -1213,7 +1213,6 @@ src/agents/cache-trace.ts	3
 src/agents/cli-credentials.ts	7
 src/agents/cli-executable-identity.ts	3
 src/agents/cli-output-records.ts	1
-src/agents/cli-runner.ts	1
 src/agents/cli-runner/bundle-mcp-codex.ts	3
 src/agents/cli-runner/bundle-mcp-gemini.ts	2
 src/agents/cli-runner/bundle-mcp-runtime.ts	1

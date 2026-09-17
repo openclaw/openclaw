@@ -408,7 +408,7 @@ describe("mcp-grant-store", () => {
     firstController.abort();
     expect(revokeMcpLoopbackClientGrant(stable.token)).toBe(true);
     expect(first?.isCurrent()).toBe(false);
-    const revocations: Array<{ token: string; runtimeOwnerToken: string }> = [];
+    const revocations: Array<{ kind: string; token: string; runtimeOwnerToken: string }> = [];
     const unregister = registerMcpLoopbackClientGrantRevocationListener((event) => {
       revocations.push(event);
     });
@@ -481,8 +481,13 @@ describe("mcp-grant-store", () => {
       }),
     ).toBe(false);
     expect(revocations).toEqual([
-      { token: stable.token, runtimeOwnerToken: "runtime-one" },
-      { token: next.token, runtimeOwnerToken: "runtime-one" },
+      { kind: "replaced", token: stable.token, runtimeOwnerToken: "runtime-one" },
+      {
+        kind: "transferred",
+        successorToken: stable.token,
+        token: next.token,
+        runtimeOwnerToken: "runtime-one",
+      },
     ]);
     nextController.abort();
     expect(transferred?.isCurrent()).toBe(false);
@@ -512,7 +517,7 @@ describe("mcp-grant-store", () => {
   });
 
   it("notifies revocation listeners for single and runtime-wide cleanup", () => {
-    const events: Array<{ token: string; runtimeOwnerToken: string }> = [];
+    const events: Array<{ kind: string; token: string; runtimeOwnerToken: string }> = [];
     const unregister = registerMcpLoopbackClientGrantRevocationListener((event) => {
       events.push(event);
     });
@@ -526,12 +531,22 @@ describe("mcp-grant-store", () => {
         runtimeOwnerToken: "runtime-one",
       });
 
-      expect(revokeMcpLoopbackClientGrant(first.token)).toBe(true);
-      expect(revokeMcpLoopbackClientGrant(first.token)).toBe(false);
+      expect(revokeMcpLoopbackClientGrant(first.token, "completion")).toBe(true);
+      expect(revokeMcpLoopbackClientGrant(first.token, "completion")).toBe(false);
       expect(revokeMcpLoopbackClientGrantsForRuntime("runtime-one")).toBe(1);
       expect(events).toEqual([
-        { token: first.token, runtimeOwnerToken: "runtime-one" },
-        { token: second.token, runtimeOwnerToken: "runtime-one" },
+        {
+          kind: "revoked",
+          token: first.token,
+          runtimeOwnerToken: "runtime-one",
+          closeReason: "completion",
+        },
+        {
+          kind: "revoked",
+          token: second.token,
+          runtimeOwnerToken: "runtime-one",
+          closeReason: "cancel",
+        },
       ]);
     } finally {
       unregister();

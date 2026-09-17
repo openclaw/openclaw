@@ -225,7 +225,7 @@ it.for([
         await pending?.catch(() => {});
         restore?.();
         signal.removeEventListener("abort", onAbort);
-        cache.clear();
+        await cache.clear();
         admission?.close();
         projection.dispose();
       }

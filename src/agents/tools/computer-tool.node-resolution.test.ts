@@ -644,6 +644,20 @@ describe("createComputerTool node resolution", () => {
     );
   });
 
+  it("drives the node with an owner-supplied execution id", async () => {
+    listNodesMock.mockResolvedValue([macComputerNode()]);
+    callGatewayToolMock.mockResolvedValue(screenshotPayload());
+    const executionId = "0f4a2a7c-2d0e-4c7d-9b41-8a1b6a4b9c11";
+    const tool = createComputerTool({ executionId, registerRunCleanup: () => {} });
+
+    await tool.execute("shot", { action: "screenshot" });
+
+    const snapshot = callGatewayToolMock.mock.calls
+      .map((call) => call[2] as { command?: string; params?: Record<string, unknown> })
+      .findLast((body) => body.command === "screen.snapshot");
+    expect(snapshot?.params?.executionId).toBe(executionId);
+  });
+
   it.each([
     {
       name: "no computer-capable node is connected",

@@ -1,3 +1,4 @@
+import type { McpLoopbackClientGrantCloseReason } from "../../gateway/mcp-grant-store.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import type {
   CliBackendLiveSessionCapability,
@@ -26,12 +27,25 @@ type CliLiveSessionRecord = {
   approvalGrants: Set<string>;
   cleanup?: () => Promise<void>;
   cleanupPromise?: Promise<void>;
+  /** Why the process was told to close; absent when it exited on its own. */
+  closeReason?: CliBackendLiveSessionCloseReason;
   capture?: {
     token: string;
     key: string;
-    revoke: () => void;
+    revoke: (closeReason: McpLoopbackClientGrantCloseReason) => void;
   };
 };
+
+/**
+ * Turn cleanup settles the bearer with the run's outcome, so a bearer still
+ * live when its process closes belongs to a turn that never settled: closed on
+ * request (idle, restart, rotation, abort) it was cut short; a self-exit failed.
+ */
+function resolveProcessGrantCloseReason(
+  closeReason: CliBackendLiveSessionCloseReason | undefined,
+): McpLoopbackClientGrantCloseReason {
+  return closeReason === undefined ? "error" : "cancel";
+}
 
 const liveSessions = new Map<string, CliLiveSessionRecord>();
 const retiredSessionCleanup = new Map<string, Promise<void>>();
@@ -129,6 +143,7 @@ async function closeRecord(
   reason: CliBackendLiveSessionCloseReason,
 ): Promise<void> {
   if (!record.cleanupPromise) {
+    record.closeReason = reason;
     record.handle.close(reason);
   }
   await (record.cleanupPromise ?? record.handle.waitForExit());
@@ -150,9 +165,10 @@ function ensureCliLiveSessionCapacity(context: PreparedCliRunContext): void {
   if (liveSessions.size < MAX_LIVE_SESSIONS) {
     return;
   }
-  for (const { handle } of liveSessions.values()) {
-    if (handle.isIdle()) {
-      handle.close("idle");
+  for (const record of liveSessions.values()) {
+    if (record.handle.isIdle()) {
+      record.closeReason = "idle";
+      record.handle.close("idle");
       return;
     }
   }
@@ -305,7 +321,7 @@ export function createCliLiveSessionCapability(params: {
       if (record?.handle !== handle) {
         return;
       }
-      record.capture?.revoke();
+      record.capture?.revoke(resolveProcessGrantCloseReason(record.closeReason));
       liveSessions.delete(ownerKey);
       record.approvalGrants.clear();
       retiringSessionHandles.add(handle);

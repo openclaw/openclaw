@@ -22,8 +22,8 @@ import {
   hasCompletionMessageSessionSpawn,
 } from "./accepted-session-spawn.js";
 import { bindOperatorModelExecution, readRunOperatorAuthority } from "./admitted-run-context.js";
+import { releasePreparedCliBackend } from "./cli-runner/backend-release.js";
 import { runCliBeforeAgentReply } from "./cli-runner/before-agent-reply.js";
-import { runCliCleanup } from "./cli-runner/cleanup.js";
 import { acceptsCliLiveSession } from "./cli-runner/cli-live-session-registry.js";
 import {
   resolveCliSessionId,
@@ -620,14 +620,13 @@ async function runPreparedCliAgentOwned(
   } catch (error) {
     outcome = { error };
   }
-  let cleanupError: Error | undefined;
-  try {
-    await runCliCleanup(params, "cli-backend-release", async () => {
-      await context.preparedBackend.cleanup?.();
-    });
-  } catch (error) {
-    cleanupError = error as Error;
-  }
+  const cleanupError = await releasePreparedCliBackend({
+    context,
+    params,
+    runFailed: "error" in outcome,
+    runError: "error" in outcome ? outcome.error : undefined,
+    runResult: "result" in outcome ? outcome.result : undefined,
+  });
   params.assertCurrent?.();
   if (cleanupError) {
     recordAgentCleanupFailure();

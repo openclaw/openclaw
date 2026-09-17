@@ -1,3 +1,4 @@
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -7,31 +8,41 @@ import {
   readAdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { createComputerTool } from "../agents/tools/computer-tool.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   McpLoopbackToolCache,
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "./mcp-http.runtime.js";
+import { readMcpLoopbackToolName } from "./mcp-http.schema.js";
 
 const resolveGatewayScopedTools = vi.hoisted(() => vi.fn());
 const listNodes = vi.hoisted(() => vi.fn());
+const nodeInvoke = vi.hoisted(() => vi.fn());
 
-vi.mock("../agents/tools/gateway.js", () => ({
-  callGatewayTool: async (
-    method: string,
-    _opts: unknown,
-    _args: unknown,
-    options: { signal?: AbortSignal },
-  ) => {
-    if (method === "node.list") {
-      return { nodes: await listNodes(options.signal) };
-    }
-    if (method === "computer.status") {
-      return { configured: false, available: false };
-    }
-    throw new Error(`Unexpected Gateway method: ${method}`);
-  },
-}));
+vi.mock("../agents/tools/gateway.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/tools/gateway.js")>();
+  return {
+    ...actual,
+    callGatewayTool: async (
+      method: string,
+      _opts: unknown,
+      args: unknown,
+      options: { signal?: AbortSignal },
+    ) => {
+      if (method === "node.list") {
+        return { nodes: await listNodes(options.signal) };
+      }
+      if (method === "computer.status") {
+        return { configured: false, available: false };
+      }
+      if (method === "node.invoke") {
+        return await nodeInvoke(args);
+      }
+      throw new Error(`Unexpected Gateway method: ${method}`);
+    },
+  };
+});
 
 vi.mock("./tool-resolution.js", () => ({
   resolveGatewayScopedTools,
@@ -67,6 +78,45 @@ function computerNode(nodeId: string, actions: string[]) {
   };
 }
 
+type NodeInvokeRequest = {
+  nodeId?: string;
+  command?: string;
+  params?: Record<string, unknown>;
+};
+
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+
+function readNodeInvokes(command: string): NodeInvokeRequest[] {
+  return nodeInvoke.mock.calls
+    .map((call) => call[0] as NodeInvokeRequest)
+    .filter((request) => request.command === command);
+}
+
+function readSnapshotExecutionIds(): string[] {
+  return readNodeInvokes("screen.snapshot").flatMap((request) => {
+    const executionId = request.params?.executionId;
+    return typeof executionId === "string" ? [executionId] : [];
+  });
+}
+
+function readExecutionCloses(): Array<Record<string, unknown>> {
+  return readNodeInvokes("computer.act")
+    .map((request) => request.params ?? {})
+    .filter((params) => params.action === "__close_execution");
+}
+
+function findLoopbackTool(
+  resolved: Awaited<ReturnType<McpLoopbackToolCache["resolve"]>>,
+  name: string,
+) {
+  const tool = resolved.tools.find((candidate) => readMcpLoopbackToolName(candidate) === name);
+  if (!tool) {
+    throw new Error(`missing loopback tool ${name}`);
+  }
+  return tool;
+}
+
 function readComputerActions(
   resolved: Awaited<ReturnType<McpLoopbackToolCache["resolve"]>>,
 ): string[] | undefined {
@@ -93,6 +143,21 @@ function scopeParams({
 beforeEach(() => {
   listNodes.mockReset();
   listNodes.mockResolvedValue([]);
+  nodeInvoke.mockReset();
+  nodeInvoke.mockImplementation(async (request: NodeInvokeRequest) =>
+    request.command === "screen.snapshot"
+      ? {
+          payload: {
+            format: "png",
+            base64: TINY_PNG_BASE64,
+            displayFrameId: "display-0-frame",
+            width: 1280,
+            height: 800,
+            screenIndex: 0,
+          },
+        }
+      : { payload: { ok: true } },
+  );
   resolveGatewayScopedTools.mockReset();
   resolveGatewayScopedTools.mockReturnValue(
     scopedToolFixture(["memory_search", "memory_get", "message", "cron"]),
@@ -221,7 +286,7 @@ describe("McpLoopbackToolCache", () => {
       if (action === "evict") {
         cache.evictGrant("pending-grant");
       } else {
-        cache.clear();
+        await cache.clear();
       }
       inventory.resolve([]);
       await pending;
@@ -235,7 +300,9 @@ describe("McpLoopbackToolCache", () => {
     "does not cache tools when cancellation overtakes %s",
     async (stage) => {
       const cache = new McpLoopbackToolCache();
-      const params = scopeParams({ nodeExecAllowed: true, grantToken: "cancelled-grant" });
+      // Rows without a client grant build under the request's own signal; grant
+      // rows share one build across requests (see the execution lifecycle below).
+      const params = scopeParams({ nodeExecAllowed: true });
       const controller = new AbortController();
       const reason = new Error("synthetic request cancelled");
       const entered = createDeferred();
@@ -261,7 +328,6 @@ describe("McpLoopbackToolCache", () => {
       controller.abort(reason);
       resume.resolve();
       await rejected;
-      expect(cache.evictGrant("cancelled-grant")).toBe(false);
       const next = new AbortController();
       await cache.resolve({ ...params, signal: next.signal });
       next.abort();
@@ -376,13 +442,23 @@ describe("McpLoopbackToolCache", () => {
 
 describe("MCP loopback Computer Use schema", () => {
   beforeEach(() => {
-    resolveGatewayScopedTools.mockImplementation(({ cfg, pairedNodeComputerUse }) => {
-      const computerDenied = cfg.tools?.deny?.includes("computer");
-      return {
-        agentId: "main",
-        tools: computerDenied ? [] : [createComputerTool({ pairedNodeComputerUse })],
-      };
-    });
+    resolveGatewayScopedTools.mockImplementation(
+      ({ cfg, pairedNodeComputerUse, registerRunCleanup, computerExecutionId }) => {
+        const computerDenied = cfg.tools?.deny?.includes("computer");
+        return {
+          agentId: "main",
+          tools: computerDenied
+            ? []
+            : [
+                createComputerTool({
+                  pairedNodeComputerUse,
+                  registerRunCleanup,
+                  executionId: computerExecutionId,
+                }),
+              ],
+        };
+      },
+    );
   });
 
   it("does not query node inventory when the grant excludes computer", async () => {
@@ -440,5 +516,377 @@ describe("MCP loopback Computer Use schema", () => {
       expect.arrayContaining(["screenshot", "list_windows", "launch_app", "wait"]),
     );
     expect(listNodes).toHaveBeenCalledTimes(2);
+  });
+
+  describe("paired-node execution lifecycle", () => {
+    const executionScope = (overrides: Partial<ScopeParams["context"]> = {}) =>
+      scopeParams({
+        cfg: { tools: { allow: ["computer"] } } as OpenClawConfig,
+        grantToken: "grant-computer",
+        sessionKey: "agent:main:main",
+        senderIsOwner: true,
+        modelHasVision: true,
+        ...overrides,
+      });
+
+    beforeEach(() => {
+      listNodes.mockResolvedValue([computerNode("headless-windows-node", ["screenshot"])]);
+    });
+
+    it("hands the tool builder a cleanup registrar and the grant's execution id", async () => {
+      const cache = new McpLoopbackToolCache();
+      await cache.resolve(executionScope());
+      const first = resolveGatewayScopedTools.mock.lastCall?.[0];
+      expect(first).toMatchObject({
+        registerRunCleanup: expect.any(Function),
+        computerExecutionId: expect.any(String),
+      });
+
+      await cache.resolve(executionScope({ sessionKey: "agent:main:other" }));
+      const second = resolveGatewayScopedTools.mock.lastCall?.[0];
+      expect(second?.computerExecutionId).toBe(first?.computerExecutionId);
+
+      await cache.resolve(scopeParams({ cfg: {} as OpenClawConfig, grantToken: "grant-b" }));
+      expect(resolveGatewayScopedTools.mock.lastCall?.[0].computerExecutionId).not.toBe(
+        first?.computerExecutionId,
+      );
+    });
+
+    it("closes the node execution with the run's outcome when the grant is revoked (#147420)", async () => {
+      const cache = new McpLoopbackToolCache();
+      const scope = executionScope();
+      const first = await cache.resolve(scope);
+      const computer = findLoopbackTool(first, "computer");
+      await computer.execute("shot-1", { action: "screenshot" });
+      const [executionId] = readSnapshotExecutionIds();
+      expect(executionId).toEqual(expect.any(String));
+      expect(readExecutionCloses()).toEqual([]);
+
+      expect(cache.revokeGrant("grant-computer", "completion")).toBe(true);
+
+      await vi.waitFor(() => {
+        expect(readExecutionCloses()).toEqual([
+          { action: "__close_execution", executionId, reason: "completion" },
+        ]);
+      });
+      await expect(computer.execute("shot-after-close", { action: "screenshot" })).rejects.toThrow(
+        "computer: execution is closed",
+      );
+      // A later run under a fresh grant starts its own execution.
+      const next = await cache.resolve(scope);
+      await findLoopbackTool(next, "computer").execute("shot-2", { action: "screenshot" });
+      const executionIds = readSnapshotExecutionIds();
+      expect(executionIds).toHaveLength(2);
+      expect(executionIds[1]).not.toBe(executionId);
+    });
+
+    it.each(["cancel", "error", "timeout"] as const)(
+      "passes a %s settlement to the node close unchanged",
+      async (closeReason) => {
+        const cache = new McpLoopbackToolCache();
+        const resolved = await cache.resolve(executionScope());
+        await findLoopbackTool(resolved, "computer").execute("shot-1", { action: "screenshot" });
+        const [executionId] = readSnapshotExecutionIds();
+
+        cache.revokeGrant("grant-computer", closeReason);
+
+        await vi.waitFor(() => {
+          expect(readExecutionCloses()).toEqual([
+            { action: "__close_execution", executionId, reason: closeReason },
+          ]);
+        });
+      },
+    );
+
+    it("keeps a grant's row and node execution across the schema-cache TTL", async () => {
+      const cache = new McpLoopbackToolCache();
+      const scope = executionScope();
+      const first = await cache.resolve(scope);
+      await findLoopbackTool(first, "computer").execute("shot-1", { action: "screenshot" });
+      const [executionId] = readSnapshotExecutionIds();
+
+      vi.useFakeTimers();
+      vi.advanceTimersByTime(30_000);
+      const second = await cache.resolve(scope);
+      vi.useRealTimers();
+
+      expect(second).toBe(first);
+      await findLoopbackTool(second, "computer").execute("shot-2", { action: "screenshot" });
+      expect(readSnapshotExecutionIds()).toEqual([executionId, executionId]);
+      expect(readExecutionCloses()).toEqual([]);
+    });
+
+    it("replacing the grant's authority drops its rows but keeps the execution open", async () => {
+      const cache = new McpLoopbackToolCache();
+      const scope = executionScope();
+      const first = await cache.resolve(scope);
+      await findLoopbackTool(first, "computer").execute("shot-1", { action: "screenshot" });
+      const [executionId] = readSnapshotExecutionIds();
+
+      // Capture activation for the next turn replaces the authority behind the token.
+      expect(cache.evictGrant("grant-computer")).toBe(true);
+      const second = await cache.resolve(scope);
+
+      expect(second).not.toBe(first);
+      await findLoopbackTool(second, "computer").execute("shot-2", { action: "screenshot" });
+      expect(readSnapshotExecutionIds()).toEqual([executionId, executionId]);
+      expect(readExecutionCloses()).toEqual([]);
+
+      cache.revokeGrant("grant-computer", "completion");
+      await vi.waitFor(() => {
+        expect(readExecutionCloses().length).toBeGreaterThan(0);
+      });
+      expect(
+        readExecutionCloses().every(
+          (close) => close.executionId === executionId && close.reason === "completion",
+        ),
+      ).toBe(true);
+    });
+
+    it("serves but does not publish a row whose authority was replaced mid-discovery", async () => {
+      const cache = new McpLoopbackToolCache();
+      const scope = executionScope();
+      listNodes.mockImplementationOnce(async () => {
+        cache.evictGrant("grant-computer");
+        return [computerNode("headless-windows-node", ["screenshot"])];
+      });
+      const stale = await cache.resolve(scope);
+      await findLoopbackTool(stale, "computer").execute("shot-1", { action: "screenshot" });
+      const [executionId] = readSnapshotExecutionIds();
+      const calls = resolveGatewayScopedTools.mock.calls.length;
+
+      const fresh = await cache.resolve(scope);
+      expect(fresh).not.toBe(stale);
+      expect(resolveGatewayScopedTools.mock.calls.length).toBeGreaterThan(calls);
+
+      cache.revokeGrant("grant-computer", "completion");
+      await vi.waitFor(() => {
+        expect(readExecutionCloses()).toContainEqual({
+          action: "__close_execution",
+          executionId,
+          reason: "completion",
+        });
+      });
+    });
+
+    it("moves the execution to the successor token when the grant is transferred", async () => {
+      const cache = new McpLoopbackToolCache();
+      const first = await cache.resolve(executionScope());
+      await findLoopbackTool(first, "computer").execute("shot-1", { action: "screenshot" });
+      const [executionId] = readSnapshotExecutionIds();
+
+      cache.transferGrant("grant-computer", "process-token");
+      const successor = await cache.resolve(executionScope({}));
+      expect(successor).not.toBe(first);
+      const moved = await cache.resolve({ ...executionScope(), grantToken: "process-token" });
+      await findLoopbackTool(moved, "computer").execute("shot-2", { action: "screenshot" });
+      expect(readSnapshotExecutionIds()).toEqual([executionId, executionId]);
+      expect(readExecutionCloses()).toEqual([]);
+
+      cache.revokeGrant("process-token", "completion");
+      await vi.waitFor(() => {
+        expect(readExecutionCloses()).toContainEqual({
+          action: "__close_execution",
+          executionId,
+          reason: "completion",
+        });
+      });
+    });
+
+    it("coalesces concurrent misses for one grant scope onto a single row", async () => {
+      const cache = new McpLoopbackToolCache();
+      const scope = executionScope();
+      const entered = createDeferred();
+      const inventory = createDeferred<unknown[]>();
+      listNodes.mockImplementationOnce(() => {
+        entered.resolve();
+        return inventory.promise;
+      });
+      const first = cache.resolve(scope);
+      await entered.promise;
+      const second = cache.resolve(scope);
+      inventory.resolve([computerNode("headless-windows-node", ["screenshot"])]);
+
+      const [a, b] = await Promise.all([first, second]);
+      expect(b).toBe(a);
+      expect(listNodes).toHaveBeenCalledTimes(1);
+    });
+
+    it("builds its own row instead of joining a build the replaced authority started", async () => {
+      const cache = new McpLoopbackToolCache();
+      const scope = executionScope();
+      const entered = createDeferred();
+      const inventory = createDeferred<unknown[]>();
+      listNodes.mockImplementationOnce(() => {
+        entered.resolve();
+        return inventory.promise;
+      });
+      const stale = cache.resolve(scope);
+      await entered.promise;
+      cache.evictGrant("grant-computer");
+      const fresh = cache.resolve(scope);
+      inventory.resolve([computerNode("headless-windows-node", ["screenshot"])]);
+
+      const [a, b] = await Promise.all([stale, fresh]);
+      expect(b).not.toBe(a);
+      expect(listNodes).toHaveBeenCalledTimes(2);
+      // Only the row built under the current authority is published.
+      expect(await cache.resolve(scope)).toBe(b);
+    });
+
+    it.each(["starter", "joiner"] as const)(
+      "rejects an aborted %s while shared discovery is pending and serves the other request",
+      async (abortedRequest) => {
+        const cache = new McpLoopbackToolCache();
+        const scope = executionScope();
+        const entered = createDeferred();
+        const inventory = createDeferred<unknown[]>();
+        listNodes.mockImplementationOnce(() => {
+          entered.resolve();
+          return inventory.promise;
+        });
+        const controller = new AbortController();
+        const reason = new Error("synthetic request cancelled");
+        const withSignal = (request: "starter" | "joiner") =>
+          request === abortedRequest ? { ...scope, signal: controller.signal } : scope;
+        const starter = cache.resolve(withSignal("starter"));
+        await entered.promise;
+        const joiner = cache.resolve(withSignal("joiner"));
+        // Let the joiner reach the shared build before its request is cancelled.
+        await nextEventLoopTurn();
+        controller.abort(reason);
+
+        // Discovery is still pending: the aborted request settles on its own signal.
+        await expect(abortedRequest === "starter" ? starter : joiner).rejects.toBe(reason);
+        inventory.resolve([computerNode("headless-windows-node", ["screenshot"])]);
+        const row = await (abortedRequest === "starter" ? joiner : starter);
+        expect(listNodes).toHaveBeenCalledTimes(1);
+        expect(await cache.resolve(scope)).toBe(row);
+      },
+    );
+
+    it("waits for a retired execution's close before serving a cached successor row", async () => {
+      const cache = new McpLoopbackToolCache();
+      const previous = await cache.resolve(executionScope());
+      await findLoopbackTool(previous, "computer").execute("shot-1", { action: "screenshot" });
+      // The successor listed its tools while the previous run was still active.
+      const successorScope = executionScope({ sessionKey: "agent:main:successor" });
+      const successor = await cache.resolve({ ...successorScope, grantToken: "grant-successor" });
+      const closing = createDeferred<unknown>();
+      nodeInvoke.mockImplementation((request: NodeInvokeRequest) =>
+        request.params?.action === "__close_execution"
+          ? closing.promise
+          : { payload: { ok: true } },
+      );
+
+      expect(cache.revokeGrant("grant-computer", "completion")).toBe(true);
+      const serving = cache.resolve({ ...successorScope, grantToken: "grant-successor" });
+      const settled = vi.fn();
+      void serving.then(settled, settled);
+      await nextEventLoopTurn();
+      expect(settled).not.toHaveBeenCalled();
+
+      closing.resolve({ payload: { ok: true } });
+      expect(await serving).toBe(successor);
+    });
+
+    it("closes a row the global cap pushed out when its grant ends", async () => {
+      const cache = new McpLoopbackToolCache();
+      const scope = executionScope();
+      const first = await cache.resolve(scope);
+      await findLoopbackTool(first, "computer").execute("shot-1", { action: "screenshot" });
+      const [executionId] = readSnapshotExecutionIds();
+      for (let index = 0; index < 256; index += 1) {
+        await cache.resolve(executionScope({ currentMessageId: `message-${index}` }));
+      }
+      const rebuilt = await cache.resolve(scope);
+      expect(rebuilt).not.toBe(first);
+      await findLoopbackTool(rebuilt, "computer").execute("shot-2", { action: "screenshot" });
+      expect(readSnapshotExecutionIds()).toEqual([executionId, executionId]);
+
+      cache.revokeGrant("grant-computer", "completion");
+
+      await vi.waitFor(() => {
+        expect(readExecutionCloses().length).toBeGreaterThan(0);
+      });
+      expect(readExecutionCloses().every((close) => close.executionId === executionId)).toBe(true);
+    });
+
+    it("waits for closes already in flight when the cache is cleared", async () => {
+      const cache = new McpLoopbackToolCache();
+      const resolved = await cache.resolve(executionScope());
+      await findLoopbackTool(resolved, "computer").execute("shot-1", { action: "screenshot" });
+      const [executionId] = readSnapshotExecutionIds();
+
+      // The loopback server revokes its grants, then clears the cache.
+      expect(cache.revokeGrant("grant-computer", "completion")).toBe(true);
+      await cache.clear();
+
+      expect(readExecutionCloses()).toEqual([
+        { action: "__close_execution", executionId, reason: "completion" },
+      ]);
+    });
+
+    it("retires a row whose grant was revoked while it was still discovering nodes", async () => {
+      const cache = new McpLoopbackToolCache();
+      const closeReasons: string[] = [];
+      const build = resolveGatewayScopedTools.getMockImplementation();
+      resolveGatewayScopedTools.mockImplementation((params) => {
+        params.registerRunCleanup?.(async (reason: string) => {
+          closeReasons.push(reason);
+        });
+        return build?.(params) ?? scopedToolFixture([]);
+      });
+      listNodes.mockImplementationOnce(async () => {
+        cache.revokeGrant("grant-computer", "completion");
+        return [computerNode("headless-windows-node", ["screenshot"])];
+      });
+
+      const stale = await cache.resolve(executionScope());
+
+      await expect(
+        findLoopbackTool(stale, "computer").execute("shot-1", { action: "screenshot" }),
+      ).rejects.toThrow("computer: execution is closed");
+      expect(readSnapshotExecutionIds()).toEqual([]);
+      // The row closes with the run's real settlement, not a made-up cancel.
+      expect(closeReasons).toEqual(["completion"]);
+    });
+
+    it("keeps a row built during another grant's revocation reachable for its own cleanup", async () => {
+      const cache = new McpLoopbackToolCache();
+      listNodes.mockImplementationOnce(async () => {
+        // Revocation of another grant lands while this row is still discovering nodes.
+        cache.revokeGrant("grant-other", "completion");
+        return [computerNode("headless-windows-node", ["screenshot"])];
+      });
+      const row = await cache.resolve(executionScope());
+      await findLoopbackTool(row, "computer").execute("shot-1", { action: "screenshot" });
+      const [executionId] = readSnapshotExecutionIds();
+      expect(readExecutionCloses()).toEqual([]);
+
+      cache.revokeGrant("grant-computer", "completion");
+
+      await vi.waitFor(() => {
+        expect(readExecutionCloses()).toEqual([
+          { action: "__close_execution", executionId, reason: "completion" },
+        ]);
+      });
+    });
+
+    it("leaves rows without a client grant untracked and without a cleanup owner", async () => {
+      const cache = new McpLoopbackToolCache();
+      const cfg = { tools: { allow: ["computer"] } } as OpenClawConfig;
+      const resolved = await cache.resolve({ ...executionScope(), cfg, grantToken: undefined });
+      expect(resolveGatewayScopedTools.mock.lastCall?.[0]).toMatchObject({
+        registerRunCleanup: undefined,
+        computerExecutionId: undefined,
+      });
+      await findLoopbackTool(resolved, "computer").execute("shot-1", { action: "screenshot" });
+      expect(readSnapshotExecutionIds()).toHaveLength(1);
+
+      await cache.clear();
+
+      expect(readExecutionCloses()).toEqual([]);
+    });
   });
 });

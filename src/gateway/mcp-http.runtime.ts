@@ -22,10 +22,20 @@ import { normalizeToolPolicyName, toolPolicyRestrictsTools } from "../agents/too
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import { hasSessionControlAuthority } from "../agents/tools/sessions-operator-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { DirectoryCache } from "../infra/outbound/directory-cache.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
-import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
+import type {
+  McpLoopbackClientGrantCloseReason,
+  McpLoopbackRequestContext,
+} from "./mcp-grant-store.js";
+import {
+  createScopedToolsCleanupOwner,
+  McpLoopbackGrantRows,
+  type GrantResources,
+  type ScopedToolsCleanup,
+} from "./mcp-http.grant-rows.js";
 import {
   buildMcpToolSchema,
   readMcpLoopbackToolName,
@@ -57,6 +67,9 @@ type CachedScopedTools = {
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
   sessionFacts: ReturnType<typeof captureMcpCatalogSessionFacts>;
+  // Grant-owned rows only: drains the node resources the tool instances
+  // registered (a computer execution opens on the first screenshot). Idempotent.
+  dispose?: ScopedToolsCleanup;
 };
 
 type McpLoopbackScopeParams = {
@@ -77,6 +90,8 @@ type McpLoopbackScopeParams = {
    * the exact row it was built for.
    */
   isGrantCurrent?: () => boolean;
+  /** Owner-scoped computer execution identity; absent from the cache key like the grant liveness. */
+  computerExecutionId?: string;
   yieldContextCacheKey?: string;
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   nodeExecAvailability?: Awaited<ReturnType<typeof loadNodeExecAvailability>>;
@@ -234,7 +249,8 @@ async function resolvePairedComputerNodeScope(
       pairedComputerUseAvailability,
     },
   };
-  // Rebuild computer with the prepared host/node action projection and target status.
+  // Rebuild computer with the prepared host/node action projection and target
+  // status. A discarded probe row never bound a node, so it holds nothing to release.
   return pairedComputerUseAvailability.prepared
     ? resolvedParams
     : { ...resolvedParams, policyResolved };
@@ -327,6 +343,11 @@ async function constructMcpLoopbackTools(
   const skillWorkshop = params.skillLibraryAuthoring
     ? { libraryAuthoring: params.skillLibraryAuthoring }
     : undefined;
+  // Only grant-owned rows get a cleanup owner. Runtime-token callers (the
+  // owner/non-owner bearer, used for probes and listings) have no run to end,
+  // so they keep the untracked per-row execution they had before, and no owner
+  // means no execution-owned actions in their schema.
+  const cleanupOwner = params.computerExecutionId ? createScopedToolsCleanupOwner() : undefined;
   const scopeOptions: Parameters<typeof resolveGatewayScopedTools>[0] = {
     ...context,
     messageActionTurnCapability: params.messageActionTurnCapability,
@@ -345,6 +366,8 @@ async function constructMcpLoopbackTools(
     includeNodeExecTool,
     nodeExecAvailable: params.nodeExecAvailability?.isAvailable,
     pairedNodeComputerUse: params.pairedComputerUseAvailability?.prepared,
+    registerRunCleanup: cleanupOwner?.register,
+    computerExecutionId: params.computerExecutionId,
   };
   const scoped = await resolveGatewayScopedTools(scopeOptions, params.assertCurrent);
   params.assertCurrent();
@@ -360,6 +383,7 @@ async function constructMcpLoopbackTools(
     tools,
     toolSchema,
     sessionFacts,
+    ...(cleanupOwner ? { dispose: cleanupOwner.dispose } : {}),
   };
 }
 
@@ -465,84 +489,244 @@ function buildMcpLoopbackToolCacheKey(params: McpLoopbackScopeParams): string {
   })}`;
 }
 
+function hasComputerTool(row: CachedScopedTools): boolean {
+  return row.tools.some((tool) => readMcpLoopbackToolName(tool) === "computer");
+}
+
 /** Short-lived cache for loopback tool lists keyed by session/channel context. */
 export class McpLoopbackToolCache {
+  // Rows without a client grant: schema-only rows under the short TTL.
   #entries = new DirectoryCache<CachedScopedTools>(TOOL_CACHE_TTL_MS, TOOL_CACHE_MAX_ENTRIES);
-  // Revocation needs the config scopes where one grant may have cached tools.
-  #grantConfigScopes = new Map<string, Set<OpenClawConfig>>();
+  // Rows with a client grant live with the grant until it is revoked. The global
+  // cap still bounds them; a row the cap drops is rebuilt on the same execution.
+  #grants = new McpLoopbackGrantRows<CachedScopedTools>(TOOL_CACHE_MAX_ENTRIES);
+  // Concurrent misses for one grant scope share a single construction, so one
+  // request cannot screenshot on a row another request's publication discards.
+  // The entry remembers which authority it observed: a request under replaced
+  // or retired authority starts its own build instead of joining a stale one.
+  #inflight = new Map<
+    string,
+    {
+      grant: GrantResources<CachedScopedTools>;
+      generation: number;
+      cfg: OpenClawConfig;
+      pending: Promise<CachedScopedTools>;
+    }
+  >();
   #epoch = 0;
+
+  #lookup(
+    grant: GrantResources<CachedScopedTools> | undefined,
+    cacheKey: string,
+    cfg: OpenClawConfig,
+  ): CachedScopedTools | undefined {
+    return grant ? this.#grants.lookup(grant, cacheKey, cfg) : this.#entries.get(cacheKey, cfg);
+  }
 
   async resolve(input: McpLoopbackScopeParams): Promise<CachedScopedTools> {
     const epoch = this.#epoch;
-    const nodeExecParams = await resolveNodeExecScope(captureMcpLoopbackScope(input), "exact");
+    // Capture refuses a grant revoked before this resolve, so only live grants are tracked.
+    const captured = captureMcpLoopbackScope(input);
+    const grantToken = input.grantToken;
+    const grant = grantToken ? this.#grants.acquire(grantToken) : undefined;
+    // Authority replaced during any discovery below must keep this row unpublished.
+    const generation = grant?.generation ?? 0;
+    const nodeExecParams = await resolveNodeExecScope(
+      grant ? { ...captured, computerExecutionId: grant.computerExecutionId } : captured,
+      "exact",
+    );
     for (;;) {
       nodeExecParams.assertCurrent();
       // A policy-excluded computer scope has no inventory component. It can use
       // the ordinary cached catalog without touching Gateway again.
       const preDiscoveryCacheKey = buildMcpLoopbackToolCacheKey(nodeExecParams);
-      let preDiscoveryCached = this.#entries.get(preDiscoveryCacheKey, nodeExecParams.cfg);
-      if (preDiscoveryCached) {
-        preDiscoveryCached = await withReadyMcpSession(nodeExecParams, () => {
-          const cached = this.#entries.get(preDiscoveryCacheKey, nodeExecParams.cfg);
+      if (this.#lookup(grant, preDiscoveryCacheKey, nodeExecParams.cfg)) {
+        const preDiscoveryCached = await withReadyMcpSession(nodeExecParams, () => {
+          const cached = this.#lookup(grant, preDiscoveryCacheKey, nodeExecParams.cfg);
           return cached && isMcpCatalogSessionCurrent(cached, nodeExecParams) ? cached : undefined;
         });
         nodeExecParams.assertCurrent();
         if (preDiscoveryCached && isMcpCatalogSessionCurrent(preDiscoveryCached, nodeExecParams)) {
-          return preDiscoveryCached;
+          return grant
+            ? await this.#serveGrantRow(preDiscoveryCached, input.signal)
+            : preDiscoveryCached;
         }
       }
 
-      // Availability belongs to the current connection, not the schema TTL.
-      const resolved = await resolvePairedComputerNodeScope(nodeExecParams, "exact");
+      const nextEntry =
+        grantToken && grant
+          ? await this.#joinGrantRow(
+              grantToken,
+              grant,
+              generation,
+              preDiscoveryCacheKey,
+              nodeExecParams,
+              input.signal,
+            )
+          : await this.#resolveUntrackedRow(nodeExecParams, epoch);
       nodeExecParams.assertCurrent();
-      const { params } = resolved;
-      const cacheKey = buildMcpLoopbackToolCacheKey(params);
-      const nextEntry = await withReadyMcpSession(params, async () => {
-        const cached = this.#entries.get(cacheKey, params.cfg);
-        if (cached && isMcpCatalogSessionCurrent(cached, params)) {
-          return cached;
-        }
-        const next =
-          resolved.policyResolved && isMcpCatalogSessionCurrent(resolved.policyResolved, params)
-            ? resolved.policyResolved
-            : await constructMcpLoopbackTools(params, "exact");
-        params.assertCurrent();
-        // Revocation may overtake discovery before a grant owns any cached rows.
-        if (epoch === this.#epoch && isMcpCatalogSessionCurrent(next, params)) {
-          this.#entries.set(cacheKey, next, params.cfg);
-          if (params.grantToken) {
-            const scopes =
-              this.#grantConfigScopes.get(params.grantToken) ?? new Set<OpenClawConfig>();
-            scopes.add(params.cfg);
-            this.#grantConfigScopes.set(params.grantToken, scopes);
-          }
-        }
-        return next;
-      });
-      params.assertCurrent();
-      if (isMcpCatalogSessionCurrent(nextEntry, params)) {
+      if (isMcpCatalogSessionCurrent(nextEntry, nodeExecParams)) {
         return nextEntry;
       }
     }
   }
 
-  evictGrant(token: string): boolean {
-    this.#epoch += 1;
-    const scopes = this.#grantConfigScopes.get(token);
-    if (!scopes) {
-      return false;
-    }
-    const cacheKeyPrefix = `${token}\u0000`;
-    for (const cfg of scopes) {
-      this.#entries.clearMatching((cacheKey) => cacheKey.startsWith(cacheKeyPrefix), cfg);
-    }
-    this.#grantConfigScopes.delete(token);
-    return true;
+  async #resolveUntrackedRow(
+    nodeExecParams: CapturedMcpLoopbackScope,
+    epoch: number,
+  ): Promise<CachedScopedTools> {
+    // Availability belongs to the current connection, not the schema TTL.
+    const resolved = await resolvePairedComputerNodeScope(nodeExecParams, "exact");
+    nodeExecParams.assertCurrent();
+    const { params } = resolved;
+    const cacheKey = buildMcpLoopbackToolCacheKey(params);
+    return await withReadyMcpSession(params, async () => {
+      const cached = this.#entries.get(cacheKey, params.cfg);
+      if (cached && isMcpCatalogSessionCurrent(cached, params)) {
+        return cached;
+      }
+      const next =
+        resolved.policyResolved && isMcpCatalogSessionCurrent(resolved.policyResolved, params)
+          ? resolved.policyResolved
+          : await constructMcpLoopbackTools(params, "exact");
+      params.assertCurrent();
+      // Clearing may overtake discovery before the row is cached.
+      if (epoch === this.#epoch && isMcpCatalogSessionCurrent(next, params)) {
+        this.#entries.set(cacheKey, next, params.cfg);
+      }
+      return next;
+    });
   }
 
-  clear(): void {
+  /**
+   * Joins the shared build for this grant scope, or starts it. The build belongs
+   * to the cache, not to the request that started it: it runs without any
+   * request's signal and stays joinable until it settles, while each caller
+   * stops waiting as soon as its own request is cancelled.
+   */
+  async #joinGrantRow(
+    grantToken: string,
+    grant: GrantResources<CachedScopedTools>,
+    generation: number,
+    preDiscoveryCacheKey: string,
+    nodeExecParams: CapturedMcpLoopbackScope,
+    signal: AbortSignal | undefined,
+  ): Promise<CachedScopedTools> {
+    const inflight = this.#inflight.get(preDiscoveryCacheKey);
+    const pending =
+      inflight?.grant === grant &&
+      inflight.generation === generation &&
+      inflight.cfg === nodeExecParams.cfg
+        ? inflight.pending
+        : this.#startGrantBuild(
+            grantToken,
+            grant,
+            generation,
+            preDiscoveryCacheKey,
+            nodeExecParams,
+          );
+    return await racePromiseWithAbortSignal(pending, signal, (aborted) => aborted.reason);
+  }
+
+  #startGrantBuild(
+    grantToken: string,
+    grant: GrantResources<CachedScopedTools>,
+    generation: number,
+    preDiscoveryCacheKey: string,
+    nodeExecParams: CapturedMcpLoopbackScope,
+  ): Promise<CachedScopedTools> {
+    const pending = this.#resolveGrantRow(
+      grantToken,
+      grant,
+      generation,
+      captureMcpLoopbackScope({ ...nodeExecParams, signal: undefined }),
+    );
+    this.#inflight.set(preDiscoveryCacheKey, {
+      grant,
+      generation,
+      cfg: nodeExecParams.cfg,
+      pending,
+    });
+    const settle = () => {
+      if (this.#inflight.get(preDiscoveryCacheKey)?.pending === pending) {
+        this.#inflight.delete(preDiscoveryCacheKey);
+      }
+    };
+    void pending.then(settle, settle);
+    return pending;
+  }
+
+  /**
+   * A retired predecessor's close must reach the node before a grant row's next
+   * screenshot, or the provider still reports the old execution busy. Applies
+   * to cached rows as well: a successor may have built its row while the
+   * predecessor was still running.
+   */
+  async #serveGrantRow(row: CachedScopedTools, signal?: AbortSignal): Promise<CachedScopedTools> {
+    if (this.#grants.hasPendingDisposals && hasComputerTool(row)) {
+      await this.#grants.settleDisposals(signal);
+      signal?.throwIfAborted();
+    }
+    return row;
+  }
+
+  async #resolveGrantRow(
+    grantToken: string,
+    grant: GrantResources<CachedScopedTools>,
+    generation: number,
+    nodeExecParams: CapturedMcpLoopbackScope,
+  ): Promise<CachedScopedTools> {
+    // Availability belongs to the current connection, not the schema TTL.
+    const resolved = await resolvePairedComputerNodeScope(nodeExecParams, "exact");
+    nodeExecParams.assertCurrent();
+    const { params } = resolved;
+    const cacheKey = buildMcpLoopbackToolCacheKey(params);
+    const nextEntry = await withReadyMcpSession(params, async () => {
+      const cached = this.#grants.lookup(grant, cacheKey, params.cfg);
+      if (cached && isMcpCatalogSessionCurrent(cached, params)) {
+        return cached;
+      }
+      const next =
+        resolved.policyResolved && isMcpCatalogSessionCurrent(resolved.policyResolved, params)
+          ? resolved.policyResolved
+          : await constructMcpLoopbackTools(params, "exact");
+      if (isMcpCatalogSessionCurrent(next, params)) {
+        this.#grants.publish(grantToken, grant, generation, cacheKey, params.cfg, next);
+      }
+      return next;
+    });
+    return await this.#serveGrantRow(nextEntry);
+  }
+
+  /**
+   * The authority behind a live token was replaced: its rows captured the old
+   * authority and must go, but the node execution the run drives stays open.
+   */
+  evictGrant(token: string): boolean {
+    this.#epoch += 1;
+    return this.#grants.evict(token);
+  }
+
+  /** The run moved onto a successor token; its execution and cleanups move with it. */
+  transferGrant(token: string, successorToken: string): void {
+    this.#epoch += 1;
+    this.#grants.transfer(token, successorToken);
+  }
+
+  /** The run the token served ended; close the node execution with its real outcome. */
+  revokeGrant(token: string, closeReason: McpLoopbackClientGrantCloseReason): boolean {
+    this.#epoch += 1;
+    return this.#grants.revoke(token, closeReason);
+  }
+
+  /**
+   * Drops every row. The loopback server revokes its grants before clearing, so
+   * this normally only waits for their closes; a grant still tracked here is
+   * cancelled as well so nothing outlives the cache.
+   */
+  async clear(): Promise<void> {
     this.#epoch += 1;
     this.#entries.clear();
-    this.#grantConfigScopes.clear();
+    await this.#grants.clear();
   }
 }

@@ -538,8 +538,19 @@ async function startMcpLoopbackServer(
     throw new Error("mcp loopback did not bind to a TCP port");
   }
   const unregisterGrantRevocation = registerMcpLoopbackClientGrantRevocationListener((event) => {
-    if (event.runtimeOwnerToken === ownerToken) {
-      toolCache.evictGrant(event.token);
+    if (event.runtimeOwnerToken !== ownerToken) {
+      return;
+    }
+    switch (event.kind) {
+      case "replaced":
+        toolCache.evictGrant(event.token);
+        break;
+      case "transferred":
+        toolCache.transferGrant(event.token, event.successorToken);
+        break;
+      case "revoked":
+        toolCache.revokeGrant(event.token, event.closeReason);
+        break;
     }
   });
   // Register tokens only after the TCP listener is live so clients never learn
@@ -553,7 +564,7 @@ async function startMcpLoopbackServer(
     clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
     revokeMcpLoopbackClientGrantsForRuntime(ownerToken);
     unregisterGrantRevocation();
-    toolCache.clear();
+    await toolCache.clear();
     try {
       await new Promise<void>((resolve, reject) => {
         httpServer.close((error) => (error ? reject(error) : resolve()));

@@ -7218,7 +7218,6 @@
 ["src/gateway/mcp-http.question-authority.test.ts","../agents/node-exec-availability.js","71ec8ee2c185e6b5049a3d16551c604ca81707e8473f8c24a2420035f245d7ca",1]
 ["src/gateway/mcp-http.question-authority.test.ts","../plugins/hook-runner-global.js","1bbcc11318d7e6fdb669b7837445d214b2cf63654843a9ab7517c5a4373a66e9",1]
 ["src/gateway/mcp-http.question-authority.test.ts","../tts/tts-settings.js","2c402d525da89b9803dffded8666bacd8581343e79054c540b35d81222951fd1",1]
-["src/gateway/mcp-http.runtime.test.ts","../agents/tools/gateway.js","471889c9a0bccf4fc19cdd1b66e2bd28f61e62cb8f0ce5d6a708e59dceca4371",1]
 ["src/gateway/mcp-http.runtime.test.ts","./tool-resolution.js","7489fe284b1291e98cbc25cc7a0d80f230e2e81d9857ac8553c1a2f2cbdada01",1]
 ["src/gateway/mcp-http.session-controls.test.ts","../browser-lifecycle-cleanup.js","932978110f5fb27f9735a219708e6b01d58d1d4296e97f78171c9eff879c4ce9",1]
 ["src/gateway/mcp-http.test.ts","../agents/agent-tools.before-tool-call.js","fc093046c8f42ac69fe14639bf78bedba36d9f307903cdb9ca867b6425e99883",1]

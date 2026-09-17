@@ -73,8 +73,17 @@ export function createComputerTool(options?: {
   pairedNodeComputerUse?: PreparedPairedComputerUse;
   /** Attempt owner for deterministic provider-execution cleanup. */
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
+  /**
+   * Execution identity shared by every tool instance the owner builds for one
+   * run scope, so a rebuilt tool set continues the node execution instead of
+   * being refused as a foreign one. The owner closes it once that scope ends.
+   */
+  executionId?: string;
 }): AnyAgentTool {
-  const executionId = crypto.randomUUID();
+  const executionId = options?.executionId ?? crypto.randomUUID();
+  // The registrar gates execution-owned actions, but a tool without one still
+  // opens a keyed provider execution on its first screenshot. Every owner that
+  // keeps tool instances alive must supply it, or the node stays busy (#147420).
   const hasCleanupOwner = options?.registerRunCleanup !== undefined;
   const availableActions = (actions: readonly ComputerUseV2ActionName[]) =>
     availableComputerActions(actions, hasCleanupOwner);

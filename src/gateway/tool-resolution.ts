@@ -121,6 +121,13 @@ export async function resolveGatewayScopedTools(
     /** Current node inventory predicate; evaluated with the resolved exec binding. */
     nodeExecAvailable?: (node?: string) => boolean;
     pairedNodeComputerUse?: import("../agents/computer-use-node-capabilities.js").PreparedPairedComputerUse;
+    /**
+     * Owner-held registrar for tools that hold node resources (computer
+     * executions). The caller drains it when this tool set retires.
+     */
+    registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
+    /** Execution identity the owner shares across the tool sets it rebuilds for one run. */
+    computerExecutionId?: string;
     skillWorkshop?: SkillWorkshopRunOptions;
   },
   assertPreparationCurrent?: () => void,
@@ -421,6 +428,8 @@ export async function resolveGatewayScopedTools(
     disablePluginTools: params.disablePluginTools,
     agentDir: params.agentDir,
     authProfileStore: params.authProfileStore,
+    registerRunCleanup: params.registerRunCleanup,
+    computerExecutionId: params.computerExecutionId,
     pinnedWidgetAuthoring: surface === "loopback" ? params.pinnedWidgetAuthoring : undefined,
     sandboxed,
     pluginToolAllowlist: collectExplicitAllowlist(requestedPolicies),

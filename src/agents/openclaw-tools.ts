@@ -419,6 +419,7 @@ export function createOpenClawTools(
                 // The tool combines this run scope with the assistant turn and provider call id.
                 idempotencyScope: options?.runId,
                 contextEpoch: options?.computerContextEpoch,
+                executionId: options?.computerExecutionId,
               }),
           createCronTool({
             ...options,

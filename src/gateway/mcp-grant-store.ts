@@ -166,14 +166,27 @@ type StoredMcpLoopbackClientGrant = McpLoopbackClientGrant & {
   toolAuth?: McpLoopbackToolAuth;
 };
 
-type McpLoopbackClientGrantRevocation = {
-  token: string;
-  runtimeOwnerToken: string;
-};
+/** Why a client grant's node resources close; `completion` is the only outcome that keeps artifacts. */
+export type McpLoopbackClientGrantCloseReason = "completion" | "cancel" | "error" | "timeout";
 
-const clientGrantRevocationListeners = new Set<(event: McpLoopbackClientGrantRevocation) => void>();
+/**
+ * Ownership change of a grant's server-owned projections. `replaced` swaps the
+ * authority behind a live token, `transferred` moves it to a successor token,
+ * and only `revoked` ends the run the token served.
+ */
+export type McpLoopbackClientGrantChange =
+  | { kind: "replaced"; token: string; runtimeOwnerToken: string }
+  | { kind: "transferred"; token: string; successorToken: string; runtimeOwnerToken: string }
+  | {
+      kind: "revoked";
+      token: string;
+      runtimeOwnerToken: string;
+      closeReason: McpLoopbackClientGrantCloseReason;
+    };
 
-function notifyMcpLoopbackClientGrantRevoked(event: McpLoopbackClientGrantRevocation): void {
+const clientGrantRevocationListeners = new Set<(event: McpLoopbackClientGrantChange) => void>();
+
+function notifyMcpLoopbackClientGrantRevoked(event: McpLoopbackClientGrantChange): void {
   for (const listener of clientGrantRevocationListeners) {
     listener(event);
   }
@@ -301,6 +314,7 @@ function replaceMcpLoopbackClientGrant(grant: StoredMcpLoopbackClientGrant): voi
   clientGrantsByToken.set(grant.token, grant);
   // Cached tools capture a row's authority even when token and capture strings stay unchanged.
   notifyMcpLoopbackClientGrantRevoked({
+    kind: "replaced",
     token: grant.token,
     runtimeOwnerToken: grant.runtimeOwnerToken,
   });
@@ -458,11 +472,14 @@ export function transferMcpLoopbackClientGrant(params: {
   // map swap so a request can observe either the old grant or the new grant,
   // never a partially updated authority.
   notifyMcpLoopbackClientGrantRevoked({
+    kind: "replaced",
     token: params.targetToken,
     runtimeOwnerToken: params.runtimeOwnerToken,
   });
   notifyMcpLoopbackClientGrantRevoked({
+    kind: "transferred",
     token: params.sourceToken,
+    successorToken: params.targetToken,
     runtimeOwnerToken: params.runtimeOwnerToken,
   });
   return true;
@@ -542,23 +559,37 @@ export function resolveMcpLoopbackClientGrant(params: {
 
 /** Registers cleanup tied to the exact lifetime of loopback client grants. */
 export function registerMcpLoopbackClientGrantRevocationListener(
-  listener: (event: McpLoopbackClientGrantRevocation) => void,
+  listener: (event: McpLoopbackClientGrantChange) => void,
 ): () => void {
   clientGrantRevocationListeners.add(listener);
   return () => clientGrantRevocationListeners.delete(listener);
 }
 
-export function revokeMcpLoopbackClientGrant(token: string): boolean {
+/**
+ * Ends the run a client grant served. A caller that settled the run passes its
+ * outcome; without one (runtime stop, teardown before a run) the node work is
+ * cancelled, because only the run's real outcome may claim completion.
+ */
+export function revokeMcpLoopbackClientGrant(
+  token: string,
+  closeReason: McpLoopbackClientGrantCloseReason = "cancel",
+): boolean {
   const grant = clientGrantsByToken.get(token);
   if (!grant || !clientGrantsByToken.delete(token)) {
     return false;
   }
   // Revocation must also release server-owned projections whose closures retain
-  // this grant's prepared credentials.
-  notifyMcpLoopbackClientGrantRevoked({ token, runtimeOwnerToken: grant.runtimeOwnerToken });
+  // this grant's prepared credentials, and close the node resources they hold.
+  notifyMcpLoopbackClientGrantRevoked({
+    kind: "revoked",
+    token,
+    runtimeOwnerToken: grant.runtimeOwnerToken,
+    closeReason,
+  });
   return true;
 }
 
+/** The runtime stops every run it served; their node work is cancelled, not completed. */
 export function revokeMcpLoopbackClientGrantsForRuntime(runtimeOwnerToken: string): number {
   let removed = 0;
   for (const [token, grant] of clientGrantsByToken) {

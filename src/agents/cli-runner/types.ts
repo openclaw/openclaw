@@ -197,7 +197,16 @@ export type CliSecretInput = SpawnSecretInput & {
   fingerprint: string;
 };
 
-type CliPreparedBackend = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> & {
+type CliBundleMcpPreparation = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>>;
+
+type CliPreparedBackend = Omit<CliBundleMcpPreparation, "cleanup"> & {
+  /**
+   * Releases prepared resources. The run's settlement decides whether node work
+   * keeps its artifacts; without one the grant store cancels it.
+   */
+  cleanup?: (
+    outcome?: import("../../gateway/mcp-grant-store.js").McpLoopbackClientGrantCloseReason,
+  ) => Promise<void>;
   /** Exact process cleanup retained across attempt copies and natural registry removal. */
   closeLiveSession?: (
     reason: import("../../plugins/cli-backend.types.js").CliBackendLiveSessionCloseReason,
@@ -212,8 +221,14 @@ type CliPreparedBackend = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> 
     transportToken: string;
     /** Move this turn's authority onto the bearer held by an existing child. */
     adoptProcessToken: (processToken: string) => void;
-    /** Revoke the bearer when the child process that holds it exits. */
-    revokeProcessToken: () => void;
+    /**
+     * Revoke the bearer this turn currently owns: its minted token, or the process
+     * bearer it adopted. Turn cleanup passes the run's settlement; the live-session
+     * registry passes how the process ended when it exits with the bearer still live.
+     */
+    revokeProcessToken: (
+      closeReason?: import("../../gateway/mcp-grant-store.js").McpLoopbackClientGrantCloseReason,
+    ) => void;
     activate: (captureKey: string, assertCurrent: () => void) => void;
     deactivate: (captureKey: string) => void;
     captureNativeTools?: (tools: unknown) => void;
