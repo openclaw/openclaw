@@ -747,6 +747,47 @@ describe("fleet restore runtime", () => {
     expect(message).toMatch(/openclaw fleet start acme/iu);
   });
 
+  it("does not start a replacement that inherits the cell name after the original disappears", async () => {
+    const archive = await createArchive();
+    const running = inspection(true);
+    const replacement = {
+      ...inspection(),
+      containerId: "replacement-id",
+      labels: { ...inspection().labels },
+    };
+    const containers = containerMock(running);
+    containers.stop.mockImplementation(async () => {
+      running.running = false;
+      running.state = "exited";
+    });
+    containers.remove.mockRejectedValue(new Error("transient removal failure"));
+    let inspectCount = 0;
+    containers.inspect.mockImplementation(async (_runtime, reference) => {
+      inspectCount += 1;
+      if (inspectCount === 1) {
+        return running;
+      }
+      if (reference === "container-id" && containers.remove.mock.calls.length > 0) {
+        return { kind: "missing", state: "missing" };
+      }
+      return reference === "container-id" ? running : replacement;
+    });
+
+    let message = "";
+    try {
+      await restoreFleetCell({ ...restoreParams(containers, archive), force: true });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toMatch(/transient removal failure/iu);
+    expect(message).toMatch(/previous cell container is missing/iu);
+    expect(message).toMatch(/registered cell name and was left untouched/iu);
+    expect(message).toMatch(/original full provisioning profile/iu);
+    expect(containers.inspect).toHaveBeenCalledWith("docker", record.containerName);
+    expect(containers.start).not.toHaveBeenCalled();
+  });
+
   it("requires the original profile when a force-stopped Podman cell disappears", async () => {
     record.runtime = "podman";
     record.hostPort = 19125;

@@ -27,7 +27,7 @@ import {
   validateCellContainerProfile,
   type CellContainerProfile,
 } from "./cell-profile.js";
-import type { FleetContainerRuntime } from "./containers.runtime.js";
+import type { FleetContainerInspectResult, FleetContainerRuntime } from "./containers.runtime.js";
 import type { FleetCellRecord } from "./registry.js";
 import {
   assertManagedInspection,
@@ -795,27 +795,31 @@ export async function restoreFleetCell(params: {
           inspection.containerId,
         );
         if (currentInspection.kind === "missing") {
-          // The old ID is gone; inspect the registered name only to distinguish
-          // a truly missing cell from a new generation or a foreign container.
-          const namedInspection = await params.containers.inspect(
-            params.record.runtime,
-            params.record.containerName,
-          );
-          if (namedInspection.kind === "missing") {
-            missingContainerError = new Error(
-              `${errorMessage(error)}. The previous cell container is missing; ${missingContainerRecoveryHint(params.record)}.`,
-              { cause: error },
+          // The old ID is gone; inspect the registered name only for diagnostics.
+          // A name match is never enough to authorize starting another generation.
+          let namedInspection: FleetContainerInspectResult;
+          try {
+            namedInspection = await params.containers.inspect(
+              params.record.runtime,
+              params.record.containerName,
             );
-          } else {
-            const current = assertManagedInspection(params.record, namedInspection);
-            if (
-              !current.running &&
-              current.labels[FLEET_ATTEMPT_LABEL] === inspection.labels[FLEET_ATTEMPT_LABEL]
-            ) {
-              await params.checkpoint();
-              await params.containers.start(params.record.runtime, current.containerId);
-            }
+          } catch {
+            namedInspection = {
+              kind: "unavailable",
+              state: "unknown",
+              error: "container name inspection failed",
+            };
           }
+          const nameLookupNote =
+            namedInspection.kind === "missing"
+              ? " The registered cell name is also missing."
+              : namedInspection.kind === "ok"
+                ? " A container still uses the registered cell name and was left untouched."
+                : " The registered cell name could not be checked, so no container was started.";
+          missingContainerError = new Error(
+            `${errorMessage(error)}. The previous cell container is missing; ${missingContainerRecoveryHint(params.record)}.${nameLookupNote}`,
+            { cause: error },
+          );
         } else {
           const current = assertManagedInspection(params.record, currentInspection);
           if (!current.running) {
@@ -824,6 +828,9 @@ export async function restoreFleetCell(params: {
           }
         }
       } catch {
+        if (missingContainerError) {
+          throw missingContainerError;
+        }
         throw new Error(
           `${errorMessage(error)}. The previous cell could not be restarted or verified; run \`openclaw fleet start ${params.record.tenantId}\` before retrying fleet restore.`,
           { cause: error },
