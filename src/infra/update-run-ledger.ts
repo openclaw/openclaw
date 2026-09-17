@@ -589,16 +589,12 @@ export function recordUpdateRunDiagnostic(
   runId: string,
   detail: string,
   options: LedgerOptions = {},
+  step = "finalize:exit",
 ): UpdateRunRecord {
   return mutateRun(
     runId,
     (record) => {
-      upsertStep(record, {
-        step: "finalize:exit",
-        status: "completed",
-        endedAtMs: Date.now(),
-        detail,
-      });
+      upsertStep(record, { step, status: "completed", endedAtMs: Date.now(), detail });
     },
     options,
   );

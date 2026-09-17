@@ -24,6 +24,7 @@ export {
   adoptUpdateRun,
   finishUpdateRun,
   getUpdateRun,
+  recordUpdateRunDiagnostic,
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";

@@ -64,7 +64,13 @@ export async function getUpdateRunAsync(
   );
 }
 
-type ListInput = { limit?: number; active?: boolean; reason?: string; includeRunId?: string };
+type ListInput = {
+  limit?: number;
+  active?: boolean;
+  reason?: string;
+  excludeReason?: string;
+  includeRunId?: string;
+};
 
 function readRuns(db: DatabaseSync, input: ListInput): UpdateRunRecord[] {
   if (!tableExists(db, "update_runs")) {
@@ -78,6 +84,12 @@ function readRuns(db: DatabaseSync, input: ListInput): UpdateRunRecord[] {
   }
   if (input.reason) {
     query = query.where("reason", "=", input.reason);
+  }
+  const excludeReason = input.excludeReason;
+  if (excludeReason) {
+    query = query.where((eb) =>
+      eb.or([eb("reason", "is", null), eb("reason", "!=", excludeReason)]),
+    );
   }
   const runs = executeSqliteQuerySync(
     db,

@@ -406,7 +406,8 @@ export function registerManagedRecoveryOutcomeTests(
     "$kind preserves terminal foreground $status outcomes and rejects unverified recovery ($recoveryLabel)",
     async ({ kind, status, recovery }) => {
       const reason = status === "skipped" ? "no-upstream" : "preflight-fetch";
-      const { commands, state, sentinel, log } = await runManagedServiceManagerBoundary(kind, {
+      const { commands, state, sentinel, log, run } = await runManagedServiceManagerBoundary(kind, {
+        ledger: true,
         updaterExitCode: status === "skipped" ? 0 : 7,
         helperExitCode: status === "skipped" ? 1 : 7,
         updaterNotification: "consumed",
@@ -419,6 +420,19 @@ export function registerManagedRecoveryOutcomeTests(
       ).toBe(false);
       expect(state.healthProbed).toBeUndefined();
       expect(log).toContain("managed update recovery not attempted:");
+      const availabilityUnverified =
+        !recovery || !("service" in recovery) || recovery.service === "failed";
+      if (availabilityUnverified) {
+        expect(log).toContain("could not verify Gateway recovery");
+        expect(run?.steps).toContainEqual(
+          expect.objectContaining({
+            step: "warning:gateway-availability",
+            detail: expect.stringContaining("could not verify Gateway recovery"),
+          }),
+        );
+      } else {
+        expect(log).not.toContain("could not verify Gateway recovery");
+      }
       if (recovery && "service" in recovery) {
         expect(sentinel).toBeNull();
       } else {
