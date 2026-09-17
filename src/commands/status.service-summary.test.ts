@@ -1,7 +1,8 @@
 // Status service-summary tests cover managed gateway service status parsing and log path reporting.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as gatewayServiceLayout from "../daemon/service-layout.js";
 import type { GatewayServiceEnvArgs } from "../daemon/service-types.js";
 import { resolveGatewayService, type GatewayService } from "../daemon/service.js";
@@ -10,6 +11,8 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
 import { getStatusOverviewRowValue } from "./status.test-support.ts";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createService(overrides: Partial<GatewayService>): GatewayService {
   return createMockGatewayService({
@@ -29,6 +32,55 @@ function requireMockArg(mock: { mock: { calls: unknown[][] } }, label: string): 
 }
 
 describe("readServiceStatusSummary", () => {
+  it.each(["2026.9.4", "2026.9.17"])(
+    "reports both installation paths and versions without Gateway metadata (service %s)",
+    async (serviceVersion) => {
+      const root = await fs.realpath(tempDirs.make("openclaw-status-prefix-drift-"));
+      const serviceRoot = path.join(root, "prefix-a", "lib", "node_modules", "openclaw");
+      const activeRoot = path.join(root, "prefix-b", "lib", "node_modules", "openclaw");
+      for (const [packageRoot, version] of [
+        [serviceRoot, serviceVersion],
+        [activeRoot, "2026.9.17"],
+      ] as const) {
+        await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version }),
+        );
+        await fs.writeFile(path.join(packageRoot, "dist", "index.js"), "export {};\n");
+      }
+      const service = createService({
+        isLoaded: vi.fn(async () => true),
+        readCommand: vi.fn(async () => ({
+          programArguments: [
+            process.execPath,
+            path.join(serviceRoot, "dist", "index.js"),
+            "gateway",
+          ],
+        })),
+        readRuntime: vi.fn(async () => ({ status: "running" })),
+      });
+      const summary = await readServiceStatusSummary(service, "Daemon", undefined, activeRoot);
+      const output = getStatusOverviewRowValue("Gateway service", {
+        gatewayService: summary,
+        gatewayReachable: false,
+        gatewayProbe: { error: "protocol mismatch" },
+        gatewaySelf: null,
+      });
+      expect(output).toContain(`${serviceRoot} (${serviceVersion})`);
+      expect(output).toContain(`${activeRoot} (2026.9.17)`);
+      expect(output).toContain("openclaw doctor --fix");
+      expect(output).toContain("openclaw gateway install --force");
+
+      const alias = path.join(root, "active-package");
+      await fs.symlink(serviceRoot, alias, "dir");
+      const aligned = await readServiceStatusSummary(service, "Daemon", undefined, alias);
+      expect(aligned.installationDrift).toBeUndefined();
+      expect(
+        getStatusOverviewRowValue("Gateway service", { gatewayService: aligned }),
+      ).not.toContain("different OpenClaw install");
+    },
+  );
   it.each(["user", "system"] as const)("labels the observed %s manager", async (scope) => {
     const summary = await readServiceStatusSummary(
       createService({

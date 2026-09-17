@@ -18,11 +18,15 @@ import {
 } from "../../daemon/service-inspection-error.js";
 import {
   gatewayServiceCommandMatchesRoot,
+  inspectGatewayServiceInstallationDrift,
+  isSourceCheckoutRoot,
   summarizeGatewayServiceLayout,
 } from "../../daemon/service-layout.js";
-import type {
-  GatewayServiceCommandConfig,
-  GatewayServiceState,
+import {
+  hasGatewayServiceLauncherOverride,
+  resolveManagedGatewayServiceProcessEnv,
+  type GatewayServiceCommandConfig,
+  type GatewayServiceState,
 } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
@@ -194,6 +198,7 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
   root?: string;
   state: GatewayServiceState;
   retainedCommand?: boolean;
+  allowInstallRootChange?: boolean;
 }): Promise<ManagedGatewayUpdateVerdict> {
   const { state } = params;
   const { command } = state;
@@ -244,6 +249,24 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
     return unavailable();
   }
   if (ownsRoot === false) {
+    if (
+      params.allowInstallRootChange &&
+      (state.definitionMutationCapability?.kind ?? "writable") === "writable" &&
+      !hasGatewayServiceLauncherOverride(command) &&
+      resolveManagedGatewayServiceProcessEnv(command, state.env) !== null &&
+      !(await isSourceCheckoutRoot(root))
+    ) {
+      const layout = await summarizeGatewayServiceLayout(command);
+      if (layout?.packageRootReal && !layout.entrypointSourceCheckout) {
+        return {
+          kind: "owned",
+          root: layout.packageRootReal,
+          fingerprint: sha256Hex(serialized),
+          refreshDefinition: true,
+          requiresInstallRootRefresh: true,
+        };
+      }
+    }
     return { kind: "foreign" };
   }
   const fingerprint = sha256Hex(serialized);
@@ -258,7 +281,11 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
 }
 
 /** Recorded launchers cannot select an update's package, Node, or state without live inspection. */
-export async function readManagedGatewayServiceForUpdate(env: NodeJS.ProcessEnv) {
+export async function readManagedGatewayServiceForUpdate(
+  env: NodeJS.ProcessEnv,
+  root?: string,
+  allowInstallRootChange = false,
+) {
   return await withCommandProcessScope(async () => {
     let service: ReturnType<typeof resolveGatewayService> | undefined;
     try {
@@ -272,8 +299,14 @@ export async function readManagedGatewayServiceForUpdate(env: NodeJS.ProcessEnv)
       if (!state.command) {
         return null;
       }
-      const inspection = await inspectManagedGatewayServiceBeforeUpdate({ state });
-      return inspection.kind === "owned" ? { command: state.command, verdict: inspection } : null;
+      const inspection = await inspectManagedGatewayServiceBeforeUpdate({
+        state,
+        root,
+        allowInstallRootChange,
+      });
+      return inspection.kind === "owned"
+        ? { ...state, command: state.command, verdict: inspection }
+        : null;
     } catch (error) {
       if (hasCommandProcessCleanupError(error)) {
         throw error;
@@ -296,6 +329,16 @@ export async function readManagedGatewayServiceForUpdate(env: NodeJS.ProcessEnv)
       return null;
     }
   });
+}
+
+export async function readManagedGatewayServiceCommandForUpdate(
+  env: NodeJS.ProcessEnv,
+  root?: string,
+  allowInstallRootChange = false,
+): Promise<GatewayServiceCommandConfig | null> {
+  return (
+    (await readManagedGatewayServiceForUpdate(env, root, allowInstallRootChange))?.command ?? null
+  );
 }
 
 type PackageRuntimePreflight = {
@@ -326,7 +369,11 @@ export async function resolvePackageRuntimePreflight(params: {
 > {
   return await withCommandProcessScope(async () => {
     const nodeRunner = normalizeOptionalString(
-      params.alreadyCurrent
+      params.alreadyCurrent &&
+        !(
+          params.service?.serviceUpdateVerdict?.kind === "owned" &&
+          params.service.serviceUpdateVerdict.requiresInstallRootRefresh
+        )
         ? (params.service?.serviceNodeRunner ?? params.nodeRunner)
         : params.nodeRunner,
     );
@@ -550,6 +597,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   rootRedirect: ManagedServiceRootRedirect | null;
   nodeRunner?: string;
   serviceUnitTarget?: string;
+  installationDrift?: string;
 }> {
   const pkgOwnership =
     params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS);
@@ -562,7 +610,8 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   }
   // Root and runtime planning share one effective command; mutation and restart
   // revalidate independently so this snapshot cannot grant later service authority.
-  const command = (await readManagedGatewayServiceForUpdate(process.env))?.command ?? null;
+  const state = await readManagedGatewayServiceForUpdate(process.env);
+  const command = state?.command ?? null;
   const layout = await summarizeGatewayServiceLayout(command);
   const serviceUnitTarget = layout?.entrypoint ?? "no service entrypoint found";
   if (!layout?.packageRootReal) {
@@ -572,11 +621,33 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   await pkgOwnership.assertUnowned(serviceRoot);
   const serviceNode = resolveManagedServiceNodeRunner(command);
   if (
+    layout.entrypointSourceCheckout &&
+    (await tryRealpathOrResolve(params.root)) !== layout.packageRootReal
+  ) {
+    return { rootRedirect: null, serviceUnitTarget };
+  }
+  if (
     serviceRoot &&
     layout.packageRootReal &&
     layout.entrypointSourceCheckout !== true &&
     (await tryRealpathOrResolve(params.root)) !== layout.packageRootReal
   ) {
+    const inspection = state
+      ? await inspectManagedGatewayServiceBeforeUpdate({
+          state,
+          root: params.root,
+          allowInstallRootChange: true,
+        })
+      : undefined;
+    // A writable managed launcher follows the installation selected on PATH.
+    // Deployment-owned definitions retain their existing package owner instead.
+    if (inspection?.kind === "owned" && inspection.requiresInstallRootRefresh) {
+      return {
+        rootRedirect: null,
+        serviceUnitTarget,
+        installationDrift: await inspectGatewayServiceInstallationDrift(layout, params.root),
+      };
+    }
     return {
       serviceUnitTarget,
       rootRedirect: { root: serviceRoot, previousRoot: params.root },
@@ -646,7 +717,11 @@ export async function resolveUpdatedGatewayRestartPort(params: {
 export function formatManagedServicePackageUpdatePlan(params: {
   rootRedirect: ManagedServiceRootRedirect | null;
   nodeRunner?: string;
+  installationDrift?: string;
 }): Array<{ level: "muted" | "warn"; message: string }> {
+  if (params.installationDrift) {
+    return [{ level: "warn", message: params.installationDrift }];
+  }
   const { rootRedirect, nodeRunner } = params;
   if (rootRedirect) {
     return [

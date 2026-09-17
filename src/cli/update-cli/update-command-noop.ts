@@ -33,7 +33,6 @@ import {
   UpdateCommandAbort,
 } from "./update-command-service.js";
 
-/** A current core still owns plugin convergence, but only changed plugins need activation. */
 export async function finishAlreadyCurrentUpdate(
   params: Pick<
     FinishUpdateParams,

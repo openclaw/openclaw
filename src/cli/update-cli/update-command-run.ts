@@ -95,7 +95,6 @@ import {
 import {
   GatewayServiceUpdateOwnershipError,
   assertGatewayServiceManagementAllowedForUpdate,
-  gatewayServiceCommandUsesRoot,
   isGatewayServiceManagementAllowedForUpdate,
   readManagedGatewayServiceForUpdate,
   resolveManagedServicePackageUpdatePlan,
@@ -149,20 +148,24 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
     !env[UPDATE_RUN_ID_ENV] &&
     isGatewayServiceManagementAllowedForUpdate(env)
   ) {
-    const command = (await readManagedGatewayServiceForUpdate(env))?.command ?? null;
+    const command =
+      (
+        await readManagedGatewayServiceForUpdate(
+          env,
+          params.root,
+          (await resolveUpdateInstallKind(params.root)) === "package",
+        )
+      )?.command ?? null;
     if (command) {
-      const usesRoot = await gatewayServiceCommandUsesRoot({ root: params.root, command });
-      if (usesRoot) {
-        env = resolveOwnedManagedUpdateEnv({
-          processEnv: env,
-          serviceEnv: mergeGatewayServiceEnv(env, command),
-          serviceDefinitionEnv: resolveManagedGatewayServiceCommand(command)?.environment,
-          invocationCwd: params.invocationCwd,
-        });
-        // Contradictory native identity must refuse before database or target selection.
-        if (resolveGatewayNativeServiceIdentityConflict(env)) {
-          assertGatewayServiceManagementAllowedForUpdate(env);
-        }
+      env = resolveOwnedManagedUpdateEnv({
+        processEnv: env,
+        serviceEnv: mergeGatewayServiceEnv(env, command),
+        serviceDefinitionEnv: resolveManagedGatewayServiceCommand(command)?.environment,
+        invocationCwd: params.invocationCwd,
+      });
+      // Contradictory native identity must refuse before database or target selection.
+      if (resolveGatewayNativeServiceIdentityConflict(env)) {
+        assertGatewayServiceManagementAllowedForUpdate(env);
       }
     }
   }

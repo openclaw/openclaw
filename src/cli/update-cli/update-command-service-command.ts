@@ -120,6 +120,7 @@ export async function runUpdatedInstallGatewayCommand(
     serviceEnv?: NodeJS.ProcessEnv;
     serviceInstallEnv?: NodeJS.ProcessEnv | null;
     nodeRunner?: string;
+    gatewayPort?: number;
     timeoutMs?: number;
     invocationCwd?: string;
     signal?: AbortSignal;
@@ -152,6 +153,9 @@ export async function runUpdatedInstallGatewayCommand(
   const args = ["gateway", action];
   if (installing) {
     args.push("--force");
+    if (params.gatewayPort !== undefined) {
+      args.push("--port", String(params.gatewayPort));
+    }
   } else {
     // Update retries must not bypass the installer's backup and drift audit.
     args.push("--preserve-definition");

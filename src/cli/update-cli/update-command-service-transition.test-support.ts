@@ -40,6 +40,7 @@ export type InstallRootTransitionFixture = {
 
 export function registerInstallRootTransitionTests(getFixture: () => InstallRootTransitionFixture) {
   it.each([
+    { scenario: "CLI already uses replacement install", mode: "npm", allowed: true },
     { scenario: "retained source launcher", mode: "npm", allowed: true },
     { scenario: "removed pnpm package root", mode: "pnpm", allowed: true },
     { scenario: "same-version stale launcher after refresh", mode: "npm", allowed: true },
@@ -80,8 +81,11 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
         scenario === "retained unresolved launcher"
           ? createShippedUnresolvedServiceStop(process.env, root)
           : await maybeStopManagedServiceBeforeMutableUpdate({
-              updateInstallKind: mode === "npm" ? "git" : "package",
-              root,
+              updateInstallKind:
+                mode === "npm" && scenario !== "CLI already uses replacement install"
+                  ? "git"
+                  : "package",
+              root: scenario === "CLI already uses replacement install" ? replacementRoot : root,
               shouldRestart: true,
               jsonMode: true,
             });
@@ -150,6 +154,12 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
       mocks.child.mockImplementation(async (argv) => {
         expect(argv).toContain(replacementEntry);
         if (argv.includes("install")) {
+          if (scenario === "CLI already uses replacement install") {
+            expect(argv.slice(argv.indexOf("--port"), argv.indexOf("--port") + 2)).toEqual([
+              "--port",
+              "19305",
+            ]);
+          }
           mocks.events.push("install verified replacement");
           if (scenario === "failed Git refresh retains original launcher") {
             return {
@@ -184,17 +194,18 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
       if (scenario === "Git still serves previous build") {
         mocks.configSnapshot.mockResolvedValueOnce(undefined);
       }
+      const result: Parameters<typeof maybeRestartService>[0]["result"] = {
+        status: "ok",
+        mode,
+        root: replacementRoot,
+        before: { version: VERSION },
+        after: { version: VERSION, ...(mode === "git" ? { buildId: "target-build" } : {}) },
+        steps: [],
+        durationMs: 0,
+      };
       const activated = await maybeRestartService({
         shouldRestart: true,
-        result: {
-          status: "ok",
-          mode,
-          root: replacementRoot,
-          before: { version: VERSION },
-          after: { version: VERSION, ...(mode === "git" ? { buildId: "target-build" } : {}) },
-          steps: [],
-          durationMs: 0,
-        },
+        result,
         opts: { json: true, run },
         refreshServiceEnv: true,
         serviceUpdateVerdict: verdict,
@@ -208,7 +219,7 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
         scenario !== "same-version stale launcher after refresh" &&
           scenario !== "failed Git refresh retains original launcher"
           ? "ok"
-          : "failed",
+          : "reconciliation-pending",
       );
       expect(mocks.configSnapshot).toHaveBeenCalledTimes(
         scenario === "Git still serves previous build" ? 1 : 0,
@@ -227,6 +238,18 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
         );
       }
       expect(mocks.child.mock.calls.filter(([argv]) => argv.includes("install"))).toHaveLength(1);
+      if (
+        scenario === "same-version stale launcher after refresh" ||
+        scenario === "failed Git refresh retains original launcher"
+      ) {
+        expect(result.steps).toContainEqual(
+          expect.objectContaining({
+            advisory: expect.objectContaining({
+              message: expect.stringContaining("gateway install --force"),
+            }),
+          }),
+        );
+      }
     },
   );
 }

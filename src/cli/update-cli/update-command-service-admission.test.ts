@@ -109,7 +109,7 @@ it.each(
       const prepared = await prepareUpdateCommand({ dryRun: true });
       const root = prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot;
       const env = await resolveUpdateCommandAdmissionEnv({ root, opts: {} });
-      expect(root).toBe(outcome === "unavailable" ? callerRoot : serviceRoot);
+      expect(root).toBe(callerRoot);
       expect(env.OPENCLAW_STATE_DIR).toBe(outcome === "unavailable" ? callerState : serviceState);
       if (outcome === "pending") {
         const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;

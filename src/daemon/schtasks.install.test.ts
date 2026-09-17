@@ -59,7 +59,14 @@ vi.mock("./schtasks-exec.js", () => ({
         }
       }
     }
-    return schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" };
+    const response = schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" };
+    return argv[0] === "/Query" && argv.includes("/XML") && response.code === 0 && !response.stdout
+      ? {
+          ...response,
+          stdout:
+            "<Task><Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>gateway.cmd</Command></Exec></Actions></Task>",
+        }
+      : response;
   },
 }));
 
@@ -105,7 +112,7 @@ describe("installScheduledTask", () => {
   }
 
   function expectInitialTaskQuery(taskName = "OpenClaw Gateway"): void {
-    expect(schtasksCalls[0]).toEqual(["/Query", "/TN", taskName]);
+    expect(schtasksCalls[0]).toEqual(["/Query", "/TN", taskName, "/XML"]);
   }
 
   function expectTaskRunCall(index: number, taskName = "OpenClaw Gateway"): void {
@@ -266,7 +273,7 @@ describe("installScheduledTask", () => {
         sourcePath: scriptPath,
       });
 
-      expect(schtasksCalls[0]).toEqual(["/Query", "/TN", "OpenClaw Gateway"]);
+      expect(schtasksCalls[0]).toEqual(["/Query", "/TN", "OpenClaw Gateway", "/XML"]);
       expect(schtasksCalls[1]?.[0]).toBe("/Change");
       // Battery-flag XML re-apply runs between /Change and /Run on upgrades.
       expect(schtasksCalls[2]?.slice(0, 5)).toEqual([

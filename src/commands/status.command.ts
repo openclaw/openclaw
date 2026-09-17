@@ -17,6 +17,7 @@ import { collectNodeRuntimeFindings } from "./node-runtime-diagnostics.js";
 import { assertStatusUsageAgentScope, runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
+  reportStatusScanFailure,
   resolveStatusGatewayHealth,
   resolveStatusSecurityAudit,
   resolveStatusRuntimeSnapshot,
@@ -134,7 +135,8 @@ export async function statusCommand(
 
   const scan = await statusScanModuleLoader
     .load()
-    .then(({ scanStatus }) => scanStatus({ timeoutMs: opts.timeoutMs, deep: opts.deep }));
+    .then(({ scanStatus }) => scanStatus({ timeoutMs: opts.timeoutMs, deep: opts.deep }))
+    .catch((error: unknown) => reportStatusScanFailure(error, runtime, opts.timeoutMs));
 
   const {
     cfg,

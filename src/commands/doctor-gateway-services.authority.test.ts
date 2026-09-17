@@ -226,6 +226,8 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
           "After=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=control-group\n";
       } else if (binary === "systemctl" && args.includes("status")) {
         stdout = "running\n";
+      } else if (binary === "systemctl" && args.includes("is-enabled")) {
+        stdout = "enabled\n";
       } else if (binary === "systemctl" && args.includes("is-active")) {
         stdout = "inactive\n";
         code = 3;

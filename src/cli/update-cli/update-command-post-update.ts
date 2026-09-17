@@ -32,12 +32,10 @@ import type { UpdateServiceDefinitionRecovery } from "./update-command-service-c
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { UpdateServiceLoadBoundaryError } from "./update-command-service-load.js";
 import { createWindowsTaskAutoStartGuard } from "./update-command-service-maintenance.js";
-import {
-  collectServiceInspectionFailureFacts,
-  GatewayServiceUpdateOwnershipError,
-} from "./update-command-service-plan.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
   recordFailedUpdateGatewayState,
+  prepareUpdateServiceResult,
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
@@ -80,21 +78,7 @@ export async function finishUpdate(
   assertCurrent();
   await assertUpdateCommandPackageFinalization(params);
   assertCurrent();
-  const serviceVerdict = params.preManagedServiceStop?.serviceUpdateVerdict;
-  if (serviceVerdict?.kind === "unavailable") {
-    params.result.steps.push({
-      name: "managed-service",
-      command: "openclaw gateway status --deep",
-      cwd: params.root,
-      durationMs: 0,
-      exitCode: 0,
-      advisory: { kind: "recoverable-maintenance", message: serviceVerdict.message },
-      failureFacts: collectServiceInspectionFailureFacts(serviceVerdict),
-    });
-  }
-  const shouldRestart =
-    params.shouldRestart &&
-    (!params.coreAlreadyCurrent || params.preManagedServiceStop?.running === true);
+  const shouldRestart = prepareUpdateServiceResult(params);
   let gateway: TriageFailureContext["gateway"] = "preserve";
   let triageAllowed = true;
   const createFailure = (
@@ -552,8 +536,8 @@ export async function finishUpdate(
           onVerified: recordVerifiedDowntime,
         }),
       );
-      if (restarted === "ok" || restarted === "readiness-pending") {
-        return;
+      if (restarted !== "failed" && restarted !== "restart-health-failed") {
+        return restarted !== "reconciliation-pending";
       }
       triageAllowed = restartContext.serviceMutationAllowed;
       if (
@@ -605,22 +589,22 @@ export async function finishUpdate(
       );
       if (recovered.result.status === "ok") {
         resultWithPostUpdate = recovered.result;
-      } else {
-        // The Gateway may have consumed its sentinel. Update only the existing
-        // receipt so a failed repair cannot deliver a duplicate notification.
-        await markControlPlaneUpdateRestartSentinelFailureBestEffort({
-          ...sentinelOptions,
-          reason: recovered.result.reason ?? verificationFailure,
-        });
-        const reported = await reportResult(recovered.result, false, undefined, false);
-        throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported));
+        return true;
       }
+      // The Gateway may have consumed its sentinel. Update only the existing
+      // receipt so a failed repair cannot deliver a duplicate notification.
+      await markControlPlaneUpdateRestartSentinelFailureBestEffort({
+        ...sentinelOptions,
+        reason: recovered.result.reason ?? verificationFailure,
+      });
+      const reported = await reportResult(recovered.result, false, undefined, false);
+      throw createFailure(reported, resolveManagedServiceUpdateFailureExitCode(reported));
     };
     if (!params.coreAlreadyCurrent) {
       await restart();
     }
     if (deferPluginConvergence) {
-      ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins(async () => {
+      const parkGateway = async () => {
         const before = currentServiceStop();
         if (!before) {
           throw new Error("Plugin maintenance lost its update service owner.");
@@ -651,8 +635,14 @@ export async function finishUpdate(
         }
         stopped.windowsTaskAutoStartRecovery?.beginMutation();
         pendingRestartAtMs ??= stopped.stoppedAtMs;
-      }));
-      if (resultWithPostUpdate.postUpdate?.plugins?.changed) {
+      };
+      ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins(parkGateway));
+      const requiresInstallRootRefresh =
+        restartContext.serviceUpdateVerdict?.kind === "owned" &&
+        restartContext.serviceUpdateVerdict.requiresInstallRootRefresh;
+      if (resultWithPostUpdate.postUpdate?.plugins?.changed || requiresInstallRootRefresh) {
+        // Installation-only repair keeps the old Gateway serving; the native
+        // installer owns replacement and rollback with its actual running state.
         // Convergence awaited package managers and plugin hooks. Revalidate the
         // exact native owner again before a changed plugin snapshot is activated.
         restartContext = await prepareUpdateRestart(
@@ -666,12 +656,16 @@ export async function finishUpdate(
         );
         pendingRestartAtMs ??= Date.now();
         restartContext.restartScriptPath = null;
-        if (!params.serviceRuntimeRefreshRequired) {
+        if (!params.serviceRuntimeRefreshRequired && !requiresInstallRootRefresh) {
           restartContext.refreshGatewayServiceEnv = false;
         }
         await notifyRestart();
         await restoreWindowsAutoStart(resultWithPostUpdate);
-        await restart();
+        const reconciled = await restart();
+        if (requiresInstallRootRefresh && reconciled && resultWithPostUpdate.status === "skipped") {
+          resultWithPostUpdate.status = "ok";
+          delete resultWithPostUpdate.reason;
+        }
       }
       return await reportResult(resultWithPostUpdate);
     }

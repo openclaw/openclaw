@@ -11,6 +11,7 @@ import type { ExecResult } from "./exec-file.js";
 import {
   buildSystemdManagerPropertyOutput,
   buildSystemdUnitPropertyOutput as serializeSystemdUnitProperties,
+  pathLikeToString,
   type SystemdManagerSnapshotFixture,
 } from "./service.test-helpers.js";
 
@@ -216,19 +217,6 @@ function requireFirstWrite(write: ReturnType<typeof vi.fn>): string {
   return String(value);
 }
 
-function pathLikeToString(pathname: unknown): string {
-  if (typeof pathname === "string") {
-    return pathname;
-  }
-  if (pathname instanceof URL) {
-    return pathname.pathname;
-  }
-  if (pathname instanceof Uint8Array) {
-    return Buffer.from(pathname).toString("utf8");
-  }
-  return "";
-}
-
 function assertUserSystemctlArgs(args: string[], ...command: string[]) {
   expect(args).toEqual(["--user", ...command]);
 }
@@ -287,26 +275,23 @@ function execFileResult(...result: ExecFileResult): ExecFileMock {
 }
 
 function mockNodeInstallNoMediumFailure(machineUser?: string): void {
+  const unavailable: ExecFileResult = [
+    createExecFileError("Failed to connect to bus: No medium found", {
+      stderr: "Failed to connect to bus: No medium found",
+    }),
+    "",
+    "",
+  ];
   execFileMock
     .mockImplementationOnce(systemctlUserSuccess("status"))
     .mockImplementationOnce(systemctlUserSuccess("daemon-reload"))
-    .mockImplementationOnce(
-      systemctlUserResult(
-        [
-          createExecFileError("Failed to connect to bus: No medium found", {
-            stderr: "Failed to connect to bus: No medium found",
-          }),
-          "",
-          "",
-        ],
-        "enable",
-        NODE_SERVICE,
-      ),
-    );
+    .mockImplementationOnce(systemctlUserResult(unavailable, "enable", NODE_SERVICE));
   if (machineUser) {
     execFileMock
       .mockImplementationOnce(systemctlMachineUserSuccess(machineUser, "enable", NODE_SERVICE))
       .mockImplementationOnce(systemctlUserSuccess("restart", NODE_SERVICE));
+  } else {
+    execFileMock.mockImplementationOnce(systemctlUserResult(unavailable, "disable", NODE_SERVICE));
   }
 }
 
@@ -2983,7 +2968,7 @@ describe("stageSystemdService", () => {
         installSystemdService(gatewayPortSystemdServiceFixture(env, "18789")),
       ).rejects.toThrow("system ownership appeared before activation");
 
-      await fs.access(unitPath);
+      await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(assertNoSystemSystemdOwnershipMock).toHaveBeenCalledTimes(4);
       expect(execFileMock).toHaveBeenCalledTimes(1);
     });
@@ -3759,7 +3744,7 @@ describe("systemd service install and uninstall", () => {
         const managerQuery = execFileMock.getMockImplementation();
         execFileMock.mockImplementation((command, args, options, callback) => {
           if (command === "systemctl") {
-            callback(null, "", "");
+            callback(null, args.includes("is-enabled") ? "enabled\n" : "", "");
             return;
           }
           managerQuery?.(command, args, options, callback);
@@ -3854,6 +3839,9 @@ describe("systemd service install and uninstall", () => {
           "daemon-reload",
           ...(action === "restart" ? ["enable"] : []),
           action,
+          "disable",
+          "daemon-reload",
+          ...(action === "restart" ? ["stop"] : []),
         ]);
       });
     },
@@ -3914,7 +3902,12 @@ describe("systemd service install and uninstall", () => {
         }),
       ).rejects.toThrow("systemctl --user unavailable: Failed to connect to bus: No medium found");
 
-      expect(execFileMock).toHaveBeenCalledTimes(3);
+      expect(execFileMock.mock.calls.map(([, args]) => args)).toEqual([
+        ["--user", "status"],
+        ["--user", "daemon-reload"],
+        ["--user", "enable", NODE_SERVICE],
+        ["--user", "disable", NODE_SERVICE],
+      ]);
     });
   });
 

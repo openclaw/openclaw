@@ -1,5 +1,9 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as gatewayService from "../../daemon/service.js";
+import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import {
   createUpdateRun,
@@ -12,6 +16,7 @@ import {
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
@@ -450,6 +455,94 @@ describe("maybeRestartService", () => {
       warning,
     );
   });
+
+  it.for(["installed", "registration rejected", "activation uncertain"])(
+    "keeps a Windows two-prefix reconciliation available (%s)",
+    async (outcome, { onTestFinished }) => {
+      const platform = mockProcessPlatform("win32");
+      onTestFinished(() => platform.mockRestore());
+      const home = await fs.realpath(tempDirs.make("update-task-prefixes-"));
+      const roots = [path.join(home, "prefix-a"), path.join(home, "prefix-b")] as const;
+      for (const root of roots) {
+        await fs.mkdir(path.join(root, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", version: gateway.version }),
+        );
+        await fs.writeFile(path.join(root, "dist/index.js"), "export {};\n");
+      }
+      let commandRoot = roots[0];
+      let servingRoot = roots[0];
+      const service = vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(
+        createMockGatewayService({
+          isLoaded: async () => true,
+          readRuntime: async () => ({ status: "running", pid: 8000 }),
+          readCommand: async () => ({
+            programArguments: [
+              process.execPath,
+              path.join(commandRoot, "dist/index.js"),
+              "gateway",
+            ],
+          }),
+        }),
+      );
+      onTestFinished(() => service.mockRestore());
+      mocks.runUpdatedInstallGatewayCommand.mockImplementation(async (_params, action) => {
+        if (action === "install") {
+          if (outcome !== "installed") {
+            throw new Error(outcome);
+          }
+          commandRoot = roots[1];
+          return "unverified";
+        }
+        servingRoot = commandRoot;
+        return "accepted";
+      });
+      onTestFinished(() => {
+        mocks.runUpdatedInstallGatewayCommand
+          .mockReset()
+          .mockImplementation(async (_params, action) =>
+            action === "restart" ? "accepted" : "unverified",
+          );
+      });
+      const result: UpdateRunResult = {
+        status: "ok",
+        mode: "npm",
+        root: roots[1],
+        before: { version: gateway.version },
+        after: { version: gateway.version },
+        steps: [],
+        durationMs: 0,
+      };
+      const actual = await maybeRestartService({
+        shouldRestart: true,
+        result,
+        opts: { json: true },
+        refreshServiceEnv: true,
+        serviceUpdateVerdict: {
+          kind: "owned",
+          root: roots[0],
+          fingerprint: "original",
+          refreshDefinition: true,
+          requiresInstallRootRefresh: true,
+        },
+        gatewayPort: 18789,
+        timeoutMs: 1_000,
+      });
+      expect(actual).toBe(outcome === "installed" ? "ok" : "reconciliation-pending");
+      expect(servingRoot).toBe(outcome === "installed" ? roots[1] : roots[0]);
+      expect(mocks.runUpdatedInstallGatewayCommand.mock.calls.map(([, action]) => action)).toEqual(
+        outcome === "installed" ? ["install", "restart"] : ["install"],
+      );
+      if (outcome !== "installed") {
+        expect(result.steps).toEqual([
+          expect.objectContaining({
+            advisory: expect.objectContaining({ message: expect.stringContaining(outcome) }),
+          }),
+        ]);
+      }
+    },
+  );
 
   it.each(["new-build", undefined])(
     "enforces the available Git identity after restart: %s",

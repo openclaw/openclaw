@@ -20,6 +20,34 @@ export type GatewayServiceLayoutSummary = {
   entrypointSourceCheckout?: boolean;
 };
 
+/** Local package evidence remains available when the Gateway cannot answer a probe. */
+export async function inspectGatewayServiceInstallationDrift(
+  layout: Pick<GatewayServiceLayoutSummary, "packageRootReal" | "packageVersion"> | undefined,
+  activeRoot: string,
+): Promise<string | undefined> {
+  const serviceRoot = layout?.packageRootReal;
+  const activeRootReal = await tryRealpath(activeRoot);
+  if (!serviceRoot || !activeRootReal || serviceRoot === activeRootReal) {
+    return undefined;
+  }
+  const [serviceStat, activeStat] = await Promise.all(
+    [serviceRoot, activeRootReal].map((root) => fs.stat(root).catch(() => undefined)),
+  );
+  // A deployment can expose the same package through two bind mounts.
+  if (
+    serviceStat &&
+    activeStat &&
+    serviceStat.dev === activeStat.dev &&
+    serviceStat.ino === activeStat.ino
+  ) {
+    return undefined;
+  }
+  const activeVersion = (await readPackageVersion(activeRootReal)) ?? undefined;
+  const serviceVersion =
+    layout.packageVersion ?? (await readPackageVersion(serviceRoot)) ?? undefined;
+  return `Gateway service targets a different OpenClaw install: ${serviceRoot} (${serviceVersion ?? "version unknown"}); active CLI: ${activeRootReal} (${activeVersion ?? "version unknown"}). Run \`openclaw doctor --fix\` or \`openclaw gateway install --force\` from the active CLI.`;
+}
+
 function shellQuoteArg(value: string): string {
   if (/^[A-Za-z0-9_./:@%+=,-]+$/u.test(value)) {
     return value;
@@ -62,7 +90,9 @@ export function resolveServiceEntrypointIndex(
   return commandIndex > 0 ? commandIndex - 1 : undefined;
 }
 
-export function resolveServiceEntrypoint(command: GatewayServiceCommandConfig): string | undefined {
+export function resolveServiceEntrypoint(
+  command: Pick<GatewayServiceCommandConfig, "programArguments" | "workingDirectory">,
+): string | undefined {
   const entrypointIndex = resolveServiceEntrypointIndex(command.programArguments);
   if (entrypointIndex === undefined) {
     return undefined;
@@ -103,7 +133,7 @@ async function tryRealpath(value: string | undefined): Promise<string | undefine
   }
 }
 
-async function isSourceCheckoutRoot(candidate: string): Promise<boolean> {
+export async function isSourceCheckoutRoot(candidate: string): Promise<boolean> {
   const hasRepoMarker =
     (await pathExists(path.join(candidate, ".git"))) ||
     (await pathExists(path.join(candidate, "pnpm-workspace.yaml")));
@@ -138,7 +168,10 @@ async function resolveOpenClawPackageRoot(entrypoint: string): Promise<string | 
 }
 
 export async function summarizeGatewayServiceLayout(
-  command: GatewayServiceCommandConfig | null,
+  command: Pick<
+    GatewayServiceCommandConfig,
+    "programArguments" | "workingDirectory" | "sourcePath"
+  > | null,
 ): Promise<GatewayServiceLayoutSummary | undefined> {
   if (!command) {
     return undefined;

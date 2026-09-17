@@ -112,7 +112,10 @@ export async function prepareUpdateRestart(
         serviceEnv: gatewayServiceEnv,
         serviceCommand:
           serviceUpdateVerdict.kind === "unresolved" ||
-          (serviceUpdateVerdict.kind === "owned" && !serviceUpdateVerdict.refreshDefinition)
+          (serviceUpdateVerdict.kind === "owned" &&
+            (!serviceUpdateVerdict.refreshDefinition ||
+              (serviceUpdateVerdict.requiresInstallRootRefresh &&
+                restartConfigSnapshot.config.gateway?.port === undefined)))
             ? serviceState.command
             : undefined,
       });

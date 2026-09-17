@@ -18,6 +18,14 @@ loaded, or `openclaw gateway install --force` from the intended installation to
 replace its service definition. Externally managed services still belong to
 their supervisor.
 
+Doctor also compares the service's package path and version with the active CLI,
+without requiring a Gateway connection. `openclaw doctor --fix` reconciles a
+verified, writable managed service that still points at another packaged install.
+It preserves the service's profile and an explicit service port when no port is
+configured. Source checkouts, deployment-owned overrides, and unavailable native
+inspection do not grant automatic installation repair authority; Doctor reports
+the mismatch and the next repair action.
+
 For legacy services or conflicting systemd scopes, run `openclaw doctor`
 interactively to review the findings and confirm supported cleanup. Cleanup
 reports what it removed or skipped; it does not guarantee a replacement service
