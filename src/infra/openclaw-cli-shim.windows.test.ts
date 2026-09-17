@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { quoteCmdScriptArg } from "../daemon/cmd-argv.js";
 import {
   buildWindowsCmdExeCommandLine,
@@ -49,6 +49,19 @@ async function sourceFixture(root: string) {
   };
 }
 
+const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn(() => "gbk"));
+const resolveWindowsOemCodePageForEncodingMock = vi.hoisted(() => vi.fn(() => 936));
+
+vi.mock("./windows-encoding.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./windows-encoding.js")>("./windows-encoding.js");
+  return {
+    ...actual,
+    resolveWindowsOemEncoding: resolveWindowsOemEncodingMock,
+    resolveWindowsOemCodePageForEncoding: resolveWindowsOemCodePageForEncodingMock,
+  };
+});
+
 afterEach(clearGatewayAgentCliShim);
 describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", () => {
   it.each(["off", "on"])(
@@ -83,6 +96,41 @@ describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", 
       );
       f.check(f.cmd(caller, []), ["probe", "literal!%USERPROFILE%!"]);
     }));
+
+  it("executes and regenerates a CJK-path launcher through cmd.exe", async () => {
+    await withTempDir("openclaw-source-cli-cjk-win-", async (root) => {
+      const fixture = await createSourceCliFixture(root);
+      const cjkCheckout = path.join(root, "用户", "OpenClaw source");
+      await fs.cp(fixture.checkout, cjkCheckout, { recursive: true });
+      const cjkEntryPath = path.join(cjkCheckout, "src", "entry.ts");
+      const invocation = {
+        ...fixture.invocation,
+        args: fixture.invocation.args.map((arg) =>
+          arg === fixture.entryPath ? cjkEntryPath : arg,
+        ),
+      };
+      const stateDir = path.join(root, "state");
+      const shimPath = path.join(stateDir, "tmp", "agent-cli", "openclaw.cmd");
+      const command = buildWindowsCmdExeCommandLine(shimPath, ["probe"]);
+
+      for (const regeneration of [1, 2]) {
+        await prepareGatewayAgentCliShim({ env: {}, invocation, stateDir });
+        const result = runSourceCliProbe(
+          resolveTrustedWindowsCmdExe(),
+          ["/d", "/v:off", "/s", "/c", command],
+          fixture.callerCwd,
+          { windowsVerbatimArguments: true },
+        );
+        expect(result.status, `CJK launcher regeneration ${regeneration}`).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          source: "gateway",
+          args: ["probe"],
+          cwd: fixture.callerCwd,
+          tsconfigPath: path.join(cjkCheckout, "tsconfig.json"),
+        });
+      }
+    });
+  });
 
   it.each(["generic Node host", "bare TSX source parent"])(
     "launches source mode outside the checkout from a %s",
