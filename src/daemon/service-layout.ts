@@ -133,7 +133,7 @@ async function tryRealpath(value: string | undefined): Promise<string | undefine
   }
 }
 
-export async function isSourceCheckoutRoot(candidate: string): Promise<boolean> {
+export async function isGatewayServiceSourceCheckoutRoot(candidate: string): Promise<boolean> {
   const hasRepoMarker =
     (await pathExists(path.join(candidate, ".git"))) ||
     (await pathExists(path.join(candidate, "pnpm-workspace.yaml")));
@@ -188,7 +188,7 @@ export async function summarizeGatewayServiceLayout(
     ? ((await readPackageVersion(packageRoot)) ?? undefined)
     : undefined;
   const entrypointSourceCheckout = packageRootReal
-    ? await isSourceCheckoutRoot(packageRootReal)
+    ? await isGatewayServiceSourceCheckoutRoot(packageRootReal)
     : undefined;
 
   return {

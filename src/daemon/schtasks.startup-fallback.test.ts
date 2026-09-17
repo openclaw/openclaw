@@ -30,7 +30,7 @@ import {
   inspectPortUsageMock,
   killProcessTreeMock,
   resetSchtasksBaseMocks,
-  resolveStartupEntryPath,
+  resolveStartupFixturePath,
   schtasksCalls,
   schtasksResponses,
   withWindowsEnv,
@@ -676,7 +676,9 @@ describe("Windows startup fallback", () => {
           () => installGatewayScheduledTask(env),
         ),
       ).rejects.toThrow("startup fallback is unsupported");
-      await expect(fs.stat(resolveStartupEntryPath(env))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(resolveStartupFixturePath(env))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
       expect(spawn).not.toHaveBeenCalled();
     });
   });
@@ -693,7 +695,7 @@ describe("Windows startup fallback", () => {
 
       const result = await installGatewayScheduledTask(env, stdout);
 
-      const startupEntryPath = resolveStartupEntryPath(env);
+      const startupEntryPath = resolveStartupFixturePath(env);
       const startupScript = decodeWindowsLauncherScript({
         buffer: await fs.readFile(startupEntryPath),
       });
@@ -715,7 +717,7 @@ describe("Windows startup fallback", () => {
         OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
       });
 
-      const startupEntryPath = resolveStartupEntryPath(env, "vbs");
+      const startupEntryPath = resolveStartupFixturePath(env, "vbs");
       const rawStartupScript = await fs.readFile(startupEntryPath);
       const startupScript = decodeWindowsLauncherScript({ buffer: rawStartupScript });
       expect(result.scriptPath).toBe(resolveTaskScriptPath(env));
@@ -1691,7 +1693,7 @@ describe("Windows startup fallback", () => {
 
       await installGatewayScheduledTask(env);
 
-      await fs.access(resolveStartupEntryPath(env));
+      await fs.access(resolveStartupFixturePath(env));
       expectStartupFallbackSpawn();
     });
   });
@@ -1702,7 +1704,7 @@ describe("Windows startup fallback", () => {
 
       await installGatewayScheduledTask(env);
 
-      await fs.access(resolveStartupEntryPath(env));
+      await fs.access(resolveStartupFixturePath(env));
       expectStartupFallbackSpawn();
     });
   });
@@ -1717,7 +1719,7 @@ describe("Windows startup fallback", () => {
         "Scheduled Task registration did not confirm completion",
       );
 
-      await expect(fs.access(resolveStartupEntryPath(env))).rejects.toMatchObject({
+      await expect(fs.access(resolveStartupFixturePath(env))).rejects.toMatchObject({
         code: "ENOENT",
       });
       expect(spawn).not.toHaveBeenCalled();
@@ -1737,7 +1739,7 @@ describe("Windows startup fallback", () => {
       );
 
       await expect(fs.access(resolveTaskScriptPath(env))).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.access(resolveStartupEntryPath(env))).rejects.toMatchObject({
+      await expect(fs.access(resolveStartupFixturePath(env))).rejects.toMatchObject({
         code: "ENOENT",
       });
       expect(spawn).not.toHaveBeenCalled();
@@ -2196,7 +2198,7 @@ describe("Windows startup fallback", () => {
   it("removes hidden Startup-folder entries when the caller env lacks the marker", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       queueNativeResponses({ code: 0, stdout: "", stderr: "" });
-      const startupEntryPath = resolveStartupEntryPath(env, "vbs");
+      const startupEntryPath = resolveStartupFixturePath(env, "vbs");
       await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
       await fs.writeFile(startupEntryPath, 'CreateObject("WScript.Shell")\n', "utf8");
 

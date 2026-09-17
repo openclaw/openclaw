@@ -64,7 +64,7 @@ export async function writeGatewayScript(
   );
 }
 
-export function resolveStartupEntryPath(env: Record<string, string>, extension = "cmd") {
+export function resolveStartupFixturePath(env: Record<string, string>, extension = "cmd") {
   const taskName = env.OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway";
   return path.join(
     expectDefined(env.APPDATA, "env.APPDATA test invariant"),
@@ -78,7 +78,7 @@ export function resolveStartupEntryPath(env: Record<string, string>, extension =
 }
 
 export async function writeStartupFallbackEntry(env: Record<string, string>, extension = "cmd") {
-  const startupEntryPath = resolveStartupEntryPath(env, extension);
+  const startupEntryPath = resolveStartupFixturePath(env, extension);
   await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
   await fs.writeFile(startupEntryPath, "@echo off\r\n", "utf8");
   return startupEntryPath;
