@@ -135,16 +135,27 @@ function shouldLoadPluginMetadataForSecrets(config: OpenClawConfig): boolean {
   );
 }
 
-function loadAuthStoresWithMigrationIsolation(params: {
+// Auth-store reads and clones are synchronous CPU work; yielding every batch lets
+// pending Gateway requests interleave instead of blocking behind a full multi-agent scan.
+const AUTH_STORE_LOAD_YIELD_BATCH_SIZE = 25;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+async function loadAuthStoresWithMigrationIsolation(params: {
   agentDirs: readonly string[];
   loadAuthStore: (agentDir?: string) => AuthProfileStore;
   allowUnavailable: boolean;
-}): {
+}): Promise<{
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
   degradedOwners: DegradedSecretOwner[];
-} {
+}> {
   const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   const degradedOwners: DegradedSecretOwner[] = [];
+  let processed = 0;
   for (const agentDir of params.agentDirs) {
     try {
       authStores.push({ agentDir, store: structuredClone(params.loadAuthStore(agentDir)) });
@@ -163,6 +174,10 @@ function loadAuthStoresWithMigrationIsolation(params: {
         refKeys: [],
         reason: "auth profile migration required",
       });
+    }
+    processed += 1;
+    if (processed % AUTH_STORE_LOAD_YIELD_BATCH_SIZE === 0) {
+      await yieldToEventLoop();
     }
   }
   return { authStores, degradedOwners };
@@ -207,7 +222,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
   let migrationDegradedOwners: DegradedSecretOwner[] = [];
   if (includeAuthStoreRefs) {
-    const loaded = loadAuthStoresWithMigrationIsolation({
+    const loaded = await loadAuthStoresWithMigrationIsolation({
       agentDirs: candidateDirs,
       loadAuthStore: fastPathLoadAuthStore,
       allowUnavailable: params.allowUnavailableSecretOwners === true,
@@ -284,7 +299,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   if (includeAuthStoreRefs) {
     const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
     if (!params.loadAuthStore) {
-      const loaded = loadAuthStoresWithMigrationIsolation({
+      const loaded = await loadAuthStoresWithMigrationIsolation({
         agentDirs: candidateDirs,
         loadAuthStore,
         allowUnavailable: params.allowUnavailableSecretOwners === true,
