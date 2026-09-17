@@ -5,7 +5,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { runExecProcess } from "../bash-tools.exec-runtime.js";
 import { registerSandboxBackend } from "./backend.js";
 import type {
@@ -62,9 +65,10 @@ beforeEach(() => {
   };
 });
 
-afterEach(() => {
+afterEach(async () => {
   disposeBackend?.();
   disposeBackend = undefined;
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -248,6 +252,7 @@ describe("durable sandbox runtime generations", () => {
     await expect(resolve()).rejects.toThrow("provider config invalid");
     expect(allocated.size).toBe(0);
     await expect(removeSandboxContainer("reserved-1")).rejects.toThrow("provider config invalid");
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await expect(readRegistryEntry("reserved-1")).resolves.toMatchObject({
       runtimeState: "removing-pending",
@@ -350,6 +355,7 @@ describe("durable sandbox runtime generations", () => {
       return backend;
     });
     await expect(resolve()).rejects.toThrow(error.message);
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     fail = false;
     await expect(resolve()).resolves.toMatchObject({ runtimeId: "reserved-1" });
@@ -403,6 +409,13 @@ describe("durable sandbox runtime generations", () => {
       const creating = resolve();
       const failedCreation = expect(creating).rejects.toThrow("removed or is being removed");
       const id = await started.promise;
+      const discovery = createDeferred();
+      const readActualRegistry = registry.readRegistry;
+      vi.spyOn(registry, "readRegistry").mockImplementationOnce(() => {
+        const read = readActualRegistry();
+        void read.then(() => discovery.resolve(), discovery.reject);
+        return read;
+      });
       let removing: Promise<void>;
       if (operation === "prune") {
         advancePruneTime();
@@ -411,11 +424,14 @@ describe("durable sandbox runtime generations", () => {
       } else {
         removing = removeSandboxContainer(id);
       }
-      await vi.waitFor(async () => {
+      try {
+        await discovery.promise;
         expect((await readRegistryEntry(id))?.runtimeState).toBe("removing-pending");
-      });
-      expect(remove).not.toHaveBeenCalled();
-      finish.resolve();
+        expect(remove).not.toHaveBeenCalled();
+      } finally {
+        finish.resolve();
+        await Promise.allSettled([failedCreation, removing]);
+      }
       await failedCreation;
       await removing;
       expect(remove).toHaveBeenCalledOnce();
@@ -429,6 +445,7 @@ describe("durable sandbox runtime generations", () => {
     const context = await resolve();
     remove.mockRejectedValueOnce(new Error("cleanup response lost"));
     await expect(removeSandboxContainer("reserved-1")).rejects.toThrow("cleanup response lost");
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await expect(resolve()).rejects.toThrow("removed or is being removed");
     const backend = context?.backend;

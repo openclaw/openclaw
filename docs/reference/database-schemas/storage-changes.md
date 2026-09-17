@@ -24,6 +24,14 @@ and publishes the result. Avoid exposing a generic SQL callback to application
 code or adding an asynchronous wrapper around an existing asynchronous facade.
 The plugin KV API already has asynchronous methods over its SQLite owner.
 
+Sandbox registry lists, point lookups, backend/scope runtime IDs, and browser
+registry reads execute in the shared-state read worker. CLI management and
+runtime provisioning await the same domain APIs. Reads retain inherited snapshot
+and disposable-source scopes, preserve read-only and missing-state behavior, and
+join native reader cleanup before returning. Registry writes, runtime reservation
+and currentness callbacks, and Doctor imports retain their synchronous owners;
+their worker migration remains separate work.
+
 Explicit promotion notice and claim annotations execute in the shared-state
 worker. The CLI awaits their best-effort completion before reporting results;
 storage failures still do not fail a promotion claim. Notice recording retains
