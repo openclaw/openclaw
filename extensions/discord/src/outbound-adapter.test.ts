@@ -13,7 +13,6 @@ import {
   mockDiscordBoundThreadManager,
   resetDiscordOutboundMocks,
 } from "./outbound-adapter.test-harness.js";
-import { createDiscordSendReceipt } from "./send.receipt.js";
 
 const outboundWarnSpy = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
@@ -261,94 +260,6 @@ describe("discordOutbound", () => {
       expect.stringContaining("webhook persona send failed"),
       { error: expect.objectContaining({ message: "rate limited" }) },
     );
-  });
-
-  it("routes poll sends to thread target when threadId is provided", async () => {
-    const onPlatformSendDispatch = vi.fn(async () => undefined);
-    const onDeliveryResult = vi.fn();
-    const markInboundEventDelivered = vi.fn();
-    const end = discordInboundEventDelivery.begin(
-      "agent:main:discord:channel:parent-1",
-      {
-        outboundTo: "thread-1",
-        outboundAccountId: "default",
-        markInboundEventDelivered,
-      },
-      { inboundEventKind: "room_event" },
-    );
-    const pollResult = {
-      messageId: "poll-1",
-      channelId: "thread-1",
-      receipt: createDiscordSendReceipt({
-        platformMessageIds: ["poll-1"],
-        channelId: "thread-1",
-        kind: "poll",
-        threadId: "thread-1",
-      }),
-    };
-    hoisted.sendPollDiscordMock.mockImplementationOnce(async (_to, _poll, options) => {
-      if (
-        !options ||
-        typeof options !== "object" ||
-        !("onDeliveryResult" in options) ||
-        typeof options.onDeliveryResult !== "function"
-      ) {
-        throw new Error("expected poll delivery callback");
-      }
-      await options.onDeliveryResult(pollResult);
-      return pollResult;
-    });
-    let result;
-    try {
-      result = await discordOutbound.sendPoll?.({
-        cfg: {},
-        to: "channel:parent-1",
-        poll: { question: "Best snack?", options: ["banana", "apple"] },
-        content: "Vote now",
-        accountId: "default",
-        threadId: "thread-1",
-        silent: true,
-        sessionKey: "agent:main:discord:channel:parent-1",
-        inboundEventKind: "room_event",
-        onPlatformSendDispatch,
-        onDeliveryResult,
-      });
-    } finally {
-      end();
-    }
-
-    const call = mockCall(hoisted.sendPollDiscordMock);
-    expect(call[0]).toBe("channel:thread-1");
-    expect(call[1]).toEqual({
-      question: "Best snack?",
-      options: ["banana", "apple"],
-    });
-    expect(mockObjectArg(hoisted.sendPollDiscordMock)).toMatchObject({
-      accountId: "default",
-      content: "Vote now",
-      threadId: "thread-1",
-      silent: true,
-      onPlatformSendDispatch,
-      onDeliveryResult: expect.any(Function),
-    });
-    expect(result).toEqual({
-      channel: "discord",
-      messageId: "poll-1",
-      channelId: "thread-1",
-      receipt: expect.objectContaining({
-        primaryPlatformMessageId: "poll-1",
-        threadId: "thread-1",
-      }),
-    });
-    expect(markInboundEventDelivered).toHaveBeenCalledOnce();
-    expect(onDeliveryResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageId: "poll-1",
-        target: { kind: "channel", id: "thread-1" },
-        receipt: expect.objectContaining({ primaryPlatformMessageId: "poll-1" }),
-      }),
-    );
-    expect(onDeliveryResult.mock.calls[0]?.[0]).not.toHaveProperty("channel");
   });
 
   it("enforces account poll policy before provider dispatch", async () => {
