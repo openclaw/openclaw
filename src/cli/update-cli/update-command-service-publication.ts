@@ -157,7 +157,9 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           ? resolveLaunchAgentLabel(state.env)
           : process.platform === "win32"
             ? resolveTaskName(state.env)
-            : resolveSystemdServiceName(state.env);
+            : process.platform === "freebsd"
+              ? "openclaw"
+              : resolveSystemdServiceName(state.env);
       const nativeIdentity = stableStringify({
         command: state.command,
         serviceName,

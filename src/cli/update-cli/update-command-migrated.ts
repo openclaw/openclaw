@@ -209,7 +209,12 @@ export async function continueMigratedUpdateInFreshProcess(
     );
     assertCurrent();
     const resultPath = path.join(scratchDir, "result.json");
-    const { requesterAuthority, executorFence, ...runIdentity } = run;
+    const {
+      requesterAuthority,
+      executorFence,
+      freebsdRootAdmission: _admission,
+      ...runIdentity
+    } = run;
     const input: MigratedUpdateFinalizationInput = {
       params: {
         ...serializable,

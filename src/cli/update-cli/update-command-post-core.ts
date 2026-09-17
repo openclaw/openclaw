@@ -344,12 +344,14 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   let tentativePluginIndex:
     | Awaited<ReturnType<typeof writePersistedInstalledPluginIndexInstallRecordsWithLease>>
     | undefined;
+  const admission = params.opts.run?.freebsdRootAdmission;
+  const lifecycleOptions = admission ? { assertCurrent: admission.assertCurrent } : {};
   const restoreTentativePluginIndex = async () => {
     const tentative = tentativePluginIndex;
     if (!tentative) {
       return;
     }
-    await withPluginLifecycleLease({}, async (lease) => {
+    await withPluginLifecycleLease(lifecycleOptions, async (lease) => {
       await restorePersistedInstalledPluginIndexIfCurrent(tentative.previous, tentative.revision, {
         lease,
       });
@@ -359,7 +361,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
 
   try {
     if (pluginInstallRecords && pluginInstallRecords !== params.pluginInstallRecords) {
-      await withPluginLifecycleLease({}, async (lease) => {
+      await withPluginLifecycleLease(lifecycleOptions, async (lease) => {
         tentativePluginIndex = await writePersistedInstalledPluginIndexInstallRecordsWithLease(
           pluginInstallRecords,
           {

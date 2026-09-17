@@ -19,6 +19,10 @@ import {
 } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { FreeBsdPkgOwnershipError } from "../../infra/update-freebsd-pkg-ownership.js";
+import {
+  FreeBsdUpdateRootOwnershipError,
+  FreeBsdUpdateServiceDiscoveryError,
+} from "../../infra/update-freebsd-root-ownership.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { UpdateRunAdmissionBusyError } from "../../infra/update-run-admission.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
@@ -73,7 +77,10 @@ export function createUpdateCommandFailureResult(
   const { failure, admission, ...result } = params;
   const { cause, detail } = failure;
   const preMutationFailure = cause instanceof UpdatePreMutationError;
-  const pkgOwnershipFailure = cause instanceof FreeBsdPkgOwnershipError;
+  const pkgOwnershipFailure =
+    cause instanceof FreeBsdPkgOwnershipError ||
+    cause instanceof FreeBsdUpdateRootOwnershipError ||
+    cause instanceof FreeBsdUpdateServiceDiscoveryError;
   const admissionFailure =
     admission === true && cause instanceof GatewayServiceUpdateOwnershipError;
   const reason =
@@ -138,13 +145,19 @@ export async function withUpdateAdmissionReporting<T>(
       return reportUpdateCommandPendingRecovery(error, opts);
     }
     if (
+      !(error instanceof UpdatePreMutationError) &&
       !(error instanceof GatewayServiceUpdateOwnershipError) &&
-      !(error instanceof FreeBsdPkgOwnershipError)
+      !(error instanceof FreeBsdPkgOwnershipError) &&
+      !(error instanceof FreeBsdUpdateRootOwnershipError) &&
+      !(error instanceof FreeBsdUpdateServiceDiscoveryError)
     ) {
       throw error;
     }
     const message =
-      error instanceof FreeBsdPkgOwnershipError
+      error instanceof UpdatePreMutationError ||
+      error instanceof FreeBsdPkgOwnershipError ||
+      error instanceof FreeBsdUpdateRootOwnershipError ||
+      error instanceof FreeBsdUpdateServiceDiscoveryError
         ? error.message
         : `${error.message} Run \`openclaw gateway status --deep\` from the service's owning account before retrying.`;
     if (opts.json) {
@@ -331,10 +344,14 @@ export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {
   result: UpdateRunResult;
   jsonMode: boolean;
   env: NodeJS.ProcessEnv | undefined;
+  run?: UpdateCommandOptions["run"];
 }): Promise<void> {
   if (!params.meta) {
     return;
   }
+  // Terminal publication outlives the executor. The store commits synchronously
+  // before yielding, so retain the run's refusal at this existing writer boundary.
+  params.run?.freebsdRootAdmission?.assertCurrent();
   try {
     await writeControlPlaneUpdateRestartSentinel(
       { meta: params.meta, result: params.result },
@@ -355,10 +372,12 @@ export async function markControlPlaneUpdateRestartSentinelFailureBestEffort(par
   reason: string;
   jsonMode: boolean;
   env: NodeJS.ProcessEnv | undefined;
+  run?: UpdateCommandOptions["run"];
 }): Promise<void> {
   if (!params.meta) {
     return;
   }
+  params.run?.freebsdRootAdmission?.assertCurrent();
   try {
     await markControlPlaneUpdateRestartSentinelFailure(params.reason, params.meta, params.env);
   } catch (err) {
@@ -376,6 +395,7 @@ export function recordUpdateResultNextAction(
   result: UpdateRunResult,
 ) {
   const run = params.opts.run;
+  run?.freebsdRootAdmission?.assertCurrent();
   const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
   const nextAction = resolveUpdateResultNextAction({
     result,

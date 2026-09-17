@@ -35,9 +35,11 @@ export async function withUpdateCommandRecoveryUnwind(
   let failure: { error: unknown } | undefined;
   try {
     await operation();
+    run.freebsdRootAdmission?.assertCurrent();
     run.executorFence?.assertCurrent();
   } catch (error) {
     try {
+      run.freebsdRootAdmission?.assertCurrent();
       run.executorFence?.assertCurrent();
     } catch (cause) {
       throw new UpdateCommandPendingRecoveryFailure(

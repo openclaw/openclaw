@@ -71,6 +71,22 @@ export async function prepareUpdateCommandFailureTriage(
     invocationCwd: opts.invocationCwd,
   });
   return async (error) => {
+    if (opts.run?.freebsdRootAdmission?.canWrite === false) {
+      return reportUpdateCommandPendingRecovery(
+        new UpdateCommandPendingRecoveryFailure(
+          {
+            ...(error instanceof UpdateCommandFailure
+              ? error.result
+              : { status: "error", mode: "unknown", steps: [], durationMs: 0 }),
+            reason: opts.run.freebsdRootAdmission.failure?.reason ?? "freebsd-update-ownership",
+            runId: opts.run.runId,
+          },
+          `${opts.run.freebsdRootAdmission.failure?.message ?? "Update ownership was not admitted."} Update history remains pending.`,
+          { cause: error },
+        ),
+        opts,
+      );
+    }
     if (error instanceof UpdateCommandFinalizedRecoveryFailure) {
       return exitCliAfterOutput(defaultRuntime, error.exitCode);
     }

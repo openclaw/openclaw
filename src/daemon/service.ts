@@ -99,6 +99,8 @@ export type GatewayService = {
   label: string;
   loadedText: string;
   notLoadedText: string;
+  /** Repair guidance only; inspection and maintenance admission remain independent. */
+  managementUnsupportedReason?: string;
   stage: (args: GatewayServiceStageArgs) => Promise<void>;
   install: (args: GatewayServiceInstallArgs) => Promise<void>;
   uninstall: (args: GatewayServiceManageArgs) => Promise<void>;
@@ -523,6 +525,7 @@ function createUnsupportedGatewayService(kind: ServiceKind): GatewayService {
     label: "Gateway service",
     loadedText: "available",
     notLoadedText: "not installed",
+    managementUnsupportedReason: createUnsupportedGatewayServiceError(kind).message,
     stage: rejectUnsupportedGatewayService,
     install: rejectUnsupportedGatewayService,
     uninstall: rejectUnsupportedGatewayService,
@@ -530,6 +533,14 @@ function createUnsupportedGatewayService(kind: ServiceKind): GatewayService {
     stop: rejectUnsupportedGatewayService,
     restart: rejectUnsupportedGatewayService,
     isLoaded: rejectUnsupportedGatewayService,
+    ...(process.platform === "freebsd" && kind === "gateway"
+      ? {
+          isAbsent: async (args: GatewayServiceEnvArgs) => {
+            const { isFreeBsdGatewayServiceAbsent } = await import("./freebsd-service.js");
+            return await isFreeBsdGatewayServiceAbsent(args);
+          },
+        }
+      : {}),
     readCommand: async () => null,
     readRuntime: async () => ({
       status: "unknown",

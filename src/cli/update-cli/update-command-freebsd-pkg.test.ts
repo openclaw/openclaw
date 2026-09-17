@@ -9,12 +9,17 @@ import {
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
+import * as rootOwnership from "../../infra/update-freebsd-root-ownership.js";
 import * as updateRunner from "../../infra/update-runner.js";
 import * as exec from "../../process/exec.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import * as shared from "./shared.js";
+import {
+  assertFreeBsdUpdateCommandMode,
+  assertFreeBsdUpdateCommandRunOrigin,
+} from "./update-command-freebsd-policy.js";
 import { updateGitInstall } from "./update-command-git.js";
 import { prepareUpdateCommand, resolveUpdateCommandAdmissionEnv } from "./update-command-run.js";
 import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
@@ -44,6 +49,15 @@ async function withPackageRoots(
       },
       async () => {
         mockSystemAccountHome();
+        // These fixtures exercise pkg ownership, not native root/ACL admission.
+        // Keep its prerequisite explicit without pretending temporary user paths qualify.
+        vi.spyOn(rootOwnership, "assertFreeBsdForegroundUpdateAdmission").mockResolvedValue();
+        vi.spyOn(rootOwnership, "admitFreeBsdUpdateRootOwnership").mockResolvedValue({
+          canWrite: true,
+          failure: undefined,
+          assertCurrent() {},
+          async revalidate() {},
+        });
         await withMockedPlatform("freebsd", () => run(base, requested, managed));
       },
     );
@@ -92,12 +106,12 @@ describe("FreeBSD pkg update admission", () => {
       vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
       vi.spyOn(service, "resolveGatewayService").mockReturnValue(createMockGatewayService());
       const query = vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(pkgQueryResult());
-      const prepared = await prepareUpdateCommand({ dryRun: true });
+      const prepared = await prepareUpdateCommand({ dryRun: true, restart: false });
       vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
       await expect(
         resolveUpdateCommandAdmissionEnv({
           root,
-          opts: { dryRun: true },
+          opts: { dryRun: true, restart: false },
           pkgOwnership: prepared.pkgOwnership,
         }),
       ).resolves.toBeDefined();
@@ -177,10 +191,9 @@ describe("FreeBSD pkg update admission", () => {
   });
 
   it.each([
-    { name: "ordinary update", opts: {} },
     { name: "no restart", opts: { restart: false } },
-    { name: "dry run", opts: { dryRun: true } },
-    { name: "package-to-Git switch", opts: { channel: "dev" } },
+    { name: "dry run", opts: { dryRun: true, restart: false } },
+    { name: "package-to-Git switch", opts: { channel: "dev", restart: false } },
   ])(
     "refuses the invoking pkg root before service planning or state writes: $name",
     async ({ opts }) => {
@@ -278,7 +291,7 @@ describe("FreeBSD pkg update admission", () => {
       vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
         pkgQueryResult(`${managed}/package.json\n`),
       );
-      const prepared = await prepareUpdateCommand({ dryRun: true });
+      const prepared = await prepareUpdateCommand({ dryRun: true, restart: false });
       prepared.servicePlan = {
         rootRedirect: { root: managed, previousRoot: root },
         nodeRunner: "/fixture/bin/node",
@@ -298,5 +311,15 @@ describe("FreeBSD pkg update admission", () => {
       ).rejects.toMatchObject({ reason: "pkg-owned-install" });
       expect(enter).not.toHaveBeenCalled();
     });
+  });
+});
+
+it("keeps Linux request modes and inherited-run selection outside FreeBSD policy", () => {
+  withMockedPlatform("linux", () => {
+    for (const restart of [undefined, true, false]) {
+      const env = { OPENCLAW_UPDATE_RUN_ID: "unresolved", OPENCLAW_UPDATE_RUN_HANDOFF: "1" };
+      expect(() => assertFreeBsdUpdateCommandMode({ restart }, env)).not.toThrow();
+      expect(() => assertFreeBsdUpdateCommandRunOrigin({ restart }, env)).not.toThrow();
+    }
   });
 });

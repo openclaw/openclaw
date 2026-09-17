@@ -75,6 +75,22 @@ export async function withUpdateCommandTerminalResult<T>(
       terminalOwners.delete(run);
     }
   }
+  if (run?.freebsdRootAdmission?.canWrite === false) {
+    // The terminal owner outlives the executor, but not filesystem rejection.
+    // Do not invoke a deferred publisher that can reopen history or sentinels.
+    throw new UpdateCommandPendingRecoveryFailure(
+      {
+        status: "error",
+        mode: "unknown",
+        reason: run.freebsdRootAdmission.failure?.reason ?? "freebsd-update-ownership",
+        runId: run.runId,
+        steps: [],
+        durationMs: 0,
+      },
+      `${run.freebsdRootAdmission.failure?.message ?? "Update ownership was not admitted."} Update history remains pending.`,
+      "error" in outcome ? { cause: outcome.error } : undefined,
+    );
+  }
   const activationTimeout =
     "error" in outcome
       ? collectNestedErrorCandidates(outcome.error).find(
@@ -168,14 +184,17 @@ export async function resolveSettledUpdateCommandResult(
   // The mutation owner is now closed. This is diagnostic publication only,
   // never authority to reopen displaced state or replace another terminal row.
   try {
+    params.opts.run?.freebsdRootAdmission?.assertCurrent();
     const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env;
     // Keep the first target stable if selectors change during admission.
     const targetPath = resolveOpenClawStateSqlitePath(env);
     await assertUpdateRecoveryAdmission({ env, path: targetPath });
+    params.opts.run?.freebsdRootAdmission?.assertCurrent();
     if (params.opts.run) {
       if (resolveOpenClawStateSqlitePath(params.opts.run.env) !== targetPath) {
         await assertUpdateRecoveryAdmission({ env: params.opts.run.env });
       }
+      params.opts.run.freebsdRootAdmission?.assertCurrent();
       const prior = getUpdateRun(params.opts.run.runId, { env: params.opts.run.env });
       if (prior && prior.status !== "running" && settlementFailed) {
         throw new Error("Update history was already finalized by another owner.");
@@ -321,6 +340,7 @@ async function publishPreMutationUpdateOutcome(
   prepareOutcome: () => Promise<Pick<UpdateRunResult, "status" | "recovery">>,
 ): Promise<UpdateRunResult> {
   const run = params.opts.run;
+  run?.freebsdRootAdmission?.assertCurrent();
   const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
   if (run && active && params.message) {
     recordUpdateRunPhase(
@@ -331,6 +351,7 @@ async function publishPreMutationUpdateOutcome(
     );
   }
   const outcome = await prepareOutcome();
+  run?.freebsdRootAdmission?.assertCurrent();
   const result = completeUpdateCommandRun(
     {
       ...outcome,
@@ -368,6 +389,7 @@ async function publishPreMutationUpdateOutcome(
       result,
       jsonMode: Boolean(params.opts.json),
       env: run?.env,
+      run,
     });
   }
   if (params.opts.json && params.message) {

@@ -33,6 +33,11 @@ import {
   createFreeBsdPkgOwnershipInspection,
   type FreeBsdPkgOwnershipInspection,
 } from "../../infra/update-freebsd-pkg-ownership.js";
+import {
+  admitFreeBsdUpdateRootOwnership,
+  assertFreeBsdForegroundUpdateAdmission,
+  type FreeBsdUpdateRootAdmission,
+} from "../../infra/update-freebsd-root-ownership.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
@@ -79,6 +84,10 @@ import { registerSignalExitBarrier, waitForSignalExitBarriers } from "../signal-
 import type { UpdateDisplayProgress } from "./progress.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
+import {
+  assertFreeBsdUpdateCommandMode,
+  assertFreeBsdUpdateCommandRunOrigin,
+} from "./update-command-freebsd-policy.js";
 import { revalidateUpdateDatabaseContext } from "./update-command-managed-context.js";
 import {
   admitMutableUpdateSignalRun,
@@ -110,7 +119,26 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
   root: string;
   invocationCwd?: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
+  freebsdRootAdmission?: FreeBsdUpdateRootAdmission;
+  freebsdRootFence?: UpdateRecoveryFence;
 }): Promise<NodeJS.ProcessEnv> {
+  assertFreeBsdUpdateCommandMode(params.opts);
+  const inspectRootOwnership = async (env?: NodeJS.ProcessEnv) => {
+    const admission = params.freebsdRootAdmission ?? params.opts.run?.freebsdRootAdmission;
+    if (admission) {
+      // Before initialization there is no executor. A retained initialization or
+      // run owner must be idle across every native inspection await.
+      await admission.revalidate(
+        { roots: [params.root], env },
+        params.freebsdRootFence?.assertCurrent ??
+          params.opts.run?.executorFence?.assertCurrent ??
+          (() => {}),
+      );
+    } else {
+      await assertFreeBsdForegroundUpdateAdmission({ roots: [params.root], env });
+    }
+  };
+  await inspectRootOwnership();
   const pkgOwnership =
     params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS);
   await pkgOwnership.assertUnowned(params.root);
@@ -158,6 +186,8 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
       }
     }
   }
+  await inspectRootOwnership(env);
+  assertFreeBsdUpdateCommandRunOrigin(params.opts, env);
   return env;
 }
 
@@ -189,19 +219,25 @@ export async function admitUpdateCommandRun(params: {
   root: string;
   invocationCwd?: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
+  freebsdRootAdmission?: FreeBsdUpdateRootAdmission;
   initialization?: {
     env: NodeJS.ProcessEnv;
     runId: string;
     databasePath: string;
     configPath: string;
+    freebsdRootFence?: UpdateRecoveryFence;
     target: {
       configSnapshot: ConfigFileSnapshot;
       legacyConfigPlan?: LegacyConfigUpdatePlan;
     };
   };
 }): Promise<NonNullable<UpdateCommandOptions["run"]>> {
+  assertFreeBsdUpdateCommandMode(params.opts);
   assertUpdatePackageActivationAdmission(params.root);
-  const env = await resolveUpdateCommandAdmissionEnv(params);
+  const env = await resolveUpdateCommandAdmissionEnv({
+    ...params,
+    freebsdRootFence: params.initialization?.freebsdRootFence,
+  });
   // A previous invocation may have died with a sealed restoration plan. Detect
   // it before any writable owner open or history row creation changes that state.
   // An inherited diagnostic run ID is not a durable continuation claim.
@@ -233,6 +269,21 @@ export async function admitUpdateCommandRun(params: {
         : {}),
     });
   }
+  // Finish filesystem and native ACL admission before createUpdateRun opens a
+  // writable ledger; transaction callbacks retain their existing row checks.
+  const freebsdRootAdmission =
+    params.freebsdRootAdmission ??
+    params.opts.run?.freebsdRootAdmission ??
+    (await admitFreeBsdUpdateRootOwnership({ roots: [params.root], env }));
+  if (params.freebsdRootAdmission || params.opts.run?.freebsdRootAdmission) {
+    await freebsdRootAdmission?.revalidate(
+      { roots: [params.root], env },
+      params.initialization?.freebsdRootFence?.assertCurrent ??
+        params.opts.run?.executorFence?.assertCurrent ??
+        (() => {}),
+    );
+  }
+  assertFreeBsdUpdateCommandRunOrigin(params.opts, env, params.initialization?.runId);
   const driver = readUpdateRunDriver();
   const ledgerOptions = {
     env,
@@ -260,6 +311,7 @@ export async function admitUpdateCommandRun(params: {
     runId: record.runId,
     defaultStepTimeoutMs: record.trigger === "campaign" ? AUTO_UPDATE_STEP_TIMEOUT_MS : undefined,
     env,
+    ...(freebsdRootAdmission ? { freebsdRootAdmission } : {}),
     ...(requesterAuthority ? { requesterAuthority } : {}),
   };
   if (
@@ -299,7 +351,9 @@ export async function withUpdatePreviewSignals<T>(
     }
     // Missing/displaced canonical state, pending recovery, or a changed row is
     // not permission to open a writable runtime or dispose of another owner.
+    opts.run?.freebsdRootAdmission?.assertCurrent();
     await assertUpdateRecoveryAdmission({ env });
+    opts.run?.freebsdRootAdmission?.assertCurrent();
     if (!isDeepStrictEqual(getUpdateRun(expected.runId, { env }), expected)) {
       return;
     }
@@ -333,6 +387,12 @@ export function failUpdateCommandRun(
   error: unknown,
   run: NonNullable<UpdateCommandOptions["run"]>,
 ): void {
+  if (run.freebsdRootAdmission?.canWrite === false) {
+    defaultRuntime.error(
+      `${run.freebsdRootAdmission.failure?.message ?? "Update ownership was not admitted."} Update history remains pending.`,
+    );
+    return;
+  }
   const options = { env: run.env };
   // Recovery owns failure/outcome publication; outer unwind must not rewrite a
   // database whose exact contents may still be needed to reconcile restoration.
@@ -363,7 +423,7 @@ export function createUpdateRunProgress(
   const driver = readUpdateRunDriver();
   const pendingSteps: UpdateRunStep[] = [];
   const record = (step: UpdateRunStep) => {
-    if (deferred) {
+    if (deferred || run.freebsdRootAdmission?.canWrite === false) {
       pendingSteps.push(step);
       return undefined;
     }
@@ -372,7 +432,7 @@ export function createUpdateRunProgress(
   return {
     pendingSteps,
     onHeartbeat() {
-      if (!deferred) {
+      if (!deferred && run.freebsdRootAdmission?.canWrite !== false) {
         heartbeatUpdateRun(run.runId, driver, { env: run.env });
       }
     },
@@ -382,6 +442,9 @@ export function createUpdateRunProgress(
       deferred = true;
     },
     flushLedgerWrites() {
+      if (run.freebsdRootAdmission?.canWrite === false) {
+        return;
+      }
       deferred = false;
       for (const step of pendingSteps.splice(0)) {
         record(step);
@@ -415,6 +478,14 @@ export function completeUpdateCommandRun(
   const result = normalizeControlPlaneUpdateResult(input);
   if (!run) {
     return result;
+  }
+  if (run.freebsdRootAdmission?.canWrite === false) {
+    return {
+      ...result,
+      status: "error",
+      reason: run.freebsdRootAdmission.failure?.reason ?? "freebsd-update-ownership",
+      runId: run.runId,
+    };
   }
   // A process-local result cannot complete an operationally pending update or
   // authorize package retirement. Only the durable finalizer may close it.
@@ -504,6 +575,8 @@ export function readDevUpdateTarget(): DevUpdateTarget | undefined {
 }
 
 export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
+  const admissionEnv = { ...process.env };
+  assertFreeBsdUpdateCommandMode(opts, admissionEnv);
   // Refuse before preflight can inspect write ownership or admit a live run ledger.
   const runtimeFailure = process.versions.bun
     ? null
@@ -548,6 +621,22 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   // The shim can move during preparation; the loaded module owns the executing generation.
   const executingRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   const discoveredRoot = await resolveUpdateRoot();
+  const rootInspection = {
+    roots: executingRoot ? [discoveredRoot, executingRoot] : [discoveredRoot],
+    env: admissionEnv,
+    timeoutMs,
+  };
+  // Initialization can mutate selected state before a Run exists. Keep one
+  // admission from preparation through that owner and later terminal reporting.
+  const freebsdRootAdmission =
+    opts.run?.freebsdRootAdmission ?? (await admitFreeBsdUpdateRootOwnership(rootInspection));
+  if (opts.run?.freebsdRootAdmission) {
+    await freebsdRootAdmission?.revalidate(
+      rootInspection,
+      opts.run.executorFence?.assertCurrent ?? (() => {}),
+    );
+  }
+  assertFreeBsdUpdateCommandRunOrigin(opts, admissionEnv);
   const installKind = await resolveUpdateInstallKind(discoveredRoot, { timeoutMs });
   const pkgOwnership = createFreeBsdPkgOwnershipInspection(timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS);
   // Inspect the invoking installation before a service can redirect its root,
@@ -563,6 +652,18 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
       ? await resolveManagedServicePackageUpdatePlan({ root: discoveredRoot, pkgOwnership })
       : undefined;
   if (servicePlan?.rootRedirect) {
+    const redirectedInspection = {
+      roots: [discoveredRoot, servicePlan.rootRedirect.root],
+      timeoutMs,
+    };
+    if (freebsdRootAdmission) {
+      await freebsdRootAdmission.revalidate(
+        redirectedInspection,
+        opts.run?.executorFence?.assertCurrent ?? (() => {}),
+      );
+    } else {
+      await assertFreeBsdForegroundUpdateAdmission(redirectedInspection);
+    }
     assertUpdatePackageActivationAdmission(servicePlan.rootRedirect.root, {
       continuation: postCoreUpdateResume ? opts.run?.executorFence : undefined,
     });
@@ -609,6 +710,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     installKind,
     servicePlan,
     pkgOwnership,
+    ...(freebsdRootAdmission ? { freebsdRootAdmission } : {}),
   };
 }
 

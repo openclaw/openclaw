@@ -200,6 +200,44 @@ it.each(["stopped", "absent"])(
     }),
 );
 
+it.each(["absent", "present", "appears before publication"])(
+  "keeps FreeBSD runtime publication inside fresh absence and existing custody: %s",
+  (observation) =>
+    withRuntimePublicationFixture(async ({ root, env, service, coordinatorPath }) => {
+      mockProcessPlatform("freebsd");
+      const absent = vi.fn(async () => observation === "absent");
+      if (observation === "appears before publication") {
+        absent.mockResolvedValueOnce(true).mockResolvedValue(false);
+      }
+      service.isAbsent = absent;
+      vi.mocked(service.readCommand).mockResolvedValue(null);
+      vi.mocked(service.isLoaded).mockRejectedValue(
+        new Error("native service management unsupported"),
+      );
+      vi.mocked(service.readRuntime).mockResolvedValue({ status: "unknown" });
+      const publish = vi.fn(async (assertCurrent: () => Promise<void>) => {
+        await assertCurrent();
+        expect(tryAcquireExclusiveSqliteCoordinator(coordinatorPath)).toBeNull();
+        // A new definition after publication admission must still revoke the next effect.
+        absent.mockResolvedValue(false);
+        await expect(assertCurrent()).rejects.toThrow(/affected Gateway/);
+        return "held";
+      });
+      const result = withGatewayRuntimeArtifactPublication(
+        { root, env, timeoutMs: 200, assertCurrent() {} },
+        publish,
+      );
+      if (observation === "absent") {
+        await expect(result).resolves.toBe("held");
+        expect(publish).toHaveBeenCalledOnce();
+      } else {
+        await expect(result).rejects.toThrow(/affected Gateway/);
+        expect(publish).not.toHaveBeenCalled();
+      }
+      expect(absent).toHaveBeenCalled();
+    }),
+);
+
 it.each([
   "disjoint",
   "shared overlay",

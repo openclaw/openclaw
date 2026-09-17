@@ -7,6 +7,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtime.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
+import {
+  nativeFreeBsdRoot,
+  withFreeBsdRootFixture,
+} from "../../infra/update-freebsd-root-ownership.test-support.js";
 import { getUpdateRun, type createUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
@@ -36,12 +40,33 @@ it.skipIf(process.platform === "win32").each([
   { signal: "SIGINT", mode: "no-owner" },
 ] as const)(
   "settles only the local pre-activation diagnostic under its real executor: $signal/$mode",
-  async ({ signal, mode }) => {
-    const root = dirs.make("update-owned-signal-");
-    const script = path.join(root, "signal.mjs");
-    fs.writeFileSync(
-      script,
-      `
+  ({ signal, mode }) =>
+    nativeFreeBsdRoot
+      ? withFreeBsdRootFixture(({ home }) => assertOwnedSignal(home, signal, mode))
+      : assertOwnedSignal(dirs.make("update-owned-signal-"), signal, mode),
+  60000,
+);
+
+it.skipIf(!nativeFreeBsdRoot).each([
+  { signal: "SIGINT", mode: "root-pending" },
+  { signal: "SIGTERM", mode: "root-pending" },
+  { signal: "SIGINT", mode: "root-rejected" },
+  { signal: "SIGTERM", mode: "root-rejected" },
+] as const)(
+  "preserves pending history after native ownership refusal: $signal/$mode",
+  ({ signal, mode }) => withFreeBsdRootFixture(({ home }) => assertOwnedSignal(home, signal, mode)),
+  60000,
+);
+
+async function assertOwnedSignal(
+  root: string,
+  signal: NodeJS.Signals,
+  mode: string,
+): Promise<void> {
+  const script = path.join(root, "signal.mjs");
+  fs.writeFileSync(
+    script,
+    `
     import fs from 'node:fs';
     import { createUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunPhase } from ${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateRunLedger).href)};
     import { createRetainedUpdateRecovery } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.retainedRecovery).href)};
@@ -50,7 +75,7 @@ it.skipIf(process.platform === "win32").each([
     import { withUpdateCommandExecutor } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href)};
     const root = ${JSON.stringify(root)};
     const mode = ${JSON.stringify(mode)};
-    const opts = {};
+    const opts = { restart: false };
     if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
     const run = await admitUpdateCommandRun({opts, root});
     await withUpdatePreviewSignals({...opts, run}, async () => {
@@ -70,6 +95,34 @@ it.skipIf(process.platform === "win32").each([
           fs.mkdirSync(root + '/state/.openclaw-restore-00000000-0000-4000-8000-000000000001-0');
           fs.renameSync(root + '/state/openclaw.sqlite',root + '/state/.openclaw-restore-00000000-0000-4000-8000-000000000001-0/displaced');
         }
+        if (mode === 'root-pending') {
+          if (!run.freebsdRootAdmission) throw new Error('native admission missing');
+          const entered = Promise.withResolvers();
+          const original = fs.promises.lstat;
+          // Pause the next existing filesystem probe only after real initial admission.
+          fs.promises.lstat = (...args) => {
+            fs.promises.lstat = original;
+            entered.resolve();
+            return new Promise(() => {});
+          };
+          void run.freebsdRootAdmission.revalidate({roots:[root],env:run.env},run.executorFence.assertCurrent).catch(() => {});
+          await entered.promise;
+          if (run.freebsdRootAdmission.canWrite) throw new Error('pending inspection admitted writes');
+        }
+        if (mode === 'root-rejected') {
+          if (!run.freebsdRootAdmission) throw new Error('native admission missing');
+          fs.chmodSync(root,0o777);
+          let rejected = false;
+          try {
+            await run.freebsdRootAdmission.revalidate({roots:[root],env:run.env},run.executorFence.assertCurrent);
+          } catch (error) {
+            if (error.reason !== 'freebsd-update-ownership') throw error;
+            rejected = true;
+          } finally {
+            fs.chmodSync(root,0o700);
+          }
+          if (!rejected || run.freebsdRootAdmission.canWrite) throw new Error('failed inspection admitted writes');
+        }
         process.send({runId:run.runId,expected,sibling});
         await new Promise(() => setInterval(() => {},1000));
       };
@@ -83,78 +136,87 @@ it.skipIf(process.platform === "win32").each([
       }
     });
   `,
-    );
-    const child = spawn(process.execPath, [...sourceImportArgs, script], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        HOME: root,
-        USERPROFILE: root,
-        OPENCLAW_STATE_DIR: root,
-        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-        OPENCLAW_SUPERVISOR_MODE: "external",
-        OPENCLAW_UPDATE_RUN_ID: undefined,
-        OPENCLAW_UPDATE_RUN_HANDOFF: undefined,
-        OPENCLAW_UPDATE_POST_CORE: undefined,
-      },
-      stdio: ["ignore", "ignore", "pipe", "ipc"],
-    });
-    let stderr = "";
-    child.stderr?.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    const closed = once(child, "close");
-    try {
-      const message = await Promise.race([
-        once(child, "message").then(
-          ([payload]) =>
-            payload as {
-              runId: string;
-              expected: ReturnType<typeof getUpdateRun>;
-              sibling: ReturnType<typeof createUpdateRun>;
-            },
-        ),
-        closed.then(() => {
-          throw new Error(`Update process exited before ready: ${stderr}`);
-        }),
-      ]);
-      expect(child.kill(signal)).toBe(true);
-      const [code, exitSignal] = await closed;
-      expect(code ?? (exitSignal === "SIGINT" ? 130 : 143)).toBe(signal === "SIGINT" ? 130 : 143);
-      const options =
-        mode === "missing"
-          ? {
-              path: path.join(
-                root,
-                "state",
-                ".openclaw-restore-00000000-0000-4000-8000-000000000001-0",
-                "displaced",
-              ),
-            }
-          : { env: { OPENCLAW_STATE_DIR: root } };
-      const actual = getUpdateRun(message.runId, options);
-      if (mode === "fresh") {
-        expect(actual).toMatchObject({
-          status: "failed",
-          phase: "finished",
-          reason: "interrupted",
-        });
-        expect(actual?.steps.some((step) => step.status === "in_progress")).toBe(false);
-      } else {
-        expect(actual).toEqual(message.expected);
-      }
-      expect(getUpdateRun(message.sibling.runId, options)).toEqual(message.sibling);
-      if (mode === "missing") {
-        for (const suffix of ["", "-wal", "-shm"]) {
-          expect(fs.existsSync(path.join(root, "state", `openclaw.sqlite${suffix}`))).toBe(false);
-        }
-      }
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-      await closed;
+  );
+  const child = spawn(process.execPath, [...sourceImportArgs, script], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_STATE_DIR: root,
+      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      OPENCLAW_SUPERVISOR_MODE: "external",
+      OPENCLAW_UPDATE_RUN_ID: undefined,
+      OPENCLAW_UPDATE_RUN_HANDOFF: undefined,
+      OPENCLAW_UPDATE_POST_CORE: undefined,
+    },
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
+  });
+  let stderr = "";
+  child.stderr?.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  const closed = once(child, "close");
+  try {
+    const message = await Promise.race([
+      once(child, "message").then(
+        ([payload]) =>
+          payload as {
+            runId: string;
+            expected: ReturnType<typeof getUpdateRun>;
+            sibling: ReturnType<typeof createUpdateRun>;
+          },
+      ),
+      closed.then(() => {
+        throw new Error(`Update process exited before ready: ${stderr}`);
+      }),
+    ]);
+    expect(child.kill(signal)).toBe(true);
+    const [code, exitSignal] = await closed;
+    if (mode === "root-pending" || mode === "root-rejected" || code !== null) {
+      expect(code).toBe(signal === "SIGINT" ? 130 : 143);
+      expect(exitSignal).toBeNull();
+    } else {
+      expect(exitSignal).toBe(signal);
     }
-  },
-  60000,
-);
+    const options =
+      mode === "missing"
+        ? {
+            path: path.join(
+              root,
+              "state",
+              ".openclaw-restore-00000000-0000-4000-8000-000000000001-0",
+              "displaced",
+            ),
+          }
+        : { env: { OPENCLAW_STATE_DIR: root } };
+    const actual = getUpdateRun(message.runId, options);
+    if (mode === "fresh") {
+      expect(actual).toMatchObject({
+        status: "failed",
+        phase: "finished",
+        reason: "interrupted",
+      });
+      expect(actual?.steps.some((step) => step.status === "in_progress")).toBe(false);
+    } else {
+      expect(actual).toEqual(message.expected);
+    }
+    expect(getUpdateRun(message.sibling.runId, options)).toEqual(message.sibling);
+    if (mode === "root-pending" || mode === "root-rejected") {
+      expect(stderr).toContain(
+        "Update interruption could not be recorded; history remains pending.",
+      );
+    }
+    if (mode === "missing") {
+      for (const suffix of ["", "-wal", "-shm"]) {
+        expect(fs.existsSync(path.join(root, "state", `openclaw.sqlite${suffix}`))).toBe(false);
+      }
+    }
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+    await closed;
+  }
+}

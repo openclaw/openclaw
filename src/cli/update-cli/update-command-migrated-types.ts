@@ -23,7 +23,7 @@ export type MigratedUpdateFinalizationInput = {
     opts: Omit<FinishUpdateParams["opts"], "run" | "recovery"> & {
       run?: Omit<
         NonNullable<FinishUpdateParams["opts"]["run"]>,
-        "requesterAuthority" | "executorFence"
+        "requesterAuthority" | "executorFence" | "freebsdRootAdmission"
       > & {
         requesterAuthority?: Pick<UpdateRequesterAuthority, "requester">;
       };

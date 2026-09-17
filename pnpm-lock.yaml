@@ -382,6 +382,9 @@ importers:
       semver:
         specifier: 7.8.5
         version: 7.8.5
+      signal-exit:
+        specifier: 4.1.0
+        version: 4.1.0
       tar:
         specifier: 7.5.22
         version: 7.5.22

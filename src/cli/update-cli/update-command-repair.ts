@@ -40,6 +40,8 @@ export async function runUpdateCommandRepair(params: {
   ) => Promise<UpdateRepairValidation>;
   onEvent?: (event: UpdateRepairEvent) => void;
 }) {
+  const admission = params.run?.freebsdRootAdmission;
+  admission?.assertCurrent();
   const target = resolveInstallationTarget(params.env);
   const options = {
     env: { ...(params.run?.env ?? params.env) },
@@ -50,6 +52,7 @@ export async function runUpdateCommandRepair(params: {
   const requester = resolveManagedUpdateRequester(admittedRun?.origin.requester);
   const requesterAuthority = params.run?.requesterAuthority;
   const isCurrent = () => {
+    admission?.assertCurrent();
     if ((requester && !requesterAuthority) || requesterAuthority?.isCurrent() === false) {
       throw new UpdateRequesterRevokedError();
     }
@@ -137,7 +140,12 @@ export async function runUpdateCommandRepair(params: {
             turnStartedAtMs = Date.now();
             activeTurn = event.turn;
           }
-          if (runId) {
+          if (event.type === "turn-finished") {
+            completedTurns += 1;
+          }
+          // Keep presentation/counters, but a pending or rejected inspection
+          // cannot let a late repair event reopen selected history.
+          if (runId && admission?.canWrite !== false) {
             if (event.type === "turn-started" || event.type === "turn-finished") {
               recordUpdateRunStep(
                 runId,
@@ -158,7 +166,6 @@ export async function runUpdateCommandRepair(params: {
               );
             }
             if (event.type === "turn-finished") {
-              completedTurns += 1;
               recordUpdateRunRepairAttempt(
                 runId,
                 {

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
@@ -9,8 +10,12 @@ import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-
 import * as updateGlobal from "../../infra/update-global.js";
 import { defaultRuntime } from "../../runtime.js";
 import * as processIdentity from "../../shared/pid-alive.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
 import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
@@ -23,6 +28,16 @@ export const targetMetadata = {
   version: "2026.9.2",
   nodeEngine: null,
   schemaVersions: { state: 16, agent: 19 },
+};
+
+export const targetDoctorSuccess = {
+  name: "openclaw doctor",
+  command: "node openclaw.mjs doctor --non-interactive --fix",
+  cwd: "/selected-target",
+  durationMs: 1,
+  exitCode: 0,
+  stdoutTail: "",
+  stderrTail: "",
 };
 
 export function installFreshUpdateFixture() {
@@ -106,4 +121,18 @@ export function installFreshUpdateFixture() {
   });
 
   return { fixture, dirs };
+}
+
+export function createSelectedTargetStateDatabase(databasePath: string) {
+  openOpenClawStateDatabase();
+  closeOpenClawStateDatabaseForTest();
+  const db = new DatabaseSync(databasePath);
+  try {
+    removePreparedWorkerOwnershipColumns(db);
+    db.exec(
+      "PRAGMA user_version=16; UPDATE schema_meta SET schema_version=16, app_version='2026.9.2'",
+    );
+  } finally {
+    db.close();
+  }
 }

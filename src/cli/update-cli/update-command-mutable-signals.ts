@@ -39,6 +39,7 @@ export async function withMutableUpdateSignals<T>(
   const { env } = admission;
   const pathname = resolveOpenClawStateSqlitePath(env);
   const assertCurrent = () => {
+    run.freebsdRootAdmission?.assertCurrent();
     if (!run.executorFence) {
       throw new Error("Interrupted update has no live installation owner.");
     }

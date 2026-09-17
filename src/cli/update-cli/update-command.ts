@@ -1,18 +1,13 @@
-import { randomUUID } from "node:crypto";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { resolveConfigPath } from "../../config/paths.js";
-import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
-import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { finishUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { defaultRuntime } from "../../runtime.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { VERSION } from "../../version.js";
-import { createUpdateProgress, type UpdateDisplayProgress } from "./progress.js";
+import { createUpdateProgress } from "./progress.js";
 import {
   confirmUpdateDowngrade,
+  resolveGitInstallDir,
   tryResolveInvocationCwd,
   type UpdateCommandOptions,
 } from "./shared.js";
@@ -34,24 +29,15 @@ import {
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
-import {
-  resolveServiceRefreshEnv,
-  withOwnedManagedUpdateEnv,
-  resolveUpdateTargetEnv,
-  withUpdateInProgressEnv,
-} from "./update-command-service-env.js";
+import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
 import { resolvePackageRuntimePreflight } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 import {
   reportPreMutationUpdateResult,
-  reportUnreportedUpdateAdmissionOutcome,
   withUpdateCommandTerminalResult,
 } from "./update-command-terminal.js";
-import {
-  prepareUpdateCommandFailureTriage,
-  withUpdateFailureTriage,
-} from "./update-command-triage.js";
+import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
 type PreparedUpdate = NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>;
@@ -83,10 +69,22 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
       root: prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
       invocationCwd,
       pkgOwnership: prepared.pkgOwnership,
+      freebsdRootAdmission: prepared.freebsdRootAdmission,
     });
-    const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
+    const { updateStateNeedsInitialization } =
+      await import("./update-command-state-initialization.js");
     if (await updateStateNeedsInitialization(env)) {
-      return await initializeAndRunUpdate(inputOpts, prepared, recoveryState, invocationCwd, env);
+      const { initializeAndRunUpdate } = await import("./update-command-initialization.js");
+      return await initializeAndRunUpdate({
+        opts: inputOpts,
+        prepared,
+        recoveryState,
+        invocationCwd,
+        env,
+        updateStepTimeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+        runAdmitted: (initialization) =>
+          runAdmittedUpdate(inputOpts, prepared, recoveryState, invocationCwd, initialization),
+      });
     }
     return await runAdmittedUpdate(inputOpts, prepared, recoveryState, invocationCwd);
   });
@@ -105,6 +103,7 @@ async function runAdmittedUpdate(
     invocationCwd,
     initialization,
     pkgOwnership: prepared.pkgOwnership,
+    freebsdRootAdmission: prepared.freebsdRootAdmission,
   });
   const opts = { ...inputOpts, run };
   prepared.controlPlaneUpdateSentinelMeta = {
@@ -157,210 +156,6 @@ async function runAdmittedUpdate(
     throw error;
   } finally {
     disposePresentation?.();
-  }
-}
-
-async function initializeAndRunUpdate(
-  opts: UpdateCommandOptions,
-  prepared: PreparedUpdate,
-  recoveryState: UpdateCommandRecoveryState,
-  invocationCwd: string | undefined,
-  env: NodeJS.ProcessEnv,
-): Promise<void> {
-  const runId = env.OPENCLAW_UPDATE_RUN_ID?.trim() || randomUUID();
-  let handleFailure: Awaited<ReturnType<typeof prepareUpdateCommandFailureTriage>> | undefined;
-  try {
-    await withUpdateCommandTerminalResult(
-      (registerRun) =>
-        withUpdateInProgressEnv(invocationCwd, () =>
-          withUpdateCommandExecutor(runId, async (executor) => {
-            const target = await withOwnedManagedUpdateEnv(env, () =>
-              resolveUpdateCommandTarget(
-                opts,
-                recoveryState,
-                invocationCwd,
-                prepared,
-                executor,
-                prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-              ),
-            );
-            if (!target) {
-              return;
-            }
-            const initialization: InitializedUpdate = {
-              env,
-              runId,
-              executor,
-              registerRun: async (run) => {
-                registerRun(run);
-                handleFailure = await prepareUpdateCommandFailureTriage(
-                  { ...opts, invocationCwd, run },
-                  recoveryState.triageTarget,
-                );
-              },
-              target,
-              databasePath: resolvePathViaExistingAncestorSync(resolveOpenClawStateSqlitePath(env)),
-              configPath: resolvePathViaExistingAncestorSync(resolveConfigPath(env)),
-            };
-            const runInitialized = () =>
-              runAdmittedUpdate(opts, prepared, recoveryState, invocationCwd, initialization);
-            if (opts.dryRun) {
-              return await previewUpdateCommand({
-                target,
-                prepared,
-                opts,
-                runId,
-                invocationCwd,
-                updateStepTimeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-              });
-            }
-            const artifact =
-              target.updateInstallKind === "package" &&
-              !canResolveRegistryVersionForPackageTarget(target.packageInstallSpec ?? target.tag);
-            const stageParams = (progress: UpdateDisplayProgress) => ({
-              reapplyLocalOverrides: opts.reapplyLocalOverrides,
-              root: target.root,
-              installKind: prepared.installKind,
-              tag: target.tag,
-              installSpec: target.packageInstallSpec ?? undefined,
-              timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-              startedAt: prepared.startedAt,
-              progress,
-              managedServiceEnv: env,
-              invocationCwd,
-              honorPackageRoot:
-                target.managedServiceRootRedirect !== null ||
-                target.managedServiceNodeRunner !== undefined,
-              nodeRunner: target.packageUpdateNodeRunner,
-              installEnv: resolveUpdateTargetEnv({
-                baseEnv: target.packageInstallEnv,
-                serviceEnv: env,
-                invocationCwd,
-              }),
-              installTarget: target.packageInstallTarget,
-            });
-            const runSelectedTarget = async () => {
-              if (target.updateInstallKind !== "package") {
-                return await runInitialized();
-              }
-              const schemas = target.packageTargetSchemaVersions;
-              if (!target.targetVersion || !schemas) {
-                return await target.refuseUpdate(
-                  "target-metadata-preflight",
-                  "The selected package could not be resolved to a published release with known database support. Retry with an exact published --tag before initializing this profile.",
-                );
-              }
-              if (schemas.state >= OPENCLAW_STATE_SCHEMA_VERSION && !artifact) {
-                return await runInitialized();
-              }
-              const timeoutMs = prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
-              const selectedStoredChannel = target.storedChannel;
-              const checkSchemas = async () => {
-                const { readUpdateChannelConfig } = await import("./update-command-config.js");
-                const config = await withOwnedManagedUpdateEnv(env, () =>
-                  readUpdateChannelConfig(Boolean(opts.channel)),
-                );
-                if (!opts.channel && config.storedChannel !== selectedStoredChannel) {
-                  await target.refuseUpdate(
-                    "update-channel-changed",
-                    "Stored update channel changed after target selection. Rerun the update, or specify --channel explicitly.",
-                  );
-                }
-                Object.assign(target, config);
-                await preflightUpdateCommandSchemas({
-                  ...target,
-                  shouldRestart: prepared.shouldRestart,
-                  updateStepTimeoutMs: timeoutMs,
-                  invocationCwd,
-                  packageTargetVersion: target.targetVersion ?? undefined,
-                  opts,
-                });
-              };
-              await checkSchemas();
-              const initializationRuntime = await import("./update-command-initialization.js");
-              await initializationRuntime.confirmFreshUpdateDowngrade({
-                target,
-                opts,
-                controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
-              });
-              initialization.downgradeConfirmed = true;
-              const runtime = await resolvePackageRuntimePreflight({
-                root: target.root,
-                shouldRestart: prepared.shouldRestart,
-                target: target.packageRuntimeTarget,
-                timeoutMs,
-                nodeRunner: target.managedServiceNodeRunner,
-              });
-              if (!runtime.ok) {
-                const { error, failureFacts } = runtime;
-                return await target.refuseUpdate("node-runtime-preflight", error, failureFacts);
-              }
-              target.packageUpdateNodeRunner = runtime.value.nodeRunner;
-              if (schemas.state >= OPENCLAW_STATE_SCHEMA_VERSION) {
-                return await runInitialized();
-              }
-              const fence = await executor.enter(target.root, { preflight: true });
-              fence.assertCurrent();
-              const { stagePackageInstallUpdate } = await import("./update-command-package.js");
-              const legacyFence = initializationRuntime.acquireLegacyUpdateInitializationFence({
-                env,
-                targetVersion: target.targetVersion,
-                targetSchemas: schemas,
-              });
-              await initializationRuntime.withUpdateInitializationCleanup(
-                async () => {
-                  await initializationRuntime.withUpdateInitializationCleanup(
-                    async () => {
-                      const presentation = createUpdateProgress(!opts.json);
-                      try {
-                        await checkSchemas();
-                        fence.assertCurrent();
-                        if (!target.packageAlreadyCurrent && !initialization.stagedPackage) {
-                          initialization.stagedPackage = await stagePackageInstallUpdate(
-                            stageParams(presentation.progress),
-                          );
-                        }
-                        fence.assertCurrent();
-                        await initializationRuntime.initializeUpdateStateFromTarget({
-                          root: initialization.stagedPackage?.root ?? target.root,
-                          env,
-                          timeoutMs,
-                          nodeRunner: target.packageUpdateNodeRunner,
-                          invocationCwd,
-                          progress: presentation.progress,
-                          assertCurrent: fence.assertCurrent,
-                          checkSchemas,
-                        });
-                      } finally {
-                        presentation.dispose();
-                      }
-                    },
-                    () => legacyFence?.release(),
-                  );
-                  await runInitialized();
-                },
-                () => (artifact ? undefined : initialization.stagedPackage?.close()),
-              );
-            };
-            if (!artifact) {
-              return await runSelectedTarget();
-            }
-            const { runFreshUpdateArtifact } = await import("./update-command-artifact.js");
-            return await runFreshUpdateArtifact(
-              { initialization, stageParams, json: Boolean(opts.json) },
-              runSelectedTarget,
-            );
-          }),
-        ),
-      opts,
-    );
-  } catch (error) {
-    if (!handleFailure) {
-      return await reportUnreportedUpdateAdmissionOutcome(error);
-    }
-    // The admitted run's prepared handler outlives both staged cleanup and the
-    // executor, so no failure is reported while either mutation owner remains live.
-    await handleFailure(error);
   }
 }
 
@@ -500,6 +295,12 @@ async function updateCommandInternal(
         { env: run.env, pluginCount },
       )),
     });
+    if (run.freebsdRootAdmission) {
+      await run.freebsdRootAdmission.revalidate(
+        { roots: [discoveredRoot, root], env: run.env, timeoutMs: updateStepTimeoutMs },
+        run.executorFence.assertCurrent,
+      );
+    }
   };
   if (packageAlreadyCurrent) {
     await activateCurrentCore();
@@ -584,11 +385,36 @@ async function updateCommandInternal(
     run.executorFence = fence;
     run.activationTimeoutMs ??= activationTimeoutMs;
     fence.assertCurrent();
+    if (run.freebsdRootAdmission) {
+      await run.freebsdRootAdmission.revalidate(
+        {
+          roots: [
+            discoveredRoot,
+            root,
+            ...(packageInstallTarget?.packageRoot ? [packageInstallTarget.packageRoot] : []),
+            ...(switchToGit ? [resolveGitInstallDir()] : []),
+          ],
+          env: env ?? run.env,
+          timeoutMs: updateStepTimeoutMs,
+        },
+        fence.assertCurrent,
+      );
+    }
     if (mutableUpdatePrepared) {
       return;
     }
     assertUpdatePackageActivationAdmission(captureUpdateCommandExecutorAuthority(fence).installKey);
-    preUpdatePluginInstallRecords = await prepareMutableUpdateRuntime(env, fence);
+    preUpdatePluginInstallRecords = await prepareMutableUpdateRuntime(
+      env,
+      run.freebsdRootAdmission
+        ? {
+            assertCurrent() {
+              run.freebsdRootAdmission?.assertCurrent();
+              fence.assertCurrent();
+            },
+          }
+        : fence,
+    );
     mutableUpdatePrepared = true;
   };
 

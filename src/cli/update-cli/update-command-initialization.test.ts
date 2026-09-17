@@ -23,7 +23,7 @@ import {
   acquireLegacyUpdateInitializationFence,
   initializeUpdateStateFromTarget,
   updateStateNeedsInitialization,
-} from "./update-command-initialization.js";
+} from "./update-command-state-initialization.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const targetSchemas = { state: 16, agent: 19 };

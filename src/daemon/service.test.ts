@@ -23,6 +23,11 @@ import { createMockGatewayService, mockSystemAccountHome } from "./service.test-
 const probePortUsage = vi.hoisted(() =>
   vi.fn<typeof import("../infra/ports-probe.js").probePortUsage>(),
 );
+const discoverFreeBsdService = vi.hoisted(() =>
+  vi.fn<typeof import("../../scripts/lib/freebsd-service-discovery.mjs").discoverFreeBsdService>(),
+);
+
+vi.mock("../../scripts/lib/freebsd-service-discovery.mjs", () => ({ discoverFreeBsdService }));
 
 vi.mock("../infra/ports-probe.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/ports-probe.js")>()),
@@ -33,6 +38,12 @@ beforeEach(() => {
   mockSystemAccountHome();
   probePortUsage.mockReset();
   probePortUsage.mockRejectedValue(new Error("unexpected port probe"));
+  discoverFreeBsdService.mockReset().mockResolvedValue({
+    schema: 1,
+    service: "openclaw",
+    status: "unknown",
+    reason: "root-required",
+  });
 });
 
 afterEach(() => {
@@ -150,6 +161,7 @@ describe("resolveGatewayService", () => {
   it("gives FreeBSD node hosts their own foreground recovery command", async () => {
     mockProcessPlatform("freebsd");
     const service = resolveNodeService();
+    expect(service.isAbsent).toBeUndefined();
     const runtime = await service.readRuntime(process.env);
     expect(runtime.status).toBe("unknown");
     expect(runtime.detail).toContain("Node service management is not supported");
@@ -172,6 +184,44 @@ describe("resolveGatewayService", () => {
       running: false,
       runtime,
     });
+    expect(discoverFreeBsdService).not.toHaveBeenCalled();
+  });
+
+  it("consumes fresh FreeBSD absence without granting service-management authority", async () => {
+    mockProcessPlatform("freebsd");
+    const service = resolveGatewayService();
+    const observation = {
+      schema: 1 as const,
+      service: "openclaw" as const,
+      context: { cwd: "/", env: { HOME: "/", PATH: "/sbin:/bin:/usr/sbin:/usr/bin", LC_ALL: "C" } },
+      directories: ["/etc/rc.d", "/usr/local/etc/rc.d"],
+      definitions: [],
+      selected: null,
+    };
+    discoverFreeBsdService.mockResolvedValueOnce({ ...observation, status: "absent" });
+    await expect(readGatewayServiceState(service, { timeoutMs: 250 })).resolves.toMatchObject({
+      installed: false,
+      loadState: { status: "not-loaded" },
+      running: false,
+      command: null,
+      runtime: { status: "stopped", missingUnit: true },
+    });
+    expect(discoverFreeBsdService).toHaveBeenLastCalledWith({
+      timeoutMs: 250,
+      registerExitCleanup: expect.any(Function),
+    });
+    discoverFreeBsdService.mockResolvedValueOnce({
+      ...observation,
+      status: "present",
+      definitions: [{ path: "/usr/local/etc/rc.d/openclaw", executable: false }],
+    });
+    await expect(readGatewayServiceState(service)).resolves.toMatchObject({
+      loadState: { status: "unknown" },
+    });
+    expect(discoverFreeBsdService).toHaveBeenCalledTimes(2);
+    await expect(service.start({ stdout: process.stdout })).rejects.toThrow(
+      service.managementUnsupportedReason,
+    );
   });
 
   it("guards mutating service adapters when config was written by a newer OpenClaw", async () => {

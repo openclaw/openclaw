@@ -335,6 +335,29 @@ This is a diagnostic observation. It does not establish process or package
 ownership, authorize an update, or enable CLI-managed rc.d service updates.
 Continue to use the installation owner's update procedure above.
 
+## Foreground FreeBSD updates without an rc.d service
+
+Once the installed updater contains this support, a root-owned installation that
+is not managed by pkg can use `openclaw update --no-restart` from its existing
+root shell. Invoke the trusted installed CLI with the same installation prefix,
+state, and configuration. Stop any foreground Gateway through its process owner
+first. This does not elevate an unprivileged account or transfer another
+account's installation or state to root.
+
+The updater performs fresh native discovery under its existing update owner.
+Only verified absence of every `openclaw` rc.d definition can use this path;
+disabled, non-executable, custom, or unreadable definitions do not qualify.
+Existing package-ownership checks, Gateway locks, listener checks, and state
+coordinators still apply. A saved diagnostic result cannot authorize an update.
+
+The CLI does not install, start, stop, or restart FreeBSD rc.d services. Doctor
+reports the owning package or foreground procedure instead of offering a native
+service installation. Present or unknown service state still blocks maintenance
+when its owner cannot be verified. Older installed updaters need the
+[manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+before they can use this path; selecting a newer target alone does not replace
+their admission logic.
+
 ## Stale update history
 
 Untouched, identityless legacy admissions older than 24 hours can

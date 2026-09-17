@@ -2230,6 +2230,7 @@
     "quickjs-wasi": "3.6.0",
     "rastermill": "0.3.3",
     "semver": "7.8.5",
+    "signal-exit": "4.1.0",
     "tar": "7.5.22",
     "tree-sitter-bash": "0.25.1",
     "tslog": "5.1.0",

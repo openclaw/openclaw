@@ -172,8 +172,8 @@ async function collectGatewayHealthFindingsWithRuntime(
 async function collectGatewayDaemonFindingsWithRuntime(
   ctx: HealthCheckContext,
 ): Promise<readonly HealthFinding[]> {
-  const runtime = await loadDoctorCoreChecksRuntimeModule();
-  return runtime.collectGatewayDaemonFindings(ctx);
+  const { collectGatewayDaemonFindings } = await import("./doctor-gateway-daemon.js");
+  return collectGatewayDaemonFindings(ctx);
 }
 
 async function listGatewayCronJobsWithRuntime(
