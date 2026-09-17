@@ -133,11 +133,11 @@ suite.define(() => {
           await pane.getByRole("button", { name: "Close search", exact: true }).click();
           await expect.poll(() => workToggle.getAttribute("aria-expanded")).toBe("false");
           expect(await earlierMessage.count()).toBe(0);
-          const preview = pane.locator(".chat-reply-preview--message");
+          const preview = pane.locator(".chat-reply-attribution--inline");
           await expect.poll(() => preview.textContent()).toContain(sourceText);
           await page.screenshot({ path: path.join(artifactDir, "before-reveal.png") });
 
-          await preview.click();
+          await preview.getByRole("button").click();
           await expect
             .poll(() =>
               pane.locator(`[data-entry-id="${sourceId}"].chat-bubble--reply-target`).count(),

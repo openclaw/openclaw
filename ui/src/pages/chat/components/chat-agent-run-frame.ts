@@ -18,6 +18,7 @@ import {
   type StreamGroupOptions,
   type StreamGroupPart,
 } from "./chat-message.ts";
+import { resolveReplyAttribution } from "./chat-reply-attribution.ts";
 import { renderChatSourcePreviews } from "./chat-source-previews.ts";
 import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
 
@@ -53,14 +54,27 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
     replyToSender:
       firstAssistant?.replyToSender ??
       frame.parts.find((part) => part.kind === "stream-run")?.replyToSender,
+    replyToMessage:
+      firstAssistant?.replyToMessage ??
+      frame.parts.find((part) => part.kind === "stream-run")?.replyToMessage,
     messages: representative?.messages ?? [],
     visibleContent: representative?.visibleContent ?? "none",
     timestamp: Math.min(...groups.map((group) => group.timestamp), ...streamStarts, Date.now()),
     isStreaming: frame.outcome.kind === "active",
     runId: frame.runId,
   };
+  const attributionGroup =
+    (actionOwner && groups.find((group) => group.messages.includes(actionOwner))) || shell;
+  const replyAttribution = resolveReplyAttribution(
+    attributionGroup,
+    opts.renderGroupOptions(shell).resolveReplyPreview,
+    groups.flatMap((group) => group.messages),
+  );
   const renderFrameGroup = (group: MessageGroup) =>
-    renderMessageGroupContent(group, opts.renderGroupOptions(group));
+    renderMessageGroupContent(group, {
+      ...opts.renderGroupOptions(group),
+      hasReplyAttribution: Boolean(replyAttribution),
+    });
   type BodyPart =
     | Exclude<AgentRunFrameRenderItem["parts"][number], { kind: "stream-run" }>
     | StreamGroupPart;
@@ -121,6 +135,7 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
   return renderMessageGroup(shell, {
     ...opts.renderGroupOptions(shell),
     frameContent,
+    replyAttribution,
     frameActionOwner: actionOwner,
     turnRecap: opts.turnRecap,
   });

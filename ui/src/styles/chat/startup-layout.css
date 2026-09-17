@@ -202,11 +202,12 @@
 }
 
 .chat-group-messages {
+  --chat-message-gap: 2px;
   --chat-message-type-boundary-gap: var(--space-1);
   position: relative; /* anchors message-local popovers */
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--chat-message-gap);
   flex: 1 1 auto;
   align-items: flex-start;
   width: 100%;

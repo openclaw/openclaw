@@ -5,7 +5,7 @@ import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control
 import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 export async function readFooterGeometry(group: Locator) {
-  return group.locator(".chat-group-footer").evaluate((footer) => {
+  return group.locator(":scope > .chat-group-footer").evaluate((footer) => {
     const actions = footer.querySelector<HTMLElement>(".chat-group-footer-actions");
     const identity = footer.querySelector<HTMLElement>(".chat-group-footer__meta");
     const name = footer.querySelector<HTMLElement>(".chat-sender-name");

@@ -64,8 +64,10 @@ describe("chat transcript replies", () => {
       transcript.hostUpdated();
       await flushDeferredRowPrune();
 
-      const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
-      expect(preview?.textContent).toContain("Replying to Molty");
+      const preview = container.querySelector<HTMLButtonElement>(
+        ".chat-reply-attribution--inline button",
+      );
+      expect(preview?.getAttribute("aria-label")).toBe("Replying to Molty");
       expect(preview?.textContent).toContain("The original answer");
       expect(preview?.textContent).not.toContain("source-message");
 
@@ -140,9 +142,11 @@ describe("chat transcript replies", () => {
         props.replyMessageAccess.revision += 1;
         rerender();
 
-        const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
-        expect(preview?.querySelector(".chat-reply-preview__label")?.textContent?.trim()).toBe(
-          `Replying to ${senderLabel}`,
+        const preview = container.querySelector<HTMLButtonElement>(
+          ".chat-reply-attribution--inline button",
+        );
+        expect(preview?.querySelector(".chat-reply-attribution__name")?.textContent?.trim()).toBe(
+          senderLabel,
         );
         expect(preview?.textContent).toContain("The original message");
         expect(container.querySelector("[data-entry-id='source-message']")).toBeNull();
@@ -179,7 +183,7 @@ describe("chat transcript replies", () => {
         rerender();
         transcript.hostConnected();
         await flushDeferredRowPrune();
-        requireElement(container, ".chat-reply-preview--message").click();
+        requireElement(container, ".chat-reply-attribution--inline button").click();
         expect(open).toHaveBeenCalledWith("source-message");
         props.replyMessageAccess.navigationId = "source-message";
         props.messages = [
@@ -258,7 +262,7 @@ describe("chat transcript replies", () => {
 
     expect(threadContainer.querySelector("[data-entry-id='source-message']")).toBeNull();
     const preview = threadContainer.querySelector<HTMLButtonElement>(
-      ".chat-reply-preview--message",
+      ".chat-reply-attribution--inline button",
     );
     expect(preview).not.toBeNull();
     preview!.click();
