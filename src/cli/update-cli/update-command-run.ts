@@ -175,7 +175,7 @@ export async function resolveUpdateCommandAdmissionEnv(params: {
 /** Package admission must not open history or launch diagnostics on a retained operation. */
 export function assertUpdatePackageActivationAdmission(
   root: string,
-  options?: Parameters<typeof assertNoPendingPackageActivation>[1],
+  options?: Parameters<typeof assertNoPendingPackageActivation>[1] & { serviceRoot?: string },
 ): void {
   try {
     assertNoPendingPackageActivation(resolveUpdateInstallRoot(root), options);
@@ -193,12 +193,19 @@ export function assertUpdatePackageActivationAdmission(
       { cause },
     );
   }
+  // A retained publication still owns the service installation when the CLI updates another root.
+  if (options?.serviceRoot && options.serviceRoot !== root) {
+    assertUpdatePackageActivationAdmission(options.serviceRoot, {
+      continuation: options.continuation,
+    });
+  }
 }
 
 export async function admitUpdateCommandRun(params: {
   opts: UpdateCommandOptions;
   root: string;
   installKind?: "git" | "package" | "unknown";
+  serviceRoot?: string;
   invocationCwd?: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
   initialization?: {
@@ -212,12 +219,13 @@ export async function admitUpdateCommandRun(params: {
     };
   };
 }): Promise<NonNullable<UpdateCommandOptions["run"]>> {
-  assertUpdatePackageActivationAdmission(params.root);
+  assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
   const env = await resolveUpdateCommandAdmissionEnv(params);
   // A previous invocation may have died with a sealed restoration plan. Detect
   // it before any writable owner open or history row creation changes that state.
   // An inherited diagnostic run ID is not a durable continuation claim.
   await assertUpdateRecoveryAdmission({ env });
+  assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(env),
     env,
@@ -245,6 +253,7 @@ export async function admitUpdateCommandRun(params: {
         : {}),
     });
   }
+  assertUpdatePackageActivationAdmission(params.root, { serviceRoot: params.serviceRoot });
   const driver = readUpdateRunDriver();
   const ledgerOptions = {
     env,
@@ -611,11 +620,11 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     installKind === "package"
       ? await resolveManagedServicePackageUpdatePlan({ root: discoveredRoot, pkgOwnership })
       : undefined;
-  if (servicePlan?.rootRedirect) {
-    assertUpdatePackageActivationAdmission(servicePlan.rootRedirect.root, {
-      continuation: postCoreUpdateResume ? opts.run?.executorFence : undefined,
-    });
-  }
+  const packageAdmission = {
+    continuation: postCoreUpdateResume ? opts.run?.executorFence : undefined,
+    serviceRoot: servicePlan?.serviceRoot ?? servicePlan?.rootRedirect?.root,
+  };
+  assertUpdatePackageActivationAdmission(discoveredRoot, packageAdmission);
   opts.run?.executorFence?.assertCurrent();
   if (opts.dryRun !== true) {
     await assertOpenClawStateWriteAllowedAtPath({
@@ -637,6 +646,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     });
     opts.run?.executorFence?.assertCurrent();
   }
+  assertUpdatePackageActivationAdmission(discoveredRoot, packageAdmission);
   if (opts.dryRun !== true) {
     try {
       assertConfigWriteAllowedInCurrentMode();

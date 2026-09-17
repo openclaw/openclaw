@@ -77,13 +77,16 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
     );
   }
   return await withUpdateAdmissionReporting(inputOpts, async () => {
+    const root = prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot;
+    const serviceRoot = prepared.servicePlan?.serviceRoot;
     const env = await resolveUpdateCommandAdmissionEnv({
       opts: inputOpts,
-      root: prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
+      root,
       invocationCwd,
       pkgOwnership: prepared.pkgOwnership,
     });
     const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
+    assertUpdatePackageActivationAdmission(root, { serviceRoot });
     if (await updateStateNeedsInitialization(env)) {
       return await initializeAndRunUpdate(inputOpts, prepared, recoveryState, invocationCwd, env);
     }
@@ -101,6 +104,7 @@ async function runAdmittedUpdate(
   const run = await admitUpdateCommandRun({
     opts: inputOpts,
     root: prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
+    serviceRoot: initialization?.target.managedServiceRoot ?? prepared.servicePlan?.serviceRoot,
     invocationCwd,
     initialization,
     pkgOwnership: prepared.pkgOwnership,
@@ -117,9 +121,9 @@ async function runAdmittedUpdate(
   try {
     await initialization?.registerRun(run);
     if (initialization?.target.updateInstallKind === "package") {
-      run.executorFence = await initialization.executor.enter(initialization.target.root, {
-        preflight: true,
-      });
+      const { root, managedServiceRoot: serviceRoot } = initialization.target;
+      run.executorFence = await initialization.executor.enter(root, { preflight: true });
+      assertUpdatePackageActivationAdmission(root, { serviceRoot });
     }
     const presentation = createUpdateProgress(!opts.json, run);
     disposePresentation = presentation.dispose;
@@ -188,6 +192,7 @@ async function initializeAndRunUpdate(
             if (!target) {
               return;
             }
+            const packageAdmission = { serviceRoot: target.managedServiceRoot };
             const initialization: InitializedUpdate = {
               env,
               runId,
@@ -241,6 +246,7 @@ async function initializeAndRunUpdate(
               installTarget: target.packageInstallTarget,
             });
             const runSelectedTarget = async () => {
+              assertUpdatePackageActivationAdmission(target.root, packageAdmission);
               if (target.updateInstallKind !== "package") {
                 return await runInitialized();
               }
@@ -305,8 +311,12 @@ async function initializeAndRunUpdate(
                 return await runInitialized();
               }
               const fence = await executor.enter(target.root, { preflight: true });
-              fence.assertCurrent();
+              const assertCurrent = () => {
+                fence.assertCurrent();
+                assertUpdatePackageActivationAdmission(target.root, packageAdmission);
+              };
               const { stagePackageInstallUpdate } = await import("./update-command-package.js");
+              assertCurrent();
               const legacyFence = initializationRuntime.acquireLegacyUpdateInitializationFence({
                 env,
                 targetVersion,
@@ -319,13 +329,13 @@ async function initializeAndRunUpdate(
                       const presentation = createUpdateProgress(!opts.json);
                       try {
                         await checkSchemas();
-                        fence.assertCurrent();
+                        assertCurrent();
                         if (!target.packageAlreadyCurrent && !initialization.stagedPackage) {
                           initialization.stagedPackage = await stagePackageInstallUpdate(
                             stageParams(presentation.progress),
                           );
                         }
-                        fence.assertCurrent();
+                        assertCurrent();
                         await initializationRuntime.initializeUpdateStateFromTarget({
                           root: initialization.stagedPackage?.root ?? target.root,
                           env,
@@ -333,7 +343,7 @@ async function initializeAndRunUpdate(
                           nodeRunner: target.packageUpdateNodeRunner,
                           invocationCwd,
                           progress: presentation.progress,
-                          assertCurrent: fence.assertCurrent,
+                          assertCurrent,
                           checkSchemas: async () => void (await checkSchemas()),
                         });
                       } finally {
@@ -423,6 +433,7 @@ async function updateCommandInternal(
     packageAlreadyCurrent,
     packageRuntimeTarget,
     managedServiceRootRedirect,
+    managedServiceRoot,
     managedServiceNodeRunner,
   } = target;
   let { packageUpdateNodeRunner } = target;
@@ -590,16 +601,20 @@ async function updateCommandInternal(
   let mutableUpdatePrepared = false;
   const prepareMutableUpdate = async (env?: NodeJS.ProcessEnv, activationTimeoutMs?: number) => {
     if (!mutableUpdatePrepared) {
-      assertUpdatePackageActivationAdmission(root);
+      assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
     }
     const fence = await executor.enter(root, { activationTimeoutMs });
     run.executorFence = fence;
     run.activationTimeoutMs ??= activationTimeoutMs;
     fence.assertCurrent();
     if (mutableUpdatePrepared) {
+      if (managedServiceRoot) {
+        assertUpdatePackageActivationAdmission(managedServiceRoot);
+      }
       return;
     }
-    assertUpdatePackageActivationAdmission(captureUpdateCommandExecutorAuthority(fence).installKey);
+    const installKey = captureUpdateCommandExecutorAuthority(fence).installKey;
+    assertUpdatePackageActivationAdmission(installKey, { serviceRoot: managedServiceRoot });
     preUpdatePluginInstallRecords = await prepareMutableUpdateRuntime(env, fence);
     mutableUpdatePrepared = true;
   };

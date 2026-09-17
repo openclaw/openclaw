@@ -45,6 +45,9 @@ service through `gateway install --force` before verifying the restarted Gateway
 The old service command remains the recovery identity until that handoff succeeds.
 Reconciliation failures are recorded as warnings with a manual repair command.
 Deployment-owned definitions retain their existing installation owner.
+Pending package-publication recovery in either the CLI or selected service
+installation blocks writable preparation. Follow the package recovery command
+reported by the update before retrying; Doctor does not clear those artifacts.
 
 The installed 2026.9.4 updater can refuse with `managed-service-preflight` before
 the target code runs. To reach a release containing this repair, use the
