@@ -211,6 +211,37 @@ Each live attempt bounds projection preparation to one pass. A superseded snapsh
 yields to the existing retry delays and budget before selection or dispatch.
 Restored retries retain their separate durable-row ordering and bounded retry policy.
 
+Default Gateway task persistence awaits initial creation in the shared-state worker
+before activating its run. The worker and retained synchronous creators use one
+create/reuse algorithm. Synchronous duplicate selection keeps process insertion
+order; worker selection uses persisted creation time and task ID. Filling missing
+delivery origin still commits before optional metadata changes. Automatic one-task
+flow creation, linking, and compensation remain separate best-effort stages after
+the task commit; compensation preserves a flow that changed or acquired another
+task reference.
+
+Modern creation captures its database target and selected plugin registry activation
+and registration before waiting. Transaction admission rechecks that owner and the
+original Gateway run. Confirmed task results survive later owner retirement. If
+activation fails, exact receipt cleanup uses the original database owner and refuses
+a task adopted by another run. Successful immediate flow publication precedes task
+observation. A failed projection read or known pre-dispatch cancellation overload
+retains required flow follow-up on the existing retry schedule and budget.
+Post-commit reconciliation orders one canonical read and cache installation, then
+releases that phase before callbacks run. Task observation belongs to acknowledged
+rows whose own effects are ready. Committed task changes, snapshot installation,
+and delivery-only changes keep distinct invalidation rules; conflicting scopes stay
+dirty for the existing refresh owner. Acknowledged task mutations are never replayed.
+
+An externally registered legacy runtime preserves synchronous creation before
+Gateway setup and synchronous run-scoped terminal finalization, including command
+failure before execution starts. This operation retains the original live registration;
+retirement or replacement stops it with a warning. Its shipped run-scoped semantics
+do not become an exact-task cleanup guarantee. Worker failures never switch to a
+legacy creator. Coordinator SQL remains on the host. Other detached lifecycle
+callers retain their synchronous paths until their complete admission and settlement
+owners migrate.
+
 Routine status reads stream task audit metadata through the same shared worker
 and return fixed-size history aggregates plus candidates for live reconciliation.
 They do not decode retained task payloads or restore delivery-state maps. Reads

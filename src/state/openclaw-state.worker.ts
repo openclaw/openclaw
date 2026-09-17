@@ -47,8 +47,10 @@ import {
   resolveRecordedProjectRootInDatabase,
 } from "../projects/project-registry.kernel.js";
 import { mapTaskFlowView } from "../tasks/task-domain-views.js";
-import { runManagedTaskInFlowInDatabase } from "../tasks/task-flow-managed-run-task.kernel.js";
-import type { RunTaskInFlowResult } from "../tasks/task-flow-managed-run-task.types.js";
+import {
+  runManagedTaskInFlowInDatabase,
+  type ManagedTaskInFlowReceipt,
+} from "../tasks/task-flow-managed-run-task.kernel.js";
 import {
   assertControllerId,
   normalizeRestoredFlowRecord,
@@ -64,6 +66,7 @@ import {
   upsertTaskFlowRowInDatabase,
 } from "../tasks/task-flow-registry.store.kernel.js";
 import { isTerminalTaskFlow, type TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
+import { executeTaskInitialMutation } from "../tasks/task-initial.worker.js";
 import { syncLiveTaskFlowInDatabase } from "../tasks/task-registry-live-flow.worker.js";
 import {
   restoreTaskRegistryInDatabase,
@@ -248,8 +251,18 @@ function createSharedStateWorkerBackend(
           env: getSqliteWorkerStateContext().environment,
         });
       }
+      if (
+        command.type === "tasks.createRecord" ||
+        command.type === "tasks.settleUnstarted" ||
+        command.type === "flows.createForTask" ||
+        command.type === "tasks.linkInitialFlow" ||
+        command.type === "flows.deleteUnlinkedForTask" ||
+        command.type === "flows.finalizeTaskCancellation"
+      ) {
+        return executeTaskInitialMutation(open(), command);
+      }
       if (command.type === "flows.runTask") {
-        let committed: RunTaskInFlowResult | undefined;
+        let committed: ManagedTaskInFlowReceipt | undefined;
         try {
           const database = open();
           return withSharedStateWriteCoordinator(

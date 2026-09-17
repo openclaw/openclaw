@@ -152,7 +152,12 @@ it.each(["converging", "exhausted"] as const)(
     });
     const release = createDeferred();
     const publication = runTaskRegistryWorkerMutation(
-      { scope: { taskId: task.taskId, flowId: flow.flowId }, admission: context.admission },
+      {
+        scope: { taskId: task.taskId, flowId: flow.flowId },
+        admission: context.admission,
+        publicationRecords: () =>
+          new Map([[task.taskId, { ...task, notifyPolicy: "state_changes" }]]),
+      },
       async () => {
         await release.promise;
         store.upsertTaskWithDeliveryState({ task: { ...task, notifyPolicy: "state_changes" } });
@@ -256,7 +261,11 @@ it.each(["current row", "retired store", "retired admission"] as const)(
     const readRows = store.loadSnapshot.bind(store);
     const releasePublication = createDeferred();
     const publication = runTaskRegistryWorkerMutation(
-      { scope: { taskId: task.taskId, flowId: flow.flowId }, admission: context.admission },
+      {
+        scope: { taskId: task.taskId, flowId: flow.flowId },
+        admission: context.admission,
+        publicationRecords: () => new Map(),
+      },
       () => releasePublication.promise,
       async () => readRows(),
     );

@@ -150,6 +150,15 @@ export type TaskExecutionOwner = {
   startIdentity: number;
 };
 
+/** A persisted identity narrows a retained owner's operation; it never grants authority. */
+export type TaskPersistenceReceipt = Readonly<
+  Pick<TaskRecord, "taskId" | "runtime" | "ownerKey" | "scopeKind" | "createdAt"> & {
+    runId: string;
+    childSessionKey?: string;
+    taskKind?: string;
+  }
+>;
+
 export type TaskRecord = {
   taskId: string;
   runtime: TaskRuntime;

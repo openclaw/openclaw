@@ -292,7 +292,7 @@ describe("asynchronous registry restoration", () => {
     expect([...complete.tasks.keys()]).toEqual(["legacy-mirror", "retained", "stale-mirror"]);
     expect(complete.deliveryStates.get("retained")?.lastNotifiedEventAt).toBe(50);
     const pendingMutation = runTaskRegistryWorkerMutation(
-      { admission: context.admission, scope },
+      { admission: context.admission, scope, publicationRecords: () => new Map() },
       () => mutationDone.promise,
       () => store.loadMutationSnapshotAsync(context, scope),
     );
@@ -364,6 +364,8 @@ describe("asynchronous registry restoration", () => {
         {
           admission: context.admission,
           scope: { taskId: "z-first", flowId: "flow-a", runId: task.runId },
+          publicationRecords: () =>
+            new Map([["z-first", { ...task, taskId: "z-first", notifyPolicy: "state_changes" }]]),
         },
         async () => {
           await finishMutation.promise;

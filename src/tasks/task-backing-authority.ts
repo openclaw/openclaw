@@ -4,7 +4,7 @@ import {
   createManagedTaskBackingDetail,
   readManagedTaskBacking,
   readTaskBackingInstance,
-  sameTaskBackingInstance,
+  hasAuthoritativeTaskBackingFromRecords,
   selectCurrentCanonicalTaskBacking,
   type TaskBackingInstance,
 } from "./task-backing-records.js";
@@ -91,32 +91,8 @@ export function getManagedTaskBackingInstance(task: TaskRecord): TaskBackingInst
 
 /** A managed projection may control a child only while its exact canonical instance is current. */
 export function hasAuthoritativeTaskBacking(task: TaskRecord): boolean {
-  if (task.runtime !== "acp" && task.runtime !== "subagent") {
-    return true;
-  }
-  const flowId = task.parentFlowId?.trim();
-  if (!flowId || getTaskFlowById(flowId)?.syncMode !== "managed") {
-    return true;
-  }
-  const childSessionKey = task.childSessionKey?.trim();
-  if (!childSessionKey) {
-    return true;
-  }
-  const runId = task.runId?.trim();
-  const managed = readManagedTaskBacking(task.detail);
-  if (!runId || !managed) {
-    return false;
-  }
-  const current = resolveCurrentCanonicalBacking({
-    runtime: task.runtime,
-    scopeKind: task.scopeKind,
-    ownerKey: task.ownerKey,
-    childSessionKey,
-    runId,
+  return hasAuthoritativeTaskBackingFromRecords(task, {
+    isManagedFlow: (flowId) => getTaskFlowById(flowId)?.syncMode === "managed",
+    resolveCurrentCanonicalBacking,
   });
-  return Boolean(
-    current &&
-    current.task.taskId === managed.taskId &&
-    sameTaskBackingInstance(current.instance, managed.instance),
-  );
 }

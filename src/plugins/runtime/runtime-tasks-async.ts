@@ -240,11 +240,19 @@ function bindManagedFlows(params: Binding): BoundAsyncManagedTaskFlowsRuntime {
         runId: taskInput.runId?.trim(),
         childSessionKey: taskInput.childSessionKey?.trim(),
       };
+      let publicationTask: TaskRecord | undefined;
       const result = await store.runOpenClawStateWorkerOperation(context, (worker) =>
         runTaskRegistryWorkerMutation(
-          { scope, admission: context.admission },
-          () =>
-            worker.execute({
+          {
+            scope,
+            admission: context.admission,
+            publicationRecords: () =>
+              new Map<string, TaskRecord | undefined>(
+                publicationTask ? [[publicationTask.taskId, publicationTask]] : [],
+              ),
+          },
+          async () => {
+            const receipt = await worker.execute({
               type: "flows.runTask",
               input: {
                 callerOwnerKey: binding.sessionKey,
@@ -252,7 +260,12 @@ function bindManagedFlows(params: Binding): BoundAsyncManagedTaskFlowsRuntime {
                 taskId: scope.taskId,
                 now: Date.now(),
               },
-            }),
+            });
+            if (receipt.taskMutation === "created" || receipt.taskMutation === "updated") {
+              publicationTask = receipt.task;
+            }
+            return receipt;
+          },
           () => worker.execute({ type: "tasks.mutationSnapshot", input: scope }),
         ),
       );

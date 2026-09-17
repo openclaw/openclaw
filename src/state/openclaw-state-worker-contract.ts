@@ -23,14 +23,17 @@ import type {
   ProjectRegistryIdentity,
   ProjectRegistryRecord,
 } from "../projects/project-registry.kernel.js";
-import type { ManagedTaskInFlowInput } from "../tasks/task-flow-managed-run-task.kernel.js";
-import type { RunTaskInFlowResult } from "../tasks/task-flow-managed-run-task.types.js";
+import type {
+  ManagedTaskInFlowInput,
+  ManagedTaskInFlowReceipt,
+} from "../tasks/task-flow-managed-run-task.kernel.js";
 import type {
   TaskFlowRegistryStoreSnapshot,
   TaskFlowRegistryUpdate,
   TaskFlowRegistryUpdateResult,
 } from "../tasks/task-flow-registry.store.types.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
+import type { TaskInitialWorkerOperations } from "../tasks/task-initial-worker.types.js";
 import type {
   TaskRegistryRestoreResult,
   TaskMirroredFlowSyncOutcome,
@@ -66,6 +69,7 @@ type TaskFlowReadQuery = {
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = NativeHookRelayStoreWorkerOperations &
   HostedCatalogSnapshotWorkerOperations &
+  TaskInitialWorkerOperations &
   PluginStateWorkerOperations &
   UserPreferenceWorkerOperations &
   CronStoreWorkerOperations &
@@ -121,7 +125,7 @@ export type OpenClawStateWorkerOperations = NativeHookRelayStoreWorkerOperations
       input: { now: number; preserveSourceArtifacts: boolean };
       output: TaskRegistryStatusSnapshot | undefined;
     };
-    "flows.runTask": { input: ManagedTaskInFlowInput; output: RunTaskInFlowResult };
+    "flows.runTask": { input: ManagedTaskInFlowInput; output: ManagedTaskInFlowReceipt };
     "tasks.mutationSnapshot": {
       input: TaskRegistryMutationScope | undefined;
       output: TaskRegistryStoreSnapshot;

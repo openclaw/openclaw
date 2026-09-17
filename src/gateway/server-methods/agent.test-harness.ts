@@ -28,6 +28,7 @@ import { installInMemoryTaskRegistryRuntime } from "../../test-utils/task-regist
 import { createChatRunState } from "../server-chat-state.js";
 import { agentIdentityHandlers } from "./agent-identity.js";
 import { agentHandlers } from "./agent.js";
+import { createAgentTestUserTurnRecorder } from "./agent.user-turn-recorder.test-support.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -173,21 +174,11 @@ vi.mock("../../sessions/user-turn-transcript.js", async () => {
     createUserTurnTranscriptRecorder: (
       params: Parameters<typeof actual.createUserTurnTranscriptRecorder>[0],
     ) =>
-      actual.createUserTurnTranscriptRecorder({
-        ...params,
-        // Handler-unit fixtures mock session loading with ordered returns. The
-        // gateway-server suites own real target revalidation and SQLite proof.
-        target: mocks.userTurnStorePath
-          ? params.target
-          : {
-              sessionId: "test-session-id",
-              expectedSessionId: "test-session-id",
-              sessionKey: "agent:main:main",
-              sessionEntry: { sessionId: "test-session-id", updatedAt: Date.now() },
-              storePath: "/tmp/sessions.json",
-              agentId: "main",
-            },
-      }),
+      createAgentTestUserTurnRecorder(
+        actual.createUserTurnTranscriptRecorder,
+        params,
+        mocks.userTurnStorePath,
+      ),
   };
 });
 
@@ -558,7 +549,7 @@ export function mockMainSessionEntry(
 ) {
   mocks.loadSessionEntry.mockReturnValue({
     cfg,
-    storePath: "/tmp/sessions.json",
+    storePath: mocks.userTurnStorePath ?? "/tmp/sessions.json",
     entry: {
       sessionId: "existing-session-id",
       updatedAt: Date.now(),
@@ -913,7 +904,7 @@ export function setupCronContinuationReleaseFixture() {
   };
   mocks.loadSessionEntry.mockReturnValue({
     cfg: {},
-    storePath: "/tmp/sessions.json",
+    storePath: mocks.userTurnStorePath ?? "/tmp/sessions.json",
     canonicalKey: sessionKey,
     entry,
   });

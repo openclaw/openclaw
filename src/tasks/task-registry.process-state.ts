@@ -2,13 +2,27 @@ import type { Result } from "@openclaw/normalization-core/result";
 // Tracks task process state transitions used to reconcile running work.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { TaskSummary } from "../../packages/gateway-protocol/src/schema/tasks.js";
-import { getTaskRelatedSessionIndexKeys } from "./task-registry-records.js";
-import type { TaskRegistryMutationScope } from "./task-registry.store.types.js";
+import {
+  getTaskRelatedSessionIndexKeys,
+  cloneTaskRecordForObserver,
+  isEquivalentTaskRecord,
+  listTasksFromIndex,
+} from "./task-registry-records.js";
+import type {
+  TaskRegistryMutationScope,
+  TaskRegistryObserverEvent,
+} from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 export type PendingTaskRegistryMutation = {
   scope: TaskRegistryMutationScope;
   published: Map<string, Omit<TaskRecord, "detail"> | undefined>;
+  publication?: {
+    records: Map<string, TaskRecord | undefined>;
+    ready: Set<string>;
+    invalidated: Set<string>;
+  };
+  readWitness?: { writtenTaskIds: Set<string>; replaced: boolean };
 };
 
 export type TaskRunOwner = {
@@ -74,6 +88,7 @@ type TaskRegistryProcessState = {
     dirty: boolean;
     mutationDepth: number;
     pending: Set<PendingTaskRegistryMutation>;
+    readTail?: Promise<void>;
     dirtyScopes: Set<TaskRegistryMutationScope>;
   };
 };
@@ -218,4 +233,101 @@ export function rebuildRunIdIndex() {
   for (const [taskId, task] of indexState.tasks.entries()) {
     addRunIdIndex(taskId, task.runId);
   }
+}
+
+export function taskIdsInScope(scope?: TaskRegistryMutationScope): Iterable<string> {
+  if (!scope) {
+    return indexState.tasks.keys();
+  }
+  return new Set([
+    ...(scope.taskId ? [scope.taskId] : []),
+    ...(scope.runId ? (indexState.taskIdsByRunId.get(scope.runId) ?? []) : []),
+    ...(scope.childSessionKey
+      ? (indexState.taskIdsByRelatedSessionKey.get(scope.childSessionKey) ?? [])
+      : []),
+  ]);
+}
+
+export function matchesScope(task: TaskRecord, scope: TaskRegistryMutationScope): boolean {
+  return (
+    task.taskId === scope.taskId ||
+    Boolean(scope.runId && task.runId?.trim() === scope.runId) ||
+    Boolean(scope.childSessionKey && task.childSessionKey?.trim() === scope.childSessionKey)
+  );
+}
+
+/** A committed projection write supersedes held reads even when its value returns to the original. */
+export function recordTaskRegistryProjectionWrite(
+  source: "task" | "snapshot" | "delivery",
+  taskId?: string,
+  deleted = false,
+): void {
+  for (const pending of indexState.projection.pending) {
+    const witness = pending.readWitness;
+    if (witness) {
+      const current = taskId === undefined ? undefined : indexState.tasks.get(taskId);
+      if (taskId === undefined) {
+        witness.replaced = true;
+      } else if (
+        taskId === pending.scope.taskId ||
+        pending.published.has(taskId) ||
+        (current && matchesScope(current, pending.scope))
+      ) {
+        witness.writtenTaskIds.add(taskId);
+      }
+    }
+    const publication = pending.publication;
+    if (!publication || source === "delivery") {
+      continue;
+    }
+    for (const id of taskId === undefined ? publication.records.keys() : [taskId]) {
+      // A predecessor's snapshot cannot supersede a receipt still waiting for its own read.
+      if (
+        !publication.records.has(id) ||
+        (source === "snapshot" && !witness && !publication.ready.has(id))
+      ) {
+        continue;
+      }
+      const expected = publication.records.get(id);
+      const current = deleted ? undefined : indexState.tasks.get(id);
+      if (
+        expected === undefined
+          ? current !== undefined
+          : current === undefined || !isEquivalentTaskRecord(expected, current)
+      ) {
+        publication.invalidated.add(id);
+      }
+    }
+  }
+}
+
+export function recordTaskRegistryPublication(event: TaskRegistryObserverEvent): void {
+  for (const pending of indexState.projection.pending) {
+    if (event.kind === "restored") {
+      for (const task of indexState.tasks.values()) {
+        if (matchesScope(task, pending.scope)) {
+          pending.published.set(task.taskId, cloneTaskRecordForObserver(task));
+        }
+      }
+    } else {
+      const task = event.kind === "upserted" ? event.task : event.previous;
+      if (pending.published.has(task.taskId) || matchesScope(task, pending.scope)) {
+        pending.published.set(
+          task.taskId,
+          event.kind === "upserted" ? cloneTaskRecordForObserver(event.task) : undefined,
+        );
+      }
+    }
+  }
+}
+
+export function selectLiveTaskFlowForSync(taskId: string) {
+  const current = indexState.tasks.get(taskId);
+  const flowId = current?.parentFlowId?.trim();
+  return current &&
+    flowId &&
+    listTasksFromIndex(indexState.tasks, indexState.taskIdsByParentFlowId, flowId)[0]?.taskId ===
+      taskId
+    ? { taskId, flowId, createdAt: current.createdAt }
+    : undefined;
 }

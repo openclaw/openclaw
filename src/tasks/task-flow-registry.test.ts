@@ -1,5 +1,7 @@
 // Covers managed task-flow creation, lookup, ownership, and state transitions.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as sqlitePostCommit from "../infra/sqlite-post-commit.js";
+import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createInMemoryTaskFlowRegistryStore } from "../test-utils/task-registry-store.js";
@@ -14,12 +16,14 @@ import {
   listTaskFlowRecords,
   requestFlowCancel,
   reloadTaskFlowRegistryFromStoreAsync,
+  runTaskFlowRegistryWorkerMutation,
   resumeFlow,
   setFlowWaiting,
   syncFlowFromTaskResult,
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { createProjectionTransactionDatabase } from "./task-registry-projection.test-support.js";
 import {
   configureTaskFlowRegistryRuntime,
   createFlowRecord as createFlowRecordOrNull,
@@ -84,6 +88,172 @@ describe("task-flow-registry", () => {
     vi.useRealTimers();
     resetTaskFlowRegistryForTests({ persist: false });
   });
+
+  it("publishes the committed flow after refresh rollback restores an older cache", async () => {
+    const store = createInMemoryTaskFlowRegistryStore();
+    configureTaskFlowRegistryRuntime({ store });
+    const flow = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/publication",
+      goal: "Original",
+    });
+    const published: string[] = [];
+    configureTaskFlowRegistryRuntime({
+      observers: {
+        onEvent(event) {
+          if (event.kind === "upserted") {
+            published.push(event.flow.goal);
+          }
+        },
+      },
+    });
+    const context = captureOpenClawStateWorkerContext();
+    let changed = false;
+    const readCurrent = vi.fn(async () => {
+      const current = await store.readFlowAsync(context, flow.flowId);
+      if (changed) {
+        return current;
+      }
+      changed = true;
+      const database = createProjectionTransactionDatabase();
+      const lookup = vi
+        .spyOn(openClawStateDatabaseCache, "getOpenClawStateDatabaseIfOpenAtPath")
+        .mockReturnValue(database);
+      const stage = vi
+        .spyOn(sqlitePostCommit, "stageSqliteTransactionState")
+        .mockImplementation((_db, publication) => {
+          publication.stage();
+          publication.rollback();
+          return true;
+        });
+      try {
+        expect(getTaskFlowById(flow.flowId)?.goal).toBe("Original");
+        expect(stage).toHaveBeenCalledTimes(1);
+      } finally {
+        stage.mockRestore();
+        lookup.mockRestore();
+      }
+      return current;
+    });
+
+    await runTaskFlowRegistryWorkerMutation(
+      { flowId: flow.flowId, admission: context.admission },
+      async () => store.upsertFlow({ ...flow, goal: "Committed" }),
+      readCurrent,
+    );
+
+    expect(readCurrent).toHaveBeenCalledTimes(1);
+    expect(published).toEqual(["Committed"]);
+  });
+
+  it("does not resurrect a held flow snapshot after absent ABA", async () => {
+    const store = createInMemoryTaskFlowRegistryStore();
+    configureTaskFlowRegistryRuntime({ store });
+    const flow = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/publication",
+      goal: "Held flow",
+    });
+    expect(deleteTaskFlowRecordById(flow.flowId)).toBe(true);
+    const published: string[] = [];
+    configureTaskFlowRegistryRuntime({
+      observers: {
+        onEvent(event) {
+          if (event.kind !== "restored") {
+            published.push(event.kind);
+          }
+        },
+      },
+    });
+    const context = captureOpenClawStateWorkerContext();
+    let reads = 0;
+    await expect(
+      runTaskFlowRegistryWorkerMutation(
+        { flowId: flow.flowId, admission: context.admission },
+        async () => {
+          store.upsertFlow(flow);
+          return "committed";
+        },
+        async () => {
+          const current = await store.readFlowAsync(context, flow.flowId);
+          if (reads++ === 0) {
+            expect(deleteTaskFlowRecordById(flow.flowId)).toBe(true);
+          }
+          return current;
+        },
+      ),
+    ).resolves.toBe("committed");
+
+    expect(getTaskFlowById(flow.flowId)).toBeUndefined();
+    expect(published).toEqual(["deleted"]);
+    expect(reads).toBe(1);
+  });
+
+  it.each(["unrelated", "same-flow"] as const)(
+    "settles a committed flow during %s publication churn without losing its notification",
+    async (change) => {
+      const store = createInMemoryTaskFlowRegistryStore();
+      configureTaskFlowRegistryRuntime({ store });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/publication",
+        goal: "Initial goal",
+      });
+      const unrelated = createManagedTaskFlow({
+        ownerKey: "agent:main:other",
+        controllerId: "tests/publication",
+        goal: "Unrelated goal",
+      });
+      const published: string[] = [];
+      configureTaskFlowRegistryRuntime({
+        observers: {
+          onEvent(event) {
+            if (event.kind === "upserted" && event.flow.flowId === flow.flowId) {
+              published.push(event.flow.goal);
+            }
+          },
+        },
+      });
+      const context = captureOpenClawStateWorkerContext();
+      let changes = 0;
+      const readCurrent = vi.fn(async () => {
+        const current = await store.readFlowAsync(context, flow.flowId);
+        if (changes++ < 3) {
+          const selected = change === "same-flow" ? flow : unrelated;
+          const latest = getTaskFlowById(selected.flowId);
+          if (!latest) {
+            throw new Error("Expected the selected flow to remain available");
+          }
+          setFlowWaiting({
+            flowId: selected.flowId,
+            expectedRevision: latest.revision,
+            currentStep: `activity-${changes}`,
+          });
+        }
+        return current;
+      });
+      const mutate = vi.fn(async () => {
+        store.upsertFlow({ ...flow, revision: flow.revision + 1, goal: "Committed goal" });
+        return "committed";
+      });
+
+      await expect(
+        runTaskFlowRegistryWorkerMutation(
+          { flowId: flow.flowId, admission: context.admission },
+          mutate,
+          readCurrent,
+        ),
+      ).resolves.toBe("committed");
+
+      expect(mutate).toHaveBeenCalledTimes(1);
+      expect(readCurrent).toHaveBeenCalledTimes(1);
+      expect(published).toEqual(["Committed goal"]);
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        goal: "Committed goal",
+        ...(change === "same-flow" ? { status: "waiting", currentStep: "activity-1" } : {}),
+      });
+    },
+  );
 
   it("creates managed flows and updates them through revision-checked helpers", async () => {
     await withFlowRegistryTempDir(async () => {

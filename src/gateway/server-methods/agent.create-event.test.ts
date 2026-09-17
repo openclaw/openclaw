@@ -61,7 +61,7 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 vi.mock("../../tasks/detached-task-runtime.js", () => ({
-  createRunningTaskRun: vi.fn(),
+  prepareRunningTaskRun: vi.fn(() => ({ kind: "receipt", create: async () => null })),
 }));
 
 import { agentHandlers } from "./agent.js";

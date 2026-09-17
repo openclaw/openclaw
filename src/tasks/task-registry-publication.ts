@@ -17,6 +17,7 @@ import {
   addRelatedSessionKeyIndex,
   deleteRelatedSessionKeyIndex,
   rebuildRunIdIndex,
+  recordTaskRegistryProjectionWrite,
 } from "./task-registry.process-state.js";
 import { isTerminalTaskStatus, type TaskRecord } from "./task-registry.types.js";
 
@@ -40,6 +41,7 @@ export function publishTaskRecordAfterAtomicStore(
     deleteRelatedSessionKeyIndex(next.taskId, current);
   }
   tasks.set(next.taskId, next);
+  recordTaskRegistryProjectionWrite("task", next.taskId);
   bumpTaskRegistryRevision();
   if (becomesTerminal) {
     clearTaskActivity(next.taskId);

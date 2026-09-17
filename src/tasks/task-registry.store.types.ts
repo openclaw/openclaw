@@ -18,11 +18,9 @@ export type TaskExecutionRestoreStore = {
 };
 
 export type TaskRegistryMutationScope = {
-  taskId: string;
-  flowId: string;
-  runId?: string;
+  flowId?: string;
   childSessionKey?: string;
-};
+} & ({ taskId: string; runId?: string } | { taskId?: never; runId: string });
 
 export type TaskLiveFlowSelection = {
   taskId: string;
@@ -39,3 +37,20 @@ export type TaskLiveFlowAuthority = {
   assertCurrent(): void;
   isSelected(selection: TaskLiveFlowSelection): boolean;
 };
+
+type TaskRegistryObserverRecord = Omit<TaskRecord, "detail">;
+
+export type TaskRegistryObserverEvent =
+  | {
+      kind: "restored";
+    }
+  | {
+      kind: "upserted";
+      task: TaskRegistryObserverRecord;
+      previous?: TaskRegistryObserverRecord;
+    }
+  | {
+      kind: "deleted";
+      taskId: string;
+      previous: TaskRegistryObserverRecord;
+    };

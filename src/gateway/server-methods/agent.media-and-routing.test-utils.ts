@@ -16,6 +16,7 @@ import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-a
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { registerSubagentCompletionToolHandoff } from "../subagent-completion-tool-handoff.js";
+import { registerCronContinuationRecoveryCase } from "./agent.task-settlement.test-utils.js";
 import {
   getAgentTestMocks,
   operatorWriteCliClient,
@@ -1964,110 +1965,7 @@ describe("gateway agent handler", () => {
     }
   });
 
-  it("recovers a continuation release after reporting a durable write failure", async () => {
-    vi.useFakeTimers();
-    resetGatewaySuspendCoordinatorForLifecycleRestart();
-    resetGatewayWorkAdmission();
-    try {
-      mocks.agentCommand.mockClear();
-      const { sessionKey, store } = setupCronContinuationReleaseFixture();
-      const context = makeContext();
-      let releaseAttempts = 0;
-      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-        if (
-          expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation
-            ?.phase === "continuing"
-        ) {
-          releaseAttempts += 1;
-          if (releaseAttempts <= 3) {
-            throw new Error("disk unavailable");
-          }
-        }
-        return await updater(store);
-      });
-      mocks.agentCommand.mockResolvedValue({ payloads: [{ text: "continued" }], meta: {} });
-      const request = {
-        message: "media completion",
-        sessionKey,
-        internalEvents: [cronMediaCompletionEvent()],
-        idempotencyKey: "cron-media-release-fails",
-      };
-
-      const respond = await invokeAgent(request, {
-        reqId: "cron-media-release-fails",
-        client: cronContinuationGatewayClient(),
-        context,
-        flushDispatch: false,
-      });
-      await vi.advanceTimersByTimeAsync(10);
-
-      expect(releaseAttempts).toBe(3);
-      expect(
-        expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
-      ).toMatchObject({
-        phase: "continuing",
-        ownerRunId: "cron-media-release-fails",
-      });
-      expect(respond).toHaveBeenLastCalledWith(
-        false,
-        expect.objectContaining({
-          status: "error",
-          summary: "failed to persist cron continuation settlement",
-        }),
-        expect.objectContaining({ code: ErrorCodes.UNAVAILABLE }),
-        expect.objectContaining({ runId: "cron-media-release-fails" }),
-      );
-      const busyPrepare = await invokeGatewaySuspendPrepare(context, "cron-media-release-backoff");
-      expect(busyPrepare).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          status: "busy",
-          reason: "active-work",
-          blockers: expect.arrayContaining([expect.objectContaining({ kind: "root-request" })]),
-        }),
-      );
-
-      await vi.advanceTimersByTimeAsync(250);
-
-      expect(releaseAttempts).toBe(4);
-      expect(
-        expectDefined(store[sessionKey], "store[sessionKey] test invariant").cronRunContinuation,
-      ).toEqual({
-        lifecycleRevision: "revision-1",
-        phase: "ready",
-        basePersisted: true,
-      });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      const readyPrepare = await invokeGatewaySuspendPrepare(
-        context,
-        "cron-media-release-recovered",
-      );
-      const readyPayload = readyPrepare.mock.calls.at(-1)?.[1] as
-        | { status?: string; suspensionId?: string }
-        | undefined;
-      expect(readyPayload).toMatchObject({ status: "ready" });
-      expect(resumeGatewaySuspend(readyPayload?.suspensionId ?? "missing")).toMatchObject({
-        ok: true,
-        status: "running",
-      });
-      const retryRespond = await invokeAgent(request, {
-        reqId: "cron-media-release-retry",
-        client: cronContinuationGatewayClient(),
-        context,
-      });
-      expect(retryRespond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "ok", summary: "completed" }),
-        undefined,
-        { cached: true },
-      );
-      expect(mocks.agentCommand).toHaveBeenCalledOnce();
-    } finally {
-      resetGatewaySuspendCoordinatorForLifecycleRestart();
-      resetGatewayWorkAdmission();
-      vi.useRealTimers();
-    }
-  });
+  registerCronContinuationRecoveryCase();
 
   it("releases suspension admission after continuation recovery exhausts", async () => {
     vi.useFakeTimers();

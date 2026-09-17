@@ -1,5 +1,9 @@
 import { serializeAgentSchemaInspectionError } from "../state/openclaw-agent-schema-inspection-response.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import {
+  hasAuthoritativeTaskBackingFromRecords,
+  selectCurrentCanonicalTaskBacking,
+} from "../tasks/task-backing-records.js";
 import { restoreTaskExecutionSnapshot } from "../tasks/task-execution-owner.js";
 import {
   applyFlowPatch,
@@ -13,11 +17,19 @@ import type {
   TaskFlowRegistryObservedUpdate,
   TaskFlowRegistryStoreSnapshot,
 } from "../tasks/task-flow-registry.store.types.js";
-import { findLatestTaskForFlowInSnapshot } from "../tasks/task-registry-records.js";
+import type { TaskInitialWorkerOperations } from "../tasks/task-initial-worker.types.js";
+import { selectExistingTaskForCreate } from "../tasks/task-registry-create-rules.js";
+import { runTaskCreateOperation } from "../tasks/task-registry-create.operation.js";
+import { assertParentFlowRecordLinkAllowed } from "../tasks/task-registry-parent-flow-rules.js";
+import {
+  filterTasksByRunScope,
+  findLatestTaskForFlowInSnapshot,
+} from "../tasks/task-registry-records.js";
 import type {
   TaskMirroredFlowSyncOutcome,
   TaskRegistryRestoreResult,
 } from "../tasks/task-registry-restore.worker.js";
+import { runTaskRecordTransitionOperation } from "../tasks/task-registry-transition.operation.js";
 import type { TaskRegistryStore, TaskRegistryStoreSnapshot } from "../tasks/task-registry.store.js";
 import type { TaskRegistryMutationScope } from "../tasks/task-registry.store.types.js";
 
@@ -84,6 +96,119 @@ export function createInMemoryTaskRegistryStore(
 ): TaskRegistryStore {
   const state = structuredClone(snapshot);
   return {
+    async runInitialMutationAsync(context, command, assertCurrent) {
+      const unsupported = (): never => {
+        throw new Error("Initial flow mutations require the isolated worker fixture.");
+      };
+      const operations: {
+        [Key in keyof TaskInitialWorkerOperations]: (
+          input: TaskInitialWorkerOperations[Key]["input"],
+        ) => TaskInitialWorkerOperations[Key]["output"];
+      } = {
+        "tasks.createRecord": (input) =>
+          runTaskCreateOperation(input, {
+            readSelection: (identity) => {
+              const flows = flowStore?.loadSnapshot().flows;
+              const parentFlowId = input.params.parentFlowId?.trim();
+              assertParentFlowRecordLinkAllowed(
+                { ...identity, parentFlowId },
+                parentFlowId ? flows?.get(parentFlowId) : undefined,
+              );
+              const current = this.loadSnapshot();
+              const existing = selectExistingTaskForCreate({
+                ...input.params,
+                ...identity,
+                candidates: [...current.tasks.values()].toSorted(
+                  (left, right) =>
+                    left.createdAt - right.createdAt ||
+                    (left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0),
+                ),
+                isTaskMirroredFlow: (flowId) => flows?.get(flowId)?.syncMode === "task_mirrored",
+              });
+              return {
+                existing,
+                deliveryState: existing ? current.deliveryStates.get(existing.taskId) : undefined,
+              };
+            },
+            write: (operation) => operation(),
+            assertCurrent,
+            upsertDelivery: (deliveryState) => this.upsertDeliveryState(deliveryState),
+            upsertTask: (task, deliveryState) =>
+              this.upsertTaskWithDeliveryState({ task, deliveryState }),
+            deferCommit: (publish) => publish(),
+            onCommitted() {},
+          }),
+        "flows.createForTask": unsupported,
+        "tasks.settleUnstarted": (input) => {
+          const current = this.loadSnapshot().tasks.get(input.taskId);
+          if (
+            !current ||
+            (current.status !== "queued" && current.status !== "running") ||
+            current.endedAt !== undefined
+          ) {
+            return null;
+          }
+          const params = {
+            ...input.terminal,
+            runId: input.expectedTask.runId,
+            runtime: input.expectedTask.runtime,
+            sessionKey: input.expectedTask.childSessionKey ?? input.expectedTask.ownerKey,
+          };
+          return runTaskRecordTransitionOperation(
+            {
+              kind: "state",
+              taskId: input.taskId,
+              now: input.now,
+              expectedTask: input.expectedTask,
+              params,
+            },
+            {
+              readCurrent: () => {
+                const runId = params.runId.trim();
+                if (!runId) {
+                  return undefined;
+                }
+                const records = [...this.loadSnapshot().tasks.values()].filter(
+                  (task) => task.runId?.trim() === runId,
+                );
+                return filterTasksByRunScope(records, params).find(
+                  (task) => task.taskId === input.taskId,
+                );
+              },
+              hasAuthoritativeBacking: (task) =>
+                hasAuthoritativeTaskBackingFromRecords(task, {
+                  isManagedFlow: (flowId) =>
+                    flowStore?.loadSnapshot().flows.get(flowId)?.syncMode === "managed",
+                  resolveCurrentCanonicalBacking: (scope) =>
+                    selectCurrentCanonicalTaskBacking({
+                      ...scope,
+                      candidates: [...this.loadSnapshot().tasks.values()],
+                      isTaskMirroredFlow: (flowId) =>
+                        flowStore?.loadSnapshot().flows.get(flowId)?.syncMode === "task_mirrored",
+                    }),
+                }),
+              write: (operation) => operation(),
+              upsertTask: (task) => {
+                this.upsertTaskWithDeliveryState({
+                  task,
+                  deliveryState: this.loadSnapshot().deliveryStates.get(task.taskId),
+                });
+                return true;
+              },
+              assertCurrent,
+              deferCommit: (publish) => publish(),
+              onCommitted() {},
+            },
+          );
+        },
+        "tasks.linkInitialFlow": unsupported,
+        "flows.deleteUnlinkedForTask": unsupported,
+        "flows.finalizeTaskCancellation": unsupported,
+      };
+      context.admission.assertCurrent();
+      assertCurrent();
+      return operations[command.type](command.input);
+    },
     async syncLiveTaskFlowAsync(_context, params, authority) {
       if (!flowStore) {
         throw new Error(

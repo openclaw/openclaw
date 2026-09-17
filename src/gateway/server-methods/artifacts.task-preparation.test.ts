@@ -312,7 +312,11 @@ describe("artifact task preparation", () => {
         return fixture.snapshot();
       };
       const mutation = runTaskRegistryWorkerMutation(
-        { admission: context.admission, scope: { taskId: "task-1", flowId: "artifact-fixture" } },
+        {
+          admission: context.admission,
+          scope: { taskId: "task-1", flowId: "artifact-fixture" },
+          publicationRecords: () => new Map(),
+        },
         () => mutationRelease.promise,
         () => fixture.store.loadMutationSnapshotAsync(context),
       );

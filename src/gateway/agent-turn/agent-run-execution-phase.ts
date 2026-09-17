@@ -25,6 +25,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAbortError } from "../../infra/abort-signal.js";
+import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
@@ -118,6 +119,30 @@ export async function startAgentRunExecution(params: {
   try {
     await using preparedModelRuntimeLease = prepared.preparedModelRuntimeLease;
     let leaseActive = true;
+    const abortRegistration = prepared.activeRunAbort;
+    const abortEntry = abortRegistration.entry;
+    const abortController = abortRegistration.controller;
+    const operationalRunInstance = prepared.operationalRunInstance;
+    const sessionKey = abortEntry?.sessionKey;
+    const assertDispatchCurrent = () => {
+      params.assertContextCurrent?.();
+      abortController.signal.throwIfAborted();
+      assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      if (
+        !leaseActive ||
+        (abortRegistration.registered &&
+          (!prepared.activeGatewayWorkAdmission.isActive() ||
+            !abortEntry ||
+            params.context.chatAbortControllers.get(params.runId) !== abortEntry ||
+            abortEntry.controller !== abortController ||
+            abortEntry.operationalRunInstance !== operationalRunInstance ||
+            abortEntry.lifecycleGeneration !== params.lifecycleGeneration ||
+            abortEntry.sessionKey !== sessionKey ||
+            abortEntry.registrationCleanupRequested))
+      ) {
+        throw new Error("agent task creation no longer owns this Gateway run");
+      }
+    };
     let mediaCleanup: Promise<void> | undefined;
     const cleanupAdmittedRun: typeof prepared.activeRunAbort.cleanup = () => {
       const refsToDiscard = unpersistedOffloadedRefs;
@@ -379,6 +404,7 @@ export async function startAgentRunExecution(params: {
         const execution = dispatchAdmittedAgentRun(
           withAgentRunDispatchExecutionIdentity(
             {
+              assertCurrent: assertDispatchCurrent,
               commandRuntimeContext: {
                 config: prepared.replyDispatchRuntime.config,
                 pluginGeneration: prepared.replyDispatchRuntime.pluginGeneration,

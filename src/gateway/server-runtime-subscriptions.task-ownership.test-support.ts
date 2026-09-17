@@ -21,8 +21,8 @@ import {
   configureTaskRegistryRuntime,
   getTaskRegistryObservers,
   getTaskRegistryStore,
-  type TaskRegistryObserverEvent,
 } from "../tasks/task-registry.store.js";
+import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.types.js";
 import { createTaskFixture } from "../tasks/task-registry.test-support.js";
 import { bindTaskRunOwner } from "../tasks/task-run-owner.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";

@@ -589,7 +589,7 @@ export function readTaskRegistryMutationSnapshotInDatabase(
       .selectFrom("task_runs")
       .where((eb) =>
         eb.or([
-          eb("task_id", "=", scope.taskId),
+          ...(scope.taskId ? [eb("task_id", "=", scope.taskId)] : []),
           eb(eb.fn<string>("trim", [eb.ref("run_id")]), "=", scope.runId?.trim() || null),
           eb(
             eb.fn<string>("trim", [eb.ref("child_session_key")]),

@@ -10,6 +10,11 @@ import {
   listTaskRecordPage,
   resetTaskRegistryForTests,
 } from "./task-registry-query.js";
+import {
+  captureTaskPageRead,
+  configureTaskSnapshot,
+  readTaskPage,
+} from "./task-registry-query.test-support.js";
 import { markTaskTerminalById, updateTaskNotifyPolicyById } from "./task-registry-record-api.js";
 import * as taskRegistryState from "./task-registry-state.js";
 import {
@@ -17,39 +22,13 @@ import {
   runTaskRegistryWorkerMutation,
   tasks as authoritativeTasks,
 } from "./task-registry-state.js";
-import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
+import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   resetTaskRegistryForTests();
 });
-
-function configureTaskSnapshot(tasks: Iterable<TaskRecord>) {
-  const snapshotTasks = new Map([...tasks].map((task) => [task.taskId, task]));
-  const store = createInMemoryTaskRegistryStore({
-    tasks: snapshotTasks,
-    deliveryStates: new Map(),
-  });
-  configureTaskRegistryRuntime({ store });
-  return store;
-}
-
-function captureTaskPageRead() {
-  return { readContext: captureOpenClawStateWorkerContext(), store: getTaskRegistryStore() };
-}
-
-async function readTaskPage(
-  params: Omit<Parameters<typeof listTaskRecordPage>[0], "readContext" | "store">,
-  read = captureTaskPageRead(),
-) {
-  const result = await listTaskRecordPage({ ...params, ...read });
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error(`task page failed: ${result.error}`);
-  }
-  return result.value;
-}
 
 describe("listTaskRecordPage", () => {
   it.each(["converging", "exhausted"] as const)(
@@ -97,10 +76,12 @@ describe("listTaskRecordPage", () => {
       const read = captureTaskPageRead();
       await readTaskPage({ offset: 0, limit: 1 }, read);
       const release = createDeferred();
+      let receipt: TaskRecord | undefined;
       const mutation = runTaskRegistryWorkerMutation(
         {
           admission: read.readContext.admission,
           scope: { taskId: task.taskId, flowId: "preparation-flow" },
+          publicationRecords: () => new Map(receipt ? [[receipt.taskId, receipt]] : []),
         },
         async () => {
           await release.promise;
@@ -108,9 +89,8 @@ describe("listTaskRecordPage", () => {
             store.loadSnapshot().tasks.get(task.taskId),
             "pending preparation task",
           );
-          store.upsertTaskWithDeliveryState({
-            task: { ...current, notifyPolicy: "state_changes" },
-          });
+          receipt = { ...current, notifyPolicy: "state_changes" };
+          store.upsertTaskWithDeliveryState({ task: receipt });
         },
         async () => store.loadSnapshot(),
       );

@@ -59,10 +59,7 @@ import {
   resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
-import {
-  configureTaskRegistryRuntime,
-  type TaskRegistryObserverEvent,
-} from "./task-registry.store.js";
+import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import { bindTaskRecord } from "./task-registry.store.kernel.js";
 import {
   bindTaskRunExecution,
@@ -72,6 +69,7 @@ import {
   deleteTaskAndDeliveryStateFromSqlite,
   upsertTaskWithDeliveryStateToSqlite,
 } from "./task-registry.store.sqlite.js";
+import type { TaskRegistryObserverEvent } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 import {
   parseOptionalTaskTerminalOutcome,

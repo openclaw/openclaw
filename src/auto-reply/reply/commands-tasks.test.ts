@@ -164,6 +164,7 @@ describe("handleTasksCommand task board", () => {
       {
         admission: context.admission,
         scope: { taskId: fixture.task.taskId, flowId: "status-test" },
+        publicationRecords: () => new Map(),
       },
       () => release.promise,
       () => store.loadMutationSnapshotAsync(context),
