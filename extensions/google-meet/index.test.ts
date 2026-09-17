@@ -1060,6 +1060,72 @@ describe("google-meet plugin", () => {
     expect(result.details.error).toContain("Google Meet URLs do not include dial-in details");
   });
 
+  it("registers a shutdown service that leaves active sessions through the leave path", async () => {
+    const harness = setup({ defaultTransport: "twilio" });
+    const service = harness.services.find((candidate) => candidate.id === "google-meet");
+    expect(service?.stop).toBeTypeOf("function");
+    const tool = getMeetTool(harness);
+    const joined = await tool.execute("id", {
+      action: "join",
+      url: MEET_URL,
+      dialInNumber: "+15551234567",
+      pin: "123456",
+    });
+    const sessionId = joined.details.session.id;
+    expect(voiceCallMocks.endMeetVoiceCallGatewayCall).not.toHaveBeenCalled();
+
+    await service?.stop?.({} as never);
+
+    expect(voiceCallMocks.endMeetVoiceCallGatewayCall).toHaveBeenCalledWith(
+      expect.objectContaining({ callId: "call-1" }),
+    );
+    const status = (await invokeGoogleMeetGatewayMethodForTest(
+      harness.methods,
+      "googlemeet.status",
+      { sessionId },
+    )) as { found: boolean; session?: { state?: string } };
+    expect(status.found).toBe(true);
+    expect(status.session?.state).toBe("ended");
+  });
+
+  it("keeps draining remaining sessions when one leave fails during shutdown", async () => {
+    const harness = setup({ defaultTransport: "twilio" });
+    const service = harness.services.find((candidate) => candidate.id === "google-meet");
+    const tool = getMeetTool(harness);
+    await tool.execute("id", {
+      action: "join",
+      url: MEET_URL,
+      dialInNumber: "+15551234567",
+      pin: "123456",
+    });
+    await tool.execute("id", {
+      action: "join",
+      url: "https://meet.google.com/xyz-abcd-efg",
+      dialInNumber: "+15551234567",
+      pin: "654321",
+    });
+    voiceCallMocks.endMeetVoiceCallGatewayCall
+      .mockRejectedValueOnce(new Error("voice gateway unavailable"))
+      .mockResolvedValue(undefined);
+
+    await service?.stop?.({} as never);
+
+    expect(voiceCallMocks.endMeetVoiceCallGatewayCall).toHaveBeenCalledTimes(2);
+    expect(noopLogger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("voice gateway unavailable"),
+    );
+  });
+
+  it("stops cleanly when the runtime was never initialized", async () => {
+    const harness = setup({ defaultTransport: "twilio" });
+    const service = harness.services.find((candidate) => candidate.id === "google-meet");
+    expect(service?.stop).toBeTypeOf("function");
+
+    await service?.stop?.({} as never);
+
+    expect(voiceCallMocks.endMeetVoiceCallGatewayCall).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       label: "an authoritative end reason",
