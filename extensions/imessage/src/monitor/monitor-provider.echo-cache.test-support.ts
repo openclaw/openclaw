@@ -136,14 +136,18 @@ describe("iMessage sent-message echo cache", () => {
       false,
     );
     expect(
-      await cache.has("acct:imessage:+1666", { text: "Reflected reply", messageId: "guid-1" }, options),
+      await cache.has(
+        "acct:imessage:+1666",
+        { text: "Reflected reply", messageId: "guid-1" },
+        options,
+      ),
     ).toBe(false);
 
     vi.advanceTimersByTime(4_001);
 
-    expect(
-      await cache.has(scope, { text: "Reflected reply", messageId: "guid-1" }, options),
-    ).toBe(false);
+    expect(await cache.has(scope, { text: "Reflected reply", messageId: "guid-1" }, options)).toBe(
+      false,
+    );
     expect(await cache.has(scope, { messageId: "guid-1" })).toBe(true);
   });
 
