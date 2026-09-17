@@ -424,15 +424,15 @@ export function registerManagedRecoveryOutcomeTests(
       const availabilityUnverified =
         !recovery || !("service" in recovery) || recovery.service === "failed";
       if (availabilityUnverified) {
-        expect(log).toContain("current availability is unverified");
+        expect(log).toContain("Gateway recovery failed after the update");
         expect(run?.steps).toContainEqual(
           expect.objectContaining({
             step: "warning:gateway-availability",
-            detail: expect.stringContaining("current availability is unverified"),
+            detail: expect.stringContaining("Gateway recovery failed after the update"),
           }),
         );
       } else {
-        expect(log).not.toContain("current availability is unverified");
+        expect(log).not.toContain("Gateway recovery failed after the update");
       }
       if (recovery && "service" in recovery) {
         expect(sentinel).toBeNull();
