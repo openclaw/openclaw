@@ -354,6 +354,10 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           );
           result.defaults = { ...result.defaults, modelSelectionTarget };
+          const projectPlacement = await createSessionPlacementBatchProjector(
+            context,
+            result.sessions,
+          );
           diagnostics?.mark("sharing");
           const { sharingTargets, membershipKeys } = await measureDiagnosticsTimelineSpan(
             "gateway.sessions.list.sharing",
@@ -448,7 +452,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           );
           diagnostics?.mark("decoration");
-          const projectPlacement = createSessionPlacementBatchProjector(context, result.sessions);
           const projectedAgentRuns = buildProjectedAgentRunIndex();
           const projectActiveRun = createVisibleActiveSessionRunProjector(
             context,

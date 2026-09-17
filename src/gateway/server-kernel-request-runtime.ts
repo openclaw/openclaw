@@ -68,6 +68,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   await attachInitialGatewayLifetimeSidecars({
     chatMetadataLifecycle,
     gatewayRequestContext,
+    attachSessionChangeEventLifetime: shutdownRuntime.attachSessionChangeEventLifetime,
     flushPendingSessionsChangedEvents: shutdownRuntime.flushPendingSessionsChangedEvents,
     minimalTestGateway,
     logWarning: (message) => log.warn(message),

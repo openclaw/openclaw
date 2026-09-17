@@ -12,6 +12,7 @@ import {
 } from "../config/io.health-state.kernel.js";
 import { loadMutableCronStoreInWorker } from "../cron/store/load.worker.js";
 import { executeCronStoreSaveCommand } from "../cron/store/save.worker.js";
+import { readWorkerSessionPlacementProjectionInDatabase } from "../gateway/worker-environments/placement-read-projection.js";
 import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
 import { executeSessionDeliveryCommand } from "../infra/session-delivery-queue.worker.js";
@@ -364,6 +365,13 @@ function createSharedStateWorkerBackend(
         );
       }
       const database = open();
+      if (command.type === "workers.placementProjection") {
+        return readWorkerSessionPlacementProjectionInDatabase(
+          database.db,
+          command.input.sessionIds,
+          command.input.conflictBindings,
+        );
+      }
       if (command.type === "plugins.catalogSnapshot.read") {
         return readHostedCatalogSnapshotInDatabase(database.db, command.input.url);
       }

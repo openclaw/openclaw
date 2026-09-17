@@ -16,11 +16,13 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server-methods/cron.self-removal.test.ts",
   "src/gateway/server-methods/cron.validation.test.ts",
   "src/gateway/server-methods/models-auth-removal.integration.test.ts",
+  "src/gateway/server-methods/models-connect-publication.integration.test.ts",
   "src/gateway/server-methods/models-dispatch.catalog.integration.test.ts",
   "src/gateway/server-methods/models-dispatch.lifecycle.integration.test.ts",
   "src/gateway/server-methods/models-list.freshness.integration.test.ts",
   "src/gateway/server-methods/models-list.membership.integration.test.ts",
   "src/gateway/server-methods/models-list.native-lifecycle.integration.test.ts",
+  "src/gateway/server-methods/models-manual-policy.integration.test.ts",
   "src/gateway/server-methods/native-hook-relay.test.ts",
   "src/gateway/server-methods/projects.test.ts",
   "src/gateway/server-methods/requester-cron-authority.integration.test.ts",
@@ -39,6 +41,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-utils.subagent.test.ts",
   "src/gateway/setup-inference.first-signin.integration.test.ts",
   "src/gateway/tool-resolution.cron-capture.test.ts",
+  "src/gateway/worker-environments/placement-read-projection.worker.test.ts",
+  "src/gateway/worker-environments/provider-bootstrap.test.ts",
   "src/gateway/worker-environments/provider-crabbox-runtime-preflight.test.ts",
 ];
 

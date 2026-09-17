@@ -15,9 +15,13 @@ import {
   directSessionReq,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
+import type { WorkerEnvironmentPlacementFacts } from "./worker-environments/environment-record.js";
 import type { WorkerPlacementMoveIntent } from "./worker-environments/placement-move-intent.js";
-import type { WorkerSessionPlacementReader } from "./worker-environments/placement-projector.js";
-import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-store.js";
+import { activePlacementRecord } from "./worker-environments/placement-projection.test-support.js";
+import type {
+  WorkerSessionPlacementRecord,
+  WorkerSessionPlacementStore,
+} from "./worker-environments/placement-store.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
@@ -150,28 +154,20 @@ test.each([
   },
 );
 
-function activePlacementRecord(): Extract<WorkerSessionPlacementRecord, { state: "active" }> {
+function environmentPlacementFacts(
+  overrides: Partial<WorkerEnvironmentPlacementFacts> = {},
+): WorkerEnvironmentPlacementFacts {
   return {
-    sessionId: "sess-main",
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    executionMode: "worker-turn",
-    state: "active",
     environmentId: "env-placement",
-    generation: 7,
-    activeOwnerEpoch: 12,
-    workspaceBaseManifestRef: "manifest-base",
-    remoteWorkspaceDir: "/workspace/main",
-    workerBundleHash: ["a", "b"].join("").repeat(32),
-    lastTranscriptAckCursor: 23,
-    lastLiveEventAckCursor: 9,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
-    turnClaim: null,
-    createdAtMs: 100,
-    updatedAtMs: 300,
-    stateChangedAtMs: 200,
+    providerId: "machine0",
+    profileId: "team",
+    profileSnapshot: {},
+    ownerEpoch: 12,
+    state: "attached",
+    leaseId: "lease-live",
+    nodeDeviceId: null,
+    attachedSessionIds: ["sess-main"],
+    ...overrides,
   };
 }
 
@@ -204,10 +200,21 @@ test.each([
   async ({ ownerEpoch, expectedIdentity }) => {
     await seedSessionRows();
     const placement = activePlacementRecord();
-    const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>((sessionIds) => {
-      expect(sessionIds).toEqual(expect.arrayContaining(["sess-main", "sess-other"]));
-      return new Map([[placement.sessionId, placement]]);
-    });
+    const readProjection = vi.fn<WorkerSessionPlacementStore["readProjection"]>(
+      async (sessionIds) => {
+        expect(sessionIds).toEqual(expect.arrayContaining(["sess-main", "sess-other"]));
+        return {
+          placements: new Map([[placement.sessionId, placement]]),
+          moves: new Map(),
+          workspaceResultReconcilingSessionIds: new Set(),
+          environments: new Map(
+            ownerEpoch === undefined
+              ? []
+              : [[placement.environmentId, environmentPlacementFacts({ ownerEpoch })]],
+          ),
+        };
+      },
+    );
     const diskSpace = {
       status: "warning" as const,
       availableBytes: 400,
@@ -219,19 +226,13 @@ test.each([
       profileId: "team",
       machine: { class: "medium", os: "linux", osLabel: "Linux", cpu: 4, memoryGb: 16 },
     };
-    const getEnvironment = vi.fn((environmentId: string) =>
-      ownerEpoch !== undefined && environmentId === placement.environmentId
-        ? { ...identity, ownerEpoch, state: "attached" }
-        : undefined,
-    );
     const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
       "sessions.list",
       {},
       {
         context: {
-          workerSessionPlacementService: { getMany },
+          workerSessionPlacementService: { readProjection },
           workerEnvironmentService: {
-            get: getEnvironment,
             readMachineShape: () => identity.machine,
             machineShapeVersion: () => 0,
             inventoryVersion: () => 0,
@@ -246,7 +247,7 @@ test.each([
     );
 
     expect(result.ok).toBe(true);
-    expect(getMany).toHaveBeenCalledTimes(1);
+    expect(readProjection).toHaveBeenCalledTimes(1);
     const main = result.payload?.sessions.find((session) => session.sessionId === "sess-main");
     const other = result.payload?.sessions.find((session) => session.sessionId === "sess-other");
     expect(main?.placement).toStrictEqual({
@@ -300,15 +301,23 @@ test.each(["provisioning", "syncing", "starting"] as const)(
       {
         context: {
           workerSessionPlacementService: {
-            getMany: () => new Map([[placement.sessionId, placement]]),
+            readProjection: async () => ({
+              placements: new Map([[placement.sessionId, placement]]),
+              moves: new Map(),
+              workspaceResultReconcilingSessionIds: new Set(),
+              environments: new Map([
+                [
+                  "env-placement",
+                  environmentPlacementFacts({
+                    ownerEpoch: 0,
+                    state: "provisioning",
+                    leaseId: null,
+                  }),
+                ],
+              ]),
+            }),
           },
           workerEnvironmentService: {
-            get: () => ({
-              providerId: "machine0",
-              profileId: "team",
-              ownerEpoch: 0,
-              state: "provisioning",
-            }),
             readMachineShape: () => undefined,
             machineShapeVersion: () => 0,
             inventoryVersion: () => 0,
@@ -342,17 +351,17 @@ test("sessions.list projects durable placement move progress", async () => {
     createdAtMs: 320,
     updatedAtMs: 340,
   };
-  const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
-    () => new Map([[placement.sessionId, placement]]),
-  );
-  const getPlacementMoves = vi.fn<NonNullable<WorkerSessionPlacementReader["getPlacementMoves"]>>(
-    () => new Map([[move.sessionId, move]]),
-  );
+  const readProjection = vi.fn<WorkerSessionPlacementStore["readProjection"]>(async () => ({
+    placements: new Map([[placement.sessionId, placement]]),
+    moves: new Map([[move.sessionId, move]]),
+    workspaceResultReconcilingSessionIds: new Set(),
+    environments: new Map(),
+  }));
 
   const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
     "sessions.list",
     {},
-    { context: { workerSessionPlacementService: { getMany, getPlacementMoves } } },
+    { context: { workerSessionPlacementService: { readProjection } } },
   );
 
   expect(result.ok).toBe(true);
@@ -363,57 +372,100 @@ test("sessions.list projects durable placement move progress", async () => {
     updatedAtMs: 340,
   });
   expect(main?.placementMove).not.toHaveProperty("operationId");
-  expect(getPlacementMoves).toHaveBeenCalledOnce();
+  expect(readProjection).toHaveBeenCalledOnce();
 });
 
-test("sessions.describe projects durable worker placement", async () => {
-  await seedSessionRows();
-  const placement = activePlacementRecord();
-  const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>((sessionIds) => {
-    expect(sessionIds).toEqual(["sess-main"]);
-    return new Map([[placement.sessionId, placement]]);
-  });
-  const diskSpace = {
-    status: "critical" as const,
-    availableBytes: 50,
-    totalBytes: 1_000,
-    observedAtMs: 350,
-  };
+test.each(["unchanged", "replaced"] as const)(
+  "sessions.describe awaits placement projection and rechecks the session: %s",
+  async (sessionState) => {
+    await seedSessionRows();
+    const placement = activePlacementRecord();
+    let releaseProjection!: () => void;
+    const projectionReady = new Promise<void>((resolve) => {
+      releaseProjection = resolve;
+    });
+    const getMany = vi.fn(() => new Map());
+    const getEnvironment = vi.fn(() => undefined);
+    const readProjection = vi.fn<WorkerSessionPlacementStore["readProjection"]>(
+      async (sessionIds) => {
+        expect(sessionIds).toEqual(["sess-main"]);
+        await projectionReady;
+        return {
+          placements: new Map([[placement.sessionId, placement]]),
+          moves: new Map(),
+          workspaceResultReconcilingSessionIds: new Set(),
+          environments: new Map(),
+        };
+      },
+    );
+    const diskSpace = {
+      status: "critical" as const,
+      availableBytes: 50,
+      totalBytes: 1_000,
+      observedAtMs: 350,
+    };
 
-  const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
-    "sessions.describe",
-    { key: "main" },
-    {
-      context: {
-        workerSessionPlacementService: { getMany },
-        workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
-        workerPlacementRunnerAvailabilityReader: {
-          read: () => ({ kind: "device", status: "offline" }),
-          version: () => 1,
+    const completed = vi.fn();
+    const pendingResult = directSessionReq<{ session: GatewaySessionRow | null }>(
+      "sessions.describe",
+      { key: "main" },
+      {
+        context: {
+          workerSessionPlacementService: { readProjection, getMany },
+          workerEnvironmentService: { get: getEnvironment },
+          workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
+          workerPlacementRunnerAvailabilityReader: {
+            read: () => ({ kind: "device", status: "offline" }),
+            version: () => 1,
+          },
         },
       },
-    },
-  );
+    ).then((result) => {
+      completed();
+      return result;
+    });
 
-  expect(result.ok).toBe(true);
-  expect(getMany).toHaveBeenCalledTimes(1);
-  expect(result.payload?.session?.placement).toEqual({
-    state: "active",
-    environmentId: "env-placement",
-    generation: 7,
-    activeOwnerEpoch: 12,
-    workspaceBaseManifestRef: "manifest-base",
-    remoteWorkspaceDir: "/workspace/main",
-    workerBundleHash: ["a", "b"].join("").repeat(32),
-    lastTranscriptAckCursor: 23,
-    lastLiveEventAckCursor: 9,
-    createdAtMs: 100,
-    updatedAtMs: 300,
-    stateChangedAtMs: 200,
-    diskSpace,
-    runner: { kind: "device", status: "offline" },
-  });
-});
+    try {
+      await vi.waitFor(() => expect(readProjection).toHaveBeenCalledOnce());
+      expect(completed).not.toHaveBeenCalled();
+      expect(getMany).not.toHaveBeenCalled();
+      expect(getEnvironment).not.toHaveBeenCalled();
+      if (sessionState === "replaced") {
+        await writeSessionStore({
+          entries: { main: { sessionId: "sess-replacement", updatedAt: 400 } },
+        });
+      }
+    } finally {
+      releaseProjection();
+    }
+    const result = await pendingResult;
+
+    expect(result.ok).toBe(true);
+    expect(readProjection).toHaveBeenCalledTimes(1);
+    expect(getMany).not.toHaveBeenCalled();
+    expect(getEnvironment).not.toHaveBeenCalled();
+    if (sessionState === "replaced") {
+      expect(result.payload?.session).toBeNull();
+      return;
+    }
+    expect(result.payload?.session?.placement).toEqual({
+      state: "active",
+      environmentId: "env-placement",
+      generation: 7,
+      activeOwnerEpoch: 12,
+      workspaceBaseManifestRef: "manifest-base",
+      remoteWorkspaceDir: "/workspace/main",
+      workerBundleHash: ["a", "b"].join("").repeat(32),
+      lastTranscriptAckCursor: 23,
+      lastLiveEventAckCursor: 9,
+      createdAtMs: 100,
+      updatedAtMs: 300,
+      stateChangedAtMs: 200,
+      diskSpace,
+      runner: { kind: "device", status: "offline" },
+    });
+  },
+);
 
 test.each([
   { name: "without an environment", ownerEpoch: undefined, activeOwnerEpoch: 12, identity: false },
@@ -449,26 +501,29 @@ test.each([
       terminalReason: "cloud worker disappeared: provider reported lease destroyed",
       terminalAtMs: 400,
     } satisfies WorkerSessionPlacementRecord;
-    const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
-      () => new Map([[placement.sessionId, placement]]),
-    );
+    const readProjection = vi.fn<WorkerSessionPlacementStore["readProjection"]>(async () => ({
+      placements: new Map([[placement.sessionId, placement]]),
+      moves: new Map(),
+      workspaceResultReconcilingSessionIds: new Set(),
+      environments: new Map(
+        ownerEpoch === undefined
+          ? []
+          : [
+              [
+                active.environmentId,
+                environmentPlacementFacts({ ownerEpoch, state: "destroyed", leaseId: null }),
+              ],
+            ],
+      ),
+    }));
 
     const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
       "sessions.describe",
       { key: "main" },
       {
         context: {
-          workerSessionPlacementService: { getMany },
+          workerSessionPlacementService: { readProjection },
           workerEnvironmentService: {
-            get: () =>
-              ownerEpoch === undefined
-                ? undefined
-                : {
-                    providerId: "machine0",
-                    profileId: "team",
-                    ownerEpoch,
-                    state: "destroyed",
-                  },
             readMachineShape: () => undefined,
             machineShapeVersion: () => 0,
             inventoryVersion: () => 0,
@@ -513,16 +568,16 @@ test("sessions.describe requires worker teardown before failed-placement restart
     {
       context: {
         workerSessionPlacementService: {
-          getMany: () => new Map([[placement.sessionId, placement]]),
+          readProjection: async () => ({
+            placements: new Map([[placement.sessionId, placement]]),
+            moves: new Map(),
+            workspaceResultReconcilingSessionIds: new Set(),
+            environments: new Map([
+              [active.environmentId, environmentPlacementFacts({ state: "failed" })],
+            ]),
+          }),
         },
         workerEnvironmentService: {
-          get: () => ({
-            providerId: "machine0",
-            profileId: "team",
-            ownerEpoch: placement.activeOwnerEpoch,
-            state: "failed",
-            leaseId: "lease-live",
-          }),
           readMachineShape: () => undefined,
           machineShapeVersion: () => 0,
           inventoryVersion: () => 0,

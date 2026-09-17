@@ -76,3 +76,16 @@ export type WorkerEnvironmentIntentInput = RecordIdentity & {
   profileSnapshot: WorkerEnvironmentProfileSnapshot;
   provisionOperationId: string;
 };
+
+export type WorkerEnvironmentPlacementFacts = Pick<
+  WorkerEnvironmentRecord,
+  | "environmentId"
+  | "providerId"
+  | "profileId"
+  | "profileSnapshot"
+  | "state"
+  | "leaseId"
+  | "ownerEpoch"
+  | "nodeDeviceId"
+  | "attachedSessionIds"
+>;

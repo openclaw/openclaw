@@ -1,4 +1,5 @@
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
+import type { WorkerEnvironmentPlacementFacts } from "./environment-record.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRetirement,
@@ -66,6 +67,7 @@ type FailedPlacement = Extract<Placement, { state: "failed" }>;
 export function isFailedWorkerPlacementEnvironmentGone(params: {
   environmentService: SessionWorkerPlacementContext["workerEnvironmentService"];
   placement: FailedPlacement;
+  preparedEnvironment?: WorkerEnvironmentPlacementFacts | null;
 }): boolean {
   if (params.placement.environmentId === null) {
     return true;
@@ -76,9 +78,12 @@ export function isFailedWorkerPlacementEnvironmentGone(params: {
     return false;
   }
   try {
-    const environment = params.environmentService.get(params.placement.environmentId);
+    const environment =
+      params.preparedEnvironment === undefined
+        ? params.environmentService.get(params.placement.environmentId)
+        : params.preparedEnvironment;
     return (
-      environment === undefined ||
+      environment == null ||
       environment.state === "destroyed" ||
       (environment.state === "failed" && environment.leaseId === null)
     );

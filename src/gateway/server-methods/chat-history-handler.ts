@@ -445,6 +445,7 @@ export async function handleChatHistoryRequest({
   const startupMetadata = method === "chat.startup" ? startupProjection?.metadata : undefined;
   const sessionModelCatalog = startupProjection?.sessionModelCatalog;
   const defaultModelCatalog = startupProjection?.defaultModelCatalog;
+  const placementFields = await readSessionPlacementFields(context, entry?.sessionId);
   const currentSharing = readCurrentSharing();
   if (!currentSharing) {
     return;
@@ -492,7 +493,7 @@ export async function handleChatHistoryRequest({
   // Clients merge this row into the same store sessions.list fills, so it must
   // carry the placement facts that projection adds; without them the merge
   // erases a live worker placement and its move intent.
-  Object.assign(sessionInfo, readSessionPlacementFields(context, entry?.sessionId));
+  Object.assign(sessionInfo, placementFields);
   // An active embedded run can be owned by the embedded registry while absent
   // from the visible chat-abort controllers. The activeRunIds field stays
   // omitted to preserve the exact-chat-send identity contract (coordination

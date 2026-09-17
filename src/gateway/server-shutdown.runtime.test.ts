@@ -5,7 +5,8 @@ const state = vi.hoisted(() => ({
   prepareClose: vi.fn(),
   drainEmbeddingProviders: vi.fn(),
   completeClose: vi.fn(),
-  flushSessionChanges: vi.fn(),
+  attachSessionChangeEventLifetime: vi.fn(),
+  flushPendingSessionsChangedEvents: vi.fn(async () => {}),
   stopPlugins: vi.fn(),
   preparePluginRegistryShutdown: vi.fn(async () => undefined),
 }));
@@ -25,7 +26,10 @@ vi.mock("../plugins/hook-runner-global.js", () => {
 });
 vi.mock("./server-methods/session-change-event.js", () => {
   state.loaded.push("session-change-events");
-  return { flushPendingSessionsChangedEvents: state.flushSessionChanges };
+  return {
+    attachSessionChangeEventLifetime: state.attachSessionChangeEventLifetime,
+    flushPendingSessionsChangedEvents: state.flushPendingSessionsChangedEvents,
+  };
 });
 vi.mock("./mcp-http.js", () => {
   state.loaded.push("mcp-http");
@@ -94,7 +98,7 @@ describe("gateway shutdown runtime", () => {
     expect(runtime.prepareGatewayClose).toBe(state.prepareClose);
     expect(runtime.drainRetainedOpenAiEmbeddingProviders).toBe(state.drainEmbeddingProviders);
     expect(runtime.completeGatewayClose).toBe(state.completeClose);
-    expect(runtime.flushPendingSessionsChangedEvents).toBe(state.flushSessionChanges);
+    expect(runtime.attachSessionChangeEventLifetime).toBe(state.attachSessionChangeEventLifetime);
     expect(runtime.runGlobalGatewayStopSafely).toBe(state.stopPlugins);
     expect(state.preparePluginRegistryShutdown).toHaveBeenCalledOnce();
   });

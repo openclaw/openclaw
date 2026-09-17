@@ -223,6 +223,25 @@ updates retain their connection-bound kernels. Push preference and notification
 callers still use the synchronous facade until their preparation and publication
 owners migrate together.
 
+Gateway session-list, session-description, chat-history, and session-change-event placement projections
+read placements, move intents, pending workspace-result state, and environment
+facts in one shared-worker snapshot. The placement store captures its original
+database path before admission. Host-owned workspace conflicts attach only to
+the corresponding placement or retained pending-result owner; disk samples,
+runner availability, and machine catalogs consume the prepared environment facts.
+Existing session-list cache fences continue to govern response reuse; the
+placement store retains no separate completed-result cache.
+Visibility and session lifecycle checks run again after preparation yields.
+Session-change invalidation remains synchronous. Its existing coalescer registers
+preparation and publication with the Gateway sidecar owner, preserves per-session
+publication order, and drains admitted work before that owner seals. Late events
+cannot start database work after the seal. A stale row or failed preparation emits
+only the existing invalidation signal. Session-change row materialization itself
+still uses the separate synchronous session-read owner.
+Startup environment reconciliation and synchronous placement reads used by live
+turn, dispatch, and mutation authority retain their existing owners and native
+execution paths. Placement/environment writes, schemas, and retention are unchanged.
+
 The host captures the database path, state environment, and current admission
 before awaited work. The shared worker owns its canonical connection and schema
 opening, with Gateway schema authority delegated by its live coordinator owner.

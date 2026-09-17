@@ -11,6 +11,7 @@ import type {
   WorkerProfile,
 } from "../../plugins/capability-provider.types.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
+import type { WorkerEnvironmentPlacementFacts } from "./environment-record.js";
 import type {
   WorkerPlacementMoveSource,
   WorkerPlacementMoveTarget,
@@ -78,6 +79,12 @@ export type WorkerEnvironmentServiceContract = {
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
   inventoryVersion(): number;
   readMachineShape(environmentId: string): SessionPlacementMachine | undefined;
+  readPreparedMachineShape?(
+    environment: Pick<
+      WorkerEnvironmentPlacementFacts,
+      "providerId" | "profileId" | "profileSnapshot"
+    >,
+  ): SessionPlacementMachine | undefined;
   machineShapeVersion(): number;
   supportsExecutionMode(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
   listMachineOptions(profileId: string): Promise<readonly WorkerMachineOption[] | undefined>;

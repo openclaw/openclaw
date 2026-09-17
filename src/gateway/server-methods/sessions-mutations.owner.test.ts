@@ -34,8 +34,8 @@ import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-afterEach(() => {
-  flushPendingSessionsChangedEvents();
+afterEach(async () => {
+  await flushPendingSessionsChangedEvents();
   closeOpenClawAgentDatabasesForTest();
   vi.restoreAllMocks();
 });

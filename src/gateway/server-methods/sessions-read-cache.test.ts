@@ -250,8 +250,15 @@ describe("sessions.list single-flight", () => {
       const context = {
         ...requestContext(config),
         workerSessionPlacementService: {
-          getMany: () =>
-            new Map<string, WorkerSessionPlacementRecord>([[placement.sessionId, placement]]),
+          getMany: () => new Map(),
+          readProjection: async () => ({
+            placements: new Map<string, WorkerSessionPlacementRecord>([
+              [placement.sessionId, placement],
+            ]),
+            moves: new Map(),
+            workspaceResultReconcilingSessionIds: new Set(),
+            environments: new Map(),
+          }),
         },
         workerPlacementRunnerAvailabilityReader: {
           read: () => ({

@@ -1,5 +1,5 @@
 import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   SessionPlacementMoveSchema,
   SessionPlacementSchema,
@@ -66,33 +66,58 @@ describe("worker placement projection", () => {
     },
   );
 
-  it("omits an empty machine result from correlated placement identity", () => {
-    const record = {
-      ...RECORD_BASE,
-      state: "provisioning" as const,
-      environmentId: "environment-1",
-      activeOwnerEpoch: null,
-    };
-    const identity = readWorkerPlacementIdentity(record, {
-      get: () => ({
+  it.each(["legacy", "legacy-prepared", "prepared"] as const)(
+    "omits an empty machine result with %s readers",
+    (mode) => {
+      const record = {
+        ...RECORD_BASE,
+        state: "provisioning" as const,
+        environmentId: "environment-1",
+        activeOwnerEpoch: null,
+      };
+      const environment = {
         environmentId: "environment-1",
         providerId: "crabbox",
         profileId: "aws",
+        profileSnapshot: {},
         ownerEpoch: 1,
-        state: "requested",
+        state: "requested" as const,
         leaseId: null,
+        nodeDeviceId: null,
         sharedHost: null,
         createdAtMs: 1,
         idleSinceAtMs: null,
         attachedSessionIds: [],
         desktopAvailable: false,
         desktopApps: [],
-        tunnelStatus: "stopped",
-      }),
-      readMachineShape: () => ({}),
-    });
-    expect(identity).toEqual({ providerId: "crabbox", profileId: "aws" });
-  });
+        tunnelStatus: "stopped" as const,
+      };
+      const get = vi.fn(() => environment);
+      const readMachineShape = vi.fn((environmentId: string) => {
+        expect(environmentId).toBe(environment.environmentId);
+        return {};
+      });
+      const readPreparedMachineShape = vi.fn(() => ({}));
+      const service = {
+        get,
+        readMachineShape,
+        ...(mode === "prepared" ? { readPreparedMachineShape } : {}),
+      };
+      const identity = readWorkerPlacementIdentity(
+        record,
+        service,
+        mode === "legacy" ? undefined : environment,
+      );
+      expect(identity).toEqual({ providerId: "crabbox", profileId: "aws" });
+      expect(get).toHaveBeenCalledTimes(mode === "legacy" ? 1 : 0);
+      if (mode === "prepared") {
+        expect(readPreparedMachineShape).toHaveBeenCalledWith(environment);
+        expect(readMachineShape).not.toHaveBeenCalled();
+      } else {
+        expect(readMachineShape).toHaveBeenCalledWith(environment.environmentId);
+      }
+    },
+  );
 
   it("adds an exact active disk-space sample only when supplied", () => {
     const active = {

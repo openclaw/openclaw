@@ -674,10 +674,7 @@ describe("board gateway runtime boundaries", () => {
       client: null,
       isWebchatConnect: () => false,
       respond,
-      context: {
-        broadcast: vi.fn(),
-        getSessionEventSubscriberConnIds: () => new Set<string>(),
-      } as unknown as GatewayRequestContext,
+      context: createHarness(undefined, {}, boardStore).context,
     });
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect((await boardStore.getSnapshot({ sessionKey })).widgets).toHaveLength(1);

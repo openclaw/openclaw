@@ -102,9 +102,25 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
         await pause;
       }
       assertCurrent();
-      // Target, sharing, lineage and placement facts belong to this final synchronous read.
+      const placementTarget = readVisibleSession(false);
+      if (!placementTarget) {
+        return;
+      }
+      const placementFields = await readSessionPlacementFields(
+        context,
+        placementTarget.entry.sessionId,
+      );
+      assertCurrent();
+      // Recheck visibility and lifecycle after the placement snapshot yields.
       const current = readVisibleSession(true);
       if (!current) {
+        return;
+      }
+      if (
+        current.entry.sessionId !== placementTarget.entry.sessionId ||
+        current.entry.lifecycleRevision !== placementTarget.entry.lifecycleRevision
+      ) {
+        respond(true, { session: null });
         return;
       }
       const { cfg, target, storePath, store, entry, sharing } = current;
@@ -146,7 +162,7 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
           storeKeys: target.storeKeys,
           storePath,
         }),
-        ...readSessionPlacementFields(context, row.sessionId),
+        ...placementFields,
       });
       respond(true, { session: row });
     });

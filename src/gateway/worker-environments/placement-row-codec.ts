@@ -464,3 +464,27 @@ export function transitionValues(
   });
   return values;
 }
+
+export function readWorkerSessionPlacementsInDatabase(
+  db: DatabaseSync,
+  sessionIds: readonly string[],
+): Map<string, WorkerSessionPlacementRecord> {
+  const normalizedIds = [
+    ...new Set(sessionIds.map((sessionId) => required(sessionId, "session id"))),
+  ];
+  const records = new Map<string, WorkerSessionPlacementRecord>();
+  for (let offset = 0; offset < normalizedIds.length; offset += 250) {
+    const chunk = normalizedIds.slice(offset, offset + 250);
+    for (const row of executeSqliteQuerySync(
+      db,
+      query(db)
+        .selectFrom("worker_session_placements")
+        .selectAll()
+        .where("session_id", "in", chunk),
+    ).rows) {
+      const record = fromRow(row);
+      records.set(record.sessionId, record);
+    }
+  }
+  return records;
+}

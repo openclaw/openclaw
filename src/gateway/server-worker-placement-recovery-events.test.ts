@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -6,6 +6,21 @@ const runtimeMocks = vi.hoisted(() => ({
   createDiskSpace: vi.fn(),
   createSessionEvidenceResolver: vi.fn(),
 }));
+
+const sessionChangeWarn = vi.hoisted(() => vi.fn());
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "gateway/session-changes"
+        ? { ...logger, warn: sessionChangeWarn }
+        : logger;
+    },
+  };
+});
 
 vi.mock("./worker-environments/placement-dispatch.js", async (importOriginal) => {
   const actual =
@@ -177,13 +192,17 @@ async function withRecoveryRuntime(
       });
     } finally {
       await sidecar.current?.stop();
-      flushPendingSessionsChangedEvents(context);
+      await flushPendingSessionsChangedEvents(context);
       vi.useRealTimers();
     }
   });
 }
 
 describe("worker placement recovery session events", () => {
+  beforeEach(() => {
+    sessionChangeWarn.mockClear();
+  });
+
   it("refreshes correlated session observers when machine metadata arrives and unsubscribes on stop", async () => {
     const placement = recoveryPlacement();
     await withRecoveryRuntime(
@@ -200,7 +219,7 @@ describe("worker placement recovery session events", () => {
         catalogChanged("other-profile");
         expect(readSessionsMutationVersion(context)).toBe(initialVersion);
         catalogChanged("development");
-        flushPendingSessionsChangedEvents(context);
+        await flushPendingSessionsChangedEvents(context);
         expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
           "sessions.changed",
           expect.objectContaining({ reason: "placement", sessionKey: placement.sessionKey }),
@@ -388,10 +407,13 @@ describe("worker placement recovery session events", () => {
         },
         sweep: (placements) => void placements.set(recovered.sessionId, recovered),
       },
-      async ({ context, runtime, warn }) => {
+      async ({ context, runtime }) => {
         await expect(runtime.dispatchService.reconcileActive()).resolves.toBeUndefined();
+        await flushPendingSessionsChangedEvents(context);
         expect(context.broadcastToConnIds).toHaveBeenCalledOnce();
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("session broadcast failed"));
+        expect(sessionChangeWarn).toHaveBeenCalledWith(
+          expect.stringContaining("session broadcast failed"),
+        );
       },
     );
   });

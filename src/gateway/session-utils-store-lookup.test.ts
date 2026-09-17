@@ -521,10 +521,11 @@ describe("exact session model projections", () => {
             agentId: "main",
             reason: "patch",
           });
+          await flushPendingSessionsChangedEvents(eventContext);
           expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
           expect.soft(broadcast.mock.calls[0]?.[1]).toMatchObject(expected);
         } finally {
-          flushPendingSessionsChangedEvents(eventContext);
+          await flushPendingSessionsChangedEvents(eventContext);
         }
       });
     },

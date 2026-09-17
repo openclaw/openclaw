@@ -24,8 +24,8 @@ import {
   rolePolicyConfig,
 } from "./session-sharing.test-utils.js";
 
-afterEach(() => {
-  flushPendingSessionsChangedEvents();
+afterEach(async () => {
+  await flushPendingSessionsChangedEvents();
   closeOpenClawAgentDatabasesForTest();
 });
 

@@ -1146,10 +1146,10 @@ export function restoreAgentTaskRegistryRuntimeAfterTests(): void {
   resetTaskRegistryForTests({ persist: false });
 }
 
-export const describe0AfterEach0 = () => {
-  mocks.userTurnStorePath = undefined;
+export const describe0AfterEach0 = async () => {
   // Drain deferred broadcasts before retiring the test-owned row and runtime state.
-  flushPendingSessionsChangedEvents();
+  await flushPendingSessionsChangedEvents();
+  mocks.userTurnStorePath = undefined;
   mocks.loadGatewaySessionRow.mockReset();
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
@@ -1183,8 +1183,8 @@ export const describe0AfterEach0 = () => {
   vi.useRealTimers();
 };
 
-function resetIntegrationState() {
-  flushPendingSessionsChangedEvents();
+async function resetIntegrationState() {
+  await flushPendingSessionsChangedEvents();
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetAgentTaskRegistryForTests();
@@ -1214,11 +1214,11 @@ function resetIntegrationState() {
 }
 
 export const describe1BeforeEach0 = () => {
-  resetIntegrationState();
+  return resetIntegrationState();
 };
 
 export const describe1AfterEach1 = () => {
-  resetIntegrationState();
+  return resetIntegrationState();
 };
 
 export function prime(sessionId = "existing-session-id", cfg: Record<string, unknown> = {}) {

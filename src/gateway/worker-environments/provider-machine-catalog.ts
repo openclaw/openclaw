@@ -116,7 +116,7 @@ export function createWorkerMachineCatalog(
   };
 
   const readMachineShape = (
-    record: WorkerEnvironmentRecord,
+    record: Pick<WorkerEnvironmentRecord, "providerId" | "profileId" | "profileSnapshot">,
   ): SessionPlacementMachine | undefined => {
     const snapshot = record.profileSnapshot;
     const machineClass =

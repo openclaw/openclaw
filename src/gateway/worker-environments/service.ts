@@ -597,6 +597,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     inventoryVersion: store.inventoryVersion,
     machineShapeVersion: providerLifecycle.machineShapeVersion,
     subscribeMachineShapeChanged: providerLifecycle.subscribeMachineShapeChanged,
+    readPreparedMachineShape: providerLifecycle.readMachineShape,
     readMachineShape: (environmentId: string) => {
       const record = store.get(environmentId);
       return record ? providerLifecycle.readMachineShape(record) : undefined;

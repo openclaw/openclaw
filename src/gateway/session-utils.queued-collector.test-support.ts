@@ -112,7 +112,7 @@ export function useQueuedCollectorFixture() {
     await closeSwarmScheduler();
     stopLifecycleListener?.();
     stopLifecycleListener = undefined;
-    flushPendingSessionsChangedEvents();
+    await flushPendingSessionsChangedEvents();
     schedulerTesting.reset();
     for (const runId of launchedRunIds.splice(0)) {
       clearAgentRunContext(runId);

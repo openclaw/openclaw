@@ -94,6 +94,7 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import { activePlacementRecord } from "./worker-environments/placement-projection.test-support.js";
 
 async function readWarmChatStartup(ws: Parameters<typeof rpcReq>[0]) {
   // rpcReq resets the runtime config before each request. Warm startup must reuse
@@ -870,32 +871,18 @@ describe("gateway server chat", () => {
       openDirectChatSession();
       try {
         await writeMainSessionStore();
-        const placement = {
-          sessionId: "sess-main",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          executionMode: "worker-turn",
-          state: "active",
-          environmentId: "env-placement",
-          generation: 7,
-          activeOwnerEpoch: 12,
-          workspaceBaseManifestRef: "manifest-base",
-          remoteWorkspaceDir: "/workspace/main",
-          workerBundleHash: "ab".repeat(32),
-          recoveryError: null,
-          terminalReason: null,
-          terminalAtMs: null,
-          turnClaim: null,
-          createdAtMs: 100,
-          updatedAtMs: 300,
-          stateChangedAtMs: 200,
-        };
+        const placement = activePlacementRecord();
         const context = createDirectChatContext({
           workerSessionPlacementService: {
             getMany: () => new Map([[placement.sessionId, placement]]),
-            getPlacementMoves: () => new Map(),
+            readProjection: async () => ({
+              placements: new Map([[placement.sessionId, placement]]),
+              moves: new Map(),
+              workspaceResultReconcilingSessionIds: new Set(),
+              environments: new Map(),
+            }),
           },
-        } as unknown as Partial<GatewayRequestContext>);
+        });
         const responses: Array<{ ok: boolean; payload?: unknown }> = [];
         await callDirectChat(method, {
           id: method,

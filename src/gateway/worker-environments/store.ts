@@ -479,7 +479,7 @@ function nextGlobalOwnerEpoch(db: DatabaseSync): number {
     Math.max(latestEnvironment?.owner_epoch ?? 0, latestTranscriptCommit?.run_epoch ?? 0),
   );
 }
-function fromRow(row: Row, fallbackPorts: readonly number[]): WorkerEnvironmentRecord {
+export function decodeRow(row: Row, fallbackPorts: readonly number[]): WorkerEnvironmentRecord {
   const record = {
     environmentId: row.environment_id,
     providerId: row.provider_id,
@@ -559,7 +559,7 @@ function recordsFromRows(rows: readonly RowWithFallbackPort[]): WorkerEnvironmen
       row,
     });
   }
-  return Array.from(grouped.values(), ({ row, ports }) => fromRow(row, ports));
+  return Array.from(grouped.values(), ({ row, ports }) => decodeRow(row, ports));
 }
 function find(db: DatabaseSync, environmentId: string) {
   const rows = executeSqliteQuerySync(
@@ -1044,7 +1044,7 @@ export function createWorkerEnvironmentStore(
         db: read(),
         write,
         nowMs,
-        canPruneDemand: (row) => params.canPruneDemand?.(fromRow(row, []), nowMs) ?? true,
+        canPruneDemand: (row) => params.canPruneDemand?.(decodeRow(row, []), nowMs) ?? true,
         ...(params.limit === undefined ? {} : { limit: params.limit }),
       });
     },

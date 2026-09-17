@@ -259,6 +259,12 @@ describe("sessions.reclaim", () => {
           workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
           workerSessionPlacementService: {
             getMany: () => new Map([[dispatchTestSessionId, placement]]),
+            readProjection: async () => ({
+              placements: new Map([[dispatchTestSessionId, placement]]),
+              moves: new Map(),
+              workspaceResultReconcilingSessionIds: new Set(),
+              environments: new Map(),
+            }),
           },
         });
 
@@ -272,6 +278,7 @@ describe("sessions.reclaim", () => {
               ? undefined
               : expect.objectContaining({ message: reclaimError.message }),
           );
+          await flushPendingSessionsChangedEvents(context);
           expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
             "sessions.changed",
             expect.objectContaining({ reason: "reclaim", sessionKey: dispatchTestSessionKey }),
@@ -280,7 +287,7 @@ describe("sessions.reclaim", () => {
           );
           expect(readSessionsMutationVersion(context)).toBe(1);
         } finally {
-          flushPendingSessionsChangedEvents(context);
+          await flushPendingSessionsChangedEvents(context);
         }
       });
     },

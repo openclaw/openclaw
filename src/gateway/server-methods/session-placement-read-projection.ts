@@ -1,10 +1,9 @@
-import type { WorkerPlacementMoveIntent } from "../worker-environments/placement-move-intent.js";
 import {
   projectWorkerPlacementMove,
   projectWorkerSessionPlacement,
   readWorkerPlacementIdentity,
 } from "../worker-environments/placement-projector.js";
-import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
+import type { WorkerSessionPlacementProjection } from "../worker-environments/placement-read-projection.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -19,17 +18,21 @@ export type SessionPlacementReadContext = Pick<
 function projectSessionPlacementFields(params: {
   context: SessionPlacementReadContext;
   sessionId: string | undefined;
-  placements?: ReadonlyMap<string, WorkerSessionPlacementRecord>;
-  workspaceResultReconcilingSessionIds?: ReadonlySet<string>;
-  moves?: ReadonlyMap<string, WorkerPlacementMoveIntent>;
+  snapshot?: WorkerSessionPlacementProjection;
 }) {
-  const placement = params.sessionId ? params.placements?.get(params.sessionId) : undefined;
-  const move = params.sessionId ? params.moves?.get(params.sessionId) : undefined;
+  const placement = params.sessionId
+    ? params.snapshot?.placements.get(params.sessionId)
+    : undefined;
+  const move = params.sessionId ? params.snapshot?.moves.get(params.sessionId) : undefined;
+  const environment = placement?.environmentId
+    ? (params.snapshot?.environments.get(placement.environmentId) ?? null)
+    : null;
   const failedRecoveryAction =
     placement?.state === "failed"
       ? isFailedWorkerPlacementEnvironmentGone({
           environmentService: params.context.workerEnvironmentService,
           placement,
+          preparedEnvironment: environment,
         })
         ? "restart"
         : "stop-first"
@@ -40,10 +43,14 @@ function projectSessionPlacementFields(params: {
           placement: projectWorkerSessionPlacement(
             placement,
             params.context.workerPlacementDiskSpaceReader?.read(placement),
-            params.context.workerPlacementRunnerAvailabilityReader?.read(placement),
-            readWorkerPlacementIdentity(placement, params.context.workerEnvironmentService),
+            params.context.workerPlacementRunnerAvailabilityReader?.read(placement, environment),
+            readWorkerPlacementIdentity(
+              placement,
+              params.context.workerEnvironmentService,
+              environment,
+            ),
             failedRecoveryAction,
-            params.workspaceResultReconcilingSessionIds?.has(placement.sessionId) ?? false,
+            params.snapshot?.workspaceResultReconcilingSessionIds.has(placement.sessionId) ?? false,
           ),
         }
       : {}),
@@ -51,31 +58,31 @@ function projectSessionPlacementFields(params: {
   };
 }
 
-export function createSessionPlacementBatchProjector(
+export async function createSessionPlacementBatchProjector(
   context: SessionPlacementReadContext,
   sessions: readonly { sessionId?: string }[],
 ) {
   const sessionIds = sessions.flatMap((session) => (session.sessionId ? [session.sessionId] : []));
-  const placements = context.workerSessionPlacementService?.getMany(sessionIds);
-  const workspaceResultReconcilingSessionIds =
-    context.workerSessionPlacementService?.getWorkspaceResultReconcilingSessionIds?.(sessionIds);
-  const moves = context.workerSessionPlacementService?.getPlacementMoves?.(sessionIds);
+  const service = context.workerSessionPlacementService;
+  if (service && !service.readProjection) {
+    throw new Error("Worker placement projection is unavailable");
+  }
+  const snapshot = await service?.readProjection?.(sessionIds);
   return (sessionId: string | undefined) =>
     projectSessionPlacementFields({
       context,
       sessionId,
-      placements,
-      workspaceResultReconcilingSessionIds,
-      moves,
+      snapshot,
     });
 }
 
-export function readSessionPlacementFields(
+export async function readSessionPlacementFields(
   context: SessionPlacementReadContext,
   sessionId: string | undefined,
 ) {
-  return createSessionPlacementBatchProjector(
+  const project = await createSessionPlacementBatchProjector(
     context,
     sessionId ? [{ sessionId }] : [{}],
-  )(sessionId);
+  );
+  return project(sessionId);
 }

@@ -217,7 +217,7 @@ describe("session sharing handlers", () => {
             item.client,
           ),
         ).toEqual([[true, { ok: true, sessionKey, identityId: member.id }, undefined]]);
-        flushPendingSessionsChangedEvents(requestContext);
+        await flushPendingSessionsChangedEvents(requestContext);
         expect(requestContext.broadcastToConnIds).toHaveBeenCalledWith(
           "sessions.changed",
           expect.objectContaining({ reason: "sharing", sessionKey }),

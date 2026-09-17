@@ -95,7 +95,8 @@ describe("gateway lifetime sidecars", () => {
     await attachInitialGatewayLifetimeSidecars({
       chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
       gatewayRequestContext: {} as never,
-      flushPendingSessionsChangedEvents: vi.fn(),
+      attachSessionChangeEventLifetime: vi.fn(),
+      flushPendingSessionsChangedEvents: vi.fn(async () => {}),
       minimalTestGateway: false,
       logWarning: vi.fn(),
       reconcileGitHubPublications,
@@ -124,7 +125,8 @@ describe("gateway lifetime sidecars", () => {
     await attachInitialGatewayLifetimeSidecars({
       chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
       gatewayRequestContext: context as never,
-      flushPendingSessionsChangedEvents: vi.fn(),
+      attachSessionChangeEventLifetime: vi.fn(),
+      flushPendingSessionsChangedEvents: vi.fn(async () => {}),
       minimalTestGateway: false,
       logWarning: warn,
       publishSidecars: owner.publish,
@@ -169,7 +171,8 @@ describe("gateway lifetime sidecars", () => {
         await attachInitialGatewayLifetimeSidecars({
           chatMetadataLifecycle: { attachContext: vi.fn(async () => {}) } as never,
           gatewayRequestContext: {} as never,
-          flushPendingSessionsChangedEvents: vi.fn(),
+          attachSessionChangeEventLifetime: vi.fn(),
+          flushPendingSessionsChangedEvents: vi.fn(async () => {}),
           minimalTestGateway,
           logWarning: vi.fn(),
           publishSidecars: owner.publish,

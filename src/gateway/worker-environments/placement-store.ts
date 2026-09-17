@@ -7,9 +7,12 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
 import { createPlacementMoveOps } from "./placement-move-intent.js";
 import { createPlacementPendingFailureOps } from "./placement-pending-failure.js";
+import type { WorkerSessionPlacementProjection } from "./placement-read-projection.js";
 import {
   isCurrentPlacementTurnClaim,
   nextGeneration,
@@ -27,6 +30,7 @@ import {
 } from "./placement-record.js";
 import {
   ensureLocal,
+  readWorkerSessionPlacementsInDatabase,
   find,
   fromRow,
   getRequired,
@@ -149,18 +153,25 @@ export function createWorkerSessionPlacementStore(
     write: (operation) => runOpenClawStateWriteTransaction(({ db }) => operation(db), { path }),
   };
   const { read, write } = runtime;
-  const workspaceResultConflicts = new Map<string, WorkerWorkspaceResultConflict>();
+  const workspaceResultConflicts = new Map<
+    string,
+    {
+      conflict: WorkerWorkspaceResultConflict;
+      placement: WorkerSessionPlacementRecord;
+      claim: WorkerSessionTurnClaim;
+    }
+  >();
   const withWorkspaceResultConflict = (
     record: WorkerSessionPlacementRecord | undefined,
   ): WorkerSessionPlacementRecord | undefined => {
     if (!record) {
       return undefined;
     }
-    const conflict = workspaceResultConflicts.get(record.sessionId);
+    const conflict = workspaceResultConflicts.get(record.sessionId)?.conflict;
     return conflict ? { ...record, workspaceResultConflict: conflict } : record;
   };
 
-  const requireClaimOwner = (claim: WorkerSessionTurnClaim): void => {
+  const requireClaimOwner = (claim: WorkerSessionTurnClaim): WorkerSessionPlacementRecord => {
     const db = read();
     const current = find(db, required(claim.sessionId, "session id"));
     if (
@@ -169,6 +180,7 @@ export function createWorkerSessionPlacementStore(
     ) {
       throw new Error(`Session ${claim.sessionId} workspace result conflict owner changed`);
     }
+    return current;
   };
 
   const store = {
@@ -187,26 +199,51 @@ export function createWorkerSessionPlacementStore(
       return withWorkspaceResultConflict(find(read(), required(sessionId, "session id")));
     },
 
-    getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord> {
-      const normalizedIds = [
-        ...new Set(sessionIds.map((sessionId) => required(sessionId, "session id"))),
-      ];
-      const records = new Map<string, WorkerSessionPlacementRecord>();
-      const db = read();
-      for (let offset = 0; offset < normalizedIds.length; offset += 250) {
-        const chunk = normalizedIds.slice(offset, offset + 250);
-        for (const row of executeSqliteQuerySync(
-          db,
-          query(db)
-            .selectFrom("worker_session_placements")
-            .selectAll()
-            .where("session_id", "in", chunk),
-        ).rows) {
-          const record = fromRow(row);
-          records.set(record.sessionId, withWorkspaceResultConflict(record)!);
+    async readProjection(sessionIds: readonly string[]): Promise<WorkerSessionPlacementProjection> {
+      const context = captureOpenClawStateWorkerContext({ path });
+      const ids = [...new Set(sessionIds.map((sessionId) => required(sessionId, "session id")))];
+      const conflicts = new Map(
+        ids.flatMap((sessionId) => {
+          const entry = workspaceResultConflicts.get(sessionId);
+          return entry ? [[sessionId, entry] as const] : [];
+        }),
+      );
+      const { projection: snapshot, conflictSessionIds } = await executeOpenClawStateWorker(
+        context,
+        {
+          type: "workers.placementProjection",
+          input: {
+            sessionIds: ids,
+            conflictBindings: [...conflicts.values()].map(({ placement, claim }) => ({
+              placement: {
+                sessionId: placement.sessionId,
+                generation: placement.generation,
+                environmentId: placement.environmentId,
+                activeOwnerEpoch: placement.activeOwnerEpoch,
+              },
+              claim,
+            })),
+          },
+        },
+      );
+      const placements = new Map(snapshot.placements);
+      for (const [sessionId, entry] of conflicts) {
+        const record = placements.get(sessionId);
+        if (record && conflictSessionIds.has(sessionId)) {
+          placements.set(sessionId, { ...record, workspaceResultConflict: entry.conflict });
         }
       }
-      return records;
+      return { ...snapshot, placements };
+    },
+
+    getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord> {
+      const records = readWorkerSessionPlacementsInDatabase(read(), sessionIds);
+      return new Map(
+        [...records].map(([sessionId, record]) => [
+          sessionId,
+          withWorkspaceResultConflict(record)!,
+        ]),
+      );
     },
 
     getWorkspaceResultReconcilingSessionIds(sessionIds: readonly string[]): ReadonlySet<string> {
@@ -246,7 +283,7 @@ export function createWorkerSessionPlacementStore(
       claim: WorkerSessionTurnClaim,
       conflict: WorkerWorkspaceResultConflict | undefined,
     ): void {
-      requireClaimOwner(claim);
+      const placement = requireClaimOwner(claim);
       if (!conflict) {
         workspaceResultConflicts.delete(claim.sessionId);
         return;
@@ -259,10 +296,11 @@ export function createWorkerSessionPlacementStore(
       ) {
         throw new Error("Cloud workspace result conflict projection is invalid");
       }
-      workspaceResultConflicts.set(
-        claim.sessionId,
-        projectWorkspaceResultConflict(paths, stagedResultRef, conflict.totalCount),
-      );
+      workspaceResultConflicts.set(claim.sessionId, {
+        placement,
+        claim,
+        conflict: projectWorkspaceResultConflict(paths, stagedResultRef, conflict.totalCount),
+      });
     },
 
     bindPreparedEnvironment(
