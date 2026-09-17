@@ -1,15 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { emitDiagnosticEventWithTrustedTraceContext } from "../infra/diagnostic-events.js";
 import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  type EventSessionRoutingPolicy,
-  resolveEventSessionKeyForPolicy,
-  scopedHeartbeatWakeOptionsForPolicy,
-} from "../infra/event-session-routing.js";
+import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
@@ -17,16 +12,12 @@ import {
   type ExecApprovalDecision,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
-import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput, TerminationReason } from "../process/supervisor/types.js";
-import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 /**
  * Bash exec runtime.
  * Spawns host/sandbox processes, manages session updates/backgrounding,
@@ -45,13 +36,11 @@ import {
   appendOutput,
   isProcessSessionIdTaken,
   markExited,
-  recordNotifyOnExitRemoval,
   resolveProcessCleanupMs,
-  tail,
 } from "./bash-process-registry.js";
+import { maybeNotifyOnExecExit, normalizeNotifyOutput } from "./bash-tools.exec-notify.js";
 import {
   appendExecTimeoutRetryGuidance,
-  renderExecExitLabel,
   renderExecOutputText,
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
@@ -66,6 +55,7 @@ import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 import { createStreamingBinaryOutputSanitizer, getShellConfig } from "./shell-utils.js";
 import { registerTrustedToolNoStartError } from "./tool-result-error.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+export { normalizeNotifyOutput };
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 
 export { execSchema } from "./bash-tools.schemas.js";
@@ -107,9 +97,6 @@ export const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
 /** Fallback PATH used when the process environment has no PATH. */
 export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-/** Tail length used in background completion notifications. */
-const DEFAULT_NOTIFY_TAIL_CHARS = 400;
-const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
 /** Default time an approval can remain pending. */
 export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
 /** Gateway request timeout for approval registration/wait calls. */
@@ -306,23 +293,6 @@ export function resolveExecTarget(params: {
   };
 }
 
-/** Normalizes notification snippets to a compact single-line form. */
-export function normalizeNotifyOutput(value: string) {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CHARS) {
-  const normalized = normalizeNotifyOutput(value);
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length <= maxChars) {
-    return normalized;
-  }
-  const safe = Math.max(1, maxChars - 1);
-  return `${truncateUtf16Safe(normalized, safe)}…`;
-}
-
 /** Merges shell-discovered PATH entries into an exec environment. */
 export function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
   if (!shellPath) {
@@ -336,77 +306,6 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   const merged = mergePathPrepend(env[pathKey], entries);
   if (merged) {
     env[pathKey] = merged;
-  }
-}
-
-function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
-  if (
-    !session.backgrounded ||
-    !session.notifyOnExit ||
-    session.exitNotified ||
-    session.terminalPollObserved
-  ) {
-    return;
-  }
-  const sessionKey = session.sessionKey?.trim();
-  if (!sessionKey) {
-    return;
-  }
-  session.exitNotified = true;
-  const exitLabel = renderExecExitLabel(session);
-  const output = compactNotifyOutput(
-    tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-  );
-  if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
-    return;
-  }
-  if (
-    status === "completed" &&
-    session.exitCode === 0 &&
-    !output &&
-    session.notifyOnExitEmptySuccess !== true
-  ) {
-    return;
-  }
-  const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
-  const eventRouting = session.eventRouting ?? {};
-  const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
-  const eventOptions = {
-    sessionKey: eventSessionKey,
-    contextKey: `exec:${session.id}`,
-    deliveryContext: session.notifyDeliveryContext,
-  };
-  const remove = enqueueSystemEventWithReceipt(
-    eventText,
-    eventSessionKey === "global" && session.agentId
-      ? withSystemEventOwner(eventOptions, session.agentId)
-      : eventOptions,
-    { allowDuplicate: true },
-  );
-  if (remove) {
-    recordNotifyOnExitRemoval(session, remove);
-  }
-  // Subagent sessions receive exec results via process poll and announce flow;
-  // the heartbeat would fall back to the main session and cause spurious wakes.
-  if (!isSubagentSessionKey(sessionKey)) {
-    const wakeOptions = scopedHeartbeatWakeOptionsForPolicy(
-      sessionKey,
-      {
-        source: "exec-event" as const,
-        intent: "event" as const,
-        reason: "exec-event",
-        coalesceMs: 0,
-      },
-      eventRouting,
-    );
-    requestHeartbeat(
-      sessionKey === "global" && session.agentId
-        ? { ...wakeOptions, agentId: session.agentId }
-        : wakeOptions,
-    );
   }
 }
 
@@ -844,7 +743,7 @@ export async function runExecProcess({
         }
         onSettledBeforeNotify?.(finalOutcome);
         if (shouldNotify) {
-          maybeNotifyOnExit(session, finalOutcome.status);
+          maybeNotifyOnExecExit(session, finalOutcome.status);
         }
       } catch (error) {
         session.finalizationFailed = true;

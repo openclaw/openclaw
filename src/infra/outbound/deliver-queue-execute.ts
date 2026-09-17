@@ -5,6 +5,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { isProvenDeliveryNotSentError } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
+import { assertSourceGenerationCurrent } from "../source-generation-authority.js";
 import { throwIfAborted } from "./abort.js";
 import type {
   InternalDeliverOutboundPayloadsParams,
@@ -270,6 +271,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     },
     onDirectAdapterHandoff: async () => {
       throwIfAborted(params.abortSignal);
+      assertSourceGenerationCurrent(params.sourceGeneration, params.session?.agentId);
       assertSessionWriterDeliveryAuthorized(
         params.deliveryCompletion?.kind === "pending-final"
           ? params.deliveryCompletion.sessionWriterDeliveryAuthority
@@ -281,6 +283,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     assertDirectAdapterHandoff: () => {
       params.assertDirectAdapterHandoff?.();
       throwIfAborted(params.abortSignal);
+      assertSourceGenerationCurrent(params.sourceGeneration, params.session?.agentId);
       assertSessionWriterDeliveryAuthorized(
         params.deliveryCompletion?.kind === "pending-final"
           ? params.deliveryCompletion.sessionWriterDeliveryAuthority
@@ -289,6 +292,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     },
     onPlatformSendDispatch: async () => {
       throwIfAborted(params.abortSignal);
+      assertSourceGenerationCurrent(params.sourceGeneration, params.session?.agentId);
       // Once any payload returns an identity, unknown-after-send protects the whole batch.
       // A later payload dispatch must not regress that durable evidence to attempt-started.
       if (platformQueueId && queuedPreSendState !== "acked" && queuedPostSendState === undefined) {
@@ -324,6 +328,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         }
       }
       throwIfAborted(params.abortSignal);
+      assertSourceGenerationCurrent(params.sourceGeneration, params.session?.agentId);
       assertSessionWriterDeliveryAuthorized(
         params.deliveryCompletion?.kind === "pending-final"
           ? params.deliveryCompletion.sessionWriterDeliveryAuthority

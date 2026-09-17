@@ -9,6 +9,8 @@ import {
   mockRunCronFallbackPassthrough,
   readSessionMessagesAsyncMock,
   resolveCronSessionMock,
+  resolveCronDeliveryPlanMock,
+  resolveDeliveryTargetMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
@@ -100,5 +102,85 @@ describe("runCronIsolatedAgentTurn — current conversation context", () => {
     expect(readSessionMessagesAsyncMock).not.toHaveBeenCalled();
     expect(embeddedPrompt()).toContain("Run independently.");
     expect(embeddedPrompt()).not.toContain("Recent conversation:");
+  });
+
+  it("admits a saved matching topic as the isolated exec completion owner", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({ requested: true, mode: "announce" });
+    const topicSessionKey = "agent:default:telegram:group:-100123:topic:42";
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        store: {
+          [topicSessionKey]: makeCronSessionEntry({
+            sessionId: "topic-session",
+            lifecycleRevision: "topic-revision",
+          }),
+        },
+      }),
+    );
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: true,
+      channel: "telegram",
+      to: "-100123:topic:42",
+      threadId: 42,
+      mode: "explicit",
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          sessionKey: topicSessionKey,
+          sessionTarget: "isolated",
+          delivery: { mode: "announce", channel: "telegram", to: "-100123:topic:42" },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        execCompletionSessionKey: topicSessionKey,
+        execCompletionSessionGeneration: {
+          sessionId: "topic-session",
+          lifecycleRevision: "topic-revision",
+        },
+      }),
+    );
+  });
+
+  it("rejects a matching topic route when no saved source session exists", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({ requested: true, mode: "announce" });
+    const topicSessionKey = "agent:default:telegram:group:-100123:topic:42";
+    resolveCronSessionMock.mockReturnValue(makeCronSession({ store: {} }));
+    resolveDeliveryTargetMock.mockResolvedValue({
+      ok: true,
+      channel: "telegram",
+      to: "-100123:topic:42",
+      threadId: 42,
+      mode: "explicit",
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          sessionKey: topicSessionKey,
+          sessionTarget: "isolated",
+          delivery: { mode: "announce", channel: "telegram", to: "-100123:topic:42" },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        execCompletionSessionKey: undefined,
+        execCompletionSessionGeneration: undefined,
+        execOverrides: {
+          notifyOnExit: false,
+          notifyOnExitEmptySuccess: false,
+        },
+      }),
+    );
   });
 });

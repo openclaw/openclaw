@@ -975,6 +975,36 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("runs a deferred exec-route wake when periodic heartbeats are disabled", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "0m" } }, list: [{ id: "main" }] },
+        session: { scope: "global" },
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        agentId: "main",
+        sessionKey: "global",
+        heartbeat: { target: "telegram", to: "-1002:topic:2" },
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "main",
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        sessionKey: "global",
+        heartbeat: { every: "0m", target: "telegram", to: "-1002:topic:2" },
+      },
+    });
+    runner.stop();
+  });
+
   it("rejects targeted notification wakes for unconfigured agents", async () => {
     useFakeHeartbeatTime();
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });

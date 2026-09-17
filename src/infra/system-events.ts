@@ -21,6 +21,13 @@ import {
   resolveSystemEventOwnerAgentId,
 } from "./system-event-ownership.js";
 
+export type SystemEventSourceGeneration = {
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+  sessionStore?: string;
+};
+
 export type SystemEvent = {
   /**
    * OpenClaw-assigned opaque identity for one queued occurrence. Preserve it when returning a
@@ -32,6 +39,8 @@ export type SystemEvent = {
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  /** Source-session authority that must remain current through final delivery. */
+  sourceGeneration?: SystemEventSourceGeneration;
 };
 
 const MAX_EVENTS = 20;
@@ -49,6 +58,7 @@ type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  sourceGeneration?: SystemEventSourceGeneration;
   /** Replace the pending event for this context and delivery route. Requires contextKey. */
   replace?: boolean;
 };
@@ -89,6 +99,7 @@ function cloneSystemEvent(event: SystemEvent): SystemEvent {
   const clone = {
     ...event,
     ...(event.deliveryContext ? { deliveryContext: { ...event.deliveryContext } } : {}),
+    ...(event.sourceGeneration ? { sourceGeneration: { ...event.sourceGeneration } } : {}),
   };
   cloneSystemEventOwner(event, clone);
   return clone;
@@ -109,8 +120,9 @@ function findDuplicateInQueue(
   contextKey: string | null,
   deliveryContext: DeliveryContext | undefined,
   ownerAgentId: string | null,
+  sourceGeneration: SystemEventSourceGeneration | undefined,
 ): boolean {
-  const incoming = { text, contextKey, deliveryContext, ownerAgentId };
+  const incoming = { text, contextKey, deliveryContext, ownerAgentId, sourceGeneration };
   if (contextKey === null) {
     const last = queue[queue.length - 1];
     return last ? isDuplicateSystemEvent(last, incoming) : false;
@@ -162,6 +174,7 @@ function enqueueOwnedSystemEventEntry(
       normalizedContextKey,
       normalizedDeliveryContext,
       normalizedOwnerAgentId,
+      options.sourceGeneration,
     )
   ) {
     return null;
@@ -175,6 +188,7 @@ function enqueueOwnedSystemEventEntry(
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
+    sourceGeneration: options.sourceGeneration,
   };
   recordSystemEventOwner(event, normalizedOwnerAgentId);
   entry.queue.push(event);
@@ -232,7 +246,7 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
 
 function isDuplicateSystemEvent(
   existing: SystemEvent,
-  incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext"> & {
+  incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext" | "sourceGeneration"> & {
     ownerAgentId: string | null;
   },
 ): boolean {
@@ -240,7 +254,8 @@ function isDuplicateSystemEvent(
     existing.text === incoming.text &&
     (existing.contextKey ?? null) === (incoming.contextKey ?? null) &&
     resolveSystemEventOwnerAgentId(existing) === incoming.ownerAgentId &&
-    areDeliveryContextsEqual(existing.deliveryContext, incoming.deliveryContext)
+    areDeliveryContextsEqual(existing.deliveryContext, incoming.deliveryContext) &&
+    JSON.stringify(existing.sourceGeneration) === JSON.stringify(incoming.sourceGeneration)
   );
 }
 
@@ -250,7 +265,8 @@ function areLegacySystemEventsEqual(left: SystemEvent, right: SystemEvent): bool
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
     resolveSystemEventOwnerAgentId(left) === resolveSystemEventOwnerAgentId(right) &&
-    areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
+    areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext) &&
+    JSON.stringify(left.sourceGeneration) === JSON.stringify(right.sourceGeneration)
   );
 }
 

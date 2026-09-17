@@ -147,6 +147,7 @@ function createQueuedDelivery(
     gatewayClientScopes: params.gatewayClientScopes,
     preparedMessageId: params.preparedMessageId,
     deliveryCompletion: params.deliveryCompletion,
+    sourceGeneration: params.sourceGeneration,
     completionRetention: params.completionRetention,
     ...(retainOnFailure ? { retainOnFailure: true as const } : {}),
     legacyUnknownSendReconciliation: params.legacyUnknownSendReconciliation,

@@ -134,6 +134,20 @@ describe("buildCliMcpGrantContext source-reply authority", () => {
     expect(grant.execOverrides?.mode).toBe("allowlist");
   });
 
+  it("carries detached exec notification suppression into the loopback grant", () => {
+    const grant = buildGrant({
+      execOverrides: {
+        notifyOnExit: false,
+        notifyOnExitEmptySuccess: false,
+      },
+    });
+
+    expect(grant.execOverrides).toEqual({
+      notifyOnExit: false,
+      notifyOnExitEmptySuccess: false,
+    });
+  });
+
   it("carries the exact Skill Workshop revision into the loopback grant", () => {
     const proposalRevision = {
       agentId: "proposal-owner",

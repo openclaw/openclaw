@@ -76,6 +76,12 @@ function buildCliMcpExecOverrides(
     ...(execOverrides.security !== undefined ? { security: execOverrides.security } : {}),
     ...(execOverrides.ask !== undefined ? { ask: execOverrides.ask } : {}),
     ...(execOverrides.node !== undefined ? { node: execOverrides.node } : {}),
+    ...(execOverrides.notifyOnExit !== undefined
+      ? { notifyOnExit: execOverrides.notifyOnExit }
+      : {}),
+    ...(execOverrides.notifyOnExitEmptySuccess !== undefined
+      ? { notifyOnExitEmptySuccess: execOverrides.notifyOnExitEmptySuccess }
+      : {}),
   };
   return Object.keys(scopedOverrides).length > 0 ? scopedOverrides : undefined;
 }
@@ -173,6 +179,8 @@ export function buildCliMcpGrantContext(params: {
     grantedToolsAllow[0] === "message";
   return {
     sessionKey,
+    execCompletionSessionKey: normalizeOptionalMcpContextValue(params.run.execCompletionSessionKey),
+    execCompletionSessionGeneration: params.run.execCompletionSessionGeneration,
     runtimePolicySessionKey,
     ...(params.runtimePolicyAgentId ? { runtimePolicyAgentId: params.runtimePolicyAgentId } : {}),
     agentId: params.agentId,

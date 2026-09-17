@@ -267,6 +267,58 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
     });
   });
 
+  it("drops a routed exec completion when its source resets during inference", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const { cfg, nowMs, target, targetSessionKey, replaceTargetLifecycle } =
+        await seedExistingHeartbeatTarget({ tmpDir, storePath });
+      enqueueSystemEvent("Exec completed (reset-during-inference, code 0) :: private result", {
+        sessionKey: targetSessionKey,
+        contextKey: "exec:reset-during-inference",
+        deliveryContext: { channel: "whatsapp", to: target },
+        sourceGeneration: {
+          sessionKey: targetSessionKey,
+          sessionId: "target-session",
+          lifecycleRevision: "target-lifecycle-1",
+          sessionStore: storePath,
+        },
+      });
+      const inferenceEntered = createDeferred();
+      const releaseInference = createDeferred();
+      replySpy.mockImplementationOnce(async () => {
+        inferenceEntered.resolve();
+        await releaseInference.promise;
+        return { text: "Private result." };
+      });
+
+      const heartbeat = runHeartbeatOnce({
+        cfg,
+        sessionKey: targetSessionKey,
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        heartbeat: { isolatedSession: true },
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => nowMs,
+        },
+      });
+      try {
+        await withTestTimeout(
+          inferenceEntered.promise,
+          5_000,
+          "exec completion inference was not observed",
+        );
+        await replaceTargetLifecycle("target-lifecycle-2");
+      } finally {
+        releaseInference.resolve();
+      }
+
+      await expect(heartbeat).resolves.toMatchObject({ status: "ran" });
+      expect(deliverOutboundPayloadsInternal).not.toHaveBeenCalled();
+    });
+  });
+
   it("skips an ambient isolated poll when its base conversation is missing", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = makeIsolatedLastTargetConfig(tmpDir, storePath);

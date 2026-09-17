@@ -105,6 +105,7 @@ function buildLegacyPreparationParams(entry: LegacyQueuedDelivery, cfg: OpenClaw
     gatewayClientScopes: entry.gatewayClientScopes,
     preparedMessageId: entry.preparedMessageId,
     deliveryCompletion: entry.deliveryCompletion,
+    sourceGeneration: entry.sourceGeneration,
     completionRetention: entry.completionRetention,
     skipQueue: true,
   } as const;

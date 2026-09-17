@@ -63,6 +63,7 @@ import {
   buildUnknownSendContext,
   reconcileUnknownQueuedDelivery,
 } from "./delivery-queue-reconciliation.js";
+import { needsUnknownSendReconciliation } from "./delivery-queue-recovery-state.js";
 import {
   claimDeliveryPlatformSendAttempt,
   failDelivery,
@@ -248,12 +249,6 @@ function emitQueuedAuditTerminals(
   });
 }
 
-function needsUnknownSendReconciliation(entry: QueuedDelivery): boolean {
-  return (
-    entry.recoveryState === "send_attempt_started" || entry.recoveryState === "unknown_after_send"
-  );
-}
-
 export async function withActiveDeliveryClaim<T>(
   entryId: string,
   fn: () => Promise<T>,
@@ -297,6 +292,7 @@ function buildRecoveryDeliverParams(
     session: entry.session,
     gatewayClientScopes: entry.gatewayClientScopes,
     preparedMessageId: entry.preparedMessageId,
+    sourceGeneration: entry.sourceGeneration,
     // Recovery owns terminal completion because nested delivery only reports
     // process-local evidence that cannot survive another restart.
     ...(conversationCompletion

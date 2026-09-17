@@ -7,7 +7,7 @@ import {
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { DelegationCapability } from "../agents/delegation-capability.js";
-import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
+import type { ExecRunOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
 import type { PreparedQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
@@ -18,7 +18,6 @@ import type {
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
-import type { ExecMode } from "../infra/exec-approvals.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
@@ -27,6 +26,13 @@ import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.t
 
 export type McpLoopbackRequestContext = {
   sessionKey: string;
+  /** Session whose isolated heartbeat owns detached exec completion turns. */
+  execCompletionSessionKey?: string;
+  /** Lifecycle of execCompletionSessionKey captured when the cron run was admitted. */
+  execCompletionSessionGeneration?: {
+    sessionId: string;
+    lifecycleRevision?: string;
+  };
   runtimePolicySessionKey?: string;
   /** Agent whose execution policy applies when it differs from the durable session owner. */
   runtimePolicyAgentId?: string;
@@ -84,7 +90,7 @@ export type McpLoopbackRequestContext = {
   /** Capability minted only for Gateway-launched CLI backends. */
   nodeExecAllowed?: boolean;
   execSession?: ExecSessionDefaults;
-  execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
+  execOverrides?: ExecRunOverrides;
   bashElevated?: ExecElevatedDefaults;
   trigger?: string;
   approvalReviewerDeviceId?: string;

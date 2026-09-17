@@ -9,6 +9,7 @@ import type {
 import type { ReplyToMode } from "../../config/types.js";
 import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-types.js";
 import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
+import type { SystemEventSourceGeneration } from "../system-events.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
@@ -50,6 +51,7 @@ export type QueuedDeliveryPayload = {
   gatewayClientScopes?: readonly string[];
   preparedMessageId?: string;
   deliveryCompletion?: DurableDeliveryCompletion;
+  sourceGeneration?: SystemEventSourceGeneration;
   completionRetention?: DeliveryQueueCompletionRetention;
   legacyUnknownSendReconciliation?: Exclude<
     ChannelMessageUnknownSendReconciliationResult,

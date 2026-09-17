@@ -40,6 +40,8 @@ type AttemptToolRunFacts = Pick<
   | "hasRepliedRef"
   | "sourceReplyDeliveryMode"
   | "taskSuggestionDeliveryMode"
+  | "execCompletionSessionKey"
+  | "execCompletionSessionGeneration"
 >;
 
 /**
@@ -100,6 +102,8 @@ export function buildEmbeddedAttemptToolRunContext(
     hasRepliedRef: params.hasRepliedRef,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+    execCompletionSessionKey: params.execCompletionSessionKey,
+    execCompletionSessionGeneration: params.execCompletionSessionGeneration,
     requesterThinkingLevel: params.thinkLevel,
     // modelId may still be a configured alias; children need the prepared identity.
     requesterModel: params.model

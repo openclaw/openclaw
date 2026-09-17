@@ -1,5 +1,4 @@
 // Message tool policy tests cover message tool availability during cron runs.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -8,6 +7,22 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import { applyJobPatch } from "../service/jobs.js";
 import type { CronDeliveryMode } from "../types.js";
 import type { MutableCronSession } from "./run-session-state.js";
+import {
+  expectCliRunPrompt,
+  expectDeliveryFields,
+  expectDispatchFields,
+  expectEmbeddedRunFields,
+  expectEmbeddedRunPrompt,
+  expectRecordFields,
+  getMockCallArg,
+  makeAnnounceDeliveryPlan,
+  makeAnnounceMessageToolJob,
+  makeMessageToolPolicyJob,
+  makeMessageToolRunResult,
+  makeParams,
+  makeResolvedAnnounceTarget,
+  resolveRunPrompt,
+} from "./run.message-tool-policy.test-helpers.js";
 import {
   buildSafeExternalPromptMock,
   callGatewayMock,
@@ -35,79 +50,6 @@ import {
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const { executeCronRun } = await import("./run-executor.js");
 
-function makeMessageToolPolicyJob(
-  delivery: Record<string, unknown> = { mode: "none" },
-  payload: Record<string, unknown> = { kind: "agentTurn", message: "send a message" },
-) {
-  return {
-    id: "message-tool-policy",
-    name: "Message Tool Policy",
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    payload,
-    delivery,
-  } as never;
-}
-
-function makeAnnounceMessageToolJob(
-  options: {
-    id?: string;
-    name?: string;
-    delivery?: Record<string, unknown>;
-    payload?: Record<string, unknown>;
-  } = {},
-) {
-  return {
-    id: options.id ?? "message-tool-policy",
-    name: options.name ?? "Message Tool Policy",
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    payload: { kind: "agentTurn", message: "send a message", ...options.payload },
-    delivery: { mode: "announce", channel: "messagechat", to: "123", ...options.delivery },
-  } as never;
-}
-
-function makeParams() {
-  return {
-    cfg: {},
-    deps: {} as never,
-    job: makeMessageToolPolicyJob(),
-    message: "send a message",
-    sessionKey: "cron:message-tool-policy",
-  };
-}
-
-function makeAnnounceDeliveryPlan(overrides: Record<string, unknown> = {}) {
-  return {
-    requested: true,
-    mode: "announce",
-    channel: "messagechat",
-    to: "123",
-    ...overrides,
-  };
-}
-
-function makeResolvedAnnounceTarget(overrides: Record<string, unknown> = {}) {
-  return {
-    ok: true,
-    channel: "messagechat",
-    to: "123",
-    accountId: undefined,
-    threadId: undefined,
-    mode: "explicit",
-    ...overrides,
-  };
-}
-
-function makeMessageToolRunResult(messagingToolSentTargets: Array<Record<string, unknown>>) {
-  return {
-    payloads: [{ text: "sent" }],
-    didSendViaMessagingTool: true,
-    messagingToolSentTargets,
-    meta: { agentMeta: { usage: { input: 10, output: 20 } } },
-  };
-}
-
 function mockPendingMessagePresentationWarningOutcome() {
   resolveCronPayloadOutcomeMock.mockReturnValue({
     summary: "Final cron report",
@@ -121,86 +63,6 @@ function mockPendingMessagePresentationWarningOutcome() {
     embeddedRunError: undefined,
     pendingPresentationWarningError: "⚠️ ✉️ Message failed",
   });
-}
-
-const requireRecord = createRequireRecord("record", "expected-label-object");
-
-function expectRecordFields(
-  value: unknown,
-  expected: Record<string, unknown>,
-  label: string,
-): Record<string, unknown> {
-  const record = requireRecord(value, label);
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
-  }
-  return record;
-}
-
-function getMockCallArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  callIndex: number,
-  argIndex: number,
-  label: string,
-): unknown {
-  const call = (mock.mock.calls as unknown[][])[callIndex];
-  if (!call) {
-    throw new Error(`expected ${label} call ${callIndex}`);
-  }
-  return call[argIndex];
-}
-
-function expectEmbeddedRunFields(expected: Record<string, unknown>): Record<string, unknown> {
-  return expectRecordFields(
-    getMockCallArg(runEmbeddedAgentMock, 0, 0, "embedded run"),
-    expected,
-    "embedded run params",
-  );
-}
-
-function resolveRunPrompt(
-  runParams: Record<string, unknown>,
-  messageToolAvailable: boolean,
-): string {
-  const prompt = runParams.prompt;
-  if (typeof prompt !== "string") {
-    throw new Error("expected run prompt to be a string");
-  }
-  const finalizer = runParams.finalizePromptForResolvedTools;
-  if (typeof finalizer !== "function") {
-    return prompt;
-  }
-  const finalized = finalizer({ prompt, messageToolAvailable });
-  if (typeof finalized !== "string") {
-    throw new Error("expected finalized run prompt to be a string");
-  }
-  return finalized;
-}
-
-function expectEmbeddedRunPrompt(messageToolAvailable = false): string {
-  return resolveRunPrompt(expectEmbeddedRunFields({}), messageToolAvailable);
-}
-
-function expectCliRunPrompt(messageToolAvailable = false): string {
-  return resolveRunPrompt(
-    expectRecordFields(getMockCallArg(runCliAgentMock, 0, 0, "CLI run"), {}, "CLI run params"),
-    messageToolAvailable,
-  );
-}
-
-function expectDispatchFields(expected: Record<string, unknown>): Record<string, unknown> {
-  return expectRecordFields(
-    getMockCallArg(dispatchCronDeliveryMock, 0, 0, "cron delivery dispatch"),
-    expected,
-    "cron delivery dispatch params",
-  );
-}
-
-function expectDeliveryFields(
-  delivery: unknown,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
-  return expectRecordFields(delivery, expected, "cron delivery result");
 }
 
 describe("runCronIsolatedAgentTurn message tool policy", () => {
@@ -777,6 +639,43 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
+  it("forwards the resolved topic route into the CLI run", async () => {
+    mockRunCronFallbackPassthrough();
+    isCliProviderMock.mockReturnValue(true);
+    runCliAgentMock.mockResolvedValue({
+      payloads: [{ text: "done" }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+    const executor = createMessageToolExecutor({
+      resolvedDelivery: {
+        channel: "topicchat",
+        accountId: "ops",
+        to: "room",
+        threadId: 42,
+      },
+    });
+
+    await executor.runPrompt("send a message");
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    // Detached exec completions inherit this route; without it #138316 delivered
+    // forum-topic cron output to the owner DM.
+    expectRecordFields(
+      getMockCallArg(runCliAgentMock, 0, 0, "CLI run"),
+      {
+        messageChannel: "topicchat",
+        agentAccountId: "ops",
+        currentChannelId: "room#42",
+        currentThreadTs: "42",
+        execOverrides: {
+          notifyOnExit: false,
+          notifyOnExitEmptySuccess: false,
+        },
+      },
+      "CLI run params",
+    );
+  });
+
   it("keeps the message tool enabled when announce delivery is active", async () => {
     await expectMessageToolEnabledForPlan({
       requested: true,
@@ -1018,12 +917,20 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   });
 
   it("keeps automatic exec completion notifications when announce delivery is active", async () => {
+    const sourceSessionKey = "agent:default:messagechat:direct:123";
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        store: { [sourceSessionKey]: makeCronSessionEntry({ sessionId: "source-session" }) },
+      }),
+    );
+    const job = makeAnnounceMessageToolJob() as unknown as Record<string, unknown>;
+    job.sessionKey = sourceSessionKey;
 
     await runCronIsolatedAgentTurn({
       ...makeParams(),
-      job: makeAnnounceMessageToolJob(),
+      job: job as never,
     });
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
