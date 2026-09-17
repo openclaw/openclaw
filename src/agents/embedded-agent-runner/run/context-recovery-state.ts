@@ -27,6 +27,18 @@ export function createEmbeddedRunContextRecoveryState() {
         state.autoCompactionCount += 1;
         state.lastCompactionTokensAfter = tokens;
       }
+      if (
+        event.kind === "model" &&
+        typeof event.contextTokens === "number" &&
+        Number.isFinite(event.contextTokens) &&
+        event.contextTokens > 0
+      ) {
+        // A usage-bearing model completion proves the last recovery made real
+        // progress, so a later overflow in this run earns a fresh recovery
+        // budget. Zero-usage completions (e.g. mid-stream failures) must not
+        // renew it, or repeated overflow failures could recycle the budget.
+        state.overflowCompactionAttempts = 0;
+      }
     },
     retainTimeoutRecoveryMarker(marker: EmbeddedRunTimeoutRecoveryMarker) {
       timeoutRecoveryMarker = marker;

@@ -336,6 +336,28 @@ export async function recoverEmbeddedRunOverflow(
     }
 
     if (compactResult.compacted) {
+      const tokensBefore = compactResult.result?.tokensBefore;
+      const tokensAfter = compactResult.result?.tokensAfter;
+      // Equal counts prove no measured reduction, not necessarily an uncommitted
+      // compaction, so the transcript stays as-is; only the run-level budget is
+      // refunded and the log stays honest.
+      const noMeasuredReduction =
+        typeof tokensBefore === "number" &&
+        Number.isFinite(tokensBefore) &&
+        typeof tokensAfter === "number" &&
+        Number.isFinite(tokensAfter) &&
+        tokensAfter >= tokensBefore;
+      if (noMeasuredReduction) {
+        input.state.overflowCompactionAttempts = Math.max(
+          0,
+          input.state.overflowCompactionAttempts - 1,
+        );
+        log.warn(
+          `[context-overflow-recovery] context engine compaction reported no measured token reduction for ` +
+            `${input.modelSelection.provider}/${input.modelSelection.model} ` +
+            `(tokensBefore=${tokensBefore} tokensAfter=${tokensAfter}); refunding the recovery attempt`,
+        );
+      }
       if (preflightRecovery?.route === "compact_then_truncate") {
         const truncResult = await truncateToolResults();
         if (truncResult.truncated) {
@@ -358,7 +380,9 @@ export async function recoverEmbeddedRunOverflow(
         );
       } else {
         log.info(
-          `auto-compaction succeeded for ${input.modelSelection.provider}/${input.modelSelection.model}; retrying prompt`,
+          noMeasuredReduction
+            ? `[context-overflow-recovery] retrying prompt for ${input.modelSelection.provider}/${input.modelSelection.model} after a compaction with no measured token reduction`
+            : `auto-compaction succeeded for ${input.modelSelection.provider}/${input.modelSelection.model}; retrying prompt`,
         );
         input.markOwnedTranscriptRetry();
         if (requiresTranscriptContinuation) {
