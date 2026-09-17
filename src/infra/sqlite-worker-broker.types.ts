@@ -114,6 +114,7 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
+  preparation?: Buffer;
   expectedIdentity?: string;
   createOpenAdmission?: SqliteWorkerAdmissionFactory;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
@@ -125,6 +126,12 @@ export type PreparedSqliteWorkerOpen = {
   existingOnly: boolean;
   stateContext?: SqliteWorkerStateContext;
 };
+
+/** Canonical host opening facts, separate from the backend's stable input identity. */
+export type SqliteWorkerOpenLifecycle = Pick<
+  PreparedSqliteWorkerOpen,
+  "maintenanceScope" | "retainCleanup"
+> & { preparation?: unknown };
 
 /** Exact failed-admission custody; pathname cleanup can include unrelated actors. */
 export type SqliteWorkerAdmissionCleanup = {

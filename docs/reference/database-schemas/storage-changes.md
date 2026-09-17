@@ -656,6 +656,14 @@ context. The cold hook CLI retains its separate read-only locator worker.
 
 ### Preserve the data and concurrency contracts
 
+Async device identity loads use the shared-state worker. A first creator runs
+the existing identity owner before database bootstrap, so pending legacy identity
+files still prevent creation. Read-only loads do not create a missing database
+or change its artifacts. Existing Ed25519 keys, first-writer convergence,
+permissions, and Doctor's migration and repair authority remain unchanged.
+Process identity caches retain their existing database-path and identity-key
+scope; warm cached values need no database operation.
+
 An adapter must make these contracts explicit and verify them against a real
 database:
 

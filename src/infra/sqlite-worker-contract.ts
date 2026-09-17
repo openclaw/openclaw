@@ -40,6 +40,7 @@ export type SqliteWorkerRequest = {
       databasePath: string;
       existingIdentity?: string;
       input: Uint8Array;
+      preparation?: Uint8Array;
     }
   | { type: "execute"; input: Uint8Array }
   | { type: "execute-start"; transfer: SqliteWorkerTransferHandle }

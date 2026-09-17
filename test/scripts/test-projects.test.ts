@@ -6,7 +6,10 @@ import path from "node:path";
 import { assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
 import { readTestSelectorSourceFacts } from "../../scripts/lib/test-selector-source-facts.mts";
-import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
+import {
+  listVitestRuntimeConsumerFiles,
+  resolveVitestPretestBuildMode,
+} from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { resolveVitestRuntimeCliSelections } from "../../scripts/lib/vitest-runtime-selection.mts";
 import { resolveShardTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
 import {
@@ -115,6 +118,11 @@ describe("test runtime prerequisites", () => {
     ["native provider contract SDK", ["extensions/deepinfra/provider.contract.test.ts"], "runtime"],
     ["native catalog auth SDK", ["test/openai-model-discovery-auth-order.test.ts"], "runtime"],
     ["models.list native catalog", ["test/plugins/codex-model-catalog.gateway.test.ts"], "runtime"],
+    [
+      "Gateway TLS source fixture",
+      ["test/e2e/qa-lab/runtime/gateway-tls-pinning.test.ts"],
+      undefined,
+    ],
     ["native package setup SDK", ["test/plugin-npm-runtime-build.test.ts"], "runtime"],
     ["native Linux node SDK", ["src/node-host/linux-node-plugin.integration.test.ts"], "runtime"],
     ["native memory CLI SDK", ["src/entry.memory-json.test.ts"], "runtime"],
@@ -252,6 +260,26 @@ describe("test runtime prerequisites", () => {
       const selections = resolveVitestRuntimeCliSelections(config, ["run", file], {});
       expect(resolveVitestPretestBuildMode(selections), file).toBe(expected);
     }
+  });
+
+  it.each([
+    "src/gateway/setup-inference.first-signin.integration.test.ts",
+    "src/gateway/server-methods/models-list.freshness.integration.test.ts",
+    "test/plugins/codex-model-catalog.gateway.test.ts",
+  ])("keeps Gateway worker runtime selection rooted at the repository for %s", (file) => {
+    const config = "test/vitest/vitest.gateway-database-workers.config.ts";
+    expect(listVitestRuntimeConsumerFiles([config])).toContain(file);
+    expect(
+      listVitestRuntimeConsumerFiles(["test/vitest/vitest.gateway-methods.config.ts"]),
+    ).not.toContain(file);
+    expect(
+      resolveVitestPretestBuildMode(resolveVitestRuntimeCliSelections(config, ["run", file], {})),
+    ).toBe("runtime");
+    expect(
+      resolveVitestPretestBuildMode(
+        resolveVitestRuntimeCliSelections(config, ["run", file, "--exclude", file], {}),
+      ),
+    ).toBeUndefined();
   });
 
   it.each([

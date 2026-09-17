@@ -32,7 +32,7 @@ const runtimeConsumers = [
       "test/vitest/vitest.gateway.config.ts",
     ],
     mode: "runtime",
-    dir: "src/gateway",
+    dir: "",
   },
   {
     file: "src/plugins/loader.test.ts",
@@ -130,7 +130,7 @@ const runtimeConsumers = [
   ].map((file) => ({
     file,
     configs: [
-      "test/vitest/vitest.gateway-methods.config.ts",
+      "test/vitest/vitest.gateway-database-workers.config.ts",
       "test/vitest/vitest.gateway.config.ts",
     ],
     mode: "runtime" as const,

@@ -58,11 +58,63 @@ describe("gateway node pairing memoization", () => {
             return null;
           },
         );
+        const observations: Array<{
+          phase: string;
+          token: string;
+          value: number;
+          tableSelects: typeof tableSelects;
+        }> = [];
+        const restoreTokenStatements: Array<() => void> = [];
+        let phase = "first";
+        const prepareDescriptor = Object.getOwnPropertyDescriptor(database.db, "prepare");
+        const prepare = database.db.prepare.bind(database.db);
+        database.db.prepare = (sql) => {
+          const statement = prepare(sql);
+          const token =
+            sql === "PRAGMA data_version"
+              ? "data_version"
+              : sql === "SELECT total_changes() AS value"
+                ? "value"
+                : undefined;
+          if (token) {
+            const descriptor = Object.getOwnPropertyDescriptor(statement, "get");
+            restoreTokenStatements.push(() => {
+              if (descriptor) {
+                Object.defineProperty(statement, "get", descriptor);
+              } else {
+                Reflect.deleteProperty(statement, "get");
+              }
+            });
+            statement.get = new Proxy(statement.get.bind(statement), {
+              apply(get, _receiver, bindings) {
+                const row = get(...bindings);
+                const value = row?.[token];
+                if (typeof value === "number") {
+                  observations.push({ phase, token, value, tableSelects: { ...tableSelects } });
+                }
+                return row;
+              },
+            });
+          }
+          return statement;
+        };
         try {
           expect((await rpcReq(ws, "node.list", {})).ok).toBe(true);
+          phase = "second";
           expect((await rpcReq(ws, "node.list", {})).ok).toBe(true);
           expect(tableSelects).toEqual({ paired: 1, pending: 1 });
+        } catch (error) {
+          console.error("node.list pairing cache observations", { observations, tableSelects });
+          throw error;
         } finally {
+          if (prepareDescriptor) {
+            Object.defineProperty(database.db, "prepare", prepareDescriptor);
+          } else {
+            Reflect.deleteProperty(database.db, "prepare");
+          }
+          for (const restoreTokenStatement of restoreTokenStatements) {
+            restoreTokenStatement();
+          }
           restore();
         }
       } finally {

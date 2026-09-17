@@ -26,6 +26,7 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 import type {
   OpenClawStateWorkerOperations,
   OpenClawStateWorkerInspectionOperations,
+  OpenClawStateWorkerOpenPreparation,
 } from "./openclaw-state-worker-contract.js";
 import { hydrateOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 
@@ -33,6 +34,7 @@ type StoreOperations = OpenClawStateWorkerOperations & OpenClawStateWorkerInspec
 type Store = SqliteWorkerStore<StoreOperations>;
 type DomainScope = Pick<SqliteWorkerStore<OpenClawStateWorkerOperations>, "execute">;
 type OperationOptions = {
+  preparation?: OpenClawStateWorkerOpenPreparation;
   assertCurrent?: (commandType?: PropertyKey) => void;
   createAdmission?: SqliteWorkerAdmissionFactory;
 };
@@ -122,6 +124,7 @@ function createSharedStateWorkerOwner() {
     async open(
       context: OpenClawStateWorkerContext,
       existingOnly = false,
+      preparation?: OpenClawStateWorkerOpenPreparation,
     ): Promise<Store | undefined> {
       const { admission } = context;
       for (const [entry, attempt] of retiring) {
@@ -157,6 +160,7 @@ function createSharedStateWorkerOwner() {
             () => admission.assertCurrent(),
             {
               maintenanceScope: context.maintenanceScope,
+              preparation,
               retainCleanup: (cleanup) => {
                 admitted.cleanup = cleanup;
               },
@@ -177,7 +181,9 @@ function createSharedStateWorkerOwner() {
       admission.assertCurrent();
       if (!store) {
         forget(entry);
-        return !existingOnly && entry.existingOnly ? this.open(context) : undefined;
+        return !existingOnly && entry.existingOnly
+          ? this.open(context, false, preparation)
+          : undefined;
       }
       entry.store = store;
       try {
@@ -256,7 +262,7 @@ async function runAdmittedOpenClawStateWorkerOperation<T>(
     }
     context.admission.assertCurrent();
     options?.assertCurrent?.();
-    const store = await owner().open(context, options?.existingOnly);
+    const store = await owner().open(context, options?.existingOnly, options?.preparation);
     context.admission.assertCurrent();
     if (!store) {
       if (options?.existingOnly) {

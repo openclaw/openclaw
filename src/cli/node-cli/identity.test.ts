@@ -8,6 +8,7 @@ import {
   publicKeyRawBase64UrlFromPem,
 } from "../../infra/device-identity.js";
 import { defaultRuntime } from "../../runtime.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { runNodeIdentityShow } from "./identity.js";
 
 describe("runNodeIdentityShow", () => {
@@ -36,7 +37,8 @@ describe("runNodeIdentityShow", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     if (prevStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -50,16 +52,16 @@ describe("runNodeIdentityShow", () => {
     fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
-  it("fails closed when no identity exists (never mints one)", () => {
-    runNodeIdentityShow({});
+  it("fails closed when no identity exists (never mints one)", async () => {
+    await runNodeIdentityShow({});
     expect(errorSpy).toHaveBeenCalledOnce();
     expect(exitSpy).toHaveBeenCalledWith(1);
     expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
   });
 
-  it("writes deviceId and raw public key JSON to stdout", () => {
+  it("writes deviceId and raw public key JSON to stdout", async () => {
     const identity = loadOrCreateDeviceIdentity();
-    runNodeIdentityShow({ json: true });
+    await runNodeIdentityShow({ json: true });
     expect(exitSpy).not.toHaveBeenCalled();
     expect(logSpy).not.toHaveBeenCalled();
     expect(errorSpy).not.toHaveBeenCalled();
@@ -74,9 +76,9 @@ describe("runNodeIdentityShow", () => {
     });
   });
 
-  it("prints human-readable lines without --json", () => {
+  it("prints human-readable lines without --json", async () => {
     const identity = loadOrCreateDeviceIdentity();
-    runNodeIdentityShow({});
+    await runNodeIdentityShow({});
     expect(exitSpy).not.toHaveBeenCalled();
     const output = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join("\n");
     expect(output).toContain(identity.deviceId);

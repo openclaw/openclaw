@@ -318,7 +318,10 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
             throw error;
           }
         }
-        return factory(input, { databasePath: request.databasePath });
+        return factory(input, {
+          databasePath: request.databasePath,
+          ...(request.preparation ? { preparation: deserialize(request.preparation) } : {}),
+        });
       });
       if (
         !isRecord(backend) ||

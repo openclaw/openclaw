@@ -166,7 +166,12 @@ describe("test-projects args", () => {
     {
       title: "test-projects routes the bundled native Gateway test to its Gateway owner",
       target: "test/plugins/codex-model-catalog.gateway.test.ts",
-      config: "test/vitest/vitest.gateway-methods.config.ts",
+      config: "test/vitest/vitest.gateway-database-workers.config.ts",
+    },
+    {
+      title: "routes the Gateway TLS producer to its worker owner",
+      target: "test/e2e/qa-lab/runtime/gateway-tls-pinning.test.ts",
+      config: "test/vitest/vitest.gateway-database-workers.config.ts",
     },
     {
       title: "routes script tests to the tooling config",

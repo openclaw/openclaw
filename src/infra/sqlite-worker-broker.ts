@@ -33,6 +33,7 @@ import type {
   PreparedSqliteWorkerOpen,
   RequestBody,
   Slot,
+  SqliteWorkerOpenLifecycle,
   SqliteWorkerStoreOptions,
   StoreClient,
 } from "./sqlite-worker-broker.types.js";
@@ -75,7 +76,7 @@ export class SqliteWorkerBroker {
     options: SqliteWorkerStoreOptions,
     stateContext?: SqliteWorkerStateContext,
     assertCurrent?: () => void,
-    lifecycle?: Pick<PreparedSqliteWorkerOpen, "maintenanceScope" | "retainCleanup">,
+    lifecycle?: SqliteWorkerOpenLifecycle,
   ): Promise<SqliteWorkerStore<Operations> | undefined> {
     try {
       validateSqliteWorkerDatabaseLocator(options.databasePath);
@@ -94,17 +95,15 @@ export class SqliteWorkerBroker {
     this.clients.add(client);
     let snapshot: PreparedSqliteWorkerOpen;
     try {
-      snapshot = captureSqliteWorkerOpen(options, stateContext, assertCurrent);
-      snapshot.maintenanceScope = lifecycle?.maintenanceScope;
-      snapshot.retainCleanup = lifecycle?.retainCleanup;
+      snapshot = captureSqliteWorkerOpen(options, stateContext, assertCurrent, lifecycle);
     } catch (error) {
       this.clients.delete(client);
       return Promise.reject(toErrorObject(error, "SQLite worker input could not be serialized"));
     }
-    const { input } = snapshot;
+    const openBytes = snapshot.input.byteLength + (snapshot.preparation?.byteLength ?? 0);
     if (
-      input.byteLength > SQLITE_WORKER_MAX_MESSAGE_BYTES ||
-      this.bytes + this.admissionBytes + input.byteLength > SQLITE_WORKER_MAX_QUEUED_BYTES
+      openBytes > SQLITE_WORKER_MAX_MESSAGE_BYTES ||
+      this.bytes + this.admissionBytes + openBytes > SQLITE_WORKER_MAX_QUEUED_BYTES
     ) {
       this.clients.delete(client);
       return Promise.reject(
@@ -114,7 +113,7 @@ export class SqliteWorkerBroker {
     const previous = this.admissionTail;
     const released = createDeferredCore();
     this.admissionTail = released.promise;
-    this.admissionBytes += input.byteLength;
+    this.admissionBytes += openBytes;
     // Opening can create the physical file. Publish its identity before admitting any alias.
     return previous
       .then(() => this.openAdmitted<Operations>(snapshot, client))
@@ -123,7 +122,7 @@ export class SqliteWorkerBroker {
         throw error;
       })
       .finally(() => {
-        this.admissionBytes -= input.byteLength;
+        this.admissionBytes -= openBytes;
         released.resolve();
       });
   }
@@ -197,11 +196,12 @@ export class SqliteWorkerBroker {
           databasePath,
           ...(options.existingOnly ? { existingIdentity: key } : {}),
           input,
+          ...(options.preparation ? { preparation: options.preparation } : {}),
           ...(/\.[cm]?ts$/.test(modulePath)
             ? { sourceLoaderUrl: import.meta.resolve("tsx/esm/api") }
             : {}),
         },
-        input.byteLength,
+        input.byteLength + (options.preparation?.byteLength ?? 0),
         {
           createAdmission: options.createOpenAdmission,
           dispatchState: opening.openDispatch,

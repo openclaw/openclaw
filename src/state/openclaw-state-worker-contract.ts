@@ -10,6 +10,7 @@ import type { CronStoreWorkerOperations } from "../cron/store/load-worker.types.
 import type { CronStoreSaveWorkerOperations } from "../cron/store/save-worker.types.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
+import type { DeviceIdentity } from "../infra/device-identity-store.js";
 import type { PreparedPromotionClaim } from "../infra/promotions-feed.kernel.js";
 import type { ApnsRegistration } from "../infra/push-apns-store.types.js";
 import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-contract.js";
@@ -36,6 +37,11 @@ import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
 import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
 
+export type OpenClawStateWorkerOpenPreparation = {
+  type: "deviceIdentity";
+  identityKey: string;
+};
+
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = WebPushWorkerOperations &
   NativeHookRelayStoreWorkerOperations &
@@ -47,6 +53,8 @@ export type OpenClawStateWorkerOperations = WebPushWorkerOperations &
   SessionDeliveryWorkerOperations &
   DeliveryQueueWorkerOperations &
   TaskRegistryWorkerOperations & {
+    "deviceIdentity.read": { input: { identityKey: string }; output: DeviceIdentity | null };
+    "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
     "apns.registration.read": { input: string; output: ApnsRegistration | null };
     "apns.registrations.read": { input: readonly string[]; output: Map<string, ApnsRegistration> };
     "agentProvenance.read": {

@@ -7,6 +7,7 @@ import { INCOGNITO_AGENT_SQLITE_BASENAME } from "../state/openclaw-agent-db.path
 import type {
   PreparedSqliteWorkerOpen,
   SqliteWorkerStoreOptions,
+  SqliteWorkerOpenLifecycle,
   Actor,
   Job,
 } from "./sqlite-worker-broker.types.js";
@@ -38,6 +39,7 @@ export function captureSqliteWorkerOpen(
   options: SqliteWorkerStoreOptions,
   stateContext?: SqliteWorkerStateContext,
   assertCurrent?: () => void,
+  lifecycle?: SqliteWorkerOpenLifecycle,
 ): PreparedSqliteWorkerOpen {
   const ownedAdmission = options.admission;
   const assertOpening = ownedAdmission
@@ -56,6 +58,11 @@ export function captureSqliteWorkerOpen(
   assertOpening?.();
   return {
     assertCurrent: assertOpening,
+    maintenanceScope: lifecycle?.maintenanceScope,
+    retainCleanup: lifecycle?.retainCleanup,
+    ...(lifecycle?.preparation !== undefined
+      ? { preparation: serialize(lifecycle.preparation) }
+      : {}),
     ...(options.admission
       ? {
           expectedIdentity: options.admission.identity,

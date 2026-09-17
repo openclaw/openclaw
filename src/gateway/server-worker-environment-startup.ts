@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../config/config.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { getPairedDevice } from "../infra/device-pairing.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
@@ -288,7 +288,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   params.startup.store.onCredentialRevoked((environmentId) => {
     nodeWorkspaceTransfer.fenceEnvironment(environmentId);
   });
-  const gatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
+  const gatewayDeviceId = (await loadOrCreateProcessDeviceIdentityAsync()).deviceId;
   const nodeWorkerGatewayNamespace = resolveNodeWorkerGatewayNamespace(gatewayDeviceId);
   const nodeWorkerTunnelManager = createNodeWorkerTunnelManager({
     gatewayDeviceId,

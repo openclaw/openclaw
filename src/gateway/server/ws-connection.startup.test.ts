@@ -14,6 +14,7 @@ import {
   GATEWAY_STARTUP_UNAVAILABLE_REASON,
 } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import {
   consumeDeviceBootstrapTokenWithSetupCompletion,
   ensureDevicePairSetupBootstrapToken,
@@ -35,21 +36,28 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
   CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../../shared/device-bootstrap-profile.js";
 import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN,
   createAuthRateLimiter,
 } from "../auth-rate-limit.js";
 import * as gatewayAuth from "../auth.js";
 import { buildDeviceAuthPayload } from "../device-auth.js";
+import { GatewayConnectionWork } from "../server-connection-work.js";
 import { MAX_QUEUED_GATEWAY_PREAUTH_FRAMES } from "../server-constants.js";
 import { createWorkerEnvironmentStore } from "../worker-environments/store.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
@@ -67,7 +75,79 @@ type StartupConnectResponse = {
   error?: { code?: unknown; retryable?: unknown; details?: unknown };
 };
 
-afterEach(() => {
+const connectionCleanups = new Set<() => Promise<void>>();
+const identityCleanups = new Set<() => Promise<void>>();
+
+function ownStartupCleanup(owners: Set<() => Promise<void>>, run: () => Promise<unknown>) {
+  // A failed drain stays owned; a later teardown cannot turn it into a clean reset.
+  let settlement: Promise<void> | undefined;
+  owners.add(
+    () =>
+      (settlement ??= (async () => {
+        await run();
+      })()),
+  );
+}
+
+async function drainStartupCleanups(owners: Set<() => Promise<void>>) {
+  // Start every sibling close before joining, including shared connection-work owners.
+  const pending = [...owners].map((cleanup) => ({ cleanup, completion: cleanup() }));
+  await runQaGatewayFixture(
+    async () => {
+      await Promise.allSettled(pending.map(({ completion }) => completion));
+    },
+    ...pending.map(({ cleanup, completion }) => async () => {
+      await completion;
+      owners.delete(cleanup);
+    }),
+  );
+}
+
+function attachTrackedGatewayWs(params: Parameters<typeof attachGatewayWsForTest>[0]) {
+  const socket = params.socket ?? createGatewayWsTestSocket();
+  const connectionWork = params.options?.connectionWork ?? new GatewayConnectionWork();
+  let observedClose = false;
+  socket.once("close", () => {
+    observedClose = true;
+  });
+  ownStartupCleanup(connectionCleanups, async () => {
+    connectionWork.beginClose();
+    if (!observedClose) {
+      socket.emit("close", 1000, Buffer.from("fixture cleanup"));
+    }
+    await connectionWork.drain();
+  });
+  return {
+    ...attachGatewayWsForTest({
+      ...params,
+      socket,
+      options: { ...params.options, connectionWork },
+    }),
+    connectionWork,
+  };
+}
+
+async function withStartupTestState<T>(
+  options: Parameters<typeof createOpenClawTestState>[0],
+  run: (state: OpenClawTestState) => Promise<T>,
+): Promise<T> {
+  const state = await createOpenClawTestState(options);
+  const work = new AsyncWorkScope();
+  return await runQaGatewayFixture(
+    () => work.track(() => run(state)),
+    async () => {
+      await work.drain();
+      await drainStartupCleanups(connectionCleanups);
+      await drainStartupCleanups(identityCleanups);
+      await state.cleanup();
+    },
+  );
+}
+
+afterEach(async () => {
+  await drainStartupCleanups(connectionCleanups);
+  await drainStartupCleanups(identityCleanups);
+  await closeOpenClawStateDatabaseAsync();
   resetGatewayWorkAdmission();
   closeOpenClawStateDatabaseForTest();
 });
@@ -81,6 +161,8 @@ async function attachStartupNodeConnect(params: {
   rateLimiter?: ReturnType<typeof createAuthRateLimiter>;
   onNodeRegistered?: () => void;
 }) {
+  const identityPath = params.identityPath;
+  ownStartupCleanup(identityCleanups, () => closeOpenClawStateDatabaseByPathAsync(identityPath));
   const sent: unknown[] = [];
   const connectResponse = createDeferred<StartupConnectResponse>();
   const clients = new Set<unknown>();
@@ -133,7 +215,7 @@ async function attachStartupNodeConnect(params: {
     nodeRegistry,
   };
   const pendingSetup = vi.fn(params.isPendingWorkerNodeSetup);
-  attachGatewayWsForTest({
+  const connection = attachTrackedGatewayWs({
     attach: attachGatewayWsConnectionHandler,
     clients,
     socket,
@@ -162,7 +244,7 @@ async function attachStartupNodeConnect(params: {
   if (typeof nonce !== "string") {
     throw new Error("startup node connect challenge was not sent");
   }
-  const identity = loadOrCreateDeviceIdentity({ path: params.identityPath });
+  const identity = loadOrCreateDeviceIdentity({ path: identityPath });
   const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
   const signedAt = Date.now();
   const devicePayload = buildDeviceAuthPayload({
@@ -231,6 +313,7 @@ async function attachStartupNodeConnect(params: {
   };
   return {
     clients,
+    connectionWork: connection.connectionWork,
     identity,
     nodeRegistry,
     pendingSetup,
@@ -266,7 +349,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
   it("applies the shared preauth queue limit while the message handler loads", async () => {
     const socket = createGatewayWsTestSocket();
 
-    attachGatewayWsForTest({
+    attachTrackedGatewayWs({
       attach: attachGatewayWsConnectionHandler,
       socket,
       options: {
@@ -293,7 +376,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       },
     });
 
-    attachGatewayWsForTest({
+    attachTrackedGatewayWs({
       attach: attachGatewayWsConnectionHandler,
       clients,
       socket,
@@ -373,7 +456,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       });
       const logWsControl = createGatewayWsTestLogger();
 
-      attachGatewayWsForTest({
+      attachTrackedGatewayWs({
         attach: attachGatewayWsConnectionHandler,
         socket,
         options: {
@@ -442,7 +525,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
   );
 
   it("admits the exact cloud-worker setup node through restart startup", async () => {
-    await withOpenClawTestState(
+    await withStartupTestState(
       { label: "gateway-startup-cloud-worker", layout: "state-only" },
       async (state) => {
         const { store, setupId } = seedProvisioningNodeSetup();
@@ -489,7 +572,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
   ] as const)(
     "admits same-device uncertain startup setup retry in %s unless destroy was requested (%s)",
     async (environmentState, destroyRequested) => {
-      await withOpenClawTestState(
+      await withStartupTestState(
         { label: "gateway-startup-cloud-worker-uncertain-retry", layout: "state-only" },
         async (state) => {
           const { store, setupId } = seedProvisioningNodeSetup();
@@ -573,7 +656,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
   it.each(["cloud bootstrap", "paired shared-token"] as const)(
     "keeps restart-startup %s authentication tracked until its node mutation and handshake settle",
     async (connectionKind) => {
-      await withOpenClawTestState(
+      await withStartupTestState(
         { label: "gateway-startup-cloud-worker-drain-race", layout: "state-only" },
         async (state) => {
           const { store, setupId } = seedProvisioningNodeSetup();
@@ -660,7 +743,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
   );
 
   it("keeps non-cloud and wrong cloud setup tokens startup-unavailable", async () => {
-    await withOpenClawTestState(
+    await withStartupTestState(
       { label: "gateway-startup-cloud-worker-reject", layout: "state-only" },
       async (state) => {
         const { store, setupId } = seedProvisioningNodeSetup();
@@ -689,6 +772,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
         expect(nonCloudHarness.pendingSetup).not.toHaveBeenCalled();
         expect(nonCloudHarness.nodeRegistry.register).not.toHaveBeenCalled();
         nonCloudHarness.socket.emit("close", GATEWAY_STARTUP_CLOSE_CODE, Buffer.alloc(0));
+        await nonCloudHarness.connectionWork.drain();
 
         resetGatewayWorkAdmission();
         const wrongSetup = await issueDevicePairSetupBootstrapToken({
@@ -722,7 +806,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
   it.each(["exact bootstrap", "mixed bootstrap and shared token"] as const)(
     "keeps an invalid %s opaque and rate-limited without consulting setup state",
     async (credentialShape) => {
-      await withOpenClawTestState(
+      await withStartupTestState(
         { label: "gateway-startup-cloud-worker-invalid", layout: "state-only" },
         async (state) => {
           const { store } = seedProvisioningNodeSetup();
