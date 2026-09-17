@@ -21,6 +21,18 @@ export type ResolvedSrtPluginConfig = {
   binShell: string;
   /** Network posture applied to every sandboxed command. */
   network: SrtNetworkMode;
+  /**
+   * S5 P0 global network allowlist (v1 plan §6.4 P0). When non-empty under the
+   * "deny" posture these domains are permitted and everything else is denied — a
+   * single allowlist shared by every scope (global, not per-session; per-session
+   * R3 is the open S4/P1 decision). Empty keeps the strict deny-all default.
+   *
+   * LINUX LIMITATION: on Linux the sandbox network boundary is bwrap
+   * --unshare-net (all-or-nothing); SRT enforces domain allowlisting at a host
+   * proxy, not at the kernel boundary (SRT linux-sandbox-utils.ts:466-468). The
+   * kernel guarantee on Linux is deny-all; the allowlist is proxy-level.
+   */
+  allowedDomains: string[];
   /** Extra absolute paths added to the writable allowlist beyond the scope dirs. */
   writablePaths: string[];
   /** Buffered-command timeout in milliseconds (runShellCommand / probes). */
@@ -43,6 +55,11 @@ const absolutePath = (fieldName: string) =>
 const SrtPluginConfigSchema = z.strictObject({
   binShell: absolutePath("binShell").optional(),
   network: z.enum(["deny", "allow"], { error: "network must be one of deny, allow" }).optional(),
+  allowedDomains: z
+    .array(nonEmptyTrimmedString("allowedDomains entries must be non-empty strings"), {
+      error: "allowedDomains must be an array of non-empty domain strings",
+    })
+    .optional(),
   writablePaths: z
     .array(absolutePath("writablePaths"), {
       error: "writablePaths must be an array of absolute path strings",
@@ -73,6 +90,21 @@ function normalizeWritablePaths(value: string[] | undefined): string[] {
   return paths;
 }
 
+/** Trim + dedupe the P0 global network allowlist, preserving declaration order. */
+function normalizeDomains(value: string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const domains: string[] = [];
+  for (const entry of value ?? []) {
+    const normalized = entry.trim();
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    domains.push(normalized);
+  }
+  return domains;
+}
+
 /** Build the plugin registry config schema (validation only). */
 export function createSrtPluginConfigSchema(): OpenClawPluginConfigSchema {
   return buildPluginConfigSchema(SrtPluginConfigSchema, {
@@ -100,6 +132,7 @@ export function resolveSrtPluginConfig(value: unknown): ResolvedSrtPluginConfig 
     return {
       binShell: DEFAULT_BIN_SHELL,
       network: DEFAULT_NETWORK,
+      allowedDomains: [],
       writablePaths: [],
       commandTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
     };
@@ -113,6 +146,7 @@ export function resolveSrtPluginConfig(value: unknown): ResolvedSrtPluginConfig 
   return {
     binShell: cfg.binShell ?? DEFAULT_BIN_SHELL,
     network: cfg.network ?? DEFAULT_NETWORK,
+    allowedDomains: normalizeDomains(cfg.allowedDomains),
     writablePaths: normalizeWritablePaths(cfg.writablePaths),
     commandTimeoutMs:
       typeof cfg.commandTimeoutSeconds === "number"

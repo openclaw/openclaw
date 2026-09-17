@@ -66,12 +66,22 @@ export function resolveWritableRoots(
   return dedupeAbsolute(roots);
 }
 
-function resolveNetwork(mode: SrtNetworkMode): SandboxRuntimeConfig["network"] {
-  // deny-all is the S1 default: no domains allowed, every domain denied.
-  // "allow" leaves the network open (no allowlist, no denylist) — reserved for
-  // opt-in callers; the tighter per-domain allowlisting is a later stage.
+function resolveNetwork(
+  mode: SrtNetworkMode,
+  allowedDomains: readonly string[],
+): SandboxRuntimeConfig["network"] {
+  // "allow" leaves the network fully open (no allowlist, no denylist) — reserved
+  // for opt-in callers.
   if (mode === "allow") {
     return { allowedDomains: [], deniedDomains: [] };
+  }
+  // S5 P0 global allowlist (v1 plan §6.4 P0): with a non-empty allowlist, permit
+  // those domains and deny everything else. On macOS this is kernel-enforced; on
+  // Linux the kernel boundary is bwrap --unshare-net (deny-all) and the domain
+  // allowlist is applied at the SRT host proxy (see config.ts allowedDomains and
+  // the AC-L3 limitation note). Empty allowlist => strict deny-all (S1 default).
+  if (allowedDomains.length > 0) {
+    return { allowedDomains: [...allowedDomains], deniedDomains: ["*"] };
   }
   return { allowedDomains: [], deniedDomains: ["*"] };
 }
@@ -89,7 +99,7 @@ export function buildSrtRuntimeConfig(
 ): SandboxRuntimeConfig {
   const allowWrite = resolveWritableRoots(scope, pluginConfig.writablePaths);
   return {
-    network: resolveNetwork(pluginConfig.network),
+    network: resolveNetwork(pluginConfig.network, pluginConfig.allowedDomains),
     filesystem: {
       allowRead: [],
       denyRead: [],
