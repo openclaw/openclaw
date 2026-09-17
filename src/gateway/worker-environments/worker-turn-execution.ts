@@ -91,7 +91,12 @@ export async function executeWorkerTurn(
   });
 
   const startedAt = Date.now();
-  turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
+  await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
+  params.assertRunCurrent?.();
+  turn.abortSignal?.throwIfAborted();
+  if (!params.placements.validateTurnClaim(params.turnClaim)) {
+    throw new Error("Worker turn claim is no longer current");
+  }
   turn.onExecutionPhase?.({ phase: "runner_entered", backend: "cloud-worker" });
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
   // The unrecorded-input fallback retains its writable view and captured append custody.

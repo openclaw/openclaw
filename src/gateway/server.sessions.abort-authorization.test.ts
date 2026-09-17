@@ -109,7 +109,7 @@ async function startNativeRun(owner: Awaited<ReturnType<typeof openOperator>>, n
     // Production relays the admitted controller signal into the native attempt.
     command.abortSignal!.addEventListener("abort", abort, { once: true });
     setActiveEmbeddedRun(command.sessionId!, handle, sessionKey);
-    command.onExecutionStarted?.();
+    await command.onExecutionStarted?.();
     started.resolve();
     try {
       await finish.promise;

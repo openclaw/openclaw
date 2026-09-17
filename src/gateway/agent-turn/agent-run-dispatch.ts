@@ -263,9 +263,9 @@ export function dispatchAgentRunFromGateway(params: {
     ? {
         ...ingressOptsWithSpawnFacts,
         onPostAdmittedRunContext: trackedTaskBinding?.onPostAdmission,
-        onExecutionStarted: () => {
-          ingressOptsWithSpawnFacts.onExecutionStarted?.();
-          trackedTaskBinding?.onExecutionStarted();
+        onExecutionStarted: async () => {
+          await ingressOptsWithSpawnFacts.onExecutionStarted?.();
+          await trackedTaskBinding?.onExecutionStarted();
         },
       }
     : ingressOptsWithSpawnFacts;

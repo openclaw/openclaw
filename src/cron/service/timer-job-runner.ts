@@ -306,7 +306,7 @@ async function executeJobCoreWithTimeoutUnfinalized(
         ...executionIdentity,
         onPostAdmission: (context) => {
           bindCronJobAdmittedRun(opts?.activeJobMarker, context, runAbortController.signal);
-          executionIdentity.onPostAdmission?.(context);
+          return executionIdentity.onPostAdmission?.(context);
         },
       },
     };

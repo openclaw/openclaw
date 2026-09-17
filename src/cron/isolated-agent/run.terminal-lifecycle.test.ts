@@ -186,7 +186,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
     let attemptIndex = 0;
     runCliAgentMock.mockImplementation(async (runParams: RunCliAgentParams) => {
       attemptIndex++;
-      runParams.onExecutionStarted?.();
+      await runParams.onExecutionStarted?.();
       secondPreparing.resolve();
       await releaseSecond.promise;
       if (outcome === "cli-exhausted-throw") {
@@ -233,7 +233,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         ...runParams,
         runtimeKind: "embedded",
       });
-      runParams.onExecutionStarted?.();
+      await runParams.onExecutionStarted?.();
       const authStorage = AuthStorage.inMemory();
       const native = createStubSessionHarness();
       const stream = prepareEmbeddedAttemptStream({

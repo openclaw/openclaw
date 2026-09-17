@@ -53,8 +53,8 @@ describe("cron run execution binding", () => {
           async (params: {
             executionIdentity?: {
               ingress: { kind: string };
-              onPostAdmission?: (context: AdmittedRunContext) => void;
-              onExecutionStarted?: () => void;
+              onPostAdmission?: (context: AdmittedRunContext) => void | Promise<void>;
+              onExecutionStarted?: () => void | Promise<void>;
             };
           }) => {
             const admitted = {
@@ -69,11 +69,11 @@ describe("cron run execution binding", () => {
             expect(tableExists(beforeAdmissionSettles, "execution_owner_lifecycle_bindings")).toBe(
               false,
             );
-            params.executionIdentity?.onPostAdmission?.(admitted);
+            await params.executionIdentity?.onPostAdmission?.(admitted);
             expect(tableExists(beforeAdmissionSettles, "execution_owner_lifecycle_bindings")).toBe(
               false,
             );
-            params.executionIdentity?.onExecutionStarted?.();
+            await params.executionIdentity?.onExecutionStarted?.();
             return { status: "ok" as const };
           },
         );
@@ -188,7 +188,7 @@ describe("cron run execution binding", () => {
             now: dueAt,
           }),
         } satisfies AdmittedRunContext;
-        executionIdentity.onPostAdmission?.(admitted);
+        await executionIdentity.onPostAdmission?.(admitted);
         const db = openOpenClawStateDatabase().db;
         db.prepare("UPDATE cron_run_receipts SET owner_pid = ? WHERE receipt_id = ?").run(
           2_147_483_647,
@@ -208,7 +208,7 @@ describe("cron run execution binding", () => {
           }),
         );
 
-        executionIdentity.onExecutionStarted?.();
+        await executionIdentity.onExecutionStarted?.();
         expect(
           tableExists(openOpenClawStateDatabase().db, "execution_owner_lifecycle_bindings"),
         ).toBe(false);

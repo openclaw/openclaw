@@ -299,7 +299,7 @@ export type RunCliAgentParams = {
   assertCurrent?: () => void;
   onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
   onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: () => unknown;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;

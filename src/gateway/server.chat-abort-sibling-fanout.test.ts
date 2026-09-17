@@ -105,7 +105,7 @@ test.each([false, true])(
         agentCommandMock.mockImplementationOnce(async (input) => {
           const command = input as AgentCommandOpts;
           expect(command.abortSignal).toBeInstanceOf(AbortSignal);
-          command.onExecutionStarted?.();
+          await command.onExecutionStarted?.();
           parentStarted.resolve(command);
           await parentFinish.promise;
           command.abortSignal!.throwIfAborted();

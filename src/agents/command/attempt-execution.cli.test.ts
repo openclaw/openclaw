@@ -813,7 +813,7 @@ describe("CLI attempt execution", () => {
     const callback = embedded.onExecutionStarted;
 
     expect(callback).toBeTypeOf("function");
-    (callback as (info?: { lifecycleGeneration?: string }) => void)({
+    await (callback as (info?: { lifecycleGeneration?: string }) => void | Promise<void>)({
       lifecycleGeneration: "next-generation",
     });
     expect(onExecutionStarted).toHaveBeenCalledTimes(1);

@@ -468,9 +468,9 @@ function createCronPromptExecutor(
           params.executionIdentity.onPostAdmission,
         )
       : basePreparedRunAdmission;
-    const onExecutionStarted = (info?: CronRunnerStartedInfo) => {
+    const onExecutionStarted = async (info?: CronRunnerStartedInfo) => {
       params.onExecutionStarted?.(info);
-      params.executionIdentity?.onExecutionStarted?.();
+      await params.executionIdentity?.onExecutionStarted?.();
     };
     // Record the cron source fact at its producer for the run's lifetime so
     // exec-approval creation and standing-grant use never infer job identity
