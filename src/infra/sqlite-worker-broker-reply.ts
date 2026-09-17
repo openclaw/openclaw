@@ -5,8 +5,12 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { retainOpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import { SqliteCoordinatorError } from "./sqlite-coordinator.js";
 import { retainSqliteWriteAdmissionService } from "./sqlite-transaction.js";
-import { releaseSqliteWorkerLifecycle } from "./sqlite-worker-broker-admission.js";
-import type { Job } from "./sqlite-worker-broker.types.js";
+import {
+  prepareSqliteWorkerActorContext,
+  prepareSqliteWorkerLifecycle,
+  releaseSqliteWorkerLifecycle,
+} from "./sqlite-worker-broker-admission.js";
+import type { Job, Slot } from "./sqlite-worker-broker.types.js";
 import {
   SQLITE_WORKER_MAX_MESSAGE_BYTES,
   retainSqliteWorkerErrorCode,
@@ -22,7 +26,7 @@ import {
   type SqliteWorkerTransferFrame,
 } from "./sqlite-worker-transfer.js";
 
-export function dispatchSqliteWorkerJob(worker: Worker, job: Job): void {
+function dispatchSqliteWorkerJob(worker: Worker, job: Job): void {
   if (job.createAdmission) {
     const settlement = createDeferredCore<SqliteWorkerOperationSettlement>();
     job.settleNative = settlement.resolve;
@@ -69,7 +73,7 @@ function prepareSqliteWorkerRequest(job: Job): SqliteWorkerRequest {
   return { ...request, type: "execute-start", transfer };
 }
 
-export function decodeSqliteWorkerReplyValue(
+function decodeSqliteWorkerReplyValue(
   job: Job,
   reply: Extract<SqliteWorkerReply, { ok: true }>,
 ):
@@ -154,7 +158,7 @@ export function decodeSqliteWorkerReplyValue(
     : { type: "complete", value };
 }
 
-export function decodeSqliteWorkerReplyError(
+function decodeSqliteWorkerReplyError(
   job: Job,
   error: Extract<SqliteWorkerReply, { ok: false }>["error"],
 ): Error {
@@ -282,5 +286,116 @@ export function settleSqliteWorkerJob(
     job.reject(failure);
   } else {
     job.resolve(value);
+  }
+}
+
+/** Bind transport events; the broker retains capacity, failure and retirement ownership. */
+export function bindSqliteWorkerReplies(
+  slot: Slot,
+  {
+    fail,
+    finish,
+    dispatch,
+    onExit,
+  }: {
+    fail: (error: unknown, currentError?: Error) => void;
+    finish: typeof settleSqliteWorkerJob;
+    dispatch: () => void;
+    onExit: () => void;
+  },
+): void {
+  const { worker } = slot;
+  worker.on("message", (reply: SqliteWorkerReply) => {
+    const job = slot.current;
+    if (!job || reply.id !== job.request.id) {
+      fail(new Error("SQLite worker returned an unexpected response"));
+      return;
+    }
+    if (!reply.ok) {
+      if (reply.openNotEntered && job.request.type === "open" && job.dispatchState) {
+        job.dispatchState.openNotEntered = true;
+      }
+      const error = decodeSqliteWorkerReplyError(job, reply.error);
+      if (job.request.type === "open" && reply.openNotEntered && !reply.retire) {
+        slot.current = undefined;
+        const refusal = job.operationAdmission?.admission.failure ?? error;
+        finish(job, refusal, undefined, { kind: "not-entered", error: refusal });
+        dispatch();
+        return;
+      }
+      if (job.request.type !== "execute" || reply.retire) {
+        fail(error, job.request.type !== "execute" ? error : undefined);
+        return;
+      }
+      slot.current = undefined;
+      finish(job, job.operationAdmission?.admission.failure ?? error);
+      dispatch();
+      return;
+    }
+    let value: unknown;
+    try {
+      const result = decodeSqliteWorkerReplyValue(job, reply);
+      if (result.type === "continue") {
+        // Continuations retain the current job and its reserved transport credits through drain.
+        slot.worker.postMessage(result.request, []);
+        return;
+      }
+      value = result.value;
+    } catch (error) {
+      fail(error);
+      return;
+    }
+    slot.current = undefined;
+    finish(job, undefined, value);
+    dispatch();
+  });
+  worker.on("error", (error) => fail(error));
+  worker.on("messageerror", (error) => fail(error));
+  worker.once("exit", (code) => {
+    slot.exited = true;
+    for (const actor of slot.actors) {
+      actor.backendClosed = true;
+    }
+    fail(new Error(`SQLite worker exited with code ${code}`));
+    onExit();
+  });
+}
+
+export function dispatchSqliteWorkerSlotJob(
+  slot: Slot,
+  job: Job,
+  {
+    fail,
+    finish,
+    dispatch,
+  }: {
+    fail: (error: unknown, currentError?: Error) => void;
+    finish: typeof settleSqliteWorkerJob;
+    dispatch: () => void;
+  },
+): void {
+  slot.current = job;
+  job.detach();
+  slot.worker.ref();
+  try {
+    job.assertCurrent?.();
+    const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
+    prepareSqliteWorkerActorContext(actor, job.request);
+    prepareSqliteWorkerLifecycle(job, actor);
+    dispatchSqliteWorkerJob(slot.worker, job);
+  } catch (error) {
+    if (
+      job.request.gatewaySchemaFence ||
+      job.request.maintenanceSchemaFence ||
+      job.request.stateLifecycle ||
+      job.request.operationAdmission
+    ) {
+      // A failed transfer cannot attest that the receiving native owner is gone.
+      fail(error, toErrorObject(error, "SQLite worker transfer failed"));
+    } else {
+      slot.current = undefined;
+      finish(job, error);
+      dispatch();
+    }
   }
 }

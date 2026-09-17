@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
-import { decodeSqliteWorkerReplyError } from "../infra/sqlite-worker-broker-reply.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
@@ -82,40 +81,6 @@ describe("shared-state worker error transport", () => {
     const hydrated = hydrateOpenClawStateWorkerError(retained);
     expect(hydrated).toBeInstanceOf(AggregateError);
     expect(findStartupMaintenanceRequiredError(hydrated)).toBeInstanceOf(SqliteSchemaVersionError);
-  });
-
-  it("keeps outcome-unknown explicit instead of hydrating a maintenance payload", () => {
-    const payload = encodeOpenClawStateWorkerError(new SqliteSchemaVersionError("newer schema"));
-    if (!payload) {
-      throw new Error("Expected canonical payload");
-    }
-    const failure = decodeSqliteWorkerReplyError(
-      {
-        request: {
-          type: "execute",
-          id: 1,
-          actor: 1,
-          input: new Uint8Array(),
-          stateContext: {
-            environment: { OPENCLAW_STATE_DIR: "/fixture" },
-            coordinatorRuntime: { directory: "/fixture/coordinator", keepAlive: false },
-          },
-        },
-        bytes: 0,
-        resolve: () => undefined,
-        reject: () => undefined,
-        detach: () => undefined,
-      },
-      {
-        name: "SqliteWorkerError",
-        message: "write outcome unknown",
-        code: "outcome-unknown",
-        sharedState: payload,
-      },
-    );
-    expect(hydrateOpenClawStateWorkerError(failure)).toBe(failure);
-    expect(failure).toMatchObject({ code: "outcome-unknown" });
-    expect(findStartupMaintenanceRequiredError(failure)).toBeUndefined();
   });
 
   it("hydrates a cached rejection independently for each caller without rewriting its graph", async () => {

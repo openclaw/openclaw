@@ -5,6 +5,7 @@ export { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writ
 export {
   openSqliteWorkerStore,
   runSqliteWorkerStoreWrite,
+  withSqliteWorkerThreadReservation,
   SqliteWorkerError,
   type SqliteWorkerBackend,
   type SqliteWorkerCommand,

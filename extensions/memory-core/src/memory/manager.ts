@@ -45,7 +45,6 @@ import {
   resolveMemoryIndexManagerCacheKey,
   type MemoryIndexManagerPurpose,
 } from "./manager-registry.js";
-import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import { runMemorySearchMaintenance } from "./manager-search-maintenance.js";
 import { MemorySearchOrchestration } from "./manager-search-orchestration.js";
@@ -58,6 +57,7 @@ import {
   enqueueMemoryTargetedSessionSync,
   hasTargetedSessionSyncParams,
 } from "./manager-sync-control.js";
+import { runMemorySyncGeneration } from "./manager-sync-generation.js";
 import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
 
 const log = createSubsystemLogger("memory");
@@ -432,42 +432,14 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         }
       }
 
-      const runGeneration = async (keywordOnly: boolean) => {
-        // Reset must not overtake embeddings awaiting their final incremental writes.
-        // All sync generations own the existing maintenance lease through cleanup.
-        const dbPath = resolveUserPath(this.settings.store.databasePath);
-        const lock = await waitForMemoryReindexLock(dbPath, { waitForActive: true });
-        try {
-          // A previous failed close still owns native/lease cleanup. Finish it
-          // before opening a new generation instead of reusing a revoked owner.
-          await this.publishedDatabase.closePublicationWorker();
-          this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
-          try {
-            // Keep one native publication connection for this generation, then
-            // release its broker capacity even when the manager stays cached.
-            await this.runSync(params).then(
-              () => this.publishedDatabase.closePublicationWorker(),
-              async (error: unknown) => {
-                const [cleanup] = await Promise.allSettled([
-                  this.publishedDatabase.closePublicationWorker(),
-                ]);
-                if (cleanup.status === "rejected") {
-                  throw new AggregateError(
-                    [error, cleanup.reason],
-                    `${String(error)}; Memory sync cleanup failed: ${String(cleanup.reason)}`,
-                    { cause: error },
-                  );
-                }
-                throw error;
-              },
-            );
-          } finally {
-            this.endSyncProviderGeneration();
-          }
-        } finally {
-          await lock.release();
-        }
-      };
+      const runGeneration = (keywordOnly: boolean) =>
+        runMemorySyncGeneration({
+          databasePath: this.settings.store.databasePath,
+          publishedDatabase: this.publishedDatabase,
+          begin: () => this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly }),
+          run: () => this.runSync(params),
+          end: () => this.endSyncProviderGeneration(),
+        });
       try {
         await runGeneration(forceFtsOnly);
       } catch (err) {

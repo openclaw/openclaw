@@ -74,6 +74,14 @@ function resolveSqliteWorkerBroker() {
   );
 }
 
+/** Reserve Node thread placement only for this backend's opens until the callback drains. */
+export function withSqliteWorkerThreadReservation<T>(
+  moduleUrl: URL,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return resolveSqliteWorkerBroker().withThreadReservation(moduleUrl, operation);
+}
+
 /**
  * Retain an admitted writer through native settlement. Backends request authority
  * after BEGIN and again immediately before COMMIT; the host never joins a native

@@ -59,6 +59,16 @@ export type Slot = {
   exit: Promise<void>;
   exited: boolean;
   pendingOpens: number;
+  threadScope?: SqliteWorkerThreadScope;
+};
+export type SqliteWorkerThreadScope = {
+  moduleUrl: string;
+  active: boolean;
+  placement: boolean;
+  pending: Set<Promise<unknown>>;
+  parent?: SqliteWorkerThreadScope;
+  slot?: Slot;
+  failure?: Error;
 };
 export type Actor = {
   id: number;
@@ -114,6 +124,7 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
+  threadScopes?: Array<{ scope: SqliteWorkerThreadScope; active: boolean }>;
   expectedIdentity?: string;
   createOpenAdmission?: SqliteWorkerAdmissionFactory;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
