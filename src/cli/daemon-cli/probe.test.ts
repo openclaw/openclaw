@@ -372,6 +372,38 @@ describe("probeGatewayStatus", () => {
     });
   });
 
+  it("collects channel status issues for deep foreign-install diagnostics", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    probeGatewayMock.mockResolvedValueOnce({ ok: true });
+    const statusIssues = [
+      {
+        channel: "telegram",
+        accountId: "default",
+        kind: "runtime",
+        message: "Telegram getUpdates conflict: another poller is using this bot token",
+      },
+    ];
+    callGatewayMock.mockResolvedValueOnce({ statusIssues });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      config: {},
+      timeoutMs: 5_000,
+      includeChannelStatusIssues: true,
+    });
+
+    expect(result).toMatchObject({ ok: true, channelStatusIssues: statusIssues });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "channels.status",
+        params: { probe: false, timeoutMs: 5_000 },
+        sharedStateMode: "read-only",
+      }),
+    );
+  });
+
   it("omits config-backed credentials from the status RPC when disabled", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();

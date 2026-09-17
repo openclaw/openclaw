@@ -6,6 +6,7 @@ import {
   ConnectErrorDetailCodes,
   readConnectErrorDetailCode,
 } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { GatewayProbeAuthSummary, GatewayProbeServerSummary } from "../../gateway/probe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -58,12 +59,14 @@ export async function probeGatewayStatus(opts: {
   preauthHandshakeTimeoutMs?: number;
   json?: boolean;
   requireRpc?: boolean;
+  includeChannelStatusIssues?: boolean;
   allowRpcConfigCredentials?: boolean;
   configPath?: string;
 }) {
   const kind = opts.requireRpc ? "read" : "connect";
   let auth: GatewayProbeAuthSummary | undefined;
   let server: GatewayProbeServerSummary | undefined;
+  let channelStatusIssues: ChannelsStatusResult["statusIssues"] | undefined;
   let gatewayReached = false;
   try {
     const result = await withProgress(
@@ -126,6 +129,30 @@ export async function probeGatewayStatus(opts: {
     );
     auth = result.auth;
     server = result.server;
+    if (
+      result.ok &&
+      opts.includeChannelStatusIssues === true &&
+      (opts.allowRpcConfigCredentials !== false || Boolean(opts.token || opts.password))
+    ) {
+      const { callGateway } = await import("../../gateway/call.js");
+      channelStatusIssues = await callGateway<ChannelsStatusResult>({
+        ...(opts.urlOverride ? { url: opts.urlOverride } : { serviceTargetUrl: opts.url }),
+        localPortOverride: opts.localPortOverride,
+        token: opts.token,
+        password: opts.password,
+        tlsFingerprint: opts.tlsFingerprint,
+        preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
+        ...(opts.allowRpcConfigCredentials !== false && opts.config ? { config: opts.config } : {}),
+        method: "channels.status",
+        params: { probe: false, timeoutMs: opts.timeoutMs },
+        timeoutMs: opts.timeoutMs,
+        sharedStateMode: "read-only",
+        skipImplicitAuth: true,
+        ...(opts.configPath ? { configPath: opts.configPath } : {}),
+      })
+        .then((status) => status.statusIssues)
+        .catch(() => undefined);
+    }
     const serverSummary = server ? { server } : {};
     const version = server?.version ?? null;
     if (result.ok) {
@@ -140,6 +167,7 @@ export async function probeGatewayStatus(opts: {
             : auth?.capability,
         auth,
         ...serverSummary,
+        ...(channelStatusIssues ? { channelStatusIssues } : {}),
         ...(version != null ? { version } : {}),
       } as const;
     }

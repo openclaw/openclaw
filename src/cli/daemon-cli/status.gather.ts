@@ -478,6 +478,8 @@ async function gatherDaemonStatusImpl(
           timeoutMs,
           json: opts.rpc.json,
           requireRpc: opts.requireRpc,
+          includeChannelStatusIssues:
+            opts.deep === true && Boolean(launchdDiagnostics.foreignLaunchdJobs?.length),
           allowRpcConfigCredentials,
           configPath: daemonConfigSummary.path,
         }),

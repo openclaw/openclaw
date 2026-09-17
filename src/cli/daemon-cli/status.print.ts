@@ -65,11 +65,39 @@ function formatConnectionLine(
   return `${pid}${ppid}${direction}${command}${address}${commandLine}`;
 }
 
+const DUPLICATE_POLLER_CONFLICT_PATTERN =
+  /(?:getUpdates conflict|duplicate poller|other getUpdates request)/iu;
+
+function resolveForeignChannelConflictCorrelations(status: DaemonStatus) {
+  const jobs = status.service.foreignLaunchdJobs;
+  const rpc = status.rpc;
+  if (
+    !jobs?.length ||
+    !rpc ||
+    !("channelStatusIssues" in rpc) ||
+    !Array.isArray(rpc.channelStatusIssues)
+  ) {
+    return [];
+  }
+  return rpc.channelStatusIssues
+    .filter((issue) => DUPLICATE_POLLER_CONFLICT_PATTERN.test(issue.message))
+    .map((issue) => ({
+      channel: issue.channel,
+      accountId: issue.accountId,
+      message: issue.message,
+      foreignJobs: jobs.map(({ label, program }) => ({ label, program })),
+    }));
+}
+
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
+  const foreignChannelConflictCorrelations = resolveForeignChannelConflictCorrelations(status);
   if (opts.json) {
     defaultRuntime.writeJson({
       ...status,
       service: projectDaemonServiceForJson(status.service, { includeDefinitionPaths: false }),
+      ...(foreignChannelConflictCorrelations.length > 0
+        ? { foreignChannelConflictCorrelations }
+        : {}),
     });
     return;
   }
@@ -514,6 +542,16 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           `Remove confirmed stray Gateway lifecycle jobs with ${formatCliCommand("openclaw doctor --fix")}.`,
         ),
       );
+    }
+    for (const correlation of foreignChannelConflictCorrelations) {
+      const channelAccount = `${sanitizeTerminalText(correlation.channel)}/${sanitizeTerminalText(correlation.accountId)}`;
+      for (const job of correlation.foreignJobs) {
+        defaultRuntime.error(
+          warnText(
+            `Channel conflict correlation: ${channelAccount} reports a duplicate-poller conflict; foreign OpenClaw job ${sanitizeTerminalText(job.label)} (program=${sanitizeTerminalText(job.program)}) may be the other install using this channel credential.`,
+          ),
+        );
+      }
     }
     spacer();
   }
