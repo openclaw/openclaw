@@ -1635,6 +1635,16 @@ let automaticRequested = false;
             recovery?.service === "healthy" ? "updater already verified recovery" :
               recovery?.service === "failed" ? "updater recovery failed; no automatic retry" :
                 "no verified recovery result; inspect the installation before restarting"));
+        if (restorationArmed && !restored) {
+          const alarm = "The Gateway is down and will stay down because the failed update did not produce verified recovery artifacts. Repair the installation before restarting it.";
+          appendLog(alarm);
+          runLedger?.recordUpdateRunStep(params.runId, {
+            step: "warning:gateway-left-down",
+            status: "completed",
+            detail: alarm,
+            endedAtMs: Date.now(),
+          });
+        }
         if (childStatus !== "skipped" || !restored) {
           recordUpdateHandoffOutcome("managed-service-handoff-failed", undefined, childStatus === "skipped" ? "error" : childStatus);
         }
