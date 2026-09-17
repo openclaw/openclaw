@@ -175,6 +175,40 @@ describe("check-workflows", () => {
     );
   });
 
+  it("rejects a python3 below the pinned pre-commit runtime floor before building a venv", () => {
+    const tempDir = makeTempDir(tempDirs, "check-workflows-");
+    const binDir = path.join(tempDir, "bin");
+    const markerPath = path.join(tempDir, "venv-attempt.txt");
+    mkdirSync(binDir);
+    writeFileSync(
+      path.join(binDir, "python3"),
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "--version" ]; then printf "Python 3.9.6\\n"; exit 0; fi',
+        'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ] && [ "$3" = "--version" ]; then exit 1; fi',
+        'printf "%s\\n" "$*" >> "$VENV_ATTEMPT_MARKER"',
+        "exit 1",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(testNodeExecPath, ["--import", "tsx", scriptPath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: binDir,
+        VENV_ATTEMPT_MARKER: markerPath,
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("python3 is 3.9.6");
+    expect(result.stderr).toContain("pre-commit 4.6.2 requires Python >=3.10");
+    // The floor is checked before any temporary environment work begins.
+    expect(existsSync(markerPath)).toBe(false);
+  });
+
   it("prints the missing runtime diagnostic when Python venv support is unavailable", () => {
     const tempDir = makeTempDir(tempDirs, "check-workflows-");
     const binDir = path.join(tempDir, "bin");
