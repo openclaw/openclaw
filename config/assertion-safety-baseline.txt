@@ -2134,7 +2134,7 @@ src/commands/doctor-config-analysis.ts	3
 src/commands/doctor-config-flow.ts	2
 src/commands/doctor-config-preflight.cron.ts	4
 src/commands/doctor-gateway-services.ts	1
-src/commands/doctor-heartbeat-scratch-migration.ts	5
+src/commands/doctor-heartbeat-scratch-migration.ts	4
 src/commands/doctor-main-session-recovery.ts	1
 src/commands/doctor-model-catalog-credentials.ts	1
 src/commands/doctor-plugin-registry.ts	1
@@ -2690,7 +2690,7 @@ src/infra/restart-coordinator.ts	1
 src/infra/restart-handoff.ts	1
 src/infra/restart-sentinel-store.ts	10
 src/infra/restart-sentinel.ts	1
-src/infra/restart-stale-pids.ts	3
+src/infra/restart-stale-pids.ts	2
 src/infra/retry-policy.ts	3
 src/infra/session-cost-usage-cache.sqlite.ts	1
 src/infra/session-cost-usage-collection.ts	3

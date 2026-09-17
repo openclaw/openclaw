@@ -162,6 +162,24 @@ describe("killProcessTree", () => {
     });
   });
 
+  it("on Unix force-kills after an EPERM existence probe", async () => {
+    const permissionError = Object.assign(new Error("permission denied"), { code: "EPERM" });
+    killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+      if (pid === 5253 && signal === 0) {
+        throw permissionError;
+      }
+      return true;
+    }) as typeof process.kill);
+
+    await withMockedPlatform("darwin", async () => {
+      killProcessTree(5253, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(killSpy).toHaveBeenCalledWith(5253, "SIGTERM");
+      expect(killSpy).toHaveBeenCalledWith(5253, "SIGKILL");
+    });
+  });
+
   it("on Windows does not force-kill a disappeared or reused PID after taskkill fails", async () => {
     const gracefulTaskkill = new EventEmitter();
     spawnMock.mockReturnValueOnce(gracefulTaskkill);
@@ -319,6 +337,36 @@ describe("killProcessTree", () => {
       expect(killSpy).toHaveBeenCalledWith(-4545, "SIGKILL");
       expect(killSpy).not.toHaveBeenCalledWith(4545, "SIGKILL");
       expect(spawnSyncMock).not.toHaveBeenCalled();
+      expect(readFileSyncMock).not.toHaveBeenCalledWith("/proc/-4545/status", "utf8");
+    });
+  });
+
+  it("on Linux does not escalate a single-thread zombie", async () => {
+    const rootPid = process.pid + 10;
+    let statusReads = 0;
+    killSpy.mockImplementation(() => true);
+    readFileSyncMock.mockImplementation((filePath: string) => {
+      if (filePath === `/proc/${rootPid}/stat`) {
+        return `${rootPid} (fixture) S 1 ${rootPid} ${rootPid} 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 100 0`;
+      }
+      if (filePath === `/proc/${rootPid}/task/${rootPid}/children`) {
+        return "";
+      }
+      if (filePath === `/proc/${rootPid}/status`) {
+        statusReads += 1;
+        return statusReads === 1
+          ? "Name:\tfixture\nState:\tS (sleeping)\nThreads:\t1\n"
+          : "Name:\tfixture\nState:\tZ (zombie)\nThreads:\t1\n";
+      }
+      throw new Error(`unexpected proc path: ${filePath}`);
+    });
+
+    await withMockedPlatform("linux", async () => {
+      killProcessTree(rootPid, { graceMs: 10, detached: false });
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(killSpy).toHaveBeenCalledWith(rootPid, "SIGTERM");
+      expect(killSpy).not.toHaveBeenCalledWith(rootPid, "SIGKILL");
     });
   });
 
