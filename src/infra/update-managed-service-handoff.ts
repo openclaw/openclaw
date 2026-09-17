@@ -121,18 +121,18 @@ const leaseStore = createManagedHandoffLeaseStore({
   existingIdentity: params.updateLeaseDatabaseIdentity,
   onProcessIdentityWarning: (pid, message) => {
     appendLog(message);
-    identityWarnings.set(pid, message);
-    if (runLedger && !updaterStarted) recordIdentityWarnings(runLedger);
+    runWarnings.set("warning:process-start-identity:" + pid, message);
+    if (runLedger && !updaterStarted) recordRunWarnings(runLedger);
   },
 }, { warn: (message, metadata) => appendLog(message + " " + JSON.stringify(metadata)) });
 const { isPidAlive, properties: parseSystemdProperties, validFailure: validTriageFailure } = leaseStore;
-const identityWarnings = new Map();
-function recordIdentityWarnings(ledger) {
+const runWarnings = new Map();
+function recordRunWarnings(ledger) {
   if (!params.runId) return;
-  for (const [pid, detail] of identityWarnings) {
+  for (const [step, detail] of runWarnings) {
     try {
-      ledger.recordUpdateRunStep(params.runId, { step: "warning:process-start-identity:" + pid, status: "completed", detail, endedAtMs: Date.now() });
-      identityWarnings.delete(pid);
+      ledger.recordUpdateRunStep(params.runId, { step, status: "completed", detail, endedAtMs: Date.now() });
+      runWarnings.delete(step);
     } catch { /* The candidate runtime records warnings after state migration. */ }
   }
 }
@@ -283,30 +283,23 @@ let triageFailure;
 let runLedger;
 let runOutcome;
 let terminalRuntimePath = params.recoveryModulePath;
-let serviceStoppedAtMs;
-let serviceDowntimeMs;
-const terminalWarnings = [];
+let serviceStoppedAtMs, serviceDowntimeMs;
 
 async function finishManagedUpdateRun() {
   if (!runLedger || !runOutcome) return;
   if (foregroundParked && runOutcome.status === "succeeded") return;
   if (!ownsManagedUpdateLease()) throw new Error("managed update terminal writer lost its current claim");
   const terminalResult = { ...runOutcome, ...(serviceDowntimeMs !== undefined ? { downtimeMs: serviceDowntimeMs } : {}) };
-  if (!updaterStarted) {
-    for (const [step, detail] of terminalWarnings) {
-      try { runLedger.recordUpdateRunStep(params.runId, { step, status: "completed", detail, endedAtMs: Date.now() }); } catch {}
-    }
-    runLedger.finishUpdateRun(params.runId, terminalResult);
-  }
+  if (!updaterStarted) { recordRunWarnings(runLedger); runLedger.finishUpdateRun(params.runId, terminalResult); }
   else {
     // Doctor may have advanced the schema. A new process loads the candidate's
     // entire module graph; a cache-busted import would retain old DB readers.
-    const payload = JSON.stringify([terminalRuntimePath, params.runId, terminalResult, [...identityWarnings], terminalWarnings,
+    const payload = JSON.stringify([terminalRuntimePath, params.runId, terminalResult, [...runWarnings],
       path.join(params.cwd, "runtime", ${JSON.stringify(MANAGED_HANDOFF_RUNTIME_ENTRY)}),
       params.updateLeaseDatabaseIdentity, params.updateLeaseKey, params.handoffId, managedUpdateLease.helper]);
     if (Buffer.byteLength(payload) > 64 * 1024) throw new Error("managed update terminal result exceeds the command payload limit");
     const exit = await runOwnedUpdateCommand("finalize", [process.execPath, "--input-type=module", "-e",
-      'import { pathToFileURL } from "node:url"; const [modulePath, runId, result, identityWarnings, terminalWarnings, leaseRuntime, databaseIdentity, root, owner, helper] = JSON.parse(process.argv[1]); const { finishUpdateRun, recordUpdateRunStep } = await import(pathToFileURL(modulePath).href); const { createManagedHandoffLeaseStore } = await import(pathToFileURL(leaseRuntime).href); const store = createManagedHandoffLeaseStore({ databasePath: databaseIdentity.databasePath, existingIdentity: databaseIdentity }); const current = store.read(root); const lease = current.kind === "current" ? current.lease : null; if (!lease || lease.owner !== owner || lease.executor.pid !== process.pid || JSON.stringify(lease.helper) !== JSON.stringify(helper) || !(store.isProcessIdentityCurrent(lease.executor) || (process.connected && store.acceptParentBoundExecutor(lease)))) throw new Error("managed update terminal writer lost its current claim"); for (const [pid, detail] of identityWarnings) { try { recordUpdateRunStep(runId, {step:"warning:process-start-identity:"+pid,status:"completed",detail,endedAtMs:Date.now()}); } catch {} } for (const [step, detail] of terminalWarnings) { try { recordUpdateRunStep(runId, {step,status:"completed",detail,endedAtMs:Date.now()}); } catch {} } finishUpdateRun(runId, result);',
+      'import { pathToFileURL } from "node:url"; const [modulePath, runId, result, warnings, leaseRuntime, databaseIdentity, root, owner, helper] = JSON.parse(process.argv[1]); const { finishUpdateRun, recordUpdateRunStep } = await import(pathToFileURL(modulePath).href); const { createManagedHandoffLeaseStore } = await import(pathToFileURL(leaseRuntime).href); const store = createManagedHandoffLeaseStore({ databasePath: databaseIdentity.databasePath, existingIdentity: databaseIdentity }); const current = store.read(root); const lease = current.kind === "current" ? current.lease : null; if (!lease || lease.owner !== owner || lease.executor.pid !== process.pid || JSON.stringify(lease.helper) !== JSON.stringify(helper) || !(store.isProcessIdentityCurrent(lease.executor) || (process.connected && store.acceptParentBoundExecutor(lease)))) throw new Error("managed update terminal writer lost its current claim"); for (const [step, detail] of warnings) { try { recordUpdateRunStep(runId, {step,status:"completed",detail,endedAtMs:Date.now()}); } catch {} } finishUpdateRun(runId, result);',
       payload], params.recoveryTimeoutMs);
     if (exit.signal || exit.code !== 0) throw new Error("installed runtime could not finalize the update run");
   }
@@ -1398,7 +1391,7 @@ let automaticRequested = false;
       if (!ownsManagedUpdateLease()) throw new Error("managed update lease no longer owns the helper");
       // Retain prior drivers while recording this helper's independent lifetime.
       runLedger.adoptUpdateRun(params.runId);
-      recordIdentityWarnings(runLedger);
+      recordRunWarnings(runLedger);
       if (params.foregroundOrigin) await assertForegroundOrigin();
     }
     if (params.action === "triage") {
@@ -1641,11 +1634,7 @@ let automaticRequested = false;
             recovery?.service === "healthy" ? "updater already verified recovery" :
               recovery?.service === "failed" ? "updater recovery failed; no automatic retry" :
                 "no verified recovery result; inspect the installation before restarting"));
-        if (restorationArmed && !restored) {
-          const alarm = "Gateway recovery did not reach verified healthy readiness; its current availability is unverified. Run openclaw gateway status --deep before restarting it manually.";
-          appendLog(alarm);
-          terminalWarnings.push(["warning:gateway-availability", alarm]);
-        }
+        if (restorationArmed && !restored) { const alarm = "Gateway recovery did not reach verified healthy readiness; its current availability is unverified. Run openclaw gateway status --deep before restarting it manually."; appendLog(alarm); runWarnings.set("warning:gateway-availability", alarm); }
         if (childStatus !== "skipped" || !restored) {
           recordUpdateHandoffOutcome("managed-service-handoff-failed", undefined, childStatus === "skipped" ? "error" : childStatus);
         }
