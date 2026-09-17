@@ -92,9 +92,7 @@ const MAX_CHANGED_NODE_TEST_TARGETS = 96;
 // Each target runs in its own child process (isolation contract), so bound the
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
-// Fallback rows append to compact PR plans; keep enough headroom under the
-// 120-row GitHub matrix cap when a core-impact diff selects every extension.
-const CHANGED_EXTENSION_JOB_SECONDS = 248;
+const CHANGED_EXTENSION_JOB_SECONDS = 240;
 const MAX_CHANGED_EXTENSION_FALLBACK_JOBS = 50;
 // Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
 // processes starve each other on 4-vCPU runners and push otherwise healthy
@@ -530,6 +528,7 @@ function packChangedExtensionConfigShards(
       ) &&
       bin.reduce((seconds, entry) => seconds + entry.predictedSeconds, shard.predictedSeconds) <=
         CHANGED_EXTENSION_JOB_SECONDS,
+    true,
   );
   // Singleton objects keep their full metadata and original relative order.
   return bins

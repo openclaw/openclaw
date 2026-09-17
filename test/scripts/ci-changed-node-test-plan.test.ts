@@ -3,10 +3,11 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveTestGitCommits } from "../../.github/actions/git-owner/test-prerequisites.mjs";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
+import * as changedExtensions from "../../scripts/lib/changed-extensions.mts";
 import {
   createChangedExtensionFallbackShards,
   createChangedNodeTestShards,
@@ -27,6 +28,7 @@ import {
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
 } from "../../scripts/lib/extension-test-plan.mts";
+import * as extensionTestPlan from "../../scripts/lib/extension-test-plan.mts";
 import {
   buildVitestRunPlans,
   hasImportGraphImpactOnTargets,
@@ -1244,7 +1246,7 @@ describe("CI changed Node test plan", () => {
     expect(bundles.length).toBeGreaterThan(0);
     for (const bundle of bundles) {
       expect(bundle.groups!.length).toBeGreaterThan(1);
-      expect(bundle.predictedSeconds).toBeLessThanOrEqual(248);
+      expect(bundle.predictedSeconds).toBeLessThanOrEqual(240);
       expect(bundle.configs).toEqual([]);
       expect(bundle.pretestBuildMode).toBeUndefined();
       expect(bundle.groups!.every((group) => !group.pretestBuildMode)).toBe(true);
@@ -1260,9 +1262,67 @@ describe("CI changed Node test plan", () => {
           !other.pretestBuildMode &&
           shard.runner === other.runner &&
           shard.requiresDist === other.requiresDist &&
-          shard.predictedSeconds! + other.predictedSeconds! <= 248;
+          shard.predictedSeconds! + other.predictedSeconds! <= 240;
         expect(canShareJob, `${shard.shardName} and ${other.shardName} fit one job`).toBe(false);
       }
+    }
+  });
+
+  it.each([48, 49])("exchanges extension groups within the 240-second budget, tail %s", (tail) => {
+    const costs = [144, 120, 72, tail, 96];
+    const ids = costs.map((_, index) => `packing-fixture-${index}`);
+    const configs = ids.map((id) => `test/vitest/vitest.${id}.config.ts`);
+    const files = ids.map((id) => `extensions/${id}/index.test.ts`);
+    try {
+      vi.spyOn(changedExtensions, "listAvailableExtensionIds").mockReturnValue(ids);
+      vi.spyOn(extensionTestPlan, "listExtensionTestFilesForRoots").mockReturnValue(files);
+      vi.spyOn(extensionTestPlan, "resolveExtensionTestConfig").mockImplementation((root) => {
+        return expectDefined(
+          configs[ids.indexOf(root.slice("extensions/".length))],
+          "fixture config",
+        );
+      });
+      vi.spyOn(extensionTestPlan, "estimateExtensionTestCost").mockImplementation((config) => {
+        return expectDefined(costs[configs.indexOf(config)], "fixture cost");
+      });
+      vi.spyOn(extensionTestPlan, "shouldSplitExtensionTestProcesses").mockReturnValue(false);
+      vi.spyOn(extensionTestPlan, "splitExtensionTestJobTargets").mockImplementation((config) => {
+        const file = expectDefined(files[configs.indexOf(config)], "fixture file");
+        return config === configs[4] ? [[file], [file]] : [[file]];
+      });
+
+      const shards = createChangedExtensionFallbackShards([
+        "scripts/lib/ci-changed-node-test-plan.mts",
+      ]);
+      const groups = fallbackGroups(shards);
+      // First-fit strands a third row for 144, 120, 72, 48, 48, 48.
+      // One extra second makes two rows impossible without exceeding the budget.
+      expect(shards).toHaveLength(tail === 48 ? 2 : 3);
+      expect(groups).toHaveLength(6);
+      expect(
+        groups
+          .map((group) => expectDefined(group.configs[0], "group config"))
+          .toSorted((a, b) => a.localeCompare(b)),
+      ).toEqual(
+        [...configs, expectDefined(configs[4], "sharded config")].toSorted((a, b) =>
+          a.localeCompare(b),
+        ),
+      );
+      expect(
+        groups.filter((group) => group.configs[0] === configs[4]).map((group) => group.env),
+      ).toEqual([
+        { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--shard=1/2"]' },
+        { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--shard=2/2"]' },
+      ]);
+      expect(groups.every((group) => !group.includePatterns && !group.pretestBuildMode)).toBe(true);
+      expect(new Set(groups.map((group) => group.shard_name)).size).toBe(6);
+      expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
+      expect(shards.every((shard) => shard.predictedSeconds! <= 240)).toBe(true);
+      expect(shards.reduce((seconds, shard) => seconds + shard.predictedSeconds!, 0)).toBe(
+        costs.reduce((sum, cost) => sum + cost, 0),
+      );
+    } finally {
+      vi.restoreAllMocks();
     }
   });
 
@@ -1391,7 +1451,7 @@ describe("CI changed Node test plan", () => {
 
       expect(shards.length).toBeLessThan(groups.length);
       expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
-      expect(shards.every((shard) => shard.predictedSeconds! <= 248)).toBe(true);
+      expect(shards.every((shard) => shard.predictedSeconds! <= 240)).toBe(true);
       expect(
         groups.every(
           (group) =>
