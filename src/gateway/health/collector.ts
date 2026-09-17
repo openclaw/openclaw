@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -154,19 +155,28 @@ export async function buildHealthAgentSummaries(
   // One roster pass for every agent: per-agent resolution re-walks the roster
   // and froze large fleets for tens of seconds each refresh (#137570).
   const heartbeats = resolveHeartbeatSummariesForAgents(cfg, agentIds);
-  return ordered.map((entry, index) => {
+  const summaries: AgentHealthSummary[] = [];
+  for (const [index, entry] of ordered.entries()) {
     const store = reader.read(
       resolveSessionStorePathCore(cfg.session?.store, { agentId: entry.id }),
       entry.id,
     );
-    return {
+    summaries.push({
       agentId: entry.id,
       name: entry.name,
       isDefault: entry.id === defaultAgentId,
       heartbeat: expectDefined(heartbeats[index], "heartbeat summary"),
       sessions: projectHealthSessions(store.path, store),
-    };
-  });
+    });
+    // Each synchronous store read can block for tens of ms on a slow disk;
+    // yielding after every entry (except the last, where there is no more
+    // work left to interleave) keeps a large fleet from freezing the event
+    // loop for the whole pass (#149931).
+    if (index < ordered.length - 1) {
+      await yieldToEventLoop();
+    }
+  }
+  return summaries;
 }
 
 function buildPluginHealthSummary(cfg: OpenClawConfig): PluginHealthSummary | undefined {
