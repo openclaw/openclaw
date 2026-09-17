@@ -86,6 +86,7 @@ export type OpenClawStateWorkerOperations = NativeHookRelayStoreWorkerOperations
       output: Map<string, SubagentRunReadRecord> | undefined;
     };
     "backup.recordOutcome": { input: PreparedBackupRunRecord; output: void };
+    "sessionGroups.register": { input: { name: string }; output: boolean };
     "projects.findRoot": { input: { repoRoot: string }; output: string | undefined };
     "projects.list": { input: undefined; output: ProjectRegistryRecord[] };
     "projects.insert": {

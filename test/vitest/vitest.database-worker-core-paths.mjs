@@ -76,6 +76,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/memory-write-provenance.test.ts",
   "src/agents/prepared-model-runtime.run-resources.test.ts",
   "src/agents/sessions/sdk.auth-migration.test.ts",
+  "src/agents/tools/sessions-tool.batch.test.ts",
   "src/agents/subagents/completion/subagent-completion-admission.store.test.ts",
   "src/commands/doctor-db-bloat.worker.test.ts",
   "src/commands/doctor-maintenance.worker.test.ts",

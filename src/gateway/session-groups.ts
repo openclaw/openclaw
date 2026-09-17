@@ -19,6 +19,8 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import {
   SessionMutationAuthorizationChangedError,
   type SessionMutationTarget,
@@ -285,42 +287,18 @@ export function putSessionGroups(params: {
  * Absorbs a category assigned through sessions.patch so the catalog keeps
  * covering every group an operator UI can observe, appended at the end.
  */
-export function ensureSessionGroupRegistered(
+export async function ensureSessionGroupRegistered(
   name: string,
   env: NodeJS.ProcessEnv = process.env,
-): boolean {
+): Promise<boolean> {
   const normalized = normalizeOptionalString(name);
   if (!normalized) {
     return false;
   }
-  let inserted = false;
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const kysely = kyselyFor(db);
-      const existing = executeSqliteQuerySync(
-        db,
-        kysely.selectFrom("session_groups").select("name").where("name", "=", normalized).limit(1),
-      ).rows[0];
-      if (existing) {
-        return;
-      }
-      inserted = true;
-      const maxRow = executeSqliteQuerySync(
-        db,
-        kysely.selectFrom("session_groups").select("position").orderBy("position", "desc").limit(1),
-      ).rows[0];
-      executeSqliteQuerySync(
-        db,
-        kysely.insertInto("session_groups").values({
-          name: normalized,
-          position: (maxRow?.position ?? -1) + 1,
-          created_at: Date.now(),
-        }),
-      );
-    },
-    { env },
-  );
-  return inserted;
+  return executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
+    type: "sessionGroups.register",
+    input: { name: normalized },
+  });
 }
 
 function readCatalogEntry(db: DatabaseSync, name: string) {

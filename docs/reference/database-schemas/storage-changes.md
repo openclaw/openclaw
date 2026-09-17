@@ -223,6 +223,14 @@ updates retain their connection-bound kernels. Push preference and notification
 callers still use the synchronous facade until their preparation and publication
 owners migrate together.
 
+First-use session-group registration runs in the shared-state worker. The
+existing-name lookup, final-position lookup, and insertion share one synchronous
+write transaction. Session creation and patch callers await registration before
+publishing a groups invalidation. Creation still reports its durable session
+success if group bookkeeping fails, with a warning; patch retains its existing
+error propagation. Catalog reads and mutations, defaults, and sidebar ordering
+retain their existing owners, including synchronous authorization reads.
+
 The host captures the database path, state environment, and current admission
 before awaited work. The shared worker owns its canonical connection and schema
 opening, with Gateway schema authority delegated by its live coordinator owner.

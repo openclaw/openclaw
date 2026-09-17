@@ -2670,7 +2670,10 @@ describe("scripts/test-projects changed-target routing", () => {
       {
         config: "test/vitest/vitest.infra.config.ts",
         forwardedArgs: [],
-        includePatterns: ["src/agents/tools/cron-tool.output-contract.test.ts"],
+        includePatterns: [
+          "src/agents/tools/sessions-tool.batch.test.ts",
+          "src/agents/tools/cron-tool.output-contract.test.ts",
+        ],
         watchMode: false,
       },
       {

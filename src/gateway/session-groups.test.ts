@@ -13,6 +13,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -42,6 +43,7 @@ describe("session groups catalog", () => {
 
   afterEach(async () => {
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -277,14 +279,44 @@ describe("session groups catalog", () => {
     );
   });
 
-  it("absorbs ad-hoc categories at the end of the catalog", () => {
+  it("absorbs ad-hoc categories at the end of the catalog without parent-thread SQLite", async () => {
     putSessionGroups({ cfg, names: ["Work"], env });
-    ensureSessionGroupRegistered("Travel", env);
-    ensureSessionGroupRegistered("Travel", env);
+    const native = requireNodeSqlite();
+    const counters = [
+      vi.spyOn(native.DatabaseSync.prototype, "prepare"),
+      vi.spyOn(native.DatabaseSync.prototype, "exec"),
+      ...(["get", "all", "run", "iterate"] as const).map((method) =>
+        vi.spyOn(native.StatementSync.prototype, method),
+      ),
+    ];
+    try {
+      expect(await ensureSessionGroupRegistered("  Travel  ", env)).toBe(true);
+      expect(await ensureSessionGroupRegistered("Travel", env)).toBe(false);
+      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    } finally {
+      for (const counter of counters) {
+        counter.mockRestore();
+      }
+    }
     expect(listSessionGroups(env)).toEqual([
       { name: "Work", position: 0 },
       { name: "Travel", position: 1 },
     ]);
+  });
+
+  it("keeps the original state directory and atomic append order across overlapping registrations", async () => {
+    const originalEnv = { ...env };
+    const redirectedRoot = path.join(root, "redirected");
+    const registrations = ["First", "Second", "First"].map((name) =>
+      ensureSessionGroupRegistered(name, env),
+    );
+    env.OPENCLAW_STATE_DIR = redirectedRoot;
+    expect(await Promise.all(registrations)).toEqual([true, true, false]);
+    expect(listSessionGroups(originalEnv)).toEqual([
+      { name: "First", position: 0 },
+      { name: "Second", position: 1 },
+    ]);
+    await expect(fs.stat(redirectedRoot)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("renames a group and repoints member categories without bumping updatedAt", async () => {

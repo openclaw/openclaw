@@ -12,6 +12,7 @@ import {
 } from "../config/io.health-state.kernel.js";
 import { loadMutableCronStoreInWorker } from "../cron/store/load.worker.js";
 import { executeCronStoreSaveCommand } from "../cron/store/save.worker.js";
+import { registerSessionGroupInDatabase } from "../gateway/session-group-registration.kernel.js";
 import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
 import { executeSessionDeliveryCommand } from "../infra/session-delivery-queue.worker.js";
@@ -249,6 +250,16 @@ function createSharedStateWorkerBackend(
           path: context.databasePath,
           env: getSqliteWorkerStateContext().environment,
         });
+      }
+      if (command.type === "sessionGroups.register") {
+        return runOpenClawStateWriteTransaction(
+          ({ db }) => registerSessionGroupInDatabase(db, command.input.name),
+          {
+            database: open(),
+            path: context.databasePath,
+            env: getSqliteWorkerStateContext().environment,
+          },
+        );
       }
       if (command.type === "flows.runTask") {
         let committed: RunTaskInFlowResult | undefined;
