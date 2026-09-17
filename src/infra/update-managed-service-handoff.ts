@@ -1642,9 +1642,7 @@ let automaticRequested = false;
               recovery?.service === "failed" ? "updater recovery failed; no automatic retry" :
                 "no verified recovery result; inspect the installation before restarting"));
         if (restorationArmed && !restored) {
-          const alarm = recovery?.service === "failed"
-            ? "Gateway recovery did not reach healthy readiness; its availability is unverified. Run openclaw gateway status --deep before restarting it manually."
-            : "The Gateway is down and will stay down because the failed update did not produce verified recovery artifacts. Repair the installation before restarting it.";
+          const alarm = "Gateway recovery did not reach verified healthy readiness; its current availability is unverified. Run openclaw gateway status --deep before restarting it manually.";
           appendLog(alarm);
           terminalWarnings.push(["warning:gateway-availability", alarm]);
         }
