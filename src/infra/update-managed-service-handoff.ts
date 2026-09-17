@@ -285,22 +285,28 @@ let runOutcome;
 let terminalRuntimePath = params.recoveryModulePath;
 let serviceStoppedAtMs;
 let serviceDowntimeMs;
+const terminalWarnings = [];
 
 async function finishManagedUpdateRun() {
   if (!runLedger || !runOutcome) return;
   if (foregroundParked && runOutcome.status === "succeeded") return;
   if (!ownsManagedUpdateLease()) throw new Error("managed update terminal writer lost its current claim");
   const terminalResult = { ...runOutcome, ...(serviceDowntimeMs !== undefined ? { downtimeMs: serviceDowntimeMs } : {}) };
-  if (!updaterStarted) runLedger.finishUpdateRun(params.runId, terminalResult);
+  if (!updaterStarted) {
+    for (const [step, detail] of terminalWarnings) {
+      try { runLedger.recordUpdateRunStep(params.runId, { step, status: "completed", detail, endedAtMs: Date.now() }); } catch {}
+    }
+    runLedger.finishUpdateRun(params.runId, terminalResult);
+  }
   else {
     // Doctor may have advanced the schema. A new process loads the candidate's
     // entire module graph; a cache-busted import would retain old DB readers.
-    const payload = JSON.stringify([terminalRuntimePath, params.runId, terminalResult, [...identityWarnings],
+    const payload = JSON.stringify([terminalRuntimePath, params.runId, terminalResult, [...identityWarnings], terminalWarnings,
       path.join(params.cwd, "runtime", ${JSON.stringify(MANAGED_HANDOFF_RUNTIME_ENTRY)}),
       params.updateLeaseDatabaseIdentity, params.updateLeaseKey, params.handoffId, managedUpdateLease.helper]);
     if (Buffer.byteLength(payload) > 64 * 1024) throw new Error("managed update terminal result exceeds the command payload limit");
     const exit = await runOwnedUpdateCommand("finalize", [process.execPath, "--input-type=module", "-e",
-      'import { pathToFileURL } from "node:url"; const [modulePath, runId, result, warnings, leaseRuntime, databaseIdentity, root, owner, helper] = JSON.parse(process.argv[1]); const { finishUpdateRun, recordUpdateRunStep } = await import(pathToFileURL(modulePath).href); const { createManagedHandoffLeaseStore } = await import(pathToFileURL(leaseRuntime).href); const store = createManagedHandoffLeaseStore({ databasePath: databaseIdentity.databasePath, existingIdentity: databaseIdentity }); const current = store.read(root); const lease = current.kind === "current" ? current.lease : null; if (!lease || lease.owner !== owner || lease.executor.pid !== process.pid || JSON.stringify(lease.helper) !== JSON.stringify(helper) || !(store.isProcessIdentityCurrent(lease.executor) || (process.connected && store.acceptParentBoundExecutor(lease)))) throw new Error("managed update terminal writer lost its current claim"); for (const [pid, detail] of warnings) { try { recordUpdateRunStep(runId, {step:"warning:process-start-identity:"+pid,status:"completed",detail,endedAtMs:Date.now()}); } catch {} } finishUpdateRun(runId, result);',
+      'import { pathToFileURL } from "node:url"; const [modulePath, runId, result, identityWarnings, terminalWarnings, leaseRuntime, databaseIdentity, root, owner, helper] = JSON.parse(process.argv[1]); const { finishUpdateRun, recordUpdateRunStep } = await import(pathToFileURL(modulePath).href); const { createManagedHandoffLeaseStore } = await import(pathToFileURL(leaseRuntime).href); const store = createManagedHandoffLeaseStore({ databasePath: databaseIdentity.databasePath, existingIdentity: databaseIdentity }); const current = store.read(root); const lease = current.kind === "current" ? current.lease : null; if (!lease || lease.owner !== owner || lease.executor.pid !== process.pid || JSON.stringify(lease.helper) !== JSON.stringify(helper) || !(store.isProcessIdentityCurrent(lease.executor) || (process.connected && store.acceptParentBoundExecutor(lease)))) throw new Error("managed update terminal writer lost its current claim"); for (const [pid, detail] of identityWarnings) { try { recordUpdateRunStep(runId, {step:"warning:process-start-identity:"+pid,status:"completed",detail,endedAtMs:Date.now()}); } catch {} } for (const [step, detail] of terminalWarnings) { try { recordUpdateRunStep(runId, {step,status:"completed",detail,endedAtMs:Date.now()}); } catch {} } finishUpdateRun(runId, result);',
       payload], params.recoveryTimeoutMs);
     if (exit.signal || exit.code !== 0) throw new Error("installed runtime could not finalize the update run");
   }
@@ -1636,14 +1642,11 @@ let automaticRequested = false;
               recovery?.service === "failed" ? "updater recovery failed; no automatic retry" :
                 "no verified recovery result; inspect the installation before restarting"));
         if (restorationArmed && !restored) {
-          const alarm = "The Gateway is down and will stay down because the failed update did not produce verified recovery artifacts. Repair the installation before restarting it.";
+          const alarm = recovery?.service === "failed"
+            ? "Gateway recovery did not reach healthy readiness; its availability is unverified. Run openclaw gateway status --deep before restarting it manually."
+            : "The Gateway is down and will stay down because the failed update did not produce verified recovery artifacts. Repair the installation before restarting it.";
           appendLog(alarm);
-          runLedger?.recordUpdateRunStep(params.runId, {
-            step: "warning:gateway-left-down",
-            status: "completed",
-            detail: alarm,
-            endedAtMs: Date.now(),
-          });
+          terminalWarnings.push(["warning:gateway-availability", alarm]);
         }
         if (childStatus !== "skipped" || !restored) {
           recordUpdateHandoffOutcome("managed-service-handoff-failed", undefined, childStatus === "skipped" ? "error" : childStatus);

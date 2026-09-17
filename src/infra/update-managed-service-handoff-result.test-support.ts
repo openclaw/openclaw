@@ -421,14 +421,21 @@ export function registerManagedRecoveryOutcomeTests(
       ).toBe(false);
       expect(state.healthProbed).toBeUndefined();
       expect(log).toContain("managed update recovery not attempted:");
-      const gatewayLeftDown =
-        !recovery || !("service" in recovery) || recovery.service === "failed";
+      const gatewayLeftDown = !recovery || !("service" in recovery);
       if (gatewayLeftDown) {
         expect(log).toContain("The Gateway is down and will stay down");
         expect(run?.steps).toContainEqual(
           expect.objectContaining({
-            step: "warning:gateway-left-down",
+            step: "warning:gateway-availability",
             detail: expect.stringContaining("The Gateway is down and will stay down"),
+          }),
+        );
+      } else if (recovery.service === "failed") {
+        expect(log).toContain("availability is unverified");
+        expect(run?.steps).toContainEqual(
+          expect.objectContaining({
+            step: "warning:gateway-availability",
+            detail: expect.stringContaining("availability is unverified"),
           }),
         );
       } else {
