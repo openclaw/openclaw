@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { BoundWebPushSubscription } from "../infra/push-web.js";
+import * as userPreferences from "../state/user-preferences.js";
 import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 
 const listDevicePairingMock = vi.fn();
@@ -61,11 +62,11 @@ vi.mock("./server-methods/approval-record-lookup.js", () => ({
   isApprovalRecordVisibleToClient: isApprovalRecordVisibleToClientMock,
 }));
 
-vi.mock("./operator-approval-store.js", async () => {
-  const actual = await vi.importActual<typeof import("./operator-approval-store.js")>(
-    "./operator-approval-store.js",
+vi.mock("./operator-approval-store.async.js", async () => {
+  const actual = await vi.importActual<typeof import("./operator-approval-store.async.js")>(
+    "./operator-approval-store.async.js",
   );
-  return { ...actual, getOperatorApprovalDetailed: getOperatorApprovalDetailedMock };
+  return { ...actual, getOperatorApprovalDetailedAsync: getOperatorApprovalDetailedMock };
 });
 
 function pairedOperator(deviceId: string, scopes: string[]) {
@@ -812,6 +813,64 @@ describe("approval Web Push delivery", () => {
 
       expect(listDevicePairingMock).toHaveBeenCalledTimes(2);
       expect(preparedWebPushSendMock).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["pairing", "profile", "subscription"] as const)(
+    "rechecks %s authority after the terminal approval lookup completes",
+    async (change) => {
+      const preferences = vi.spyOn(userPreferences, "getUserPreferences").mockReturnValue({});
+      try {
+        const approvalId = "exec:deferred-terminal-lookup";
+        const delivered = boundSubscription("lookup-device", "profile-lookup");
+        approvalDeliveryTargets.set(approvalId, new Map([[delivered.subscriptionId, delivered]]));
+        listBoundWebPushSubscriptionsMock.mockReturnValue([delivered]);
+        listDevicePairingMock.mockReturnValue({
+          pending: [],
+          paired: [pairedOperator("lookup-device", ["operator.approvals", "operator.read"])],
+        });
+        const started = createDeferred();
+        const lookup = createDeferred<{
+          outcome: "found";
+          record: { reviewerDeviceIds: string[]; source: { agentId: null; sessionKey: null } };
+        }>();
+        getOperatorApprovalDetailedMock.mockImplementationOnce(() => {
+          started.resolve();
+          return lookup.promise;
+        });
+        let currentConfig = {};
+        const getRuntimeConfig = vi.fn(() => currentConfig);
+        const { createApprovalWebPushDelivery } = await import("./approval-web-push.js");
+        const delivery = createApprovalWebPushDelivery({ getRuntimeConfig });
+        const terminal = delivery.handleResolved({ id: approvalId });
+        await started.promise;
+        if (change === "pairing") {
+          listDevicePairingMock.mockReturnValue({ pending: [], paired: [] });
+        } else if (change === "profile") {
+          currentConfig = { gateway: { roles: { definitions: {} } } };
+          resolveOperatorRolePolicyForProfileMock.mockImplementation((_id, cfg) =>
+            cfg === currentConfig
+              ? { sessions: { others: "none" }, agents: [], scopes: [] }
+              : undefined,
+          );
+        } else {
+          approvalDeliveryTargets.get(approvalId)?.delete(delivered.subscriptionId);
+        }
+        lookup.resolve({
+          outcome: "found",
+          record: { reviewerDeviceIds: [], source: { agentId: null, sessionKey: null } },
+        });
+        await terminal;
+        expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+        if (change === "profile") {
+          expect(resolveOperatorRolePolicyForProfileMock).toHaveBeenLastCalledWith(
+            "profile-lookup",
+            currentConfig,
+          );
+        }
+      } finally {
+        preferences.mockRestore();
+      }
     },
   );
 

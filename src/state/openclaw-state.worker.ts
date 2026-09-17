@@ -11,6 +11,11 @@ import {
 } from "../config/io.health-state.kernel.js";
 import { loadMutableCronStoreInWorker } from "../cron/store/load.worker.js";
 import { executeCronStoreSaveCommand } from "../cron/store/save.worker.js";
+import {
+  getOperatorApprovalDetailed,
+  listTerminalOperatorApprovals,
+  OperatorApprovalHistoryCursorError,
+} from "../gateway/operator-approval-store.js";
 import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
 import { executePromotionCommand } from "../infra/promotions-feed.worker.js";
@@ -23,6 +28,7 @@ import {
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
+import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
@@ -374,6 +380,39 @@ function createSharedStateWorkerBackend(
         );
       }
       const database = open();
+      if (command.type === "operatorApproval.getDetailed") {
+        const databaseOptions = {
+          database,
+          path: context.databasePath,
+          env: getSqliteWorkerStateContext().environment,
+        };
+        return runOpenClawStateWriteTransaction(() => {
+          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+          const result = getOperatorApprovalDetailed({ ...command.input, databaseOptions });
+          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          return result;
+        }, databaseOptions);
+      }
+      if (command.type === "operatorApproval.history") {
+        try {
+          return {
+            ok: true as const,
+            history: listTerminalOperatorApprovals({
+              ...command.input,
+              databaseOptions: {
+                database,
+                path: context.databasePath,
+                env: getSqliteWorkerStateContext().environment,
+              },
+            }),
+          };
+        } catch (error) {
+          if (error instanceof OperatorApprovalHistoryCursorError) {
+            return { ok: false as const };
+          }
+          throw error;
+        }
+      }
       if (command.type === "plugins.catalogSnapshot.read") {
         return readHostedCatalogSnapshotInDatabase(database.db, command.input.url);
       }

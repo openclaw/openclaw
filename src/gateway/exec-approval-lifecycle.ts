@@ -378,6 +378,11 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     return entry.record;
   }
 
+  /** Check a prepared lookup binding without expiring or projecting its decision. */
+  hasRegisteredRecord(record: Pick<ExecApprovalRecord<TPayload>, "id">): boolean {
+    return !this.retired && this.pending.get(record.id)?.record === record;
+  }
+
   /** Reads a live local binding without entering durable storage or mutating expiry. */
   getLiveSnapshot(recordId: string): ExecApprovalRecord<TPayload> | null {
     const entry = this.pending.get(recordId);

@@ -4,7 +4,6 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
 import { retainOpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import { SqliteCoordinatorError } from "./sqlite-coordinator.js";
-import { retainSqliteWriteAdmissionService } from "./sqlite-transaction.js";
 import { releaseSqliteWorkerLifecycle } from "./sqlite-worker-broker-admission.js";
 import type { Job } from "./sqlite-worker-broker.types.js";
 import {
@@ -21,6 +20,7 @@ import {
   createSqliteWorkerTransferReceiver,
   type SqliteWorkerTransferFrame,
 } from "./sqlite-worker-transfer.js";
+import { retainSqliteWriteAdmissionService } from "./sqlite-write-admission.js";
 
 export function dispatchSqliteWorkerJob(worker: Worker, job: Job): void {
   if (job.createAdmission) {

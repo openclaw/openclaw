@@ -1,4 +1,8 @@
 // Unified operator approval lookup and first-answer resolution handlers.
+import {
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -14,6 +18,7 @@ import {
   validateApprovalHistoryParams,
   validateApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type {
@@ -26,6 +31,8 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { prepareApprovalChannelCustody } from "../approval-channel-custody.js";
 import { normalizeControlUiBasePath } from "../control-ui-shared.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import {
   canAccessOperatorApproval,
   canResolveOperatorApproval,
@@ -33,12 +40,15 @@ import {
 } from "../operator-approval-authorization.js";
 import { projectOperatorApprovalSnapshot } from "../operator-approval-snapshot.js";
 import {
-  getOperatorApprovalDetailed,
-  listTerminalOperatorApprovals,
+  getOperatorApprovalDetailedAsync,
+  listTerminalOperatorApprovalsAsync,
   OperatorApprovalHistoryCursorError,
-  type OperatorApprovalRecord,
-  type OperatorApprovalResolver,
+} from "../operator-approval-store.async.js";
+import type {
+  OperatorApprovalRecord,
+  OperatorApprovalResolver,
 } from "../operator-approval-store.js";
+import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import {
   publishAppliedApprovalResolution,
   type ExecApprovalIosPushDelivery,
@@ -119,68 +129,135 @@ function readExactApprovalId(params: unknown): string | null {
   return isWellFormedApprovalId(id) ? id : null;
 }
 
-function loadVisibleApproval(params: {
+async function loadVisibleApproval(params: {
   id: string;
   client: GatewayClient | null;
-  cfg: OpenClawConfig;
+  getConfig: () => OpenClawConfig;
   allowApprovalRuntime?: boolean;
   allowTransportRef?: boolean;
   execApprovalManager: ExecApprovalManager;
   pluginApprovalManager: ExecApprovalManager<PluginApprovalRequestPayload>;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
   databaseOptions?: OpenClawStateDatabaseOptions;
-}): OperatorApprovalRecord | null {
+}): Promise<OperatorApprovalRecord | null> {
   // Reconciliation can settle a live waiter, so authorization must precede
   // every durable read and no unauthorized lookup may reach the bridge.
-  const authorized = params.allowApprovalRuntime
-    ? canResolveOperatorApproval(params.client)
-    : canReviewOperatorApproval(params.client);
-  if (!authorized) {
+  const isAuthorized = () =>
+    !params.client?.invalidated &&
+    (params.allowApprovalRuntime
+      ? canResolveOperatorApproval(params.client)
+      : canReviewOperatorApproval(params.client));
+  if (!isAuthorized()) {
     return null;
   }
-  const liveRecord =
+  const readLiveRecord = () =>
     params.execApprovalManager.getLiveSnapshot(params.id) ??
     params.pluginApprovalManager.getLiveSnapshot(params.id) ??
     params.systemAgentApprovalManager?.getLiveSnapshot(params.id);
-  if (
-    liveRecord &&
-    !canAccessApprovalSession({
-      cfg: params.cfg,
-      client: params.client,
-      sessionKey: liveRecord.request.sessionKey,
-      agentId: liveRecord.request.agentId,
-    })
-  ) {
+  const canAccessLiveRecord = () => {
+    const liveRecord = readLiveRecord();
+    return (
+      !liveRecord ||
+      (canAccessApprovalSession({
+        cfg: params.getConfig(),
+        client: params.client,
+        sessionKey: liveRecord.request.sessionKey,
+        agentId: liveRecord.request.agentId,
+      }) &&
+        canAccessOperatorApproval({
+          client: params.client,
+          allowApprovalRuntime: params.allowApprovalRuntime,
+          binding: { reviewerDeviceIds: liveRecord.approvalReviewerDeviceIds },
+        }))
+    );
+  };
+  if (!canAccessLiveRecord()) {
     return null;
   }
-  if (
-    liveRecord &&
-    !canAccessOperatorApproval({
-      client: params.client,
-      allowApprovalRuntime: params.allowApprovalRuntime,
-      binding: { reviewerDeviceIds: liveRecord.approvalReviewerDeviceIds },
-    })
-  ) {
-    return null;
-  }
-  let lookup: ReturnType<typeof getOperatorApprovalDetailed>;
+  const cfg = params.getConfig();
+  const configMetadata = getRuntimeConfigSnapshotMetadata();
+  const accessRevision = readGatewayAccessRevision();
+  const profileId = params.client?.authenticatedUserProfile?.profileId;
+  const userId = params.client?.authenticatedUserId;
+  const actor = resolveGatewayOperatorRoleActor(params.client);
+  const actorKind = actor?.kind;
+  const actorProfileId = actor?.kind === "operator" ? actor.profileId : undefined;
+  const admittedRecord = readLiveRecord();
+  const admittedManager = admittedRecord
+    ? [
+        params.execApprovalManager,
+        params.pluginApprovalManager,
+        params.systemAgentApprovalManager,
+      ].find((manager) => manager?.getLiveSnapshot(params.id) === admittedRecord)
+    : undefined;
+  const sourceSessionKey = admittedRecord?.request.sessionKey;
+  const sourceAgentId = admittedRecord?.request.agentId;
+  // Access owners invalidate prepared authorization; admission cannot query their
+  // stores while the SQLite worker holds the shared-state write transaction.
+  const isLookupCurrent = () => {
+    const currentActor = resolveGatewayOperatorRoleActor(params.client);
+    return (
+      isAuthorized() &&
+      readGatewayAccessRevision() === accessRevision &&
+      getRuntimeConfigSnapshotMetadata() === configMetadata &&
+      params.getConfig() === cfg &&
+      params.client?.authenticatedUserProfile?.profileId === profileId &&
+      params.client?.authenticatedUserId === userId &&
+      currentActor?.kind === actorKind &&
+      (currentActor?.kind === "operator" ? currentActor.profileId : undefined) === actorProfileId &&
+      (!admittedRecord ||
+        (admittedManager?.hasRegisteredRecord(admittedRecord) === true &&
+          admittedRecord.request.sessionKey === sourceSessionKey &&
+          admittedRecord.request.agentId === sourceAgentId &&
+          canAccessOperatorApproval({
+            client: params.client,
+            allowApprovalRuntime: params.allowApprovalRuntime,
+            binding: { reviewerDeviceIds: admittedRecord.approvalReviewerDeviceIds },
+          })))
+    );
+  };
+  let lookup: Awaited<ReturnType<typeof getOperatorApprovalDetailedAsync>>;
   try {
-    lookup = getOperatorApprovalDetailed({
+    lookup = await getOperatorApprovalDetailedAsync({
       id: params.id,
       allowTransportRef: params.allowTransportRef,
+      assertCurrent: () => {
+        if (!isLookupCurrent()) {
+          throw new Error("Approval lookup authority is no longer active");
+        }
+      },
       databaseOptions: params.databaseOptions,
     });
   } catch (error) {
+    if (!isLookupCurrent() || !canAccessLiveRecord()) {
+      return null;
+    }
+    if (
+      collectNestedErrorCandidates(error).some((cause) => {
+        const code = extractErrorCode(cause);
+        return (
+          code === "closed" ||
+          code === "overloaded" ||
+          code === "unavailable" ||
+          code === "outcome-unknown"
+        );
+      })
+    ) {
+      throw error;
+    }
     const corrupt = { outcome: "corrupt", id: params.id } as const;
     params.execApprovalManager.reconcileDurableLookup(corrupt);
     params.pluginApprovalManager.reconcileDurableLookup(corrupt);
     params.systemAgentApprovalManager?.reconcileDurableLookup(corrupt);
     throw error;
   }
+  if (!isLookupCurrent() || !canAccessLiveRecord()) {
+    return null;
+  }
   if (lookup.outcome === "found") {
     if (
       !canAccessApprovalSession({
-        cfg: params.cfg,
+        cfg: params.getConfig(),
         client: params.client,
         sessionKey: lookup.record.source.sessionKey,
         agentId: lookup.record.source.agentId,
@@ -283,7 +360,7 @@ export function createApprovalHandlers(
   params: CreateApprovalHandlersParams,
 ): GatewayRequestHandlers {
   return {
-    "approval.history": ({ params: rawParams, respond, client, context }) => {
+    "approval.history": async ({ params: rawParams, respond, client, context }) => {
       if (!validateApprovalHistoryParams(rawParams)) {
         respond(
           false,
@@ -292,10 +369,17 @@ export function createApprovalHandlers(
         );
         return;
       }
+      const canReadHistory = () =>
+        !client?.invalidated &&
+        authorizeOperatorScopesForMethod("approval.history", client?.connect.scopes ?? []).allowed;
+      if (!canReadHistory()) {
+        respondApprovalNotFound(respond);
+        return;
+      }
       const historyParams = rawParams as ApprovalHistoryParams;
-      let history: ReturnType<typeof listTerminalOperatorApprovals>;
+      let history: Awaited<ReturnType<typeof listTerminalOperatorApprovalsAsync>>;
       try {
-        history = listTerminalOperatorApprovals({
+        history = await listTerminalOperatorApprovalsAsync({
           cursor: historyParams.cursor,
           limit: historyParams.limit,
           kind: historyParams.kind,
@@ -311,6 +395,10 @@ export function createApprovalHandlers(
           return;
         }
         respondApprovalStorageUnavailable({ context, respond, operation: "history", error });
+        return;
+      }
+      if (!canReadHistory()) {
+        respondApprovalNotFound(respond);
         return;
       }
       const cfg = context.getRuntimeConfig();
@@ -336,7 +424,7 @@ export function createApprovalHandlers(
       respond(true, result, undefined);
     },
 
-    "approval.get": ({ params: rawParams, respond, client, context }) => {
+    "approval.get": async ({ params: rawParams, respond, client, context }) => {
       if (!validateApprovalGetParams(rawParams)) {
         respond(
           false,
@@ -349,10 +437,10 @@ export function createApprovalHandlers(
       let record: OperatorApprovalRecord | null;
       try {
         record = id
-          ? loadVisibleApproval({
+          ? await loadVisibleApproval({
               id,
               client,
-              cfg: context.getRuntimeConfig(),
+              getConfig: () => context.getRuntimeConfig(),
               execApprovalManager: params.execApprovalManager,
               pluginApprovalManager: params.pluginApprovalManager,
               systemAgentApprovalManager: params.systemAgentApprovalManager,
@@ -386,10 +474,10 @@ export function createApprovalHandlers(
       let record: OperatorApprovalRecord | null;
       try {
         record = id
-          ? loadVisibleApproval({
+          ? await loadVisibleApproval({
               id,
               client,
-              cfg: context.getRuntimeConfig(),
+              getConfig: () => context.getRuntimeConfig(),
               allowApprovalRuntime: true,
               allowTransportRef: true,
               execApprovalManager: params.execApprovalManager,

@@ -3,10 +3,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { setSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
-import {
-  runSqliteImmediateTransactionSync,
-  withSqliteWriteAdmissionService,
-} from "../../infra/sqlite-transaction.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { withSqliteWriteAdmissionService } from "../../infra/sqlite-write-admission.js";
 
 const COMMIT_DECISION_TIMEOUT_MS = 5_000;
 const WAITING = 0;

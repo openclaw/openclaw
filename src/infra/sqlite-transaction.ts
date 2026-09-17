@@ -1,15 +1,12 @@
 // Provides SQLite transaction helpers with nested savepoints.
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsystem.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 // The cache-state module keeps this lifecycle edge off the kysely value graph
 // so cold control-plane paths using transactions do not load kysely.
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
-import { normalizeWindowsPathPreservingCase } from "./path-guards.js";
 import {
   readSqliteBusyTimeout,
   runWithSqliteBusyTimeout,
@@ -22,6 +19,7 @@ import {
   sqlitePrimaryResultCode,
 } from "./sqlite-error-diagnostics.js";
 import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
+import { runSqliteWriteAdmission } from "./sqlite-write-admission.js";
 
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
 const DEFAULT_SLOW_TRANSACTION_HOLD_MS = 1_000;
@@ -41,72 +39,6 @@ export function assertTransactionUsable(db: TransactionDatabase): void {
 }
 
 const transactionLog = createSubsystemLogger("sqlite/transaction");
-const writeAdmissionServices = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteWriteAdmissionServices"),
-  () => new Map<string, Set<() => void>>(),
-);
-const writeAdmissionLocations = new WeakMap<DatabaseSync, string | null>();
-
-function writeAdmissionLocation(database: DatabaseSync): string | null {
-  const cached = writeAdmissionLocations.get(database);
-  if (cached !== undefined) {
-    return cached;
-  }
-  // A native handle's filename is stable; normalize namespace aliases once, without filesystem IO.
-  const location = database.location();
-  const canonical = location === null ? null : normalizeWriteAdmissionLocation(location);
-  writeAdmissionLocations.set(database, canonical);
-  return canonical;
-}
-
-function normalizeWriteAdmissionLocation(location: string): string {
-  const normalized =
-    process.platform === "win32" ? normalizeWindowsPathPreservingCase(location) : location;
-  return process.platform === "win32" && !path.win32.isAbsolute(normalized) ? location : normalized;
-}
-
-/** Keep worker-owned lock holders serviceable across connections and module graphs. */
-export async function withSqliteWriteAdmissionService<T>(
-  database: DatabaseSync,
-  service: () => void,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const location = writeAdmissionLocation(database);
-  if (location === null) {
-    throw new Error("SQLite write admission service requires a file-backed database");
-  }
-  const release = retainSqliteWriteAdmissionService([location], service);
-  try {
-    return await operation();
-  } finally {
-    release();
-  }
-}
-
-/** Locations come from the retained native owner; registration grants no write authority. */
-export function retainSqliteWriteAdmissionService(
-  nativeLocations: readonly string[],
-  service: () => void,
-): () => void {
-  const locations = new Set(nativeLocations.map(normalizeWriteAdmissionLocation));
-  const registrations = [...locations].map((location) => {
-    const services = writeAdmissionServices.get(location) ?? new Set<() => void>();
-    // Separate reservations remain valid when the same owner retains two operations.
-    const retained = () => service();
-    services.add(retained);
-    writeAdmissionServices.set(location, services);
-    return { location, services, retained };
-  });
-  return () => {
-    for (const { location, services, retained } of registrations) {
-      services.delete(retained);
-      if (services.size === 0 && writeAdmissionServices.get(location) === services) {
-        writeAdmissionServices.delete(location);
-      }
-    }
-  };
-}
-
 type SqliteBeginAdmissionDiagnostics = {
   nativeAttempts: number;
   nativeMs: number;
@@ -114,42 +46,23 @@ type SqliteBeginAdmissionDiagnostics = {
   serviceMs: number;
 };
 
-function execNativeBegin(db: DatabaseSync, diagnostics: SqliteBeginAdmissionDiagnostics): void {
-  const startedAt = Date.now();
-  diagnostics.nativeAttempts += 1;
-  try {
-    db.exec("BEGIN IMMEDIATE");
-  } finally {
-    diagnostics.nativeMs += Date.now() - startedAt;
-  }
-}
-
 function beginImmediateTransaction(
   db: DatabaseSync,
   diagnostics: SqliteBeginAdmissionDiagnostics,
 ): void {
-  const location = writeAdmissionServices.size > 0 ? writeAdmissionLocation(db) : null;
-  const services = location === null ? undefined : writeAdmissionServices.get(location);
-  if (!services) {
-    execNativeBegin(db, diagnostics);
-    return;
-  }
-  const deadline = performance.now() + readSqliteBusyTimeout(db);
-  while (true) {
-    try {
-      runWithSqliteBusyTimeout(
-        db,
-        Math.min(25, Math.max(0, Math.ceil(deadline - performance.now()))),
-        () => execNativeBegin(db, diagnostics),
-      );
-      return;
-    } catch (error) {
-      if (!isSqliteLockError(error) || performance.now() >= deadline) {
-        throw error;
+  runSqliteWriteAdmission(
+    db,
+    () => {
+      const startedAt = Date.now();
+      diagnostics.nativeAttempts += 1;
+      try {
+        db.exec("BEGIN IMMEDIATE");
+      } finally {
+        diagnostics.nativeMs += Date.now() - startedAt;
       }
-      // Only admission repeats. Services retain their own authority and settlement
-      // rules; caller mutations and postcommit publication have not started yet.
-      for (const service of services) {
+    },
+    {
+      service(service) {
         const startedAt = Date.now();
         diagnostics.serviceCalls += 1;
         try {
@@ -157,12 +70,9 @@ function beginImmediateTransaction(
         } finally {
           diagnostics.serviceMs += Date.now() - startedAt;
         }
-      }
-      if (performance.now() >= deadline) {
-        throw error;
-      }
-    }
-  }
+      },
+    },
+  );
 }
 
 export type SqliteTransactionOptions = {

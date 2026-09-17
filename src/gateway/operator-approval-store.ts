@@ -298,7 +298,7 @@ function requireString(value: string, label: string): string {
   return normalized;
 }
 
-function requireApprovalId(value: string): string {
+export function requireApprovalId(value: string): string {
   if (!isWellFormedApprovalId(value)) {
     throw new Error("operator approval id must be non-empty, well-formed Unicode, and not . or ..");
   }
@@ -309,7 +309,7 @@ function encodeOperatorApprovalHistoryCursor(cursor: OperatorApprovalHistoryCurs
   return Buffer.from(JSON.stringify({ v: 1, ...cursor }), "utf8").toString("base64url");
 }
 
-function decodeOperatorApprovalHistoryCursor(raw: string): OperatorApprovalHistoryCursor {
+export function decodeOperatorApprovalHistoryCursor(raw: string): OperatorApprovalHistoryCursor {
   try {
     const bytes = Buffer.from(raw, "base64url");
     if (bytes.toString("base64url") !== raw) {

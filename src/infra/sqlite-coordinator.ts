@@ -7,6 +7,7 @@ import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { applyPrivateModeSync } from "./private-mode.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
+import { runSqliteWriteAdmission } from "./sqlite-write-admission.js";
 
 export const SqliteCoordinatorError = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteCoordinatorError"),
@@ -245,7 +246,7 @@ function retainIdleCoordinator(location: string, database: DatabaseSync, identit
 function tryAcquireSqliteCoordinator(
   location: string,
   mode: "shared" | "exclusive",
-  options: { busyTimeoutMs?: number; keepAlive?: boolean },
+  options: { busyTimeoutMs?: number; keepAlive?: boolean; admissionDatabasePath?: string },
 ): SqliteCoordinatorLease | null {
   const busyTimeoutMs = Math.max(0, Math.trunc(options.busyTimeoutMs ?? 0));
   const reusableLocation =
@@ -264,17 +265,32 @@ function tryAcquireSqliteCoordinator(
   }
   const database = reused?.database ?? openNodeSqliteDatabase(location);
   let identity: fs.BigIntStats | undefined;
+  let serviceFailed = false;
   try {
     // Kysely transaction callbacks cannot own a lock beyond their synchronous commit section.
     // This handle never writes or commits data. Keep the empty database's initial
     // journal in memory so acquiring a lock does not create filesystem artifacts.
-    database.exec(
-      `PRAGMA busy_timeout = ${busyTimeoutMs}; PRAGMA journal_mode = MEMORY; ${
-        mode === "exclusive"
-          ? "BEGIN EXCLUSIVE;"
-          : "BEGIN; SELECT rootpage FROM sqlite_schema LIMIT 1;"
-      }`,
-    );
+    const admissionSql = `PRAGMA journal_mode = MEMORY; ${
+      mode === "exclusive"
+        ? "BEGIN EXCLUSIVE;"
+        : "BEGIN; SELECT rootpage FROM sqlite_schema LIMIT 1;"
+    }`;
+    if (mode === "exclusive" && options.admissionDatabasePath !== undefined) {
+      database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs};`);
+      runSqliteWriteAdmission(database, () => database.exec(admissionSql), {
+        nativeLocation: options.admissionDatabasePath,
+        service(service) {
+          try {
+            service();
+          } catch (error) {
+            serviceFailed = true;
+            throw error;
+          }
+        },
+      });
+    } else {
+      database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}; ${admissionSql}`);
+    }
     if (poolLocation && before) {
       const current = readCoordinatorIdentity(poolLocation);
       if (matchesCoordinatorIdentity(before, current)) {
@@ -289,7 +305,7 @@ function tryAcquireSqliteCoordinator(
     } else {
       database.close();
     }
-    if (isSqliteLockError(error)) {
+    if (!serviceFailed && isSqliteLockError(error)) {
       return null;
     }
     throw error;
@@ -357,7 +373,7 @@ function tryAcquireSqliteCoordinator(
 /** Hold a raw exclusive transaction until release for cross-process coordination. */
 export function tryAcquireExclusiveSqliteCoordinator(
   location: string,
-  options: { busyTimeoutMs?: number; keepAlive?: boolean } = {},
+  options: { busyTimeoutMs?: number; keepAlive?: boolean; admissionDatabasePath?: string } = {},
 ): SqliteCoordinatorLease | null {
   return tryAcquireSqliteCoordinator(location, "exclusive", options);
 }

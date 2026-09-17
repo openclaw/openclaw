@@ -17,8 +17,8 @@ import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransaction,
   runSqliteImmediateTransactionSync,
-  withSqliteWriteAdmissionService,
 } from "./sqlite-transaction.js";
+import { withSqliteWriteAdmissionService } from "./sqlite-write-admission.js";
 
 const openDatabases: Array<import("node:sqlite").DatabaseSync> = [];
 type WriterLockChild = ChildProcessByStdio<null, Readable, Readable>;

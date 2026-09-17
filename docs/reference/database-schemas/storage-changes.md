@@ -601,6 +601,18 @@ the authoritative row in the worker transaction before deletion. Reads retain
 existing-only admission, and all stages of a prune use the captured database
 context. The cold hook CLI retains its separate read-only locator worker.
 
+Operator approval point lookups and terminal history execute on the shared-state
+worker. Point lookup keeps its existing write transaction: it can expire a pending
+approval or deny a corrupt row, and its host admission remains current through
+commit. Approval RPC readers recheck access after storage settles before publishing
+or reconciling a local waiter. History retains its cursor, ordering, and retention
+rules. Registration, decision resolution, one-use consumption, pending replay, and
+receipt projection retain their native owners pending their separate lifecycle cut.
+Native state-lifecycle lock acquisition services retained worker admission for the
+same data path, so a synchronous decision can wait behind a worker lookup without
+preventing its host grant. Acquisition retries share the existing busy timeout;
+worker authority checks, mutations, and settlement are not replayed.
+
 ### Preserve the data and concurrency contracts
 
 An adapter must make these contracts explicit and verify them against a real

@@ -3,10 +3,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import {
-  runSqliteImmediateTransactionSync,
-  withSqliteWriteAdmissionService,
-} from "./sqlite-transaction.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import { withSqliteWriteAdmissionService } from "./sqlite-write-admission.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());

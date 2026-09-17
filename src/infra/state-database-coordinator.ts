@@ -178,6 +178,7 @@ function acquireLifecycleCoordinator(
     const coordinator = tryAcquireExclusiveSqliteCoordinator(coordinatorPath, {
       busyTimeoutMs: params.busyTimeoutMs,
       keepAlive,
+      ...(family === "state-lifecycle" ? { admissionDatabasePath: params.databasePath } : {}),
     });
     if (!coordinator) {
       throw new StateDatabaseCoordinatorContentionError(family);
