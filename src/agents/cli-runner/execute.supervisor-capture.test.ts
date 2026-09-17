@@ -144,6 +144,7 @@ function buildPreparedCliRunContext(params: {
       runId,
     },
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir: "/tmp",
     backendResolved: {
       id: provider,

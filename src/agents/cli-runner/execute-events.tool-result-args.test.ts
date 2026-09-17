@@ -30,6 +30,7 @@ function buildContext(runId: string): PreparedCliRunContext {
       runId,
     },
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir: "/tmp",
     backendResolved: { id: "claude-cli", config: backend, bundleMcp: false },
     preparedBackend: { backend, env: {} },

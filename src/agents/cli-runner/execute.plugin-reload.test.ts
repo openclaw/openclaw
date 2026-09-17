@@ -43,6 +43,7 @@ async function preparePluginContext(execute: CliBackendExecute): Promise<{
       runId,
     },
     started: Date.now(),
+    startedMonotonicMs: performance.now(),
     workspaceDir: "/tmp",
     backendResolved: { id: "claude-cli", config: backend, bundleMcp: false, pluginId: "anthropic" },
     executionTarget: { kind: "plugin", execute },

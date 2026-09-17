@@ -112,7 +112,10 @@ export async function runCliRecovery<TAttempt>(params: {
         runParams.onBeforeForkedCliSessionRetry
       ) {
         try {
-          const retryTimeoutMs = runParams.timeoutMs - (Date.now() - context.started);
+          // Elapsed time is monotonic so a wall-clock step cannot consume or
+          // extend the operator-configured retry budget.
+          const retryTimeoutMs =
+            runParams.timeoutMs - (performance.now() - context.startedMonotonicMs);
           if (retryTimeoutMs <= 0) {
             throw recoveryError;
           }
@@ -160,7 +163,8 @@ export async function runCliRecovery<TAttempt>(params: {
         runParams.sessionKey
       ) {
         try {
-          const retryTimeoutMs = runParams.timeoutMs - (Date.now() - context.started);
+          const retryTimeoutMs =
+            runParams.timeoutMs - (performance.now() - context.startedMonotonicMs);
           if (retryTimeoutMs <= 0) {
             throw recoveryError;
           }

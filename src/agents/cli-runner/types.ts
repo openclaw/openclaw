@@ -382,6 +382,8 @@ export type PreparedCliRunContext = {
   authProfileStore?: AuthProfileStore;
   agentDir?: string;
   started: number;
+  /** Monotonic anchor for elapsed-budget measurements, immune to wall-clock steps. */
+  startedMonotonicMs: number;
   workspaceDir: string;
   cwd?: string;
   backendResolved: ResolvedCliBackend;
