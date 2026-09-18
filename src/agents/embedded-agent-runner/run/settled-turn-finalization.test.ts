@@ -156,6 +156,45 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     vi.useRealTimers();
   });
 
+  it("preserves a recovered final answer after an explicit source progress receipt", async () => {
+    const attempt = settledSuccessfulAttempt();
+    const progress = { text: "Saving the note.", sourceReplyFinal: false };
+    attempt.didSendViaMessagingTool = true;
+    attempt.didDeliverSourceReplyViaMessageTool = true;
+    attempt.messagingToolSentTexts = [progress.text];
+    attempt.messagingToolSentTargets = [
+      { tool: "message", provider: "telegram", to: "synthetic-source", ...progress },
+    ];
+    backendMocks.runSettledFinalization.mockResolvedValueOnce({
+      outcome: "answered",
+      result: {
+        assistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "The note was saved." }],
+        }),
+      },
+    });
+    const input = finalizationInput(attempt);
+    input.terminalBase.runParams.trigger = "user";
+
+    const result = await prepareTerminalWithSettledTurnFinalization(input);
+
+    expect(result.finalizationOutcome).toBe("answered");
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledWith(
+      expect.objectContaining({ disableTools: true, operation: "settled-tool-finalization" }),
+      attempt,
+      input.finalization.harness,
+    );
+    expect(result.attempt.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(result.attempt.messagingToolSentTargets).toEqual(attempt.messagingToolSentTargets);
+    expect(result.prepared.payloadsWithToolMedia).toEqual([
+      expect.objectContaining({ text: "The note was saved." }),
+    ]);
+    const [answer] = result.prepared.payloadsWithToolMedia ?? [];
+    expect(getReplyPayloadMetadata(answer ?? {})?.sourceReplyTranscriptMirror).toBeUndefined();
+    expect(getReplyPayloadMetadata(answer ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
+
   it.each([false, true])(
     "finalizes an empty post-tool turn only when media was not delivered (delivered: %s)",
     async (hasToolMediaBlockReply) => {
