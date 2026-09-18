@@ -3340,7 +3340,7 @@ describe("doctor health contributions", () => {
       checksSkipped: 0,
       findings: [expect.objectContaining({ checkId: "core/doctor/disk-space" })],
     });
-    expect(mocks.collectDiskSpaceHealthFindings).toHaveBeenCalledWith();
+    expect(mocks.collectDiskSpaceHealthFindings).toHaveBeenCalledWith({ env: ctx.env });
   });
 
   it("keeps WhatsApp responsiveness opt-in for default lint selection", async () => {

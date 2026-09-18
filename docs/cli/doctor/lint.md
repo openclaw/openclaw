@@ -114,6 +114,12 @@ openclaw doctor --lint --skip core/doctor/skills-readiness
 
 `--only` and `--skip` accept full check ids and may be repeated. An unregistered `--only` id emits a `core/doctor/lint-selection` error finding; valid selected checks still run. Use `checksRun`/`checksSkipped` in the output to confirm a focused gate selects the checks you expect.
 
+`core/doctor/disk-space` is opt-in through `--only` or `--all`. It checks the
+volume containing the operator's state directory, including when other selected
+checks use a private state snapshot. Below 100 MiB free is an error; exactly
+100 MiB through less than 500 MiB is a warning. With `--severity-min error`,
+this check reports and fails only for critical free space.
+
 To check model credentials, run `openclaw doctor --lint --only core/doctor/auth-profiles --json`.
 This opt-in check inspects shared credentials and each configured agent's local
 auth store, including fleets without a default agent. Shared credential problems
