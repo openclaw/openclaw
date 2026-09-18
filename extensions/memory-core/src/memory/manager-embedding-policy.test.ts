@@ -446,6 +446,8 @@ describe("memory embedding policy", () => {
       // Zhipu embedding-3 caps `input` at 64 items under its generic 1214 code.
       'openai-compatible embeddings failed: HTTP 400: {"error":{"code":"1214","message":"input array max 64"}}',
       "input array max 64",
+      // The same cap reported in Chinese (#136261).
+      'HTTP 400: {"error":{"code":"1214","message":"input数组最大不得超过64条"}}',
     ]) {
       expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(true);
     }
@@ -468,6 +470,12 @@ describe("memory embedding policy", () => {
       "input array max 64 tokens",
       "input array max 64tokens",
       "input array max 64.5",
+      // The Chinese cap phrasing must stay specific to the input-array item count:
+      // a request-rate cap, a per-text length limit, or a count-less message is not
+      // an oversized batch and must not be split.
+      'HTTP 400: {"error":{"code":"1301","message":"当前并发数不得超过5个"}}',
+      'HTTP 400: {"error":{"code":"1214","message":"单条文本长度不得超过8192个字符"}}',
+      'HTTP 400: {"error":{"code":"1214","message":"input数组最大不得超过条"}}',
     ]) {
       expect(isSplittableMemoryEmbeddingBatchError(message)).toBe(false);
     }

@@ -227,6 +227,15 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
     ],
     ["an explicit maximum input length", () => "embeddings max input length is 10"],
     [
+      "zhipu Chinese item-limit error",
+      () => '{"error":{"code":"1214","message":"input数组最大不得超过64条"}}',
+    ],
+    [
+      "bailian batch size invalid error",
+      () =>
+        '{"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 20.: input.contents"}',
+    ],
+    [
       "a DashScope-style per-request row cap",
       () =>
         '{"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents","type":"InvalidParameter","code":"InvalidParameter"}}',
@@ -320,6 +329,16 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
     {
       label: "a fractional input array limit",
       message: "input array max 64.5",
+      items: ["one", "two"],
+    },
+    {
+      label: "a Chinese request-rate cap",
+      message: '{"error":{"code":"1301","message":"当前并发数不得超过5个"}}',
+      items: ["one", "two"],
+    },
+    {
+      label: "a Chinese per-text length limit",
+      message: '{"error":{"code":"1214","message":"单条文本长度不得超过8192个字符"}}',
       items: ["one", "two"],
     },
   ])("does not retry or split $label", async ({ message, items }) => {
