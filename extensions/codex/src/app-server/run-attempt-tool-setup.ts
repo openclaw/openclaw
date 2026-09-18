@@ -3,7 +3,6 @@ import {
   isHostScopedAgentToolActive,
   materializeRequesterScopedMcpToolsForHarnessRun,
   resolveAgentDir,
-  runAgentCleanupStep,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -35,6 +34,7 @@ import {
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
+import { createCodexAttemptToolDisposer } from "./run-attempt-tool-disposal.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import {
   buildScheduledCodexAppServerConnectionIdentity,
@@ -301,39 +301,18 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   let requireExplicitMessageTarget: boolean | undefined;
   let configuredMcp: Awaited<ReturnType<typeof materializeStaticMcpToolsForHarnessRun>> | undefined;
   let scopedMcpTools: Awaited<ReturnType<typeof materializeRequesterScopedMcpToolsForHarnessRun>>;
-  let toolDisposal: Promise<void> | undefined;
-  const disposeTools = (reason: string): Promise<void> =>
-    (toolDisposal ??= (async () => {
-      await runAgentCleanupStep({
-        runId: params.runId,
-        sessionId: params.sessionId,
-        step: "codex-dynamic-tool-cleanup",
-        log: embeddedAgentLog,
-        cleanup: async () => {
-          const settled = await Promise.allSettled(
-            runCleanups.splice(0).map(async (cleanup) => await cleanup(reason)),
-          );
-          const errors = settled.flatMap((result) =>
-            result.status === "rejected" ? [result.reason] : [],
-          );
-          if (params.oneShotCliRun && errors.length) {
-            throw new AggregateError(errors, "Codex tool cleanup failed");
-          }
-        },
-      });
-      for (const [step, materialized] of [
-        ["codex-scoped-mcp-dispose", scopedMcpTools],
-        ["codex-configured-mcp-dispose", configuredMcp],
-      ] as const) {
-        await runAgentCleanupStep({
-          runId: params.runId,
-          sessionId: params.sessionId,
-          step,
-          log: embeddedAgentLog,
-          cleanup: async () => materialized?.dispose(),
-        });
-      }
-    })());
+  const disposeTools = createCodexAttemptToolDisposer({
+    runId: params.runId,
+    sessionId: params.sessionId,
+    oneShotCliRun: params.oneShotCliRun,
+    runCleanups,
+    disposeScopedMcp: async () => {
+      await scopedMcpTools?.dispose();
+    },
+    disposeConfiguredMcp: async () => {
+      await configuredMcp?.dispose();
+    },
+  });
   try {
     const tools = await buildDynamicTools({
       ...commonToolParams,

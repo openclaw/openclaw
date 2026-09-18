@@ -20,6 +20,7 @@ import { buildCodexContinuityCalibration } from "./context-engine-projection.js"
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
+import { canClearCodexBindingForRecovery } from "./run-attempt-binding-recovery.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import {
   emitCodexAppServerEvent,
@@ -27,6 +28,7 @@ import {
   shouldKeepCodexSharedAbortOpen,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
+import { offerCodexQuotaContinuation } from "./run-attempt-quota-continuation.js";
 import { settleReplyMedia } from "./run-attempt-reply-media.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import {
@@ -35,8 +37,10 @@ import {
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import { assertCodexBindingMayBeReplaced } from "./session-binding.js";
-import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
+import {
+  captureCodexSettledTurnFinalizationContext,
+  warnCodexContextUnavailable,
+} from "./settled-turn-context.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -78,21 +82,6 @@ export async function finalizeCodexAttempt(
     startupAuthProfileId,
   } = connection;
   const { toolBridge, toolState } = attemptTools;
-  const canClearBindingForRecovery = (operation: string) => {
-    if (params.expectedSessionRuntimeOwnership) {
-      // Optional recovery preserves both native ownership and the completed turn's outcome.
-      embeddedAgentLog.warn(
-        "codex app-server preserved native binding instead of recovery rotation",
-        {
-          threadId: resourceState.thread.threadId,
-          operation,
-        },
-      );
-      return false;
-    }
-    assertCodexBindingMayBeReplaced(resourceState.thread, operation);
-    return true;
-  };
   const { state, completion, deadlines, settlementExpired } = turnRuntime;
   const { emitLifecycleTerminal, buildLifecycleTerminalMeta } = lifecycle;
   const { drainNotificationQueue } = notifications;
@@ -142,10 +131,12 @@ export async function finalizeCodexAttempt(
     // so a failed handoff still returns its completed effects and preserves its binding.
     await state.pluginRuntimeRefreshStop.catch(() => undefined);
   }
-  const settlement = drainNotificationQueue().then(async () => {
-    await closeProjection();
-    await activeProjector.settlement.drain();
-  });
+  const settlement = Promise.allSettled(state.admittedRequestCompletions)
+    .then(() => drainNotificationQueue())
+    .then(async () => {
+      await closeProjection();
+      await activeProjector.settlement.drain();
+    });
   const degradedSettlement = settlementExpired.then(() => {
     beginDrainGrace();
   });
@@ -217,7 +208,7 @@ export async function finalizeCodexAttempt(
         contextEngineActive: Boolean(activeContextEngine),
         thread: resourceState.thread,
       }) &&
-      canClearBindingForRecovery("clearing a native context after overflow")
+      canClearCodexBindingForRecovery(resources, "clearing a native context after overflow")
     ) {
       embeddedAgentLog.warn(
         "codex app-server context-engine turn overflowed after resume; clearing thread binding for recovery",
@@ -499,8 +490,12 @@ export async function finalizeCodexAttempt(
     } else {
       codexModelCallDiagnostics.emitCompleted(result);
     }
-    const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey, terminalAnchor } =
-      mirrorOutcome;
+    const {
+      assistantTranscriptOwned,
+      assistantTranscriptIdempotencyKey,
+      terminalAnchor,
+      mirroredMessages,
+    } = mirrorOutcome;
     const shouldCaptureSettledTurnFinalizationContext =
       result.assistantTexts.every((text) => !text.trim()) &&
       result.messagesSnapshot.some((message) => message.role === "toolResult") &&
@@ -522,16 +517,7 @@ export async function finalizeCodexAttempt(
             })
           : undefined) ?? Object.freeze({ source: "unavailable" as const }))
       : undefined;
-    if (settledTurnFinalizationContext?.source === "unavailable") {
-      embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {
-        runId: params.runId,
-        threadId: resourceState.thread.threadId,
-        turnId: activeTurnId,
-        reason: usesSupervisionConnection
-          ? "native_auth_finalization_unsupported"
-          : "context_unavailable",
-      });
-    }
+    warnCodexContextUnavailable(settledTurnFinalizationContext, resources, activeTurnId);
     runAgentHarnessLlmOutputHook({
       event: {
         runId: params.runId,
@@ -624,7 +610,12 @@ export async function finalizeCodexAttempt(
         if (resourceState.thread.connectionScope === "supervision") {
           throw error;
         }
-        if (canClearBindingForRecovery("clearing native coverage after a completed turn")) {
+        if (
+          canClearCodexBindingForRecovery(
+            resources,
+            "clearing native coverage after a completed turn",
+          )
+        ) {
           const cleared = await bindingStore.mutate(
             bindingIdentity,
             { kind: "clear", threadId: resourceState.thread.threadId },
@@ -727,6 +718,13 @@ export async function finalizeCodexAttempt(
         ? { authBindingFingerprint: preparedAuthBinding.fingerprint }
         : {}),
       systemPromptReport,
+    });
+    await offerCodexQuotaContinuation(resources, turnRuntime, activeTurn, {
+      finalizedResult,
+      mirroredMessages,
+      projectionDrained,
+      finalAborted,
+      effectiveTimedOut,
     });
     if (turnSucceeded && toolState.yieldDetected && !runAbortController.signal.aborted) {
       resourceState.nativeHookRelay?.authorizeRetentionAfterSuccessfulYield();

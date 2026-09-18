@@ -1,9 +1,11 @@
+import { isProxy } from "node:util/types";
 import { responsesPromptObserver } from "@openclaw/ai/internal/openai";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex, sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 
 type ProviderPromptSnapshot = {
   scopeDigest: string;
@@ -78,12 +80,77 @@ export function markLastProviderPromptContextRejected(
   return attempted;
 }
 
+/** Capture without invoking accessors/toJSON or retaining any hook-owned reference. */
+function captureContinuationPayload(value: unknown): unknown {
+  const ancestors = new Set<object>();
+  let nodes = 0;
+  const visit = (input: unknown, depth: number): unknown => {
+    if (++nodes > 1_000_000 || depth > 128) {
+      throw new Error("Quota continuation provider payload exceeds snapshot bounds");
+    }
+    if (
+      input === null ||
+      input === undefined ||
+      typeof input === "string" ||
+      typeof input === "boolean"
+    ) {
+      return input;
+    }
+    if (typeof input === "number" && Number.isFinite(input)) {
+      return input;
+    }
+    if (typeof input !== "object" || isProxy(input) || ancestors.has(input)) {
+      throw new Error("Quota continuation requires an acyclic plain-data provider payload");
+    }
+    const array = Array.isArray(input);
+    const prototype = Object.getPrototypeOf(input);
+    if (
+      prototype !== (array ? Array.prototype : Object.prototype) &&
+      !(prototype === null && !array)
+    ) {
+      throw new Error("Quota continuation cannot snapshot an opaque provider payload");
+    }
+    ancestors.add(input);
+    const output: Record<string, unknown> | unknown[] = array ? [] : {};
+    // JSON must not consult a mutable inherited toJSON after admission. A captured
+    // own data property of that name (never a function) may replace this shadow.
+    Object.defineProperty(output, "toJSON", { value: undefined, configurable: true });
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    for (const key of Reflect.ownKeys(descriptors)) {
+      if (array && key === "length") {
+        continue;
+      }
+      const descriptor = typeof key === "string" ? descriptors[key] : undefined;
+      if (
+        !descriptor?.enumerable ||
+        !("value" in descriptor) ||
+        (array && !/^(0|[1-9]\d*)$/.test(String(key)))
+      ) {
+        throw new Error("Quota continuation cannot snapshot accessor or hidden provider state");
+      }
+      Object.defineProperty(output, key, {
+        value: visit(descriptor.value, depth + 1),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+    if (array && Object.keys(output).length !== input.length) {
+      throw new Error("Quota continuation cannot snapshot a sparse provider payload");
+    }
+    ancestors.delete(input);
+    return output;
+  };
+  return freezeJsonSnapshot(visit(value, 0));
+}
+
 /** Hashes the post-onPayload body for context-retry admission. */
 export function wrapStreamFnWithProviderPromptState(params: {
   streamFn: StreamFn;
   state: ProviderPromptState;
   effectiveContextTokenBudget: number;
   recordEvent?: (type: string, data?: Record<string, unknown>) => void;
+  assertFinalPayload?: (payload: unknown, api: string) => void;
 }): StreamFn {
   return async (model, context, options) => {
     params.state.lastAttempt = undefined; // Custom transports must not leave a stale candidate.
@@ -92,7 +159,13 @@ export function wrapStreamFnWithProviderPromptState(params: {
       ...options,
       onPayload: async (payload, payloadModel) => {
         const replacement = await originalOnPayload?.(payload, payloadModel);
-        const finalPayload = replacement === undefined ? payload : replacement;
+        const candidate = replacement === undefined ? payload : replacement;
+        // Ordinary retries preserve their existing payload contract. Custody requires
+        // the serializer to receive exactly the detached graph admitted below.
+        const finalPayload = params.assertFinalPayload
+          ? captureContinuationPayload(candidate)
+          : candidate;
+        params.assertFinalPayload?.(finalPayload, payloadModel.api);
         const snapshot = snapshotProviderPrompt({
           model: payloadModel,
           payload: finalPayload,

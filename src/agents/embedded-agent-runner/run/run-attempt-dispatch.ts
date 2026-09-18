@@ -591,6 +591,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     execSession: params.execSession,
     execOverrides: params.execOverrides,
     bashElevated: params.bashElevated,
+    activeQuotaContinuation: params.activeQuotaContinuation,
     timeoutMs: params.timeoutMs,
     runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     runId: params.runId,

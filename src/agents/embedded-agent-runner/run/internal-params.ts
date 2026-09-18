@@ -34,6 +34,10 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** Host-only, single-use continuation of the exact settled quota-failed turn. */
+  quotaContinuation?: import("../quota-continuation.js").QuotaContinuation;
+  quotaBudget?: import("./quota-continuation-budget.js").QuotaContinuationBudget;
+  activeQuotaContinuation?: import("../quota-continuation.js").QuotaContinuation;
   /** Reset deferred terminal facts when the host admits a new attempt, before preparation. */
   onAttemptStart?: () => void;
   /** Keep a bounded auxiliary tool set directly visible after runtime admission. */
@@ -73,7 +77,10 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
 };
 
 export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
-  Pick<RunEmbeddedAgentInternalParams, "onContextAccountingEvent" | "onCompactionRequestBudget"> & {
+  Pick<
+    RunEmbeddedAgentInternalParams,
+    "onContextAccountingEvent" | "onCompactionRequestBudget" | "activeQuotaContinuation"
+  > & {
     compactionCountOwner?: "subscription" | "caller";
   };
 

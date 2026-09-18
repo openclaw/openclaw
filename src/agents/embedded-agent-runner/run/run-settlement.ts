@@ -132,3 +132,27 @@ export async function settleEmbeddedRun(input: {
     });
   }
 }
+
+/** Keep loop teardown sequencing with its existing settlement owner. */
+export async function settleEmbeddedLoop(
+  runInput: Parameters<typeof settleEmbeddedRun>[0]["runInput"],
+  runtime: Parameters<typeof settleEmbeddedRun>[0]["runtime"],
+  state: Parameters<typeof settleEmbeddedRun>[0]["compaction"]["state"] & {
+    restoreTimeoutRecoveryAbandonment(): void;
+  },
+  permissions: { close(): void },
+  session: Parameters<typeof settleEmbeddedRun>[0]["compaction"]["session"],
+  originalTarget: Parameters<typeof settleEmbeddedRun>[0]["compaction"]["originalTarget"],
+  durable: Parameters<typeof settleEmbeddedRun>[0]["compaction"]["durable"],
+  authority: Parameters<typeof settleEmbeddedRun>[0]["compaction"]["authority"],
+  ownedContextEngineLease: Parameters<typeof settleEmbeddedRun>[0]["ownedContextEngineLease"],
+): Promise<void> {
+  state.restoreTimeoutRecoveryAbandonment();
+  permissions.close();
+  await settleEmbeddedRun({
+    runInput,
+    runtime,
+    compaction: { state, session, originalTarget, durable, authority },
+    ownedContextEngineLease,
+  });
+}

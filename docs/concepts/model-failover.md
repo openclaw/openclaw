@@ -349,6 +349,50 @@ Provider overloads and HTTP 5xx failures use transient recovery guidance. A mess
 
 When a run starts from the configured default primary, a cron job primary, an agent primary with explicit fallbacks, or an auto-selected fallback override, OpenClaw can walk the matching configured fallback chain. Agent primaries without explicit fallbacks are strict. Explicit user selections are also strict: `/model ollama/qwen3.5:27b`, the model picker, `sessions.patch`, and one-off CLI provider/model overrides. If that provider or model is unreachable, or fails before producing a reply, OpenClaw reports the failure instead of answering from an unrelated fallback.
 
+### Settled quota continuation
+
+Whole-turn replay remains blocked after side-effecting tools. Separately, a native
+harness can offer **continuation from the persisted transcript** after a structurally
+reported exhausted-quota failure. This is not permission to mark the failed attempt
+replay-safe or to send the original user request again.
+
+The first supported source is Codex with its restricted, OpenClaw-owned tool surface,
+after only audited core `read`, `write`, `edit`, or `apply_patch` calls. Plugin/channel
+tools and host shell commands cannot establish synchronous settlement merely by
+returning success. The host requires every tool call/result to be durably present, a quiescent old runtime,
+the exact still-active admitted turn, and no committed reply. It then uses an eligible
+configured fallback whose actual execution runtime is OpenClaw. Candidate setup may
+skip unavailable routes; once a continuation starts, its failure cannot start another
+model attempt through the outer fallback chain. The selected provider remains turn-local.
+
+Historical attachments, explicit image inputs, or unknown content blocks are not
+supported by this initial continuation path, even when the current turn is text-only.
+The full loaded model history is checked, including attachment facts on plain text
+captions. Eligible text history still passes through the destination's ordinary
+policies. Its final request must retain the complete admitted user/tool prefix exactly
+once, including partial-frame occurrences. The host distinguishes older identical
+requests from the admitted current turn and accepts new successor tool rounds only
+from observed loop outcomes. It detaches the final post-hook plain-data body before
+validation so retained hook references cannot change the serialized evidence.
+Windowing, compaction or transforms that lose that inventory prevent dispatch. The initial
+contract supports built-in OpenAI-compatible chat/Responses and Anthropic message
+transports with final-payload admission, not arbitrary custom transports. Result
+middleware, legacy extensions, redaction and context budgeting still run normally;
+if they change the concrete result's required text evidence, continuation is withheld
+rather than certifying the transformed output as the original result.
+
+Continuation uses only the remaining configured candidate suffix and does not retry
+already-consumed candidates. It carries the logical turn's remaining execution/retry
+budget, preserving approval-pause accounting, rather than granting a new full budget.
+
+Missing, changed, duplicate, oversized, or non-text user/tool transcript evidence; active or asynchronous
+work; pending approvals, client tools or yield; cancellation/timeouts; explicit model
+or profile pins; and absent eligible fallbacks keep the safety stop. Ordinary native
+shell/code-mode, native MCP, supervision-bound sessions, and managed execution hooks
+are not covered by this initial handoff. A bare HTTP 429 or quota-like error text never
+authorizes it. The original quota remains in the failure/attempt diagnostics, and the
+original no-replay verdict remains unsafe even when continuation succeeds.
+
 ### Candidate chain rules
 
 OpenClaw builds the candidate list from the currently requested `provider/model` plus configured fallbacks.

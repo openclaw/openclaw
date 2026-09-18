@@ -101,6 +101,7 @@ import {
 } from "../subagents/announce/subagent-announce-handoff.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
+import { rebaseExecApprovalContinuationPromptRange } from "./attempt-execution-prompt.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -220,6 +221,8 @@ function isClaudeCliProvider(provider: string): boolean {
 }
 
 export function runAgentAttempt(params: {
+  quotaContinuation?: RunEmbeddedAgentInternalParams["quotaContinuation"];
+  quotaBudget?: RunEmbeddedAgentInternalParams["quotaBudget"];
   preparedRunAdmission: PreparedAgentRunAdmission;
   providerOverride: string;
   modelOverride: string;
@@ -628,6 +631,9 @@ export function runAgentAttempt(params: {
       bootstrapPromptWarningSignature,
     }) satisfies Partial<RunEmbeddedAgentInternalParams>;
   if (!isRawModelRun && isCliExecutionProvider) {
+    if (params.quotaContinuation) {
+      throw new Error("Settled quota continuation requires the embedded runtime, not a CLI replay");
+    }
     const expectedLifecycleRevision = params.sessionEntry?.lifecycleRevision;
     return withLocalSessionPlacementTurnSettlement(
       {
@@ -1000,6 +1006,8 @@ export function runAgentAttempt(params: {
 
   const embeddedRunParams: RunEmbeddedAgentInternalParams = {
     ...buildCommonRunParams(),
+    quotaContinuation: params.quotaContinuation,
+    quotaBudget: params.quotaBudget,
     sandboxSessionKey: params.sessionKey,
     // Subagent lifecycle owns the stricter explicit visible/silent/empty evidence check.
     terminalReplyExpectation: isSubagentLane ? "optional" : undefined,

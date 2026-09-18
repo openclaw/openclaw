@@ -276,3 +276,59 @@ cannot attest that an arbitrary native runtime honored those restrictions.
 The callback remains optional for experimental third-party harness
 compatibility. When the selected harness omits it, OpenClaw preserves the
 existing incomplete-turn error instead of risking repeated side effects.
+
+## Settled quota continuation offers
+
+`settledQuotaContinuation` on an attempt result is an optional producer-owned
+**offer**, not replay authorization. Set `reason: "quota_exhausted"` only from
+structural provider/runtime evidence that distinguishes exhaustion from temporary
+throttling. Supply `messages` as the exact durably mirrored current user turn,
+including every unique tool call and matching successful result. Never synthesize
+missing results or use a best-effort history projection as settlement evidence.
+
+The producer must exclude hidden native work and establish native quiescence,
+including pending approvals, requests, asynchronous tools and hooks. Seal new request
+admission before taking the settlement snapshot, join already-admitted handlers, and
+bind persisted call arguments/results to immutable execution receipts. A fulfilled
+best-effort cleanup promise is not proof of closure: required-resource failure or
+timeout must veto the offer, including in long-lived non-one-shot runs. Failed teardown
+must remove the offer while preserving the original quota error and unsafe replay
+metadata. The bundled Codex implementation initially offers only audited core file
+operations (`read`, `write`, `edit`, `apply_patch`) on its restricted host-tool surface,
+without native shell/code-mode/MCP, managed hooks or supervision. Its private
+concrete-result provenance and host effect receipt are both required. The private receipt
+captures executed arguments, tool identity, and the lossless text projection immediately
+after execution, before result middleware, legacy extensions, callbacks, redaction or
+context budgeting. Changed or shortened evidence vetoes the optional offer; ordinary
+sanitized transcript/output behavior remains enabled. Raw receipts are not logged or
+persisted. Copied results,
+opaque plugin/channel tools and host shell commands cannot assert synchronous settlement.
+
+Core independently validates the whole current transcript (at most 256 messages and
+512 KiB), closes the old host capabilities, and joins tracked cleanup within a bounded
+handoff window. A weakly held in-process token binds the offer to the exact admitted
+turn; copied/serialized result data cannot be used as that token. It is consumed once
+by an OpenClaw-runtime candidate selected from the caller's configured fallback chain.
+The host rechecks current authority, transcript and delivery state before consumption,
+and uses an internal, non-persisted continuation prompt. Selection retains the original
+remaining candidate suffix and consumed identities. The logical-turn execution/retry
+remainder, including approval pauses, is carried rather than reset.
+
+The final post-transform provider body must retain the complete admitted user/tool
+prefix and its occurrence inventory. The host retains the admitted older/current-turn
+boundary (at most 4,096 messages / 4 MiB for this optional inventory) and observes new
+successor tool outcomes before extension callbacks; payload
+hooks cannot add completion receipts. If ordinary persistence omits a non-executable
+call, only the loop's observed no-start failure can supply its validation-only call
+projection; executed effects still require their durable call/result pair. Older identical requests and distinct, observed
+successor rounds remain valid. Normal bijective call-ID normalization is allowed, but
+extra user admissions, duplicated subsets, missing or rewritten effect evidence are not.
+The post-hook supported plain-data body is detached before validation, and that same
+snapshot reaches the built-in serializer. Accessors, cycles and opaque bodies fail closed. A smaller context window cannot silently discard earlier
+completed frames. This initial contract accepts only built-in transports exposing
+final-payload admission for OpenAI-compatible chat/Responses and Anthropic messages.
+Custom/session transports and opaque provider items fail closed. Canonical, runtime,
+legacy and layout media metadata, historical media and non-text source output are
+outside the initial portable scope. CLI dispatch is not supported.
+Neither `fallbackSafe` nor `replayInvalid` is relaxed. See
+[Settled quota continuation](/concepts/model-failover#settled-quota-continuation).

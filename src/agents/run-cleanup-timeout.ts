@@ -140,6 +140,7 @@ export async function runOwnedAgentCleanup(params: {
 }
 
 type AgentCleanupStepParams = {
+  settlement?: "required";
   runId: string;
   sessionId: string;
   step: string;
@@ -152,7 +153,13 @@ type AgentCleanupStepParams = {
 
 /** Run one cleanup step with timeout logging and late-rejection handling. */
 export async function runAgentCleanupStep(params: AgentCleanupStepParams): Promise<void> {
-  await settleAgentCleanupStep(params);
+  const outcome = await settleAgentCleanupStep(params);
+  if (params.settlement === "required" && outcome !== "done") {
+    if (typeof outcome === "object") {
+      throw outcome.error;
+    }
+    throw new Error(`Required cleanup did not settle: ${params.step}`);
+  }
 }
 
 type AgentCleanupStepOutcome = "done" | "timeout" | { error: unknown };

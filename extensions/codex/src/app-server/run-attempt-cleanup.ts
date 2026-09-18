@@ -29,7 +29,7 @@ export async function cleanupCodexAttempt(
     releaseNativeProcessAuthority,
     retainThreadSubscription,
     releaseThreadSubscription,
-    runCleanupStep,
+    runCleanupStep: runBestEffortCleanupStep,
   } = resources;
   const { connection } = prompt.context.runtime;
   const { params, options, runAbortController, terminalState, bindingStore, bindingIdentity } =
@@ -42,6 +42,22 @@ export async function cleanupCodexAttempt(
   } = lifecycle;
   const { codexModelCallDiagnostics } = requestRuntime;
   const { activeTurnId, abortListener, handle, freezeRunTerminalOutcome } = activeTurn;
+  const requiredFailures: unknown[] = [];
+  const runCleanupStep = async (
+    step: string,
+    operation: () => Promise<void> | void | undefined,
+  ) => {
+    const required = state.quotaContinuationPending && step !== "codex-trajectory-flush";
+    try {
+      await runBestEffortCleanupStep(step, operation, required ? "required" : undefined);
+    } catch (error) {
+      // Keep releasing independent resources; uncertainty must still veto custody.
+      if (!required) {
+        throw error;
+      }
+      requiredFailures.push(error);
+    }
+  };
   resourceState.releaseInferenceContext?.();
   resourceState.releaseInferenceContext = undefined;
   // Exact-thread cron authority exists only while this creator turn owns the
@@ -61,7 +77,7 @@ export async function cleanupCodexAttempt(
     : undefined;
   // Join late cancellation before releasing the subscription, but do not let a
   // failed terminal RPC skip resource cleanup. Surface that failure below.
-  if (params.oneShotCliRun) {
+  if (params.oneShotCliRun || state.quotaContinuationPending) {
     await runCleanupStep("codex-abort-cleanup", () => state.abortCleanup);
   } else {
     await state.abortCleanup?.catch(() => {});
@@ -105,8 +121,9 @@ export async function cleanupCodexAttempt(
       state.pluginRuntimeRefreshStop !== undefined &&
       !runAbortController.signal.aborted &&
       terminalState.settledTurnStatus === "completed";
+    const handingOff = pluginRuntimeRefreshing || state.quotaContinuationPending;
     const retainLiveIncognitoThread =
-      !pluginRuntimeRefreshing &&
+      !handingOff &&
       (terminalState.settledTurnStatus === "completed" ||
         (state.permissionChangeRestart === "confirmed" && !params.abortSignal?.aborted)) &&
       isIncognitoSessionKey(params.sessionKey);
@@ -114,7 +131,7 @@ export async function cleanupCodexAttempt(
     // Ordinary failed turns keep loaded configuration too: native unsubscribe delays unload.
     // Retain that configuration owner so later input can reuse the same thread.
     const retainedOrdinaryThread =
-      !pluginRuntimeRefreshing &&
+      !handingOff &&
       ((retainLiveIncognitoThread &&
         resourceState.thread.liveThreadEphemeralPolicy !== undefined) ||
         (terminalState.settledTurnStatus !== undefined &&
@@ -127,7 +144,7 @@ export async function cleanupCodexAttempt(
     const retainLiveThread =
       retainedOrdinaryThread ||
       (retainLiveIncognitoThread && resourceState.thread.liveThreadEphemeralPolicy === undefined);
-    if (pluginRuntimeRefreshing) {
+    if (handingOff) {
       // Keep the exact binding authoritative until unsubscribe succeeds; a failed
       // stop or a replacement owner must never become a fresh-thread handoff.
       await withExclusiveCodexAppServerThread({
@@ -197,7 +214,7 @@ export async function cleanupCodexAttempt(
       userInputBridgeRef.current?.cancelPending(),
     );
     await runCleanupStep("codex-turn-deadline-clear", () => deadlines.dispose());
-    await prompt.context.attemptTools.disposeTools(
+    const toolDisposal = prompt.context.attemptTools.disposeTools(
       terminalState.settledTurnStatus === "completed"
         ? "completion"
         : state.timeout
@@ -205,12 +222,19 @@ export async function cleanupCodexAttempt(
           : runAbortController.signal.aborted
             ? "cancel"
             : "error",
+      state.quotaContinuationPending ? "required" : undefined,
     );
+    if (state.quotaContinuationPending) {
+      await toolDisposal.catch((error: unknown) => {
+        requiredFailures.push(error);
+      });
+    } else {
+      await toolDisposal;
+    }
     await runCleanupStep("codex-route-release", releaseCurrentRoute);
     await checkpointCleanup;
-    await runCleanupStep(
-      "codex-shared-client-release",
-      releaseSharedClientLeaseAndRetireOneShotClient,
+    await runCleanupStep("codex-shared-client-release", () =>
+      releaseSharedClientLeaseAndRetireOneShotClient(state.quotaContinuationPending),
     );
     const nativeHookRelay = resourceState.nativeHookRelay;
     resourceState.nativeHookRelay = undefined;
@@ -243,4 +267,7 @@ export async function cleanupCodexAttempt(
     });
   }
   await state.abortCleanup;
+  if (requiredFailures.length) {
+    throw new AggregateError(requiredFailures, "Required Codex source cleanup was not confirmed");
+  }
 }

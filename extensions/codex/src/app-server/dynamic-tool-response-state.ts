@@ -20,6 +20,34 @@ export type CodexDynamicToolRuntimeResponse = CodexDynamicToolCallResponse & {
   terminalResolution?: ReturnType<NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]>>;
 };
 
+export type SynchronousCoreFileReceipt = Readonly<{
+  tool: string;
+  argumentsJson: string;
+  contentJson: string;
+}>;
+const synchronousCoreFileResults = new WeakMap<
+  CodexDynamicToolRuntimeResponse,
+  SynchronousCoreFileReceipt
+>();
+
+/** Private instance provenance; tool text or a serialized response cannot assert it. */
+export function markSynchronousCoreFileResult(
+  response: CodexDynamicToolRuntimeResponse,
+  receipt: SynchronousCoreFileReceipt,
+): void {
+  synchronousCoreFileResults.set(response, receipt);
+}
+
+export function isSynchronousCoreFileResult(response: CodexDynamicToolRuntimeResponse): boolean {
+  return synchronousCoreFileResults.has(response);
+}
+
+export function readSynchronousCoreFileReceipt(
+  response: CodexDynamicToolRuntimeResponse,
+): SynchronousCoreFileReceipt | undefined {
+  return synchronousCoreFileResults.get(response);
+}
+
 export function createFailedDynamicToolResponse(
   message: string,
   options?: {
