@@ -3,8 +3,6 @@ import "./compaction-safeguard.js";
 
 type CompactionSafeguardTestApi = {
   setSummarizeInStagesForTest(next?: typeof summarizeInStages): void;
-  collectToolFailures: CallableFunction;
-  formatToolFailuresSection: CallableFunction;
   splitPreservedRecentTurns: CallableFunction;
   buildPreservedTurnsSection: CallableFunction;
   buildCompactionStructureInstructions: CallableFunction;

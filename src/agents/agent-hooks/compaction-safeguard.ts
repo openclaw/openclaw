@@ -25,7 +25,6 @@ import {
   getCompactionProvider,
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
-import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import { computeAdaptiveChunkRatioWithWorker } from "../compaction-planning-worker.js";
 import { buildHistoryPrunePlan } from "../compaction-planning.js";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
@@ -38,7 +37,6 @@ import {
   resolveContextWindowTokens,
   summarizeInStages,
 } from "../compaction.js";
-import { collectTextContentBlocks } from "../content-blocks.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import {
@@ -70,14 +68,16 @@ import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardCancellation,
 } from "./compaction-safeguard-runtime.js";
+import {
+  collectToolFailures,
+  formatToolFailuresSection,
+} from "./compaction-safeguard-tool-failures.js";
 
 const log = createSubsystemLogger("compaction-safeguard");
 
 // Track session managers that have already logged the missing-model warning to avoid log spam.
 const missedModelWarningSessions = new WeakSet<object>();
 const SPLIT_TURN_SECTION_HEADING = "**Turn Context (split turn):**";
-const MAX_TOOL_FAILURES = 8;
-const MAX_TOOL_FAILURE_CHARS = 240;
 const CONTEXT_TRUNCATED_MARKER = "\n\n[Earlier compaction context truncated to fit budget]\n\n";
 // Split-turn context supplements the generated summary and must not claim its
 // guaranteed half of the final artifact before common finalization runs.
@@ -102,7 +102,9 @@ type CompactionLoss =
   | "suffix-head"
   | "split-turn-head"
   | "split-turn-tail"
-  | "preserved-turn-head";
+  | "preserved-turn-head"
+  | "identifier-retention"
+  | "quality-retention";
 
 function prependPreviousSummaryForRedistill(params: {
   messages: AgentMessage[];
@@ -225,6 +227,8 @@ type CompactionSuffix = {
   // Keep producer segment boundaries after later suffix sections are appended;
   // otherwise the final tail cap can split an assistant tool-call/result group.
   contextRanges: Array<{ start: number; end: number; segmentStarts: number[] }>;
+  // Leading chars the tail cap keeps whole, trimming the later sections instead.
+  reservedChars?: number;
 };
 
 type SummaryQualityRetention = {
@@ -237,17 +241,21 @@ type SummaryQualityRetention = {
   identifierPolicy: "strict" | "off" | "custom";
 };
 
-function assembleSuffix(parts: {
-  splitTurnSection?: ContextSection;
-  generatedSplitTurnSection?: string;
-  preservedTurnsSection?: ContextSection;
-  toolFailureSection?: string;
-  fileOpsSummary?: string;
-  workspaceContext?: string;
-}): CompactionSuffix {
+function assembleSuffix(
+  parts: {
+    splitTurnSection?: ContextSection;
+    generatedSplitTurnSection?: string;
+    preservedTurnsSection?: ContextSection;
+    toolFailureSection?: string;
+    fileOpsSummary?: string;
+    workspaceContext?: string;
+  },
+  reserveSplitTurn = false,
+): CompactionSuffix {
   let text = "";
+  let reservedChars = 0;
   const contextRanges: CompactionSuffix["contextRanges"] = [];
-  for (const part of Object.values(parts)) {
+  for (const [name, part] of Object.entries(parts)) {
     const section = typeof part === "string" ? part : part?.text;
     if (!section) {
       continue;
@@ -256,6 +264,9 @@ function assembleSuffix(parts: {
     const appended = leadingTrim > 0 ? section.slice(leadingTrim) : section;
     const start = text.length;
     text = appendSummarySection(text, section);
+    if (reserveSplitTurn && name === "generatedSplitTurnSection") {
+      reservedChars = text.length;
+    }
     if (typeof part !== "string") {
       contextRanges.push({
         start,
@@ -270,21 +281,15 @@ function assembleSuffix(parts: {
   // ends without newline: "...## Exact identifiers## Tool Failures").
   if (text && !/^\s/.test(text)) {
     text = `\n\n${text}`;
+    reservedChars += reservedChars > 0 ? 2 : 0;
     for (const range of contextRanges) {
       range.start += 2;
       range.end += 2;
       range.segmentStarts = range.segmentStarts.map((segmentStart) => segmentStart + 2);
     }
   }
-  return { text, contextRanges };
+  return { text, contextRanges, ...(reservedChars > 0 ? { reservedChars } : {}) };
 }
-
-type ToolFailure = {
-  toolCallId: string;
-  toolName: string;
-  summary: string;
-  meta?: string;
-};
 
 type ModelRegistryWithRequestAuthLookup = {
   getApiKeyAndHeaders?: (
@@ -387,87 +392,6 @@ function resolveQualityGuardMaxRetries(value: unknown): number {
   );
 }
 
-function formatToolFailureMeta(details: unknown): string | undefined {
-  if (!details || typeof details !== "object") {
-    return undefined;
-  }
-  const record = details as Record<string, unknown>;
-  return (
-    [
-      typeof record.status === "string" && record.status ? `status=${record.status}` : "",
-      typeof record.exitCode === "number" && Number.isFinite(record.exitCode)
-        ? `exitCode=${record.exitCode}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join(" ") || undefined
-  );
-}
-
-function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
-  const failures: ToolFailure[] = [];
-  const seen = new Set<string>();
-
-  for (const message of messages) {
-    if (message.role !== "toolResult" || !message.isError) {
-      continue;
-    }
-    const toolResult = message as {
-      toolCallId?: unknown;
-      toolName?: unknown;
-      content?: unknown;
-      details?: unknown;
-      isError?: unknown;
-    };
-    // Accepted sessions_spawn launches are successes, not failures, even when a legacy
-    // transcript persisted them with isError:true. Mirror the observer's detection
-    // (toolName + accepted child-run identity, see embedded-agent-subscribe.handlers.tools)
-    // so only real failures stay in the summary and non-spawn tools are never matched by shape.
-    if (
-      typeof toolResult.toolName === "string" &&
-      toolResult.toolName.trim() === "sessions_spawn" &&
-      normalizeAcceptedSessionSpawnResult(toolResult)
-    ) {
-      continue;
-    }
-    const toolCallId = typeof toolResult.toolCallId === "string" ? toolResult.toolCallId : "";
-    if (!toolCallId || seen.has(toolCallId)) {
-      continue;
-    }
-    seen.add(toolCallId);
-
-    const toolName =
-      typeof toolResult.toolName === "string" && toolResult.toolName.trim()
-        ? toolResult.toolName
-        : "tool";
-    const meta = formatToolFailureMeta(toolResult.details);
-    const failureText =
-      collectTextContentBlocks(toolResult.content).join("\n").replace(/\s+/g, " ").trim() ||
-      (meta ? "failed" : "failed (no output)");
-    const summary =
-      failureText.length > MAX_TOOL_FAILURE_CHARS
-        ? `${truncateUtf16Safe(failureText, MAX_TOOL_FAILURE_CHARS - 3)}...`
-        : failureText;
-    failures.push({ toolCallId, toolName, summary, meta });
-  }
-
-  return failures;
-}
-
-function formatToolFailuresSection(failures: ToolFailure[]): string {
-  if (failures.length === 0) {
-    return "";
-  }
-  const lines = failures.slice(0, MAX_TOOL_FAILURES).map((failure) => {
-    const meta = failure.meta ? ` (${failure.meta})` : "";
-    return `- ${failure.toolName}${meta}: ${failure.summary}`;
-  });
-  if (failures.length > MAX_TOOL_FAILURES) {
-    lines.push(`- ...and ${failures.length - MAX_TOOL_FAILURES} more`);
-  }
-  return `\n\n## Tool Failures\n${lines.join("\n")}`;
-}
-
 function normalizeCompactionSuffix(suffix: string | CompactionSuffix): CompactionSuffix {
   return typeof suffix === "string" ? { text: suffix, contextRanges: [] } : suffix;
 }
@@ -493,6 +417,24 @@ function capCompactionSuffix(suffixInput: string | CompactionSuffix, maxChars: n
   }
   if (maxChars <= 0) {
     return "";
+  }
+  const reserved = suffix.reservedChars ?? 0;
+  if (reserved > 0) {
+    // A reservation that cannot fit keeps its head, which names the active turn.
+    if (reserved >= maxChars) {
+      return capCompactionSummary(suffix.text.slice(0, reserved), maxChars);
+    }
+    const rest: CompactionSuffix = {
+      text: suffix.text.slice(reserved),
+      contextRanges: suffix.contextRanges
+        .filter((range) => range.start >= reserved)
+        .map((range) => ({
+          start: range.start - reserved,
+          end: range.end - reserved,
+          segmentStarts: range.segmentStarts.map((segmentStart) => segmentStart - reserved),
+        })),
+    };
+    return `${suffix.text.slice(0, reserved)}${capCompactionSuffix(rest, maxChars - reserved)}`;
   }
   if (maxChars < CONTEXT_TRUNCATED_MARKER.length) {
     const start = resolveSuffixTailStart(suffix, maxChars);
@@ -1021,27 +963,55 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       },
       producerLosses: ReadonlySet<CompactionLoss> = new Set(),
       qualityRetention?: SummaryQualityRetention,
+      // The degrade path exists BECAUSE required facts would not fit. Retaining them
+      // there is best-effort and must not throw, or the branch re-strands the session it
+      // exists to rescue. Its split-turn summary is the only generated context left, so
+      // the suffix cap trims older verbatim turns before it.
+      degraded = false,
     ) => {
       workspaceContextPromise ??= readWorkspaceContextForSummary(
         runtime?.postCompactionSections,
         runtime?.workspaceDir,
       );
-      const suffix = assembleSuffix({
-        splitTurnSection: sections.splitTurnSection,
-        generatedSplitTurnSection: sections.generatedSplitTurnSection,
-        preservedTurnsSection: sections.preservedTurnsSection,
-        toolFailureSection,
-        fileOpsSummary,
-        workspaceContext: await workspaceContextPromise,
-      });
-      const fitted = fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) =>
-        budgetCompactionSummary(body, suffix, maxChars, qualityRetention),
+      const suffix = assembleSuffix(
+        {
+          splitTurnSection: sections.splitTurnSection,
+          generatedSplitTurnSection: sections.generatedSplitTurnSection,
+          preservedTurnsSection: sections.preservedTurnsSection,
+          toolFailureSection,
+          fileOpsSummary,
+          workspaceContext: await workspaceContextPromise,
+        },
+        degraded,
       );
+      const fit = (retention?: SummaryQualityRetention) =>
+        fitCompactionSummary(preparation.summaryTokenBudget, (maxChars) =>
+          budgetCompactionSummary(body, suffix, maxChars, retention),
+        );
+      let fitted = fit(qualityRetention);
+      const losses = new Set(producerLosses);
+      const retained = () => fitted.ok && !fitted.value.qualityRetentionInfeasible;
+      if (degraded && qualityRetention && !retained()) {
+        // The request context is bounded; identifiers are not. Shed the longest
+        // identifiers first so one oversized URL cannot take the request with it.
+        const { identifiers } = qualityRetention;
+        const byLength = identifiers.toSorted((left, right) => left.length - right.length);
+        for (let kept = byLength.length - 1; kept >= 0 && !retained(); kept -= 1) {
+          const keep = new Set(byLength.slice(0, kept));
+          fitted = fit({
+            ...qualityRetention,
+            identifiers: identifiers.filter((identifier) => keep.has(identifier)),
+          });
+        }
+        losses.add(retained() ? "identifier-retention" : "quality-retention");
+        if (!retained()) {
+          fitted = fit();
+        }
+      }
       if (!fitted.ok) {
         throw fitted.error;
       }
       const finalized = fitted.value;
-      const losses = new Set(producerLosses);
       for (const section of Object.values(sections)) {
         if (typeof section !== "string" && section?.truncatedLoss) {
           losses.add(section.truncatedLoss);
@@ -1060,7 +1030,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       }
       return finalized;
     };
-    const compactionResult = (summary: string) => ({
+    const compactionResult = (summary: string, provenance?: { qualityDegraded: true }) => ({
       compaction: {
         summary,
         firstKeptEntryId: preparation.firstKeptEntryId,
@@ -1069,6 +1039,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           readFiles,
           modifiedFiles,
           ...(latestUnresolvedUserRequest ? { latestUnresolvedUserRequest } : {}),
+          ...provenance,
         },
       },
     });
@@ -1372,16 +1343,56 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         if (!qualityGuardEnabled) {
           return compactionResult(finalized.summary);
         }
-        if (finalized.qualityRetentionInfeasible) {
+        // One degraded path for every quality exhaustion the guard can still act on.
+        // Cancelling here strands the session: the transcript never shrinks, so every
+        // later turn fails preflight the same way and the user has no way out. A lossy
+        // summary beats an uncompactable session. This branch is reached by a
+        // summarizer that SUCCEEDED and then failed the audit; a summarizer that throws
+        // never arrives here and still cancels above, as do a missing model and missing
+        // credentials.
+        const degradeToFallbackSummary = async (diagnostic: string) => {
           log.warn(
-            "Compaction safeguard: required quality facts exceed finalized artifact budget; " +
+            `Compaction safeguard: ${diagnostic}; using degraded fallback summary; ` +
+              "reasonCode=quality_guard_degraded_fallback",
+          );
+          const degradedBody = buildStructuredFallbackSummary(effectivePreviousSummary);
+          const degradedSections = {
+            // The generated split-turn prefix is separately summarized context.
+            // Omitting it here silently drops the active request on this path,
+            // which normal finalization above preserves.
+            generatedSplitTurnSection: splitTurnSectionLocal
+              ? `\n\n${splitTurnSectionLocal}`
+              : undefined,
+            preservedTurnsSection: preservedTurnsSectionLocal,
+          };
+          // Carry the same required facts the audited path budgets for. auditSummary is
+          // deliberately omitted: the fallback body contains none of the generated text, so
+          // claiming it does would let the planner drop facts it thinks are already there.
+          const degradedRetention: SummaryQualityRetention = {
+            identifiers,
+            latestAsk: latestUserAsk,
+            latestAskInRetainedTurn: splitUserAsk !== null,
+            latestUnresolvedUserRequest: latestUnresolvedUserRequest ?? undefined,
+            requiredAskContext,
+            identifierPolicy,
+          };
+          const degraded = await finalizeSummaryText(
+            degradedBody,
+            degradedSections,
+            producerLosses,
+            degradedRetention,
+            true,
+          );
+          // Record the degradation on the boundary it produced. The fallback template is
+          // the only other evidence, and reading intent back out of summary prose is the
+          // multi-signal inference this repo forbids.
+          return compactionResult(degraded.summary, { qualityDegraded: true });
+        };
+        if (finalized.qualityRetentionInfeasible) {
+          return degradeToFallbackSummary(
+            "required quality facts exceed finalized artifact budget; " +
               `requiredChars>${MAX_COMPACTION_SUMMARY_CHARS} identifierCount=${identifiers.length}`,
           );
-          setCompactionSafeguardCancellation(
-            ctx.sessionManager,
-            "Compaction safeguard required facts exceed the finalized summary budget.",
-          );
-          return { cancel: true };
         }
         const quality = auditSummaryQuality({
           summary: finalized.summary,
@@ -1400,15 +1411,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           const reasonCodes = [
             ...new Set(quality.reasons.map((reason) => reason.split(":", 1)[0])),
           ];
-          log.warn(
-            "Compaction safeguard: finalized summary failed quality checks; " +
+          return degradeToFallbackSummary(
+            "final quality attempt failed; " +
               `reasonCodes=${reasonCodes.join(",")} reasonCount=${quality.reasons.length}`,
           );
-          setCompactionSafeguardCancellation(
-            ctx.sessionManager,
-            "Compaction safeguard finalized summary failed quality checks.",
-          );
-          return { cancel: true };
         }
         const reasons = quality.reasons.join(", ");
         const qualityFeedbackInstruction =
@@ -1450,8 +1456,6 @@ const testing = {
   setSummarizeInStagesForTest(next?: typeof summarizeInStages) {
     compactionSafeguardDeps.summarizeInStages = next ?? summarizeInStages;
   },
-  collectToolFailures,
-  formatToolFailuresSection,
   splitPreservedRecentTurns,
   buildPreservedTurnsSection,
   buildCompactionStructureInstructions,
