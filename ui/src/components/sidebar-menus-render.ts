@@ -33,6 +33,7 @@ import { renderSidebarAgentMenu } from "./app-sidebar-agent-menu.ts";
 import { renderSidebarIdentityMenu } from "./app-sidebar-identity-menu.ts";
 import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
 import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
+import { countSidebarSessionFilters } from "./app-sidebar-session-filter-summary.ts";
 import {
   renderSidebarCatalogViewMenu,
   renderSidebarSessionGroupMenu,
@@ -526,8 +527,13 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
     selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
-    view: controller.filterMenuView,
-    onViewChange: (view) => controller.setFilterMenuView(view),
+    activeFilterCount: countSidebarSessionFilters(host),
+    onResetFilters: () => {
+      host.setSessionOwnerFilter(null);
+      host.sessionOrganizer.setSessionsStatusFilter("active");
+      host.sessionOrganizer.setSessionsShowCron(false);
+      host.sessionOrganizer.setSessionsShowSystem(false);
+    },
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
     },

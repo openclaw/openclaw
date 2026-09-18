@@ -24,7 +24,7 @@ import {
 import {
   chooseSidebarMenuOption,
   closeSidebarMenu,
-  openSidebarMenuPage,
+  openSidebarMenu,
 } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -696,16 +696,16 @@ suite.define(() => {
       // global toolbar remains available without revealing a section action.
       const filterAndSortButton = page.getByRole("button", { name: "Filter & sort" });
       await filterAndSortButton.click();
-      await openSidebarMenuPage(page, "Filters");
-      const showAutomationSessions = page.getByRole("menuitemcheckbox", {
+      await openSidebarMenu(page);
+      const showAutomationSessions = page.getByRole("checkbox", {
         name: "Automation",
         exact: true,
       });
       await showAutomationSessions.click();
       await expect.poll(() => showAutomationSessions.getAttribute("aria-checked")).toBe("true");
       await expect.poll(() => filterAndSortButton.getAttribute("aria-expanded")).toBe("true");
-      await openSidebarMenuPage(page, "View");
-      const groupBy = page.getByRole("menuitem", { name: "Group by: Custom groups", exact: true });
+      await openSidebarMenu(page);
+      const groupBy = page.getByRole("radio", { name: "Custom groups", exact: true });
       await groupBy.waitFor();
       await captureUiProof(suite, page, "sidebar-groupby-sort-menu.png");
       await filterAndSortButton.click();

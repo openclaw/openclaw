@@ -7,19 +7,8 @@ import { createStorageMock } from "./storage.ts";
 export function setupSidebarTest() {
   let originalLocalStorage: PropertyDescriptor | undefined;
   let layoutGlobals: Array<[string, PropertyDescriptor | undefined]>;
-  let originalScrollIntoView: PropertyDescriptor | undefined;
-  let stubbedScrollIntoView = false;
 
   beforeEach(() => {
-    // jsdom has no layout scrolling; browser tests retain the native implementation.
-    stubbedScrollIntoView = typeof Element.prototype.scrollIntoView !== "function";
-    if (stubbedScrollIntoView) {
-      originalScrollIntoView = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
-      Object.defineProperty(Element.prototype, "scrollIntoView", {
-        configurable: true,
-        value: vi.fn(),
-      });
-    }
     layoutGlobals = ["matchMedia", "ResizeObserver", "IntersectionObserver"].map((name) => [
       name,
       Object.getOwnPropertyDescriptor(globalThis, name),
@@ -84,13 +73,6 @@ export function setupSidebarTest() {
     disposeSidebarContextLifecycles();
     // Disconnection queues Lit updates; finish them before retiring the DOM globals.
     await settleLitElements(sidebars);
-    if (stubbedScrollIntoView) {
-      if (originalScrollIntoView) {
-        Object.defineProperty(Element.prototype, "scrollIntoView", originalScrollIntoView);
-      } else {
-        Reflect.deleteProperty(Element.prototype, "scrollIntoView");
-      }
-    }
     for (const [name, descriptor] of layoutGlobals) {
       if (descriptor) {
         Object.defineProperty(globalThis, name, descriptor);

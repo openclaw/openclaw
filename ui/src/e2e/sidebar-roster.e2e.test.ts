@@ -9,7 +9,7 @@ import { installMockGateway, waitForControlUiRoute } from "../test-helpers/contr
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
-import { closeSidebarMenu, openSidebarMenuPage } from "./sidebar-session-menu.test-support.ts";
+import { closeSidebarMenu, openSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI sidebar agent roster" });
 
@@ -307,25 +307,21 @@ suite.define(() => {
         await expectWorkspace();
         await expect.poll(() => sessionRows.count()).toBe(8);
         await sidebar.locator(".sidebar-session-sort").click();
-        await openSidebarMenuPage(page, "View");
+        await openSidebarMenu(page);
         expect(
           await sidebar
             .locator(".sidebar-session-sort-menu")
-            .getByRole("menuitem", { name: /^Group by:/ })
+            .getByRole("radiogroup", { name: "Group by", exact: true })
             .count(),
         ).toBe(0);
         expect(
           await sidebar
             .locator(".sidebar-session-sort-menu")
-            .getByRole("menuitem", { name: /^Hide empty groups:/ })
+            .getByRole("radiogroup", { name: "Hide empty groups", exact: true })
             .count(),
         ).toBe(0);
-        await openSidebarMenuPage(page, "Filters");
-        await sidebar.getByRole("menuitem", { name: /^Owners:/ }).click();
-        await sidebar.getByRole("option", { name: /^Specific owner/ }).click();
-        await sidebar
-          .locator('.sidebar-session-owner-picker [value="owner:profile-riley"]')
-          .click();
+        await openSidebarMenu(page);
+        await sidebar.locator("#sidebar-sessions-owner").selectOption("owner:profile-riley");
         await closeSidebarMenu(page);
         await expect.poll(() => sessionRows.count()).toBe(4);
         expect(await sessionRows.allTextContents()).toEqual([
@@ -335,9 +331,8 @@ suite.define(() => {
           expect.stringContaining("Bloom project"),
         ]);
         await sidebar.locator(".sidebar-session-sort").click();
-        await openSidebarMenuPage(page, "Filters");
-        await sidebar.getByRole("menuitem", { name: /^Owners:/ }).click();
-        await sidebar.getByRole("option", { name: "All owners", exact: true }).click();
+        await openSidebarMenu(page);
+        await sidebar.locator("#sidebar-sessions-owner").selectOption("all");
         await closeSidebarMenu(page);
         await expect.poll(() => sessionRows.count()).toBe(8);
 

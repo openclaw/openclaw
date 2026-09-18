@@ -94,7 +94,7 @@ suite.define(() => {
       await installMockGateway(page, { featureMethods, methodResponses });
       await page.goto(new URL(controlUiSessionPath("agent:main:main"), suite.server.baseUrl).href);
       const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
-      const item = page.getByRole("menuitem", { name: "Session sources…", exact: true });
+      const item = page.getByRole("link", { name: "Session sources…", exact: true });
       await trigger.click();
       const originalUrl = page.url();
       // Native tab gestures do not retain an opener.
@@ -125,7 +125,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, { featureMethods, methodResponses });
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
-      await page.getByRole("menuitem", { name: "Session sources…", exact: true }).click();
+      await page.getByRole("link", { name: "Session sources…", exact: true }).click();
       const { search, sidebar } = await waitForControlUiSettingsTakeover(page);
       await expect.poll(() => new URL(page.url()).hash).toBe("#settings-session-sources");
       const section = page.locator("#settings-session-sources");

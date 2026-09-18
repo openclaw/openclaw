@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { activateSessionMenuValue, openOwnerMenu } from "../app-sidebar-menu.ts";
+import { activateSessionMenuValue, openSessionMenu } from "../app-sidebar-menu.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -59,7 +59,7 @@ describe("AppSidebar session ownership filtering", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")?.click();
     await sidebar.updateComplete;
 
-    const menu = await openOwnerMenu(sidebar);
+    const menu = await openSessionMenu(sidebar);
     expect(menu?.querySelector('[value="owner:profile:channel:opaque"]')).not.toBeNull();
     expect(menu?.textContent).toContain("Channel Keeper");
     expect(
@@ -84,7 +84,7 @@ describe("AppSidebar session ownership filtering", () => {
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
-    const unavailableMenu = sidebar.querySelector(".sidebar-session-owner-picker");
+    const unavailableMenu = sidebar.querySelector("#sidebar-sessions-owner");
     expect(unavailableMenu?.querySelector('[value^="owner:"]') ?? null).toBeNull();
     expect(unavailableMenu?.textContent ?? "").not.toContain("Channel Keeper");
   });
