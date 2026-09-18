@@ -381,6 +381,27 @@ describe("chat pane board shell", () => {
     },
   );
 
+  it("does not persist a dashboard face onto a session opened via a dashboard route without a saved layout", () => {
+    const pane = createTestPane();
+    pane.state.sessionKey = "agent:main:current";
+    pane.sessionKey = pane.state.sessionKey;
+    pane.state.sessionsResult = {
+      sessions: [{ key: pane.sessionKey, agentId: "main", kind: "direct" }],
+    } as ChatPageHost["sessionsResult"];
+    pane.boardProvider = createMockBoardProvider(pane.sessionKey);
+    pane.routeFace = "dashboard";
+    pane.onFaceChange = vi.fn();
+
+    pane.syncRetainedBoardSession(pane.resolveBoardView());
+
+    expect(
+      pane.state.sidebarLayout.columns.flatMap((column) =>
+        column.panels.map((panel) => panel.slot),
+      ),
+    ).toContain("dashboard");
+    expect(pane.onFaceChange).not.toHaveBeenCalled();
+  });
+
   it("does not hydrate the swarm after becoming hidden during module loading", async () => {
     vi.useFakeTimers();
     const list = vi.fn().mockResolvedValue({ sessions: [] });
