@@ -21,7 +21,7 @@ type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js")
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper preserves mock call and result types.
 function invokeMock<TArgs extends unknown[], TResult>(
-  mock: (...args: unknown[]) => unknown,
+  mock: (...args: TArgs) => unknown,
   ...args: TArgs
 ): TResult {
   return mock(...args) as TResult;
