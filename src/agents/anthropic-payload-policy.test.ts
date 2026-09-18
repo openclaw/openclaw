@@ -163,7 +163,7 @@ describe("anthropic payload policy", () => {
 
     expect(payload.service_tier).toBe("standard_only");
     expect(payload.system).toEqual([
-      textBlock("Follow policy.", { type: "ephemeral", ttl: "1h" }),
+      textBlock("Follow policy."),
       textBlock("Use tools carefully.", { type: "ephemeral", ttl: "1h" }),
     ]);
     expect(payload.messages[0]).toEqual({
@@ -323,7 +323,7 @@ describe("anthropic payload policy", () => {
     });
   });
 
-  it("uses the latest tool result when only one message cache marker remains", () => {
+  it("uses the latest tool result and last user turn when two message cache markers remain", () => {
     const policy = resolveAnthropicPayloadPolicy({
       provider: "anthropic",
       api: "anthropic-messages",
@@ -357,7 +357,13 @@ describe("anthropic payload policy", () => {
 
     expect(payload.messages[0]).toEqual({
       role: "user",
-      content: [{ type: "text", text: "Investigate the cache writes." }],
+      content: [
+        {
+          type: "text",
+          text: "Investigate the cache writes.",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
     });
     expect(payload.messages[2]).toEqual({
       role: "user",
@@ -469,7 +475,7 @@ describe("anthropic payload policy", () => {
     applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
 
     expect(payload.system).toEqual([
-      textBlock("Follow policy.", { type: "ephemeral", ttl: "1h" }),
+      textBlock("Follow policy."),
       textBlock("Use tools carefully.", { type: "ephemeral", ttl: "1h" }),
     ]);
     expect(payload.messages[0]).toEqual({
