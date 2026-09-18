@@ -24,6 +24,9 @@ type AuthProfileSummary = {
   email?: string;
   displayName?: string;
   expiresAt?: string;
+  lastUsedAt?: string;
+  lastFailureAt?: string;
+  errorCount?: number;
   cooldownUntil?: string;
   disabledUntil?: string;
   cooldownReason?: ProfileUsageStats["cooldownReason"];
@@ -68,6 +71,8 @@ function summarizeProfile(params: {
   usage?: ProfileUsageStats;
 }): AuthProfileSummary {
   const expiresAt = resolveProfileExpiry(params.profile);
+  const lastUsedAt = formatTimestamp(params.usage?.lastUsed);
+  const lastFailureAt = formatTimestamp(params.usage?.lastFailureAt);
   const cooldownUntil = formatTimestamp(params.usage?.cooldownUntil);
   const disabledUntil = formatTimestamp(params.usage?.disabledUntil);
   const disabledActive = Boolean(disabledUntil);
@@ -97,6 +102,9 @@ function summarizeProfile(params: {
     ...(params.profile.email ? { email: params.profile.email } : {}),
     ...(params.profile.displayName ? { displayName: params.profile.displayName } : {}),
     ...(expiresAt ? { expiresAt } : {}),
+    ...(lastUsedAt ? { lastUsedAt } : {}),
+    ...(params.usage?.errorCount ? { errorCount: params.usage.errorCount } : {}),
+    ...(lastFailureAt ? { lastFailureAt } : {}),
     ...(cooldownUntil ? { cooldownUntil } : {}),
     ...(disabledUntil ? { disabledUntil } : {}),
     ...(params.usage?.cooldownReason ? { cooldownReason: params.usage.cooldownReason } : {}),
@@ -112,6 +120,15 @@ function formatProfileLine(profile: AuthProfileSummary): string {
   const details = [`${profile.provider}/${profile.type}`];
   if (profile.expiresAt) {
     details.push(`expires ${profile.expiresAt}`);
+  }
+  if (profile.lastUsedAt) {
+    details.push(`last used ${profile.lastUsedAt}`);
+  }
+  if (profile.errorCount) {
+    details.push(`errors ${profile.errorCount}`);
+  }
+  if (profile.lastFailureAt) {
+    details.push(`last failure ${profile.lastFailureAt}`);
   }
   if (profile.cooldownUntil) {
     const diagnostic = profile.cooldownClassification ?? profile.cooldownReason;
