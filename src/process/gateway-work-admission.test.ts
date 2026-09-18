@@ -30,7 +30,9 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
   runWithGatewayIndependentRootWorkContinuation,
   runWithRetainedGatewayRootWork,
+  runWithGatewayShutdownCleanupAdmission,
   runOutsideGatewayRootWorkAdmission,
+  tryBeginGatewayIndependentRootWorkAdmission,
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRestartStartupRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
@@ -821,4 +823,25 @@ it("does not wake deferred internal work into a restart drain", async () => {
   markGatewayRestartDraining();
 
   await expect(pending).rejects.toBeInstanceOf(GatewayDrainingError);
+});
+
+it("admits shutdown cleanup chains while restart drain keeps fencing ordinary roots", async () => {
+  markGatewayRestartDraining("restart");
+  expect(tryBeginGatewayRootWorkAdmission("ws:browser.request")).toBeNull();
+
+  const observations: Array<{ ownsRoot: boolean } | null> = [];
+  await runWithGatewayShutdownCleanupAdmission(async () => {
+    // A gateway request dispatched from this chain sees the cleanup root and is admitted.
+    const nested = tryBeginGatewayRootWorkAdmission("ws:browser.request");
+    observations.push(nested && { ownsRoot: nested.ownsRoot });
+    nested?.release();
+    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    expect(getActiveGatewayRootWorkHolders()).toEqual(["test:shutdown-cleanup"]);
+  }, "test:shutdown-cleanup");
+
+  expect(observations).toEqual([{ ownsRoot: false }]);
+  // The cleanup root settles and ordinary admission stays closed for new roots.
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  expect(tryBeginGatewayRootWorkAdmission("ws:browser.request")).toBeNull();
+  expect(tryBeginGatewayIndependentRootWorkAdmission("outside")).toBeNull();
 });

@@ -93,6 +93,7 @@ export type GatewayRestartSignalAdmissionLease = {
 };
 
 const GATEWAY_ROOT_WORK_ORIGIN_MAX_CHARS = 80;
+const GATEWAY_SHUTDOWN_CLEANUP_ORIGIN = "shutdown-cleanup";
 
 function createGatewayRootWorkAdmission(
   origin: string,
@@ -492,6 +493,33 @@ export const runWithGatewayRootWorkReadmission = <T>(run: () => Promise<T>): Pro
   GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore()?.retiredByReset
     ? runWithGatewayIndependentRootWorkAdmission(run, "runtime:readmission")
     : run();
+
+/**
+ * Shutdown-owned cleanup root for the gateway's own close sequence. Restart
+ * draining fences ordinary request roots, but the close still owns owner-bound
+ * cleanup chains (such as plugin service stops) whose gateway requests must
+ * stay admissible. This tracks that root without reopening process-wide
+ * admission: external chains keep observing the closed fence.
+ */
+export function runWithGatewayShutdownCleanupAdmission<T>(
+  run: () => Promise<T>,
+  origin = GATEWAY_SHUTDOWN_CLEANUP_ORIGIN,
+): Promise<T> {
+  const admission = createGatewayRootWorkAdmission(origin);
+  return admission.run(run).finally(admission.release);
+}
+
+/**
+ * True only inside a chain started by {@link runWithGatewayShutdownCleanupAdmission}.
+ * The close sequence's own request-entry checks consult this so owner-bound
+ * cleanup RPCs stay admissible after the close prelude fences ordinary entry.
+ */
+export function isInsideGatewayShutdownCleanupChain(): boolean {
+  const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
+  return (
+    current !== undefined && !current.released && current.origin === GATEWAY_SHUTDOWN_CLEANUP_ORIGIN
+  );
+}
 
 /**
  * Detaches required follow-up from the current admitted transaction.
