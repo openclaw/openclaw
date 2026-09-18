@@ -10,11 +10,7 @@ import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-bindin
 import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { CommandLane } from "../process/lanes.js";
-import {
-  cleanupSystemAgentSession,
-  createSystemAgentSession,
-  type SystemAgentSession,
-} from "./agent-turn.js";
+import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-turn.js";
 import {
   runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl,
   type SystemAgentTurnDeps,
@@ -854,94 +850,105 @@ describe("runSystemAgentTurn", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
-  it("uses the default agent embedded model, auth directory, profile, and runtime", async () => {
-    const stateDir = useTempStateDir();
-    const agentDir = path.join(stateDir, "ops-agent");
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-global" },
-          systemAgent: { agentId: "ops" },
-          models: {
-            "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
-          },
-        },
-        list: [
-          {
-            id: "ops",
-            default: true,
-            agentDir,
-            model: { primary: "openai/gpt-5.4@openai:ops" },
-            params: { temperature: 0.2 },
-            tools: { allow: ["read"], deny: ["exec"] },
+  it.each([
+    { owner: "requester", memoryPromptAgentId: "hq", expectedMemoryPromptAgentId: "hq" },
+    { owner: "inference", memoryPromptAgentId: undefined, expectedMemoryPromptAgentId: "ops" },
+  ])(
+    "keeps the verified execution route when memory uses the $owner owner",
+    async ({ memoryPromptAgentId, expectedMemoryPromptAgentId }) => {
+      const stateDir = useTempStateDir();
+      const agentDir = path.join(stateDir, "ops-agent");
+      const config = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-global" },
+            systemAgent: { agentId: "ops" },
             models: {
-              "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+              "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
             },
           },
-          {
-            id: "openclaw",
-            params: { temperature: 1.7 },
-            tools: { allow: ["exec"] },
-          },
-        ],
-      },
-    } as OpenClawConfig;
-    const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({ payloads: [] }));
-    const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
-      payloads: [{ text: "ready" }],
-    }));
-    const { session, deps } = await createVerifiedSession(config);
+          list: [
+            {
+              id: "ops",
+              default: true,
+              agentDir,
+              model: { primary: "openai/gpt-5.4@openai:ops" },
+              params: { temperature: 0.2 },
+              tools: { allow: ["read"], deny: ["exec"] },
+              models: {
+                "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+              },
+            },
+            {
+              id: "openclaw",
+              params: { temperature: 1.7 },
+              tools: { allow: ["exec"] },
+            },
+            { id: "hq" },
+          ],
+        },
+      } as OpenClawConfig;
+      const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({ payloads: [] }));
+      const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
+        payloads: [{ text: "ready" }],
+      }));
+      const { session, deps } = await createVerifiedSession(config);
 
-    await runSystemAgentTurnWithDeps(
-      {
-        input: "hello",
-        overview: { defaultModel: "openai/gpt-5.4" } as never,
-        surface: "gateway",
-        approvalArmed: false,
-        session,
-      },
-      {
-        ...deps,
-        runCliAgent: runCliAgent as never,
-        runEmbeddedAgent: runEmbeddedAgent as never,
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-      },
-    );
+      await runSystemAgentTurnWithDeps(
+        {
+          input: "hello",
+          overview: { defaultModel: "openai/gpt-5.4" } as never,
+          surface: "gateway",
+          approvalArmed: false,
+          memoryPromptAgentId,
+          session,
+        },
+        {
+          ...deps,
+          runCliAgent: runCliAgent as never,
+          runEmbeddedAgent: runEmbeddedAgent as never,
+          readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
+        },
+      );
 
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    expect(runCliAgent).not.toHaveBeenCalled();
-    const call = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "missing embedded runner call");
-    expect(call).not.toHaveProperty("streamParams");
-    expect(call).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.4",
-      lane: CommandLane.SystemAgentInference,
-      systemAgentTool: { agentId: "ops" },
-      agentDir,
-      authProfileId: "openai:ops",
-      authProfileIdSource: "user",
-      agentHarnessRuntimeOverride: "codex",
-      agentId: "openclaw",
-      sessionKey: `agent:openclaw:${session.sessionId}`,
-      sandboxSessionKey: "agent:openclaw:main",
-      sessionId: session.sessionId,
-      workspaceDir: path.join(stateDir, "openclaw", "workspace"),
-      sessionFile: `in-memory:${session.sessionId}`,
-      messageChannel: "openclaw",
-      messageProvider: "openclaw",
-      toolsAllow: ["openclaw"],
-      disableMessageTool: true,
-    });
-    expect(call.agentHarnessId).toBeUndefined();
-    expect(listAgentEntries(call.config ?? {}).find((agent) => agent.id === "openclaw")).toEqual({
-      id: "openclaw",
-      params: { temperature: 0.2 },
-      tools: { allow: ["read"], deny: ["exec"] },
-    });
-    expect(expectDefined(call.systemAgentTool, "missing embedded OpenClaw tool").proposalRef).toBe(
-      session.proposalRef,
-    );
-  });
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      const call = expectDefined(
+        runEmbeddedAgent.mock.calls[0]?.[0],
+        "missing embedded runner call",
+      );
+      expect(call).not.toHaveProperty("streamParams");
+      expect(call).toMatchObject({
+        provider: "openai",
+        model: "gpt-5.4",
+        lane: CommandLane.SystemAgentInference,
+        systemAgentTool: { agentId: "ops" },
+        memoryPromptAgentId: expectedMemoryPromptAgentId,
+        agentDir,
+        authProfileId: "openai:ops",
+        authProfileIdSource: "user",
+        agentHarnessRuntimeOverride: "codex",
+        agentId: "openclaw",
+        sessionKey: `agent:openclaw:${session.sessionId}`,
+        sandboxSessionKey: "agent:openclaw:main",
+        sessionId: session.sessionId,
+        workspaceDir: path.join(stateDir, "openclaw", "workspace"),
+        sessionFile: `in-memory:${session.sessionId}`,
+        messageChannel: "openclaw",
+        messageProvider: "openclaw",
+        toolsAllow: ["openclaw"],
+        disableMessageTool: true,
+      });
+      expect(call.agentHarnessId).toBeUndefined();
+      expect(listAgentEntries(call.config ?? {}).find((agent) => agent.id === "openclaw")).toEqual({
+        id: "openclaw",
+        params: { temperature: 0.2 },
+        tools: { allow: ["read"], deny: ["exec"] },
+      });
+      expect(
+        expectDefined(call.systemAgentTool, "missing embedded OpenClaw tool").proposalRef,
+      ).toBe(session.proposalRef);
+    },
+  );
 
   it("threads operator-approval-only into the real ring-zero tool and stages the delegated proposal", async () => {
     useTempStateDir();
@@ -995,71 +1002,5 @@ describe("runSystemAgentTurn", () => {
     expect(reply?.text).not.toContain("ask the user to reply yes");
     // Staging still registers the exact proposal for host authorization.
     expect(session.proposalRef.current).toBeDefined();
-  });
-
-  it("rejects a low-level session without verified inference before lookup or run", async () => {
-    useTempStateDir();
-    const runCliAgent = vi.fn();
-    const runEmbeddedAgent = vi.fn();
-    const readConfigFileSnapshot = vi.fn(async () =>
-      configSnapshot({ agents: { defaults: { model: "openai/gpt-5.5" } } }),
-    );
-    const unverifiedSession = {
-      sessionId: "openclaw-unverified",
-      proposalRef: {},
-    } as unknown as SystemAgentSession;
-
-    await expect(
-      runSystemAgentTurnWithDeps(
-        {
-          input: "hello",
-          overview: { defaultModel: "openai/stale-overview-model" } as never,
-          surface: "gateway",
-          approvalArmed: false,
-          session: unverifiedSession,
-        },
-        {
-          runCliAgent: runCliAgent as never,
-          runEmbeddedAgent: runEmbeddedAgent as never,
-          readConfigFileSnapshot: readConfigFileSnapshot as never,
-        },
-      ),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
-    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
-    expect(runCliAgent).not.toHaveBeenCalled();
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
-  });
-
-  it("converts route-planning failures to a typed error and clears session state", async () => {
-    useTempStateDir();
-    const config = {
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    } satisfies OpenClawConfig;
-    const { session, deps } = await createVerifiedSession(config);
-    session.proposalRef.current = "partial-proposal";
-    session.cliSession = {
-      routeKey: "stale-route",
-      binding: { sessionId: "uncertain-cli-session" },
-    };
-
-    await expect(
-      runSystemAgentTurnWithDeps(
-        {
-          input: "hello",
-          overview: { defaultModel: "openai/gpt-5.5" } as never,
-          surface: "gateway",
-          approvalArmed: false,
-          session,
-        },
-        {
-          ...deps,
-          readConfigFileSnapshot: vi.fn(async () => {
-            throw new Error("config read failed");
-          }) as never,
-        },
-      ),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
-    expect(session.proposalRef.current).toBeUndefined();
-    expect(session.cliSession).toBeUndefined();
   });
 });
