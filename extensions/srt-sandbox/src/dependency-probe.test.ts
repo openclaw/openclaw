@@ -104,6 +104,47 @@ describe("srt dependency probe (fail-closed gate)", () => {
     expect(err.message).toMatch(/@anthropic-ai\/sandbox-runtime@0\.0\.76/);
   });
 
+  it("AC-R3 (B2): fails the FACTORY closed when the seccomp helper is unresolvable — no handle, no unsandboxed exec", async () => {
+    // SRT reports a missing/unresolvable vendored apply-seccomp as this exact
+    // degraded warning (linux-sandbox-utils checkLinuxDependencies). The probe
+    // promotes it to a hard error on Linux; the factory awaits that probe before
+    // it constructs a scope, so a seccomp-degraded host must never receive a
+    // handle it could run a command through outside kernel-enforced seccomp.
+    setPlatform("linux");
+    stubSrt({
+      supported: true,
+      errors: [],
+      warnings: ["seccomp not available - unix socket access not restricted"],
+    });
+    const factory = createSrtSandboxBackendFactory({
+      pluginConfig: resolveSrtPluginConfig(undefined),
+    });
+    const create = factory({
+      sessionKey: "s",
+      scopeKey: "scope",
+      workspaceDir: "/tmp/nope",
+      agentWorkspaceDir: "/tmp/nope-agent",
+      cfg: {
+        mode: "all",
+        backend: SRT_SANDBOX_BACKEND_ID,
+        scope: "session",
+        workspaceAccess: "rw",
+        workspaceRoot: "/tmp/nope",
+        dockerTmpfsSource: "default",
+        docker: { workdir: "/tmp/nope", env: {} },
+        ssh: {},
+        browser: {},
+        tools: {},
+        prune: {},
+      },
+    } as Parameters<typeof factory>[0]);
+    // The factory rejects (fail-closed) and yields no handle …
+    await expect(create).rejects.toThrow(SrtSandboxUnavailableError);
+    // … and the rejection is specifically the seccomp promotion, not some other
+    // dependency gap, so the guarantee is anchored to the missing helper.
+    await expect(create).rejects.toThrow(/seccomp helper unavailable/);
+  });
+
   it("does not treat the seccomp warning as fatal on macOS (Seatbelt has no seccomp helper)", async () => {
     setPlatform("darwin");
     stubSrt({

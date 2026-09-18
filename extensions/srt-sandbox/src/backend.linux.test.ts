@@ -207,3 +207,47 @@ describe.skipIf(!isLinux)("srt sandbox Linux buildExecSpec (bwrap wrapper in arg
     expect(spec.cwd).toBe(ws);
   });
 });
+
+// AC-R3 (B2 fix): prove seccomp is ENGAGED, not merely configured. The
+// dependency probe (dependency-probe.test.ts) proves the fail-closed gate fires
+// when the helper is absent; this proves the positive case on a host where the
+// helper IS present — SRT actually threads the vendored apply-seccomp binary
+// into the bwrap invocation it hands back for a real Linux wrap. Without this,
+// "seccomp is applied" rested on hand-run evidence only (XIN-1926 finding B2).
+describe.skipIf(!isLinux)("srt sandbox Linux seccomp engaged (AC-R3)", () => {
+  it("threads the vendored apply-seccomp binary into the bwrap argv for a Linux wrap", async () => {
+    const ws = mkdtempSync(path.join(tmpdir(), "srt-lx-seccomp-"));
+    const agentDir = mkdtempSync(path.join(tmpdir(), "srt-lx-seccomp-agent-"));
+    mkdirSync(ws, { recursive: true });
+    const factory = createSrtSandboxBackendFactory({
+      pluginConfig: resolveSrtPluginConfig(undefined),
+    });
+    const handle = await factory(
+      makeParams({ workspaceDir: ws, agentWorkspaceDir: agentDir, workspaceAccess: "rw" }),
+    );
+    const spec = await handle.buildExecSpec({
+      command: "true",
+      env: { PATH: process.env.PATH ?? "" },
+      usePty: false,
+    });
+    const argv = spec.argv.join(" ");
+
+    // The wrap must still be a bwrap invocation (kernel wrapper present)…
+    expect(argv).toContain("bwrap");
+    // …and it must invoke the seccomp helper. SRT prefixes the sandboxed
+    // command with the apply-seccomp binary that installs the baked-in BPF
+    // filter; "configured but skipped" would leave no such token in the argv.
+    expect(argv).toContain("apply-seccomp");
+
+    // Pin it to the VENDORED helper for this architecture (not some unrelated
+    // PATH lookup): @anthropic-ai/sandbox-runtime ships
+    // vendor/seccomp/{arm64,x64}/apply-seccomp.
+    const vendored = argv.match(/(\/[^\s'"]*vendor\/seccomp\/(?:arm64|x64)\/apply-seccomp)/);
+    expect(vendored, `expected a vendored apply-seccomp path in argv:\n${argv}`).not.toBeNull();
+
+    // The path SRT baked in is a real, present binary — resolution succeeded
+    // rather than falling through to the "helper missing" (degraded) branch.
+    const seccompPath = vendored?.[1] ?? "";
+    expect(existsSync(seccompPath)).toBe(true);
+  });
+});
