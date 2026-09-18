@@ -249,9 +249,14 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     // Encode the original text with the reference so escapes are not decoded twice.
     let remaining = replyTo ? sanitizeIrcOutboundText(`${text}\n\n[reply:${replyTo}]`) : cleaned;
     while (remaining.length > 0) {
-      const chunk = takeIrcPrivmsgChunk(remaining, messageChunkMaxChars, maxChunkBytes).trim();
-      sendRaw(`PRIVMSG ${normalizedTarget} :${chunk}`);
-      remaining = remaining.slice(chunk.length).trimStart();
+      // Slice by the trimmed length so whitespace trimmed off a chunk's tail
+      // stays in `remaining` as the next chunk's leading space. Trimming both
+      // sides used to drop separator spaces between chunks, collapsing runs of
+      // spaces in the delivered message.
+      const chunk = takeIrcPrivmsgChunk(remaining, messageChunkMaxChars, maxChunkBytes);
+      const trimmed = chunk.trimEnd();
+      sendRaw(`PRIVMSG ${normalizedTarget} :${trimmed}`);
+      remaining = remaining.slice(trimmed.length);
     }
   };
 

@@ -346,4 +346,19 @@ describe("irc client privmsg byte-limit chunking", () => {
       await server.close();
     }
   });
+
+  it("preserves interior runs of spaces when chunking long text", async () => {
+    const server = await startLoopbackIrcServer();
+    try {
+      const text = "aaaa bbbb  cccc dddd";
+      const bodies = await collectPrivmsgBodies(server, text, 8);
+      expect(bodies.length).toBeGreaterThan(1);
+      expect(bodies.join("")).toBe(text);
+      for (const body of bodies) {
+        expect(Buffer.byteLength(`PRIVMSG #general :${body}\r\n`, "utf8")).toBeLessThanOrEqual(512);
+      }
+    } finally {
+      await server.close();
+    }
+  });
 });

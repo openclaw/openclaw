@@ -157,7 +157,7 @@ describe("irc client PRIVMSG chunking", () => {
 
     client.sendPrivmsg("#room", "alpha beta gamma");
 
-    expect(privmsgBodies(socket)).toEqual(["alpha beta", "gamma"]);
+    expect(privmsgBodies(socket)).toEqual(["alpha beta", " gamma"]);
 
     client.close();
   });

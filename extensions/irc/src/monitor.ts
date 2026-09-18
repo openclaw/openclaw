@@ -177,10 +177,12 @@ export async function monitorIrcProvider(
           if (stopped || monitorAbort.signal.aborted) {
             return;
           }
-          ingressPause = ingress.pause();
-          if (activeConnectionEpoch === ingressConnection.connectionEpoch) {
-            activeConnectionEpoch = null;
+          if (activeConnectionEpoch !== ingressConnection.connectionEpoch) {
+            // A displaced or superseded socket closed; the active connection is unaffected.
+            return;
           }
+          ingressPause = ingress.pause();
+          activeConnectionEpoch = null;
           client = null;
           logger.warn?.(
             `[${account.accountId}] IRC connection closed; reconnecting in ${IRC_MONITOR_RECONNECT_DELAY_MS}ms`,
@@ -208,12 +210,25 @@ export async function monitorIrcProvider(
       nextClient.quit("shutdown");
       return;
     }
+    if (client && client !== nextClient) {
+      // A newer connection already took over; release the displaced socket so it
+      // cannot linger connected under the same nick.
+      client.close();
+    }
     client = nextClient;
     activeConnectionEpoch = ingressConnection.connectionEpoch;
     await ingressPause;
     if (client !== nextClient || !nextClient.isReady()) {
       if (activeConnectionEpoch === ingressConnection.connectionEpoch) {
         activeConnectionEpoch = null;
+      }
+      if (client === nextClient) {
+        // The connection this attempt built dropped before it activated; retry.
+        client = null;
+        scheduleReconnect();
+      } else if (nextClient.isReady()) {
+        // A newer connection already took over while this one was activating.
+        nextClient.close();
       }
       return;
     }
