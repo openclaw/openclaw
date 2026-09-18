@@ -138,6 +138,20 @@ describe("boundedJsonUtf8Bytes", () => {
     expect(result.complete).toBe(false);
     expect(result.bytes).toBeGreaterThan(8_192);
   });
+
+  it("measures payloads nested deeper than the call stack (#141306)", () => {
+    // An MCP server can list a tool whose inputSchema nests past the recursion limit.
+    let deep: Record<string, unknown> = { type: "string" };
+    for (let level = 0; level < 100_000; level += 1) {
+      deep = { type: "object", properties: { child: deep }, required: ["child"] };
+    }
+    const result = boundedJsonUtf8Bytes(
+      { tools: [{ name: "deep", inputSchema: deep }] },
+      100 * 1024 * 1024,
+    );
+    expect(result.complete).toBe(true);
+    expect(result.bytes).toBeGreaterThan(5_000_000);
+  });
 });
 
 describe("firstEnumerableOwnKeys", () => {

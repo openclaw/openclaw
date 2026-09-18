@@ -1,6 +1,7 @@
 // Verifies OpenAI strict tool schema normalization and cache behavior.
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, expect, it } from "vitest";
+import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import { projectOpenAITools } from "./openai-tool-projection.js";
 import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
 import {
@@ -305,5 +306,116 @@ describe("OpenAI strict tool schema normalization", () => {
     const normalized = normalizeOpenAIStrictToolParameters(tool?.parameters, true);
     expect(normalizeOpenAIStrictToolParameters(tool?.parameters, true)).toBe(normalized);
     expect(serializationCount).toBe(1);
+  });
+});
+
+describe("deeply nested tool schemas", () => {
+  // A depth that overflows the previous recursive walkers with RangeError: Maximum call
+  // stack size exceeded on default Node stack sizes (#141306). The walkers are iterative now,
+  // so the same input must normalize successfully.
+  const DEEP_LEVELS = 20_000;
+
+  function buildDeepObjectChain(levels: number): Record<string, unknown> {
+    let current: Record<string, unknown> = { type: "string", title: "leaf" };
+    for (let i = 0; i < levels; i += 1) {
+      current = { type: "object", properties: { child: current }, required: ["child"] };
+    }
+    return current;
+  }
+
+  function readDeepLeaf(schema: unknown, levels: number): Record<string, unknown> | undefined {
+    let current = schema as Record<string, unknown> | undefined;
+    for (let i = 0; i < levels; i += 1) {
+      const properties = current?.properties as Record<string, unknown> | undefined;
+      current = properties?.child as Record<string, unknown> | undefined;
+    }
+    return current;
+  }
+
+  it("normalizes deep nesting on the default provider path", () => {
+    const schema = buildDeepObjectChain(DEEP_LEVELS);
+    const normalized = normalizeToolParameterSchema(schema);
+    expect(readDeepLeaf(normalized, DEEP_LEVELS)?.title).toBe("leaf");
+  });
+
+  it("normalizes deep nesting in OpenAI strict mode", () => {
+    const schema = buildDeepObjectChain(DEEP_LEVELS);
+    const normalized = normalizeOpenAIStrictToolParameters(schema, true, null) as Record<
+      string,
+      unknown
+    >;
+    expect(normalized.additionalProperties).toBe(false);
+    expect(readDeepLeaf(normalized, DEEP_LEVELS)?.title).toBe("leaf");
+  });
+
+  it("normalizes deep nesting with omitEmptyArrayItems", () => {
+    const schema = buildDeepObjectChain(DEEP_LEVELS);
+    const normalized = normalizeToolParameterSchema(schema, {
+      modelCompat: { omitEmptyArrayItems: true },
+    });
+    expect(readDeepLeaf(normalized, DEEP_LEVELS)?.title).toBe("leaf");
+  });
+
+  it("normalizes deep nesting on the Gemini provider path", () => {
+    const schema = buildDeepObjectChain(DEEP_LEVELS);
+    const normalized = normalizeToolParameterSchema(schema, {
+      modelProvider: "google",
+      modelId: "gemini-2.5-pro",
+    });
+    expect(readDeepLeaf(normalized, DEEP_LEVELS)?.title).toBe("leaf");
+  });
+
+  it("normalizes deep nesting on the llamacpp GBNF profile", () => {
+    const schema = buildDeepObjectChain(DEEP_LEVELS);
+    const normalized = normalizeToolParameterSchema(schema, {
+      modelCompat: { toolSchemaProfile: "llamacpp" },
+    });
+    expect(readDeepLeaf(normalized, DEEP_LEVELS)?.title).toBe("leaf");
+  });
+
+  it("normalizes deep nesting while stripping unsupported keywords", () => {
+    const schema = buildDeepObjectChain(DEEP_LEVELS);
+    const normalized = normalizeToolParameterSchema(schema, {
+      modelCompat: { unsupportedToolSchemaKeywords: ["pattern", "minLength"] },
+    });
+    expect(readDeepLeaf(normalized, DEEP_LEVELS)?.title).toBe("leaf");
+  });
+
+  it("checks deep schemas for strict compatibility and violations", () => {
+    const schema = buildDeepObjectChain(DEEP_LEVELS);
+    expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
+    const violations = findOpenAIStrictSchemaViolations(schema, "root");
+    expect(violations).toContain("root.additionalProperties");
+  });
+
+  it("repairs deep schemas in the OpenAI strict compat pass", () => {
+    const schema = buildDeepObjectChain(DEEP_LEVELS);
+    const normalized = normalizeOpenAIStrictCompatSchema(schema);
+    expect(readDeepLeaf(normalized, DEEP_LEVELS)?.title).toBe("leaf");
+  });
+
+  it("inlines a deep flat $defs chain", () => {
+    const links = 3_000;
+    const defs: Record<string, unknown> = {};
+    for (let i = links - 1; i >= 0; i -= 1) {
+      defs[`d${i}`] =
+        i === links - 1
+          ? { type: "object", properties: { leaf: { type: "string" } } }
+          : { $ref: `#/$defs/d${i + 1}` };
+    }
+    const schema = { $ref: "#/$defs/d0", $defs: defs, title: "chain" };
+    const normalized = normalizeToolParameterSchema(schema) as Record<string, unknown>;
+    expect(normalized.title).toBe("chain");
+    expect(normalized.$defs).toBeUndefined();
+    expect((normalized.properties as Record<string, unknown> | undefined)?.leaf).toStrictEqual({
+      type: "string",
+    });
+  });
+
+  it("rejects circular object graphs with a typed error instead of overflowing the stack", () => {
+    const cyclic: Record<string, unknown> = { type: "object", properties: {} };
+    (cyclic.properties as Record<string, unknown>).self = cyclic;
+    expect(() => normalizeToolParameterSchema(cyclic)).toThrow(TypeError);
+    expect(() => normalizeToolParameterSchema(cyclic)).toThrow(/circular/i);
   });
 });

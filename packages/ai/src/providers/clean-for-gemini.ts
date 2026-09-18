@@ -279,178 +279,450 @@ function sanitizeRequiredFields(schema: Record<string, unknown>): Record<string,
   return schema;
 }
 
-function cleanSchemaForGeminiWithDefs(
-  schema: unknown,
-  defs: SchemaDefs | undefined,
-  refStack: Set<string> | undefined,
-): unknown {
-  if (!schema || typeof schema !== "object") {
-    return schema;
-  }
-  if (Array.isArray(schema)) {
-    return schema.map((item) => cleanSchemaForGeminiWithDefs(item, defs, refStack));
-  }
+// Tool schemas are external input and can nest far deeper than the call stack, so this walker
+// runs an explicit task stack instead of recursing (#141306). A visit task either resolves a
+// leaf immediately or pushes assemble tasks plus a visit task per child; each assemble task
+// only runs after its children have written their results back, mirroring the original
+// recursion's anyOf/oneOf-then-body ordering.
+type GeminiVisitTask = {
+  kind: "visit";
+  node: unknown;
+  defs: SchemaDefs | undefined;
+  refStack: Set<string> | undefined;
+  assign: (value: unknown) => void;
+};
 
-  const obj = schema as Record<string, unknown>;
-  const nextDefs = extendSchemaDefs(defs, obj);
+type GeminiAssembleArrayTask = {
+  kind: "assemble-array";
+  node: object;
+  assign: (value: unknown) => void;
+  entries: unknown[];
+};
 
-  const refValue = typeof obj.$ref === "string" ? obj.$ref : undefined;
-  if (refValue) {
-    if (refStack?.has(refValue)) {
-      return {};
+// Runs once the resolved $ref target is cleaned: merge in the referencing node's metadata.
+type GeminiAssembleRefTask = {
+  kind: "assemble-ref";
+  node: object;
+  assign: (value: unknown) => void;
+  obj: Record<string, unknown>;
+  resolved: unknown;
+};
+
+// Runs once anyOf/oneOf variants are cleaned: simplify unions, then plan the body walk.
+type GeminiAssembleUnionsTask = {
+  kind: "assemble-unions";
+  node: object;
+  assign: (value: unknown) => void;
+  obj: Record<string, unknown>;
+  nextDefs: SchemaDefs | undefined;
+  refStack: Set<string> | undefined;
+  hasAnyOf: boolean;
+  hasOneOf: boolean;
+  cleanedAnyOf: unknown[] | undefined;
+  cleanedOneOf: unknown[] | undefined;
+};
+
+// Runs once the body's child schemas are cleaned: apply union fallbacks and sanitize required.
+type GeminiAssembleRecordTask = {
+  kind: "assemble-record";
+  node: object;
+  assign: (value: unknown) => void;
+  // Body entries in source order; child results write back through the entry, and the cleaned
+  // record is built in plan order at assemble time so key insertion order (including the
+  // const-before-enum overwrite) matches the recursion exactly.
+  plan: Array<
+    | { kind: "write"; key: string; value: unknown }
+    // `properties` maps rebuild through Object.fromEntries so user-named keys such as
+    // `__proto__` become own properties, matching the recursion.
+    | { kind: "props"; key: string; entries: Array<[string, unknown]> }
+    | { kind: "child"; key: string; value: unknown }
+    | { kind: "child-array"; key: string; entries: unknown[] }
+  >;
+};
+
+type GeminiTask =
+  | GeminiVisitTask
+  | GeminiAssembleArrayTask
+  | GeminiAssembleRefTask
+  | GeminiAssembleUnionsTask
+  | GeminiAssembleRecordTask;
+
+function createCircularToolSchemaError(): TypeError {
+  return new TypeError("Tool schema contains a circular reference and cannot be normalized.");
+}
+
+function cleanSchemaForGeminiTree(schema: unknown): unknown {
+  let rootResult: unknown = schema;
+  // Recursion previously bounded cyclic object graphs via the call stack; the explicit stack
+  // removes that implicit guard, so the walk tracks the nodes on its current path instead.
+  const ancestors = new Set<object>();
+  const tasks: GeminiTask[] = [
+    {
+      kind: "visit",
+      node: schema,
+      defs: undefined,
+      refStack: undefined,
+      assign: (value) => {
+        rootResult = value;
+      },
+    },
+  ];
+  let task: GeminiTask | undefined;
+  while ((task = tasks.pop()) !== undefined) {
+    if (task.kind === "assemble-array") {
+      ancestors.delete(task.node);
+      task.assign(task.entries);
+      continue;
     }
-
-    const resolved = tryResolveLocalRef(refValue, nextDefs);
-    if (resolved) {
-      const nextRefStack = refStack ? new Set(refStack) : new Set<string>();
-      nextRefStack.add(refValue);
-
-      const cleaned = cleanSchemaForGeminiWithDefs(resolved, nextDefs, nextRefStack);
+    if (task.kind === "assemble-ref") {
+      ancestors.delete(task.node);
+      const cleaned = task.resolved;
       if (!cleaned || typeof cleaned !== "object" || Array.isArray(cleaned)) {
-        return cleaned;
+        task.assign(cleaned);
+        continue;
       }
-
       const result: Record<string, unknown> = {
         ...(cleaned as Record<string, unknown>),
       };
+      copySchemaMeta(task.obj, result);
+      task.assign(result);
+      continue;
+    }
+    if (task.kind === "assemble-record") {
+      ancestors.delete(task.node);
+      const cleaned: Record<string, unknown> = {};
+      for (const entry of task.plan) {
+        if (entry.kind === "write") {
+          cleaned[entry.key] = entry.value;
+        } else if (entry.kind === "props") {
+          cleaned[entry.key] = Object.fromEntries(entry.entries);
+        } else if (entry.kind === "child") {
+          cleaned[entry.key] = entry.value;
+        } else {
+          cleaned[entry.key] = entry.entries;
+        }
+      }
+      // Cloud Code Assist API rejects anyOf/oneOf in nested schemas even after
+      // simplifyUnionVariants runs above. Flatten remaining unions as a fallback:
+      // pick the common type or use the first variant's type so the tool
+      // declaration is accepted by Google's validation layer.
+      if (cleaned.anyOf && Array.isArray(cleaned.anyOf)) {
+        const flattened = flattenUnionFallback(cleaned, cleaned.anyOf);
+        if (flattened) {
+          task.assign(sanitizeRequiredFields(flattened));
+          continue;
+        }
+      }
+      if (cleaned.oneOf && Array.isArray(cleaned.oneOf)) {
+        const flattened = flattenUnionFallback(cleaned, cleaned.oneOf);
+        if (flattened) {
+          task.assign(sanitizeRequiredFields(flattened));
+          continue;
+        }
+      }
+      task.assign(sanitizeRequiredFields(cleaned));
+      continue;
+    }
+    if (task.kind === "assemble-unions") {
+      const { obj, nextDefs, refStack, hasAnyOf, hasOneOf, assign } = task;
+      let cleanedAnyOf = task.cleanedAnyOf;
+      let cleanedOneOf = task.cleanedOneOf;
+      if (hasAnyOf) {
+        const simplified = simplifyUnionVariants({ obj, variants: cleanedAnyOf ?? [] });
+        if (simplified.kind === "simplified") {
+          ancestors.delete(task.node);
+          assign(simplified.value);
+          continue;
+        }
+        cleanedAnyOf = simplified.value;
+      }
+      if (hasOneOf) {
+        const simplified = simplifyUnionVariants({ obj, variants: cleanedOneOf ?? [] });
+        if (simplified.kind === "simplified") {
+          ancestors.delete(task.node);
+          assign(simplified.value);
+          continue;
+        }
+        cleanedOneOf = simplified.value;
+      }
+
+      const plan: GeminiAssembleRecordTask["plan"] = [];
+      const children: GeminiVisitTask[] = [];
+
+      for (const [key, value] of Object.entries(obj)) {
+        if (GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS.has(key)) {
+          continue;
+        }
+
+        if (key === "const") {
+          const enumValues = cleanGeminiEnumValues([value]);
+          if (enumValues) {
+            plan.push({ kind: "write", key: "enum", value: enumValues });
+          }
+          continue;
+        }
+
+        if (key === "enum") {
+          const enumValues = cleanGeminiEnumValues(value);
+          if (enumValues) {
+            plan.push({ kind: "write", key: "enum", value: enumValues });
+          }
+          continue;
+        }
+
+        // Google's schema validator rejects `"required": []` — omit empty arrays.
+        if (key === "required" && Array.isArray(value) && value.length === 0) {
+          continue;
+        }
+
+        if (key === "type" && (hasAnyOf || hasOneOf)) {
+          continue;
+        }
+        if (
+          key === "type" &&
+          Array.isArray(value) &&
+          value.every((entry) => typeof entry === "string")
+        ) {
+          const types = value.filter((entry) => entry !== "null");
+          plan.push({ kind: "write", key: "type", value: types.length === 1 ? types[0] : types });
+          continue;
+        }
+
+        if (key === "properties") {
+          if (value && typeof value === "object" && !Array.isArray(value)) {
+            const planEntry: Extract<GeminiAssembleRecordTask["plan"][number], { kind: "props" }> =
+              { kind: "props", key, entries: [] };
+            plan.push(planEntry);
+            for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+              children.push({
+                kind: "visit",
+                node: childValue,
+                defs: nextDefs,
+                refStack,
+                assign: (childResult) => {
+                  planEntry.entries.push([childKey, childResult]);
+                },
+              });
+            }
+          } else {
+            // Guard malformed schemas (e.g. properties: null) that can trigger
+            // downstream Object.* crashes in strict provider validators.
+            plan.push({ kind: "write", key, value: {} });
+          }
+          continue;
+        }
+        if (key === "items" && value) {
+          if (Array.isArray(value)) {
+            const planEntry: Extract<
+              GeminiAssembleRecordTask["plan"][number],
+              { kind: "child-array" }
+            > = { kind: "child-array", key, entries: Array.from({ length: value.length }) };
+            plan.push(planEntry);
+            value.forEach((entry, index) => {
+              children.push({
+                kind: "visit",
+                node: entry,
+                defs: nextDefs,
+                refStack,
+                assign: (childResult) => {
+                  planEntry.entries[index] = childResult;
+                },
+              });
+            });
+          } else if (typeof value === "object") {
+            const planEntry: Extract<GeminiAssembleRecordTask["plan"][number], { kind: "child" }> =
+              { kind: "child", key, value: undefined };
+            plan.push(planEntry);
+            children.push({
+              kind: "visit",
+              node: value,
+              defs: nextDefs,
+              refStack,
+              assign: (childResult) => {
+                planEntry.value = childResult;
+              },
+            });
+          } else {
+            plan.push({ kind: "write", key, value });
+          }
+          continue;
+        }
+        if (key === "anyOf" && Array.isArray(value)) {
+          // Variants were already cleaned before union simplification; cleanedAnyOf is
+          // always set here because hasAnyOf guards the same condition.
+          plan.push({ kind: "write", key, value: cleanedAnyOf ?? value });
+          continue;
+        }
+        if (key === "oneOf" && Array.isArray(value)) {
+          plan.push({ kind: "write", key, value: cleanedOneOf ?? value });
+          continue;
+        }
+        if (key === "allOf" && Array.isArray(value)) {
+          const planEntry: Extract<
+            GeminiAssembleRecordTask["plan"][number],
+            { kind: "child-array" }
+          > = { kind: "child-array", key, entries: Array.from({ length: value.length }) };
+          plan.push(planEntry);
+          value.forEach((entry, index) => {
+            children.push({
+              kind: "visit",
+              node: entry,
+              defs: nextDefs,
+              refStack,
+              assign: (childResult) => {
+                planEntry.entries[index] = childResult;
+              },
+            });
+          });
+          continue;
+        }
+        plan.push({ kind: "write", key, value });
+      }
+
+      tasks.push({
+        kind: "assemble-record",
+        node: task.node,
+        assign,
+        plan,
+      });
+      for (let index = children.length - 1; index >= 0; index -= 1) {
+        const child = children[index];
+        if (child) {
+          tasks.push(child);
+        }
+      }
+      continue;
+    }
+
+    // visit
+    const { node, defs, refStack, assign } = task;
+    if (!node || typeof node !== "object") {
+      assign(node);
+      continue;
+    }
+    if (ancestors.has(node)) {
+      throw createCircularToolSchemaError();
+    }
+    ancestors.add(node);
+    if (Array.isArray(node)) {
+      const entries: unknown[] = Array.from({ length: node.length });
+      tasks.push({ kind: "assemble-array", node, assign, entries });
+      for (let index = node.length - 1; index >= 0; index -= 1) {
+        const slot = index;
+        tasks.push({
+          kind: "visit",
+          node: node[slot],
+          defs,
+          refStack,
+          assign: (value) => {
+            entries[slot] = value;
+          },
+        });
+      }
+      continue;
+    }
+
+    const obj = node as Record<string, unknown>;
+    const nextDefs = extendSchemaDefs(defs, obj);
+
+    const refValue = typeof obj.$ref === "string" ? obj.$ref : undefined;
+    if (refValue) {
+      if (refStack?.has(refValue)) {
+        ancestors.delete(node);
+        assign({});
+        continue;
+      }
+
+      const resolved = tryResolveLocalRef(refValue, nextDefs);
+      if (resolved) {
+        const nextRefStack = refStack ? new Set(refStack) : new Set<string>();
+        nextRefStack.add(refValue);
+        const refTask: GeminiAssembleRefTask = {
+          kind: "assemble-ref",
+          node,
+          assign,
+          obj,
+          resolved: undefined,
+        };
+        tasks.push(refTask);
+        tasks.push({
+          kind: "visit",
+          node: resolved,
+          defs: nextDefs,
+          refStack: nextRefStack,
+          assign: (value) => {
+            refTask.resolved = value;
+          },
+        });
+        continue;
+      }
+
+      ancestors.delete(node);
+      const result: Record<string, unknown> = {};
       copySchemaMeta(obj, result);
-      return result;
-    }
-
-    const result: Record<string, unknown> = {};
-    copySchemaMeta(obj, result);
-    return result;
-  }
-
-  const hasAnyOf = "anyOf" in obj && Array.isArray(obj.anyOf);
-  const hasOneOf = "oneOf" in obj && Array.isArray(obj.oneOf);
-  let cleanedAnyOf = hasAnyOf
-    ? (obj.anyOf as unknown[]).map((variant) =>
-        cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
-      )
-    : undefined;
-  let cleanedOneOf = hasOneOf
-    ? (obj.oneOf as unknown[]).map((variant) =>
-        cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
-      )
-    : undefined;
-
-  if (hasAnyOf) {
-    const simplified = simplifyUnionVariants({ obj, variants: cleanedAnyOf ?? [] });
-    if (simplified.kind === "simplified") {
-      return simplified.value;
-    }
-    cleanedAnyOf = simplified.value;
-  }
-
-  if (hasOneOf) {
-    const simplified = simplifyUnionVariants({ obj, variants: cleanedOneOf ?? [] });
-    if (simplified.kind === "simplified") {
-      return simplified.value;
-    }
-    cleanedOneOf = simplified.value;
-  }
-
-  const cleaned: Record<string, unknown> = {};
-
-  for (const [key, value] of Object.entries(obj)) {
-    if (GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS.has(key)) {
+      assign(result);
       continue;
     }
 
-    if (key === "const") {
-      const enumValues = cleanGeminiEnumValues([value]);
-      if (enumValues) {
-        cleaned.enum = enumValues;
+    const hasAnyOf = "anyOf" in obj && Array.isArray(obj.anyOf);
+    const hasOneOf = "oneOf" in obj && Array.isArray(obj.oneOf);
+    const anyOfVariants = hasAnyOf ? (obj.anyOf as unknown[]) : undefined;
+    const oneOfVariants = hasOneOf ? (obj.oneOf as unknown[]) : undefined;
+    const cleanedAnyOf = anyOfVariants
+      ? Array.from<unknown>({ length: anyOfVariants.length })
+      : undefined;
+    const cleanedOneOf = oneOfVariants
+      ? Array.from<unknown>({ length: oneOfVariants.length })
+      : undefined;
+
+    tasks.push({
+      kind: "assemble-unions",
+      node,
+      assign,
+      obj,
+      nextDefs,
+      refStack,
+      hasAnyOf,
+      hasOneOf,
+      cleanedAnyOf,
+      cleanedOneOf,
+    });
+    if (oneOfVariants && cleanedOneOf) {
+      const target = cleanedOneOf;
+      for (let index = oneOfVariants.length - 1; index >= 0; index -= 1) {
+        const slot = index;
+        tasks.push({
+          kind: "visit",
+          node: oneOfVariants[slot],
+          defs: nextDefs,
+          refStack,
+          assign: (value) => {
+            target[slot] = value;
+          },
+        });
       }
-      continue;
     }
-
-    if (key === "enum") {
-      const enumValues = cleanGeminiEnumValues(value);
-      if (enumValues) {
-        cleaned.enum = enumValues;
+    if (anyOfVariants && cleanedAnyOf) {
+      const target = cleanedAnyOf;
+      for (let index = anyOfVariants.length - 1; index >= 0; index -= 1) {
+        const slot = index;
+        tasks.push({
+          kind: "visit",
+          node: anyOfVariants[slot],
+          defs: nextDefs,
+          refStack,
+          assign: (value) => {
+            target[slot] = value;
+          },
+        });
       }
-      continue;
-    }
-
-    // Google's schema validator rejects `"required": []` — omit empty arrays.
-    if (key === "required" && Array.isArray(value) && value.length === 0) {
-      continue;
-    }
-
-    if (key === "type" && (hasAnyOf || hasOneOf)) {
-      continue;
-    }
-    if (
-      key === "type" &&
-      Array.isArray(value) &&
-      value.every((entry) => typeof entry === "string")
-    ) {
-      const types = value.filter((entry) => entry !== "null");
-      cleaned.type = types.length === 1 ? types[0] : types;
-      continue;
-    }
-
-    if (key === "properties") {
-      if (value && typeof value === "object" && !Array.isArray(value)) {
-        const props = value as Record<string, unknown>;
-        cleaned[key] = Object.fromEntries(
-          Object.entries(props).map(([k, v]) => [
-            k,
-            cleanSchemaForGeminiWithDefs(v, nextDefs, refStack),
-          ]),
-        );
-      } else {
-        // Guard malformed schemas (e.g. properties: null) that can trigger
-        // downstream Object.* crashes in strict provider validators.
-        cleaned[key] = {};
-      }
-    } else if (key === "items" && value) {
-      if (Array.isArray(value)) {
-        cleaned[key] = value.map((entry) =>
-          cleanSchemaForGeminiWithDefs(entry, nextDefs, refStack),
-        );
-      } else if (typeof value === "object") {
-        cleaned[key] = cleanSchemaForGeminiWithDefs(value, nextDefs, refStack);
-      } else {
-        cleaned[key] = value;
-      }
-    } else if (key === "anyOf" && Array.isArray(value)) {
-      cleaned[key] =
-        cleanedAnyOf ??
-        value.map((variant) => cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack));
-    } else if (key === "oneOf" && Array.isArray(value)) {
-      cleaned[key] =
-        cleanedOneOf ??
-        value.map((variant) => cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack));
-    } else if (key === "allOf" && Array.isArray(value)) {
-      cleaned[key] = value.map((variant) =>
-        cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
-      );
-    } else {
-      cleaned[key] = value;
     }
   }
+  return rootResult;
+}
 
-  // Cloud Code Assist API rejects anyOf/oneOf in nested schemas even after
-  // simplifyUnionVariants runs above. Flatten remaining unions as a fallback:
-  // pick the common type or use the first variant's type so the tool
-  // declaration is accepted by Google's validation layer.
-  if (cleaned.anyOf && Array.isArray(cleaned.anyOf)) {
-    const flattened = flattenUnionFallback(cleaned, cleaned.anyOf);
-    if (flattened) {
-      return sanitizeRequiredFields(flattened);
-    }
-  }
-  if (cleaned.oneOf && Array.isArray(cleaned.oneOf)) {
-    const flattened = flattenUnionFallback(cleaned, cleaned.oneOf);
-    if (flattened) {
-      return sanitizeRequiredFields(flattened);
-    }
-  }
-
-  return sanitizeRequiredFields(cleaned);
+export function cleanSchemaForGemini(schema: unknown): TSchema {
+  return cleanSchemaForGeminiTree(schema) as TSchema;
 }
 
 /**
@@ -488,8 +760,4 @@ function flattenUnionFallback(
   const merged: Record<string, unknown> = {};
   copySchemaMeta(obj, merged);
   return merged;
-}
-
-export function cleanSchemaForGemini(schema: unknown): TSchema {
-  return cleanSchemaForGeminiWithDefs(schema, undefined, undefined) as TSchema;
 }
