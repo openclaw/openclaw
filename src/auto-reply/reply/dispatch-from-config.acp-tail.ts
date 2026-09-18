@@ -14,6 +14,7 @@ export async function handleAcpDispatchTailAfterReset(
   const tailDispatchResult = await runReplyDispatchHook(state, {
     shouldSendToolSummaries: state.shouldSendToolSummaries,
     isTailDispatch: true,
+    sendFinalPayload: state.sendFinalPayload,
   });
   if (!tailDispatchResult?.handled) {
     return undefined;

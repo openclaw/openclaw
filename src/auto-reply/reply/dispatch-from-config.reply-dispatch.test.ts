@@ -6,7 +6,11 @@ import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
 } from "../../infra/outbound/deliver-types.js";
-import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.test-fixtures.js";
+import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
+import {
+  createHookRunnerWithRegistry,
+  type PluginHookReplyDispatchResult,
+} from "../../plugins/hooks.test-fixtures.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
@@ -24,6 +28,7 @@ import {
   internalHookMocks,
   mocks,
   resetPluginTtsAndThreadMocks,
+  resetReplyDispatchOutcomeMock,
   runtimePluginMocks,
   sessionBindingMocks,
   sessionStoreMocks,
@@ -136,6 +141,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     hookMocks.runner.runMessageReceived.mockReset().mockResolvedValue(undefined);
     hookMocks.runner.runBeforeDispatch.mockReset().mockResolvedValue(undefined);
     hookMocks.runner.runReplyDispatch.mockReset().mockResolvedValue(undefined);
+    resetReplyDispatchOutcomeMock();
     internalHookMocks.createInternalHookEvent.mockReset();
     internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
     internalHookMocks.triggerInternalHook.mockReset().mockResolvedValue(undefined);
@@ -222,6 +228,110 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
           expect(result.queuedFinal).toBe(true);
         },
       );
+    },
+  );
+
+  it.each(["timeout", "error"])(
+    "does not rerun an ACP task through the ordinary resolver after hook %s",
+    async (failure) => {
+      const pending = createDeferred();
+      const sideEffect = vi.fn();
+      const { runner, registry } = createHookRunnerWithRegistry([
+        {
+          hookName: "reply_dispatch",
+          pluginId: "acpx",
+          timeoutMs: 5,
+          handler: async () => {
+            sideEffect();
+            if (failure === "error") {
+              throw new Error("ACP failed after starting work");
+            }
+            await pending.promise;
+          },
+        },
+      ]);
+      for (const hook of registry.typedHooks) {
+        hook.eligibleDispatchKinds = ["acp"];
+      }
+      hookMocks.runner.runReplyDispatchOutcome.mockImplementation((event, context) =>
+        // SAFETY: dispatchReplyFromConfig supplies the hook context; the shared mock erases its type.
+        runner.runReplyDispatchOutcome(event, context as PluginHookReplyDispatchContext),
+      );
+      const replyResolver = vi.fn(async () => ({ text: "ordinary fallback" }));
+      const dispatcher = createDispatcher();
+      try {
+        await dispatchReplyFromConfig({
+          ctx: { ...createHookCtx(), SessionKey: "agent:test:acp:hook-failure" },
+          cfg: { diagnostics: { enabled: true } },
+          dispatcher,
+          replyResolver,
+        });
+        expect(sideEffect).toHaveBeenCalledOnce();
+        expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledOnce();
+        expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+          expect.objectContaining({ outcome: "error", reason: "acp_dispatch_unclaimed" }),
+        );
+        expect(
+          diagnosticMocks.logSessionStateChange.mock.calls.filter(
+            ([event]) => event.state === "idle",
+          ),
+        ).toHaveLength(1);
+        expect(replyResolver).not.toHaveBeenCalled();
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+          expect.objectContaining({ isError: true, text: expect.stringContaining("not retried") }),
+        );
+      } finally {
+        pending.resolve();
+      }
+    },
+  );
+
+  it.each(["declined", "missing"])(
+    "preserves the ordinary fallback for an ACP target with a %s hook",
+    async (kind) => {
+      if (kind === "missing") {
+        hookMocks.runner.hasHooks.mockReturnValue(false);
+      }
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => ({ text: "ordinary fallback" }));
+      await dispatchReplyFromConfig({
+        ctx: { ...createHookCtx(), SessionKey: "agent:test:acp:unclaimed" },
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+      });
+      expect(replyResolver).toHaveBeenCalledOnce();
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "ordinary fallback" });
+    },
+  );
+
+  it.each(["suppressed", "already-final", "aborted"])(
+    "does not add an ACP failure notice when delivery is %s",
+    async (delivery) => {
+      const dispatcher = createDispatcher();
+      const controller = new AbortController();
+      if (delivery === "already-final") {
+        vi.mocked(dispatcher.getQueuedCounts).mockReturnValue({ tool: 0, block: 0, final: 1 });
+      }
+      hookMocks.runner.runReplyDispatchOutcome.mockImplementation(async () => {
+        if (delivery === "aborted") {
+          controller.abort();
+        }
+        return { status: "error", error: "ACP failed after starting work" };
+      });
+      const replyResolver = vi.fn(async () => ({ text: "ordinary fallback" }));
+      await dispatchReplyFromConfig({
+        ctx: { ...createHookCtx(), SessionKey: "agent:test:acp:delivery" },
+        cfg: emptyConfig,
+        dispatcher,
+        replyResolver,
+        replyOptions: {
+          abortSignal: controller.signal,
+          ...(delivery === "suppressed" ? { sourceReplyDeliveryMode: "message_tool_only" } : {}),
+        },
+      });
+      expect(replyResolver).not.toHaveBeenCalled();
+      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     },
   );
 

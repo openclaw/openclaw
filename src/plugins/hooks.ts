@@ -50,6 +50,9 @@ import type {
   PluginHookBeforeAgentRunEvent,
   PluginHookName,
   PluginHookRegistration,
+  PluginHookReplyDispatchContext,
+  PluginHookReplyDispatchEvent,
+  PluginHookReplyDispatchResult,
   PluginHookSubagentDeliveryTargetResult,
   PluginHookToolContext,
   PluginHookToolResultPersistContext,
@@ -216,6 +219,19 @@ type PluginTargetedInboundClaimOutcome =
     }
   | {
       status: "no_handler";
+    }
+  | {
+      status: "declined";
+    }
+  | {
+      status: "error";
+      error: string;
+    };
+
+type PluginReplyDispatchOutcome =
+  | {
+      status: "handled";
+      result: PluginHookReplyDispatchResult;
     }
   | {
       status: "declined";
@@ -1194,6 +1210,24 @@ export function createHookRunner(
     );
   }
 
+  async function runReplyDispatchOutcome(
+    event: PluginHookReplyDispatchEvent,
+    ctx: PluginHookReplyDispatchContext,
+  ): Promise<PluginReplyDispatchOutcome> {
+    const hooks = getHooksForName(registry, "reply_dispatch", ctx);
+    if (hooks.length > 0) {
+      logger?.debug?.(
+        `[hooks] running reply_dispatch (${hooks.length} handlers, first-claim wins)`,
+      );
+    }
+    return runClaimingHooksList<"reply_dispatch", PluginHookReplyDispatchResult>(
+      hooks,
+      "reply_dispatch",
+      event,
+      ctx,
+    );
+  }
+
   /**
    * Run before_dispatch hook.
    * Allows plugins to inspect or handle a message before model dispatch.
@@ -1527,6 +1561,7 @@ export function createHookRunner(
     runMessageReceived: bindVoidHook("message_received"),
     runBeforeDispatch,
     runReplyDispatch: bindClaimingHook("reply_dispatch"),
+    runReplyDispatchOutcome,
     runReplyPayloadSending: bindModifyingHook("reply_payload_sending", {
       // Handlers see the latest payload without inheriting host-only media trust.
       eventForHandler: (event, result) => ({

@@ -163,6 +163,32 @@ describe("reply_dispatch hook runner", () => {
     expect(succeeding).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves an unclaimed reply dispatch error for the runtime owner", async () => {
+    const logger = {
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const { runner } = createHookRunnerWithRegistry(
+      [{ hookName: "reply_dispatch", handler: () => Promise.reject(new Error("boom")) }],
+      { logger },
+    );
+
+    await expect(
+      runner.runReplyDispatchOutcome(replyDispatchEvent, replyDispatchCtx),
+    ).resolves.toEqual({ status: "error", error: "boom" });
+    expect(logger.error).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an explicitly unclaimed reply dispatch distinguishable from an error", async () => {
+    const { runner } = createHookRunnerWithRegistry([
+      { hookName: "reply_dispatch", handler: () => undefined },
+    ]);
+
+    await expect(
+      runner.runReplyDispatchOutcome(replyDispatchEvent, replyDispatchCtx),
+    ).resolves.toEqual({ status: "declined" });
+  });
+
   it("honors per-hook registration timeouts and continues to the next handler", async () => {
     vi.useFakeTimers();
     try {
