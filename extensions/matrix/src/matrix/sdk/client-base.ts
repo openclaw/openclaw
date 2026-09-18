@@ -232,7 +232,7 @@ export abstract class MatrixClientBase {
           stateRuntime: this.stateRuntime,
         });
         return await guardedFetch(resource, init);
-      }) as typeof fetch,
+      }) as typeof fetch, // SAFETY: The SDK callback generic is not expressible across this plugin boundary.
       scheduler: new MatrixSendScheduler((event) =>
         this.messageWireDispatchGuards.wasCurrentnessRejected(event.getTxnId()),
       ),
