@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isReplyPayloadTerminalContent } from "openclaw/plugin-sdk/reply-payload";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import type { A2aTaskStore } from "./task-store.js";
 import type { ResolvedA2aChannelAccount } from "./types.js";
@@ -110,7 +111,7 @@ export async function dispatchA2aInbound(params: A2aInboundDispatchParams): Prom
       ctxPayload,
       delivery: {
         deliver: async (payload, info) => {
-          if (info.kind !== "final") {
+          if (info.kind !== "final" || !isReplyPayloadTerminalContent(payload)) {
             return;
           }
           // Conversation queues, rather than callback ownership, preserve FIFO

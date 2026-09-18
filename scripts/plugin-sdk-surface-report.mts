@@ -378,7 +378,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved shared native-command argument-menu applicability predicate.
       // +4: shared activity projectors and complete-preamble admission, including the shipped barrel.
       // -1: keep complete-preamble admission off the deprecated compatibility facade.
-      4485,
+      // +1: canonical terminal-vs-supplemental reply payload classifier for A2A task completion.
+      4486,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -520,7 +521,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved shared native-command argument-menu applicability predicate.
       // +4: shared activity projectors and complete-preamble admission, including the shipped barrel.
       // -1: keep complete-preamble admission off the deprecated compatibility facade.
-      2649,
+      // +1: canonical terminal-vs-supplemental reply payload classifier for A2A task completion.
+      2650,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

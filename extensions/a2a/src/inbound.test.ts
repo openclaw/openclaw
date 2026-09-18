@@ -100,6 +100,35 @@ describe("A2A channel inbound dispatch", () => {
     fixture.store.stop();
   });
 
+  it("ignores a fallback notice delivered as final and completes on the real answer", async () => {
+    const fixture = createA2aInboundFixture();
+    vi.mocked(fixture.runtime.channel.inbound.dispatch).mockImplementation(async (turn) => {
+      await turn.delivery.deliver(
+        { text: "fallback notice", isFallbackNotice: true },
+        { kind: "final" },
+      );
+      expect(fixture.store.get(fixture.task.id)?.status.state).toBe("TASK_STATE_WORKING");
+      await turn.delivery.deliver({ text: "agent answer" }, { kind: "final" });
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: turn.ctxPayload,
+        routeSessionKey: turn.route.sessionKey,
+        dispatchResult: createA2aDispatchResult(),
+      };
+    });
+
+    await dispatchA2aInbound(fixture.params);
+
+    expect(fixture.store.get(fixture.task.id)).toEqual(
+      expect.objectContaining({
+        status: expect.objectContaining({ state: "TASK_STATE_COMPLETED" }),
+        artifacts: [expect.objectContaining({ parts: [{ text: "agent answer" }] })],
+      }),
+    );
+    fixture.store.stop();
+  });
+
   it("records dispatch failures on their task", async () => {
     const fixture = createA2aInboundFixture();
     vi.mocked(fixture.runtime.channel.inbound.dispatch).mockRejectedValue(

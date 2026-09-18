@@ -79,6 +79,14 @@ export {
   isReplyPayloadTtsSupplement,
   markReplyPayloadAsTtsSupplement,
 } from "../auto-reply/reply-payload.js";
+/**
+ * Terminal-lane classification only: excludes reasoning, commentary, and
+ * status/compaction/fallback/TTS-supplement payloads. It does not check
+ * whether `payload` is nonempty or otherwise sendable — pair it with the
+ * relevant content/media checks (e.g. `hasReplyPayloadContent`) before
+ * treating a payload as a deliverable answer.
+ */
+export { isReplyPayloadTerminalContent } from "../auto-reply/reply-payload.js";
 
 /** Normalized outbound reply payload accepted by channel send helpers. */
 export type OutboundReplyPayload = {
