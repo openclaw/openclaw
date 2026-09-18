@@ -18,7 +18,6 @@ import {
   sameDevicePairingStringSet,
   withDevicePairingLock,
 } from "./device-pairing-state.js";
-import type { DevicePairingStoreState } from "./device-pairing-store.js";
 import { persistDevicePairingStoreState as persistState } from "./device-pairing-store.js";
 import { createDeviceAuthToken, resolveRoleTokenScopes } from "./device-pairing-tokens.js";
 import {
@@ -29,6 +28,7 @@ import {
 import type {
   DeviceAuthToken,
   DevicePairingPendingRequest,
+  DevicePairingStoreState,
   PairedDevice,
   PairedDeviceApprovalKind,
 } from "./device-pairing.types.js";

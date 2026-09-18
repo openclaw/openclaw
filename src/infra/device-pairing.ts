@@ -7,8 +7,8 @@ import { isProgressCardRendererClient } from "../utils/message-channel.js";
 import { revokeDeviceBootstrapTokensForDevice } from "./device-bootstrap.js";
 import {
   cloneDevicePairingTokens,
+  loadDevicePairingInventoryState,
   loadDevicePairingState,
-  loadDevicePairingStateReadOnly,
   mergeDevicePairingRoles,
   mergeDevicePairingScopes,
   normalizeDevicePairingId,
@@ -24,12 +24,12 @@ import {
   loadPairedDevicePairingStoreRecord,
   persistDevicePairingStoreState,
   updatePairedDevicePresenceInTransaction,
-  type DevicePairingStoreState,
 } from "./device-pairing-store.js";
 import type {
   DeviceAuthToken,
   DevicePairingPendingRecord,
   DevicePairingPendingRequest,
+  DevicePairingStoreState,
   PairedDevice,
 } from "./device-pairing.types.js";
 
@@ -409,12 +409,12 @@ function toDevicePairingList(state: DevicePairingStoreState): DevicePairingList 
 }
 
 export async function listDevicePairing(baseDir?: string): Promise<DevicePairingList> {
-  return toDevicePairingList(await loadDevicePairingState(baseDir));
+  return toDevicePairingList(await loadDevicePairingInventoryState(baseDir));
 }
 
 /** List pairing state without creating or migrating shared state. */
 export async function listDevicePairingReadOnly(baseDir?: string): Promise<DevicePairingList> {
-  return toDevicePairingList(await loadDevicePairingStateReadOnly(baseDir));
+  return toDevicePairingList(await loadDevicePairingInventoryState(baseDir, true));
 }
 
 /** Return one paired device by normalized device id. */

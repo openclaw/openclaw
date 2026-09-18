@@ -1,12 +1,15 @@
 // Shared snapshot, lock, and normalization owner for device pairing domain modules.
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { loadDevicePairingStoreStateReadOnly } from "./device-pairing-store-readonly.js";
-import {
-  loadDevicePairingStoreState,
-  type DevicePairingStoreState,
-} from "./device-pairing-store.js";
-import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
+import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { loadDevicePairingStoreState } from "./device-pairing-store.js";
+import type {
+  DeviceAuthToken,
+  DevicePairingStoreState,
+  PairedDevice,
+} from "./device-pairing.types.js";
 import { createAsyncLock, pruneExpiredPending } from "./pairing-files.js";
 
 const DEVICE_PAIRING_PENDING_TTL_MS = 5 * 60 * 1000;
@@ -31,11 +34,28 @@ export async function loadDevicePairingState(baseDir?: string): Promise<DevicePa
   return state;
 }
 
-/** Load one read-only pairing snapshot with expired pending state removed. */
-export async function loadDevicePairingStateReadOnly(
+/** Load a listing snapshot off-thread; mutable snapshots retain their native owner. */
+export async function loadDevicePairingInventoryState(
   baseDir?: string,
+  readOnly = false,
 ): Promise<DevicePairingStoreState> {
-  const state = loadDevicePairingStoreStateReadOnly(baseDir);
+  const context = captureOpenClawStateWorkerContext(
+    baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {},
+  );
+  const artifactPreserving = isArtifactPreservingStateRead();
+  const command = {
+    type: "devicePairing.inventory" as const,
+    input: { readOnly, artifactPreserving },
+  };
+  const state = (await (readOnly
+    ? runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
+        existingOnly: true,
+      })
+    : runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command)))) ?? {
+    pendingById: {},
+    pairedByDeviceId: {},
+  };
+  context.admission.assertCurrent();
   pruneExpiredDevicePairingRequests(state);
   return state;
 }

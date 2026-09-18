@@ -35,7 +35,7 @@ describe("gateway node pairing memoization", () => {
   });
 
   describeWithGatewayServer("node.list pairing snapshots", (getStarted) => {
-    test("scans pairing tables once across two node.list dispatches", async () => {
+    test("keeps pairing table scans off the host across two node.list dispatches", async () => {
       const ws = await openTrackedWs(getStarted().port);
       try {
         await connectOk(ws, {
@@ -61,7 +61,7 @@ describe("gateway node pairing memoization", () => {
         try {
           expect((await rpcReq(ws, "node.list", {})).ok).toBe(true);
           expect((await rpcReq(ws, "node.list", {})).ok).toBe(true);
-          expect(tableSelects).toEqual({ paired: 1, pending: 1 });
+          expect(tableSelects).toEqual({ paired: 0, pending: 0 });
         } finally {
           restore();
         }

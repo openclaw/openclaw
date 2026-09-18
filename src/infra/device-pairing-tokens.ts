@@ -8,16 +8,17 @@ import {
   normalizeDevicePairingRole,
   withDevicePairingLock,
 } from "./device-pairing-state.js";
-import {
-  persistDevicePairingStoreState as persistState,
-  type DevicePairingStoreState,
-} from "./device-pairing-store.js";
+import { persistDevicePairingStoreState as persistState } from "./device-pairing-store.js";
 import {
   clearNodePairingGenerationState,
   listApprovedPairedDeviceRoles,
   resolveNodePairingGeneration,
 } from "./device-pairing.js";
-import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
+import type {
+  DeviceAuthToken,
+  DevicePairingStoreState,
+  PairedDevice,
+} from "./device-pairing.types.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 const OPERATOR_SCOPE_PREFIX = "operator.";

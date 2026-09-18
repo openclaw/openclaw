@@ -21,6 +21,10 @@ import {
 import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
 import { readDeviceAuthTokensFromDatabase } from "../infra/device-auth-store.kernel.js";
+import {
+  loadDevicePairingStoreStateFromDatabase,
+  readDevicePairingStoreStateFromDatabase,
+} from "../infra/device-pairing-store.js";
 import { executePromotionCommand } from "../infra/promotions-feed.worker.js";
 import {
   readApnsRegistrationFromDatabase,
@@ -259,6 +263,17 @@ function createSharedStateWorkerBackend(
         return command.input.artifactPreservingReadOnly
           ? withArtifactPreservingStateReads(read)
           : read();
+      }
+      if (command.type === "devicePairing.inventory") {
+        if (!command.input.readOnly) {
+          return loadDevicePairingStoreStateFromDatabase(open());
+        }
+        const read = () =>
+          withExistingOpenClawStateDatabaseReadOnly(
+            ({ db }) => readDevicePairingStoreStateFromDatabase(db),
+            { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+          ) ?? { pendingById: {}, pairedByDeviceId: {} };
+        return command.input.artifactPreserving ? withArtifactPreservingStateReads(read) : read();
       }
       if (command.type === "plugins.conversationBindingApprovals.read") {
         return readPluginBindingApprovalsInDatabase(open().db);

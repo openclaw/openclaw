@@ -148,6 +148,11 @@ export type PairedDevice = {
   lastSeenReason?: string;
 };
 
+export type DevicePairingStoreState = {
+  pendingById: Record<string, DevicePairingPendingRecord>;
+  pairedByDeviceId: Record<string, PairedDevice>;
+};
+
 /** Persisted bootstrap token state, including binding and role/scope redemption progress. */
 export type DeviceBootstrapTokenRecord = {
   token: string;

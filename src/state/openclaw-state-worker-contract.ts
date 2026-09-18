@@ -15,6 +15,7 @@ import type {
 } from "../gateway/managed-image-record-store.types.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
+import type { DevicePairingStoreState } from "../infra/device-pairing.types.js";
 import type { PreparedPromotionClaim } from "../infra/promotions-feed.kernel.js";
 import type { ApnsRegistration } from "../infra/push-apns-store.types.js";
 import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-contract.js";
@@ -59,6 +60,10 @@ export type OpenClawStateWorkerOperations = WebPushWorkerOperations &
   TranscriptReadOperations &
   TaskRegistryWorkerOperations & {
     "deviceAuth.list": { input: { deviceId: string }; output: DeviceAuthEntry[] };
+    "devicePairing.inventory": {
+      input: { readOnly: boolean; artifactPreserving: boolean };
+      output: DevicePairingStoreState;
+    };
     "apns.registration.read": { input: string; output: ApnsRegistration | null };
     "apns.registrations.read": { input: readonly string[]; output: Map<string, ApnsRegistration> };
     "authProfiles.read": { input: { artifactPreserving: boolean }; output: AuthProfileRowRead };

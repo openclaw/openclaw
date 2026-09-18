@@ -93,6 +93,16 @@ imports, retention, and notification payloads are unchanged. Pairing, profile,
 user-preference, and visibility checks outside transaction admission retain their
 separate synchronous owners.
 
+Device and node pairing inventories run in the shared-state worker. Gateway,
+CLI, and Doctor list callers retain their existing filtering, ordering, and
+token presentation. Ordinary inventories keep writable database preparation;
+read-only inventories leave missing state absent, avoid migration, and carry
+the caller's artifact-preserving policy into the worker. Node inventories keep
+the pairing lock, and device expiry filtering does not expire pending node
+capability decisions. Mutable pairing snapshots, exact device reads, and the
+synchronous Web Push authority reader retain their existing owners. Stored
+rows, transaction boundaries, schema versions, and retention are unchanged.
+
 Asynchronous mutable cron-store loads run in the shared-state worker, including
 the existing retired-job deletion and runtime-authority repairs. The connection-bound
 load kernel preserves their separate transactions, partition keys, and fingerprints.

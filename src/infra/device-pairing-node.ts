@@ -6,6 +6,7 @@ import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-c
 import type { NodeHostStats } from "../shared/node-host-stats.js";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import { updatePairedNodeGenerationSurface } from "./device-pairing-node-facts.js";
+import { loadDevicePairingInventoryState, withDevicePairingLock } from "./device-pairing-state.js";
 import { updatePairedDeviceNodeSurfaceInTransaction } from "./device-pairing-store.js";
 import {
   clearNodePairingGenerationState,
@@ -339,11 +340,9 @@ export async function listNodePairing(
   baseDir?: string,
   options?: { includePairingGeneration?: boolean },
 ): Promise<NodePairingList | NodePairingListWithGeneration> {
-  return await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
-    return {
-      value: projectNodePairing(Object.values(pairedByDeviceId), options),
-      persist: false,
-    };
+  return await withDevicePairingLock(async () => {
+    const { pairedByDeviceId } = await loadDevicePairingInventoryState(baseDir);
+    return projectNodePairing(Object.values(pairedByDeviceId), options);
   });
 }
 
