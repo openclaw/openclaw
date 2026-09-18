@@ -7,7 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { installLaunchAgent } from "./launchd-install.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
-  resolveLaunchAgentEnvFilePath,
+  resolveLaunchAgentEnvironmentReadOptions,
   resolveLaunchAgentEnvWrapperPath,
   resolveLaunchAgentPlistPath,
 } from "./launchd-service-files.js";
@@ -44,7 +44,10 @@ async function fixture() {
   };
   const label = resolveLaunchAgentLabel(env);
   const plist = resolveLaunchAgentPlistPath(env);
-  const environment = resolveLaunchAgentEnvFilePath(env, label);
+  const environment = resolveLaunchAgentEnvironmentReadOptions(
+    env,
+    label,
+  ).expectedEnvironmentFilePath;
   const wrapper = resolveLaunchAgentEnvWrapperPath(env, label);
   const originals = new Map([
     [plist, { contents: "previous plist\n", mode: 0o644 }],

@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as processExec from "../process/exec.js";
 import { execFileUtf8 } from "./exec-file.js";
-import { publishLaunchAgentPlist } from "./launchd-service-files.js";
+import { resolveLaunchAgentPlistPath, writeLaunchAgentPlist } from "./launchd-service-files.js";
 import {
   assertGatewayServiceFallbackAllowed,
   assertGatewayServiceUpdateCurrent,
@@ -166,7 +166,13 @@ it("compensation closes with its callback and cannot grant an unmanaged fallback
 
 it("native plist publication rechecks after asynchronous preparation, without stale rollback", async () => {
   const root = dirs.make("native-plist-authority-");
-  const plistPath = path.join(root, "test.plist");
+  const env = {
+    HOME: root,
+    OPENCLAW_STATE_DIR: path.join(root, "state"),
+    OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.native-test",
+  };
+  const plistPath = resolveLaunchAgentPlistPath(env);
+  await fs.mkdir(path.dirname(plistPath), { recursive: true });
   await fs.writeFile(plistPath, "original");
   let current = true;
   const originalWrite = fs.writeFile;
@@ -182,10 +188,10 @@ it("native plist publication rechecks after asynchronous preparation, without st
         }
       },
       () =>
-        publishLaunchAgentPlist({
-          label: "ai.openclaw.native-test",
-          plistPath,
-          contents: "replacement",
+        writeLaunchAgentPlist({
+          env,
+          stdout: process.stdout,
+          programArguments: [process.execPath, "gateway"],
         }),
     ),
   ).rejects.toThrow("original update owner revoked");

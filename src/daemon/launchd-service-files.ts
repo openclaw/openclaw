@@ -28,8 +28,8 @@ const LAUNCH_AGENT_DIR_MODE = 0o755;
 // current macOS. Secrets stay in the separate 0600 environment file.
 const LAUNCH_AGENT_PLIST_MODE = 0o644;
 const LAUNCH_AGENT_PRIVATE_DIR_MODE = 0o700;
-export const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
-export const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
+const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
+const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
 const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
 export function resolveLaunchAgentPlistPathForLabel(
   env: Record<string, string | undefined>,
@@ -43,7 +43,7 @@ function resolveLaunchAgentEnvDir(env: GatewayServiceEnv): string {
   return path.join(resolveGatewayStateDir(env), LAUNCH_AGENT_ENV_DIR_NAME);
 }
 
-export function resolveLaunchAgentEnvFilePath(env: GatewayServiceEnv, label: string): string {
+function resolveLaunchAgentEnvFilePath(env: GatewayServiceEnv, label: string): string {
   return path.join(resolveLaunchAgentEnvDir(env), `${label}.env`);
 }
 
@@ -347,17 +347,10 @@ export function captureLaunchAgentInstallFiles(env: GatewayServiceEnv) {
   ]);
 }
 
-export async function publishLaunchAgentPlist(
+async function publishLaunchAgentPlist(
   params: { label: string; plistPath: string; contents: string },
-  publication?: LaunchAgentFilePublication,
+  publication: LaunchAgentFilePublication,
 ): Promise<void> {
-  if (!publication) {
-    const captured = await captureLaunchAgentFiles([params.plistPath]);
-    return withGatewayServiceInstallationRecovery(
-      () => publishLaunchAgentPlist(params, captured),
-      captured.restore,
-    );
-  }
   await publication.publish(params.plistPath, params.contents, LAUNCH_AGENT_PLIST_MODE, () =>
     assertNoSystemLaunchDaemonOwnership(params.label),
   );
