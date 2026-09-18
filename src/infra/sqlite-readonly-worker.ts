@@ -185,11 +185,16 @@ function sqliteReadOnlyWorkerArgv(pathname: string, options: SqliteReadOnlyWorke
   ];
 }
 
-function createScopedSqliteReadOnlyWorker(env?: NodeJS.ProcessEnv) {
+function captureSqliteReadOnlyWorkerLaunch(env?: NodeJS.ProcessEnv) {
+  return { env: { ...resolveNodeCompileCacheEnv(env) }, cwd: process.cwd() };
+}
+
+function createScopedSqliteReadOnlyWorker(
+  launch: ReturnType<typeof captureSqliteReadOnlyWorkerLaunch>,
+) {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
   return createSqliteReadOnlyWorkerSession({
-    env: resolveNodeCompileCacheEnv(env),
-    currentEnv: resolveNodeCompileCacheEnv,
+    ...launch,
     argv: [...resolveRuntimeWorkerArgv(workerUrl), SQLITE_READONLY_CHILD_ARG, "session"],
     requestArgs: sqliteReadOnlyWorkerRequestArgs,
     readBudget: (pathname) => readSqliteInspectionBudget("read-only snapshot", pathname),
@@ -240,19 +245,27 @@ export function runSqliteReadOnlyWorker(
   // Native backup promises can stall with a persistent IPC handle on Node 26.
   // Keep async backups one-shot; concurrent raw reads need separate processes
   // for POSIX lock isolation.
-  const useScopedWorker = options.mode === "sync" && !scope.busy;
+  // Bun retains native statements after close, so auth reads still need process exit.
+  const useScopedWorker =
+    (options.mode === "sync" || (options.mode === "auth-profile-rows" && !process.versions.bun)) &&
+    !scope.busy;
+  const launch = useScopedWorker
+    ? captureSqliteReadOnlyWorkerLaunch(
+        options.mode === "auth-profile-rows" ? options.env : undefined,
+      )
+    : undefined;
   if (useScopedWorker) {
     scope.busy = true;
   }
   const operation = (async () => {
-    if (!useScopedWorker) {
+    if (!launch) {
       return runSqliteReadOnlyWorkerOnce(pathname, scopedOptions);
     }
     try {
-      if (!scope.worker?.compatible()) {
+      if (!scope.worker?.compatible(launch)) {
         await scope.worker?.close();
         scopedOptions.signal.throwIfAborted();
-        scope.worker = createScopedSqliteReadOnlyWorker();
+        scope.worker = createScopedSqliteReadOnlyWorker(launch);
       }
       return await scope.worker.run(pathname, scopedOptions);
     } finally {
@@ -272,7 +285,7 @@ function runSqliteReadOnlyWorkerOnce(
   options: SqliteReadOnlyWorkerOptions,
 ): Promise<SqliteReadOnlyWorkerValue> {
   if (options.mode === "auth-profile-rows") {
-    const worker = createScopedSqliteReadOnlyWorker(options.env);
+    const worker = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch(options.env));
     return (async () => {
       try {
         const value = await worker.run(pathname, options);

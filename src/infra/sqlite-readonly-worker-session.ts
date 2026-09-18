@@ -14,7 +14,7 @@ import {
 
 export function createSqliteReadOnlyWorkerSession(host: {
   env: NodeJS.ProcessEnv;
-  currentEnv: () => NodeJS.ProcessEnv;
+  cwd: string;
   argv: string[];
   requestArgs: (pathname: string, options: SqliteReadOnlyWorkerOptions) => string[];
   readBudget: (pathname: string) => { timeoutMs: number; size: string };
@@ -23,9 +23,10 @@ export function createSqliteReadOnlyWorkerSession(host: {
   closeTimeoutMs: number;
 }) {
   const env = { ...host.env };
-  const cwd = process.cwd();
+  const cwd = host.cwd;
   const child = spawn(process.execPath, host.argv, {
     env,
+    cwd,
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   let retired = false;
@@ -137,14 +138,13 @@ export function createSqliteReadOnlyWorkerSession(host: {
     }
   });
   return {
-    compatible() {
-      const currentEnv = host.currentEnv();
-      const keys = Object.keys(currentEnv);
+    compatible(launch: { env: NodeJS.ProcessEnv; cwd: string }) {
+      const keys = Object.keys(launch.env);
       return (
         !retired &&
-        process.cwd() === cwd &&
+        launch.cwd === cwd &&
         keys.length === Object.keys(env).length &&
-        keys.every((key) => currentEnv[key] === env[key])
+        keys.every((key) => launch.env[key] === env[key])
       );
     },
     run(pathname: string, options: SqliteReadOnlyWorkerOptions) {
