@@ -185,7 +185,7 @@ describe("createEmbeddedRunFailoverRetryController", () => {
         vi.fn(async () => false),
         true,
       );
-      controller.setTransientRetryBudget(3);
+      controller.observeAttempt({ providerRetryMaxRetries: 3 });
       const onRetry = vi.fn();
       await expect(
         controller.maybeRetryTransient({
@@ -210,7 +210,7 @@ describe("createEmbeddedRunFailoverRetryController", () => {
         vi.fn(async () => false),
         false,
       );
-      controller.setTransientRetryBudget(3);
+      controller.observeAttempt({ providerRetryMaxRetries: 3 });
       await expect(
         controller.maybeRetryTransient({
           reason: "rate_limit",
@@ -230,7 +230,7 @@ describe("createEmbeddedRunFailoverRetryController", () => {
         vi.fn(async () => false),
         true,
       );
-      controller.setTransientRetryBudget(3);
+      controller.observeAttempt({ providerRetryMaxRetries: 3 });
       await expect(
         controller.maybeRetryTransient({
           reason: "rate_limit",
@@ -249,7 +249,7 @@ describe("createEmbeddedRunFailoverRetryController", () => {
         vi.fn(async () => false),
         true,
       );
-      controller.setTransientRetryBudget(3);
+      controller.observeAttempt({ providerRetryMaxRetries: 3 });
       await expect(
         controller.maybeRetryTransient({
           reason: "rate_limit",
@@ -266,7 +266,7 @@ describe("createEmbeddedRunFailoverRetryController", () => {
         vi.fn(async () => false),
         true,
       );
-      controller.setTransientRetryBudget(3);
+      controller.observeAttempt({ providerRetryMaxRetries: 3 });
       await expect(
         controller.maybeRetryTransient({
           reason: "rate_limit",
@@ -284,7 +284,7 @@ describe("createEmbeddedRunFailoverRetryController", () => {
         vi.fn(async () => false),
         true,
       );
-      controller.setTransientRetryBudget(3);
+      controller.observeAttempt({ providerRetryMaxRetries: 3 });
       await expect(
         controller.maybeRetryTransient({
           reason: "server_error",
