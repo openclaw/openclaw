@@ -99,6 +99,11 @@ export type GatewayTailscaleConfig = Omit<
   preserveFunnel?: boolean;
 };
 
+/** Operator-provisioned private HTTPS wildcard portal ingress. */
+export type GatewayPortalIngressConfig = NonNullable<
+  NonNullable<GatewayConfigInput["portals"]>["ingress"]
+>;
+
 export type GatewayRemoteConfig = NonNullable<GatewayConfigInput["remote"]>;
 
 /**

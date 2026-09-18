@@ -179,11 +179,24 @@ async function getTailscaleBinary(): Promise<string> {
   return cachedTailscaleBinary ?? "tailscale";
 }
 
-type TailscaleRouteClaim = {
+export type TailscaleRouteClaim = {
   exited: Promise<void>;
   isActive: () => boolean;
   stop: () => Promise<void>;
 };
+
+// Foreground startups replace the daemon's shared Serve config using an ETag.
+// Serialize our starts and owned stops, not the lifetime of each claim.
+let tailscaleRouteOperation: Promise<void> = Promise.resolve();
+
+function serializeTailscaleRouteOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const result = tailscaleRouteOperation.then(operation);
+  tailscaleRouteOperation = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
 
 type TailscaleRouteOwnerFailure = Pick<
   Extract<TailscaleRouteOwnerMessage, { type: "failed" }>,
@@ -346,12 +359,45 @@ async function startTailscaleRouteOwner(
   }
 }
 
+/** Claim the Gateway route, adopting only its recognized legacy root handler. */
 export async function claimTailscaleRoute(
   mode: "serve" | "funnel",
   target: number,
   gatewayPort: number,
   info: (message: string) => void,
 ): Promise<TailscaleRouteClaim> {
+  return serializeTailscaleRouteOperation(() =>
+    claimTailscaleRouteOwned({ mode, target, gatewayPort, info }),
+  );
+}
+
+/** Claim a private HTTPS Serve port without adopting or clearing existing routes. */
+export async function claimTailscaleServePort(
+  target: number,
+  httpsPort: number,
+): Promise<TailscaleRouteClaim> {
+  for (const [name, port] of [
+    ["target", target],
+    ["httpsPort", httpsPort],
+  ] as const) {
+    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+      throw new RangeError(`Tailscale ${name} must be an integer port between 1 and 65535`);
+    }
+  }
+  return serializeTailscaleRouteOperation(() =>
+    claimTailscaleRouteOwned({ mode: "serve", target, httpsPort, info: () => undefined }),
+  );
+}
+
+// Startup failure cleanup stays inside the queued operation. Only a returned
+// claim's stop reenters the queue, so cleanup cannot deadlock its own startup.
+async function claimTailscaleRouteOwned(
+  params: { target: number; info: (message: string) => void } & (
+    | { mode: "serve" | "funnel"; gatewayPort: number; httpsPort?: never }
+    | { mode: "serve"; httpsPort: number; gatewayPort?: never }
+  ),
+): Promise<TailscaleRouteClaim> {
+  const { mode, target, info } = params;
   const tailscaleBin = await getTailscaleBinary();
   let adopted = false;
   const start = async (bin: string, prefix: string[] = []) => {
@@ -359,7 +405,10 @@ export async function claimTailscaleRoute(
       runExec(bin, [...prefix, ...args], { timeoutMs: 5000, maxBuffer: 400_000 });
     await waitForTailscaleBackendReady({ bin, prefix, info });
     const { stdout } = await exec(["serve", "status", "--json"]);
-    const routes = extractTailscaleServeGatewayUrls(stdout, gatewayPort, true);
+    const routes =
+      params.gatewayPort === undefined
+        ? undefined
+        : extractTailscaleServeGatewayUrls(stdout, params.gatewayPort, true);
     // Foreground claims require a free port. Never clear sibling handlers or
     // infer ownership from the new ephemeral backend instead of the Gateway port.
     if (routes?.some((url) => !new URL(url).port)) {
@@ -367,7 +416,15 @@ export async function claimTailscaleRoute(
       adopted = true;
     }
     return startTailscaleRouteOwner(
-      [bin, ...prefix, mode, "--yes", "--bg=false", `${target}`],
+      [
+        bin,
+        ...prefix,
+        mode,
+        "--yes",
+        "--bg=false",
+        ...(params.httpsPort === undefined ? [] : [`--https=${params.httpsPort}`]),
+        `${target}`,
+      ],
       stdout,
     );
   };
@@ -396,7 +453,10 @@ export async function claimTailscaleRoute(
   if (adopted) {
     info("Tailscale route adopted from a previous OpenClaw release");
   }
-  return claim;
+  return {
+    ...claim,
+    stop: () => serializeTailscaleRouteOperation(claim.stop),
+  };
 }
 
 /** Resolve the hostname after Serve startup, while the local daemon may still be settling. */

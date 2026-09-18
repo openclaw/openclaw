@@ -326,6 +326,7 @@ src/config/env-vars.ts
 src/config/future-version-guard.ts
 src/config/gateway-control-ui-origins.ts
 src/config/gateway-env-selection.ts
+src/config/gateway-portal-ingress.ts
 src/config/github-identity-profile-id.ts
 src/config/include-write-boundary.ts
 src/config/includes.ts

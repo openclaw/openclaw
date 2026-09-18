@@ -13,6 +13,10 @@ import {
   WRITE_SCOPE,
 } from "../gateway/operator-scopes.js";
 import {
+  isValidPortalIngressDomain,
+  portalIngressConflictsWithOrigin,
+} from "./gateway-portal-ingress.js";
+import {
   GatewayRemoteConfigSchema,
   ResponsesEndpointUrlFetchShape,
   validateHttpOrigin,
@@ -96,6 +100,22 @@ export const GatewayConfigSchema = z
         validateGatewayPublicOrigin,
         "gateway.publicOrigin must be a bare HTTPS origin; HTTP is allowed only for localhost, 127.0.0.1, or [::1]",
       )
+      .optional(),
+    /** Private HTTPS wildcard proxy forwarding to a dedicated loopback listener. */
+    portals: z
+      .strictObject({
+        ingress: z
+          .strictObject({
+            domain: z
+              .string()
+              .refine(
+                isValidPortalIngressDomain,
+                "Portal ingress domain must be a bare DNS domain",
+              ),
+            port: z.number().int().min(1).max(65_535),
+          })
+          .optional(),
+      })
       .optional(),
     controlUi: z
       .strictObject({
@@ -479,5 +499,28 @@ export const GatewayConfigSchema = z
           .optional(),
       })
       .optional(),
+  })
+  .superRefine((gateway, ctx) => {
+    const ingress = gateway.portals?.ingress;
+    if (!ingress) {
+      return;
+    }
+    const origins = [gateway.publicOrigin, ...(gateway.controlUi?.allowedOrigins ?? [])];
+    if (
+      origins.some((origin) => origin && portalIngressConflictsWithOrigin(ingress.domain, origin))
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["portals", "ingress", "domain"],
+        message: "Portal ingress must use a separate domain from Gateway and Control UI origins",
+      });
+    }
+    if (ingress.port === (gateway.port ?? 18789)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["portals", "ingress", "port"],
+        message: "Portal ingress port must differ from the Gateway port",
+      });
+    }
   })
   .optional();
