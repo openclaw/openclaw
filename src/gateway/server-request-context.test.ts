@@ -40,6 +40,7 @@ import { createGatewayRequestContext } from "./server-request-context.js";
 import {
   makeContextParams,
   makeCronState,
+  makeDeviceClient,
   makeGatewayClient,
 } from "./server-request-context.test-support.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
@@ -53,14 +54,6 @@ vi.mock("./server/health-state.js", () => ({
   getHealthVersion: vi.fn(() => 1),
   incrementPresenceVersion: vi.fn(() => 1),
 }));
-
-function makeDeviceClient(connId: string, deviceId: string, role = "primary") {
-  return {
-    connId,
-    connect: { device: { id: deviceId }, role },
-    socket: { close: vi.fn() },
-  };
-}
 
 describe("createGatewayRequestContext", () => {
   it("keeps startup observation bound to copied contexts after transport context loss", async () => {
