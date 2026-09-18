@@ -61,6 +61,9 @@ internal class CloudflareAccessClient(
       return application
     } catch (error: CancellationException) {
       throw error
+    } catch (error: IOException) {
+      // Transport failures retain TLS diagnostics; they do not invalidate signed metadata.
+      throw error
     } catch (_: Exception) {
       throw CloudflareAccessException(CloudflareAccessException.Kind.InvalidApplication)
     }
@@ -158,7 +161,7 @@ internal class CloudflareAccessClient(
               call: Call,
               e: IOException,
             ) {
-              if (continuation.isActive) continuation.resumeWithException(CloudflareAccessException(CloudflareAccessException.Kind.ConnectionFailed))
+              if (continuation.isActive) continuation.resumeWithException(e)
             }
 
             override fun onResponse(
@@ -167,18 +170,20 @@ internal class CloudflareAccessClient(
             ) {
               try {
                 response.use {
-                  if (response.request.url != request.url) throw IOException("Unexpected redirect")
+                  if (response.request.url != request.url) throw CloudflareAccessException(CloudflareAccessException.Kind.ConnectionFailed)
                   val bytes =
                     if (maximumBytes == 0) {
                       byteArrayOf()
                     } else {
                       val source = response.body.source()
                       source.request(maximumBytes.toLong() + 1)
-                      if (source.buffer.size > maximumBytes) throw IOException("Response exceeds limit")
+                      if (source.buffer.size > maximumBytes) throw CloudflareAccessException(CloudflareAccessException.Kind.ConnectionFailed)
                       source.readByteArray()
                     }
                   continuation.resume(Reply(response.request.url.toString(), response.code, response.headers, bytes))
                 }
+              } catch (error: IOException) {
+                if (continuation.isActive) continuation.resumeWithException(error)
               } catch (_: Exception) {
                 if (continuation.isActive) continuation.resumeWithException(CloudflareAccessException(CloudflareAccessException.Kind.ConnectionFailed))
               }

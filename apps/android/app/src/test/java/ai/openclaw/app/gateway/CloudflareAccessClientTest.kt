@@ -1,5 +1,6 @@
 package ai.openclaw.app.gateway
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -7,14 +8,23 @@ import okhttp3.Headers
 import okhttp3.Request
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.IOException
+import java.net.ProtocolException
+import java.security.cert.CertificateException
 import java.util.Base64
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLException
+import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.SSLPeerUnverifiedException
 
 class CloudflareAccessClientTest {
   private val application = CloudflareAccessTestTokens.application
@@ -77,6 +87,80 @@ class CloudflareAccessClientTest {
       val ordinary = Request.Builder().url(application.origin.uri.toString()).build()
       assertFalse(CloudflareAccessClient.isChallenge(reply(ordinary, 403, mapOf("Server" to "cloudflare")), application.origin))
       assertFalse(CloudflareAccessClient.isChallenge(reply(ordinary, 302, mapOf("WWW-Authenticate" to "Cloudflare-Access resource_metadata=\"https://other.example.test/.well-known/cloudflare-access-protected-resource/\"")), application.origin))
+    }
+
+  @Test fun probeMetadataAndKeysPreserveTransportFailuresAndCancellation() =
+    runBlocking {
+      for (failedRequest in 1..3) {
+        val certificateFailure = CertificateException("test certificate rejected")
+        val failures =
+          listOf(
+            SSLHandshakeException("test TLS handshake failed").apply { initCause(certificateFailure) },
+            SSLPeerUnverifiedException("test hostname rejected"),
+            IOException("test transport interrupted"),
+            CancellationException("test caller canceled"),
+          )
+        for (failure in failures) {
+          var requests = 0
+          val client =
+            CloudflareAccessClient { request, _, _ ->
+              requests++
+              if (requests == failedRequest) throw failure
+              when (requests) {
+                1 -> reply(request, 302, mapOf("WWW-Authenticate" to "Cloudflare-Access resource_metadata=\"${application.origin.uri}/.well-known/cloudflare-access-protected-resource/\""))
+                2 -> reply(request, 200, mapOf("Cf-Access-Metadata" to CloudflareAccessTestTokens.metadata()))
+                else -> error("Discovery must stop at the failed request")
+              }
+            }
+          val observed = runCatching { client.discover(application.origin.uri.toString()) }.exceptionOrNull()
+          assertSame(failure, observed)
+          assertEquals(failedRequest, requests)
+          if (failure is SSLHandshakeException) assertSame(certificateFailure, observed?.cause)
+        }
+      }
+    }
+
+  @Test fun invalidMetadataStillReportsInvalidApplication() =
+    runBlocking {
+      for (metadata in listOf<String?>(null, "not-a-signed-token")) {
+        var requests = 0
+        val client =
+          CloudflareAccessClient { request, _, _ ->
+            requests++
+            if (requests == 1) {
+              reply(request, 302, mapOf("WWW-Authenticate" to "Cloudflare-Access resource_metadata=\"${application.origin.uri}/.well-known/cloudflare-access-protected-resource/\""))
+            } else {
+              reply(request, 200, metadata?.let { mapOf("Cf-Access-Metadata" to it) }.orEmpty())
+            }
+          }
+        val failure = runCatching { client.discover(application.origin.uri.toString()) }.exceptionOrNull()
+        assertEquals(CloudflareAccessException.Kind.InvalidApplication, (failure as? CloudflareAccessException)?.kind)
+        assertEquals(2, requests)
+      }
+    }
+
+  @Test fun defaultTransportPreservesNativeTlsHandshakeFailure() =
+    runBlocking {
+      MockWebServer().use { server ->
+        // No server certificate is installed: the real HTTPS handshake must fail before HTTP.
+        val tls = SSLContext.getInstance("TLS").apply { init(emptyArray(), null, null) }
+        server.useHttps(tls.socketFactory, false)
+        server.start()
+        val failure = runCatching { CloudflareAccessClient.send(Request.Builder().url(server.url("/")).build(), 0, 5) }.exceptionOrNull()
+        assertTrue(failure is SSLException)
+        assertEquals(0, server.requestCount)
+      }
+    }
+
+  @Test fun defaultTransportPreservesInterruptedResponseBodyFailure() =
+    runBlocking {
+      MockWebServer().use { server ->
+        server.start()
+        server.enqueue(MockResponse().setBody("response body").setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY))
+        val failure = runCatching { CloudflareAccessClient.send(Request.Builder().url(server.url("/")).build(), 64, 5) }.exceptionOrNull()
+        assertTrue(failure is ProtocolException)
+        assertEquals(1, server.requestCount)
+      }
     }
 
   @Test fun signatureClaimsAndMetadataMustMatchRequestedApplication() {
