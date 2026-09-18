@@ -72,6 +72,7 @@ export function resolveAskUserQuestionOptionIndex(params: {
 export type { ReplyPayloadTtsSupplement } from "../auto-reply/reply-payload.js";
 export {
   buildTtsSupplementMediaPayload,
+  copyReplyPayloadMetadata,
   FAST_MODE_AUTO_PROGRESS_KIND,
   getReplyPayloadTtsSupplement,
   isFastModeAutoProgressPayload,

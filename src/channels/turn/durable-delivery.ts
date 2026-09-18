@@ -13,11 +13,13 @@ import {
   type OutboundDeliveryIntent,
   resolveOutboundDurableFinalDeliverySupport,
 } from "../../infra/outbound/deliver.js";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
 import {
   durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
+  sendStructuredDurableMessageBatchCore,
 } from "../message/send.js";
 import {
   createChannelDeliveryResultFromReceipt,
@@ -47,6 +49,11 @@ export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptio
   runId?: string;
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
 };
+
+export type StructuredDurableInboundReplyDeliveryParams = Omit<
+  DurableInboundReplyDeliveryParams,
+  "payload"
+> & { plan: OutboundPayloadPlan };
 
 /** Outcome of attempting durable final delivery for an inbound reply payload. */
 type DurableInboundReplyDeliveryResult =
@@ -152,7 +159,26 @@ function resolveAcceptedVisibleContent(
 
 /** Delivers final inbound replies through the durable message-send context when supported. */
 export async function deliverInboundReplyWithMessageSendContextCore(
+  params: DurableInboundReplyDeliveryParams,
+): Promise<DurableInboundReplyDeliveryResult> {
+  return await deliverInboundReplyWithMessageSendContext(params, sendDurableMessageBatchCore);
+}
+
+/** Delivers a prepared final reply through the same durable owner without parsing its text. */
+export async function deliverStructuredInboundReplyWithMessageSendContextCore(
+  params: StructuredDurableInboundReplyDeliveryParams,
+): Promise<DurableInboundReplyDeliveryResult> {
+  const { plan, ...context } = params;
+  return await deliverInboundReplyWithMessageSendContext(
+    { ...context, payload: plan.payload },
+    ({ payloads: _payloads, ...sendParams }) =>
+      sendStructuredDurableMessageBatchCore({ ...sendParams, plan: [plan] }),
+  );
+}
+
+async function deliverInboundReplyWithMessageSendContext(
   input: DurableInboundReplyDeliveryParams,
+  sendBatch: typeof sendDurableMessageBatchCore,
 ): Promise<DurableInboundReplyDeliveryResult> {
   if (input.info.kind !== "final") {
     return { status: "not_applicable", reason: "non_final" };
@@ -221,7 +247,7 @@ export async function deliverInboundReplyWithMessageSendContextCore(
     requesterSenderUsername: params.ctxPayload.SenderUsername,
     requesterSenderE164: params.ctxPayload.SenderE164,
   });
-  const send = await sendDurableMessageBatchCore({
+  const send = await sendBatch({
     cfg: params.cfg,
     channel,
     to,

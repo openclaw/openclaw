@@ -21,6 +21,73 @@ function createUnphasedAssistant(texts: string[]) {
 }
 
 describe("text_end snapshot reconciliation", () => {
+  it.each([
+    {
+      name: "delivers a replacement after its prior native scope disappears",
+      prefix: "First",
+      old: "Second",
+      replacement: ["Replacement"],
+      terminal: "message_end",
+      corrected: "Replacement",
+    },
+    {
+      name: "restarts when a retained native boundary becomes interior to code",
+      prefix: "Use `",
+      old: "Old",
+      replacement: ["Use `", "new`"],
+      terminal: "text_end",
+      corrected: "Use `\nnew`",
+    },
+  ])("$name", async (scenario) => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+    const end = (texts: string[], contentIndex: number) => {
+      const partial = createUnphasedAssistant(texts);
+      emit({
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: {
+          type: "text_end",
+          contentIndex,
+          content: texts[contentIndex] ?? "",
+          partial,
+        },
+      });
+    };
+    try {
+      emit({ type: "message_start", message: createUnphasedAssistant([]) });
+      const original = [scenario.prefix, scenario.old];
+      for (const [contentIndex, delta] of original.entries()) {
+        const texts = original.slice(0, contentIndex + 1);
+        const partial = createUnphasedAssistant(texts);
+        emit({
+          type: "message_update",
+          message: partial,
+          assistantMessageEvent: { type: "text_delta", contentIndex, delta, partial },
+        });
+        end(texts, contentIndex);
+        await subscription.waitForPendingEvents();
+        expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(texts);
+      }
+      end([scenario.prefix, ""], 1);
+      await subscription.waitForPendingEvents();
+      expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(original);
+      if (scenario.terminal === "message_end") {
+        emit({ type: "message_end", message: createUnphasedAssistant(scenario.replacement) });
+      } else {
+        end(scenario.replacement, 1);
+      }
+      await subscription.waitForPendingEvents();
+      expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([
+        ...original,
+        scenario.corrected,
+      ]);
+      expect(onBlockReply).toHaveBeenCalledTimes(3);
+    } finally {
+      subscription.unsubscribe();
+    }
+  });
+
   it.each(["text_end", "message_end"] as const)(
     "preserves an orphan-close replacement after a drained raw prefix at %s",
     async (terminal) => {
@@ -266,6 +333,73 @@ describe("text_end snapshot reconciliation", () => {
     },
   );
 
+  it("keeps native code continuation fenced after a shortened open-fence checkpoint", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({
+      onBlockReply,
+      blockReplyChunking: { minChars: 1, maxChars: 20 },
+    });
+    const emitTextEvent = (
+      type: "text_delta" | "text_end",
+      texts: string[],
+      contentIndex: number,
+      delta?: string,
+    ) => {
+      const partial = createUnphasedAssistant(texts);
+      emit({
+        type: "message_update",
+        message: partial,
+        assistantMessageEvent: {
+          type,
+          contentIndex,
+          ...(type === "text_delta"
+            ? { delta: delta ?? texts[contentIndex] }
+            : { content: texts[contentIndex] }),
+          partial,
+        },
+      });
+    };
+    const shortened = "```txt\nabc";
+    const continuation = "defghijklmnopqrstuvwxyz\n```";
+    const firstChunk = "```txt\nabcdefghi\n```";
+    try {
+      emit({ type: "message_start", message: createUnphasedAssistant([]) });
+      let text = "";
+      for (const delta of ["`", "``txt\n", "abc", "def", "ghi", "jklmnop"]) {
+        text += delta;
+        emitTextEvent("text_delta", [text], 0, delta);
+      }
+      await subscription.waitForPendingEvents();
+      expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([firstChunk]);
+
+      emitTextEvent("text_end", [shortened], 0);
+      await subscription.waitForPendingEvents();
+      expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([firstChunk]);
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+
+      emitTextEvent("text_delta", [shortened, continuation], 1);
+      emitTextEvent("text_end", [shortened, continuation], 1);
+      await subscription.waitForPendingEvents();
+
+      const delivered = extractTextPayloads(onBlockReply.mock.calls);
+      expect(delivered[0]).toBe(firstChunk);
+      const codeBodies = delivered.slice(1).map((chunk) => {
+        expect(chunk.startsWith("```txt\n")).toBe(true);
+        expect(chunk.endsWith("\n```")).toBe(true);
+        expect(chunk.length).toBeLessThanOrEqual(20);
+        return chunk.slice("```txt\n".length, -"\n```".length).replaceAll("\n", "");
+      });
+      expect(codeBodies.join("")).toBe("defghijklmnopqrstuvwxyz");
+
+      emit({ type: "message_end", message: createUnphasedAssistant([shortened, continuation]) });
+      await subscription.waitForPendingEvents();
+      expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(delivered);
+      expect(onBlockReply).toHaveBeenCalledTimes(delivered.length);
+    } finally {
+      subscription.unsubscribe();
+    }
+  });
+
   it.each([
     {
       name: "text already contained in the delivered block",
@@ -432,6 +566,14 @@ describe("text_end snapshot reconciliation", () => {
       onlyCheckpoint: true,
       enforceFinalTag: false,
       expectedTexts: ["Intro\n~~~\n<think>literal</think>\n~~~"],
+    },
+    {
+      name: "prepared native block offsets after a removed reply directive",
+      chunks: ["[[reply_to:example-id]]First", "Second"],
+      separateBlocks: true,
+      onlyCheckpoint: true,
+      enforceFinalTag: false,
+      expectedTexts: ["First\nSecond"],
     },
     {
       name: "a reasoning tag completed only at message_end",
@@ -742,12 +884,12 @@ describe("text_end replay de-duplication", () => {
       });
       try {
         emit({ type: "message_start", message: createUnphasedAssistant([]) });
-        // The 13-character chunk delivers Hi while its directive opener stays in the parser.
-        for (const delta of ["Hi[[reply_to:", "target]]Bye"]) {
+        // Visible text reaches the chunk limit while the split directive remains buffered.
+        for (const delta of ["Visible text.\n[[reply_to:", "target]]Bye"]) {
           emitAssistantTextDelta({ emit, delta });
-          expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(["Hi"]);
+          expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(["Visible text."]);
         }
-        const text = "Hi[[reply_to:target]]Bye";
+        const text = "Visible text.\n[[reply_to:target]]Bye";
         const message = createUnphasedAssistant([text]);
         if (terminal === "message_end") {
           emit({ type: "message_end", message });
@@ -764,7 +906,7 @@ describe("text_end replay de-duplication", () => {
         }
         await subscription.waitForPendingEvents();
 
-        expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(["Hi", "Bye"]);
+        expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual(["Visible text.", "Bye"]);
         expect(onBlockReply.mock.calls.at(-1)?.[0]).toMatchObject({
           text: "Bye",
           replyToId: "target",

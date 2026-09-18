@@ -28,6 +28,7 @@ import type {
   DurableFinalDeliveryRequirements,
   OutboundDeliveryQueuePolicy,
 } from "../../infra/outbound/deliver.js";
+import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
@@ -226,6 +227,11 @@ export type ChannelCoreManagedTurnDeliveryAdapter = ChannelDeliveryAdapterBase &
     payload: ReplyPayload,
     info: ChannelCoreManagedDeliveryInfo,
   ) => Promise<ChannelDeliveryResult | void>;
+  /** Receives an explicitly prepared plan without interpreting its text as directives. */
+  deliverPrepared?: (
+    plan: OutboundPayloadPlan,
+    info: ChannelCoreManagedDeliveryInfo,
+  ) => Promise<ChannelDeliveryResult | void>;
   durable?:
     | false
     | ChannelTurnDurableDeliveryOptions
@@ -251,7 +257,12 @@ export type ChannelProviderOwnedMessageSendingDeliveryAdapter = ChannelDeliveryA
     payload: ReplyPayload,
     info: ChannelProviderOwnedDeliveryInfo,
   ) => Promise<ChannelDeliveryResult | void>;
+  deliverPreparedWithProviderMessageSending?: (
+    plan: OutboundPayloadPlan,
+    info: ChannelProviderOwnedDeliveryInfo,
+  ) => Promise<ChannelDeliveryResult | void>;
   deliver?: never;
+  deliverPrepared?: never;
   durable?: never;
 };
 
@@ -259,6 +270,7 @@ export type ChannelProviderOwnedMessageSendingDeliveryAdapter = ChannelDeliveryA
 export type ChannelTurnDeliveryAdapter =
   | (ChannelCoreManagedTurnDeliveryAdapter & {
       deliverWithProviderMessageSending?: never;
+      deliverPreparedWithProviderMessageSending?: never;
     })
   | ChannelProviderOwnedMessageSendingDeliveryAdapter;
 
@@ -295,10 +307,14 @@ export type ChannelTurnDroppedHistoryOptions = {
 };
 
 /** Dispatcher options excluding delivery hooks owned by the channel turn adapter. */
-type ChannelTurnDispatcherOptions = Omit<ReplyDispatcherWithTypingOptions, "deliver" | "onError">;
+type ChannelTurnDispatcherOptions = Omit<
+  ReplyDispatcherWithTypingOptions,
+  "deliver" | "deliverPrepared" | "onError"
+>;
 
 /** Reply options plus the opaque native command ownership decision carried by channel turns. */
-type ChannelTurnReplyOptions = Omit<GetReplyOptions, "onBlockReply"> & PluginCommandReplyOptions;
+type ChannelTurnReplyOptions = Omit<GetReplyOptions, "onBlockReply" | "onPreparedBlockReply"> &
+  PluginCommandReplyOptions;
 
 /** Reply pipeline options excluding cfg/agent/channel identity supplied by the turn. */
 type ChannelTurnReplyPipelineOptions = Omit<

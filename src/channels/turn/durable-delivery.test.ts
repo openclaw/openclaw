@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   resolveOutboundDurableFinalDeliverySupport: vi.fn(),
   sendDurableMessageBatch: vi.fn(),
+  sendStructuredDurableMessageBatch: vi.fn(),
 }));
 
 vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => {
@@ -19,14 +20,17 @@ vi.mock("../message/send.js", async (importOriginal) => {
   return {
     ...actual,
     sendDurableMessageBatchCore: mocks.sendDurableMessageBatch,
+    sendStructuredDurableMessageBatchCore: mocks.sendStructuredDurableMessageBatch,
   };
 });
 
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import {
   deliverInboundReplyWithMessageSendContextCore,
+  deliverStructuredInboundReplyWithMessageSendContextCore,
   throwIfDurableInboundReplyDeliveryFailed,
 } from "./durable-delivery.js";
 
@@ -80,8 +84,9 @@ describe("durable inbound reply delivery", () => {
   beforeEach(() => {
     mocks.resolveOutboundDurableFinalDeliverySupport.mockReset();
     mocks.sendDurableMessageBatch.mockReset();
+    mocks.sendStructuredDurableMessageBatch.mockReset();
     mocks.resolveOutboundDurableFinalDeliverySupport.mockResolvedValue({ ok: true });
-    mocks.sendDurableMessageBatch.mockResolvedValue({
+    const result = {
       status: "sent",
       receipt: {
         primaryPlatformMessageId: "m1",
@@ -89,7 +94,9 @@ describe("durable inbound reply delivery", () => {
         parts: [{ platformMessageId: "m1", kind: "text", index: 0 }],
         sentAt: 1,
       },
-    });
+    };
+    mocks.sendDurableMessageBatch.mockResolvedValue(result);
+    mocks.sendStructuredDurableMessageBatch.mockResolvedValue(result);
   });
 
   it("preserves explicit null thread targets instead of falling back to context thread", async () => {
@@ -114,6 +121,47 @@ describe("durable inbound reply delivery", () => {
     expect(request.threadId).toBeNull();
     expect(request.durability).toBe("best_effort");
     expect(request.gatewayClientScopes).toEqual([]);
+    expect(mocks.sendStructuredDurableMessageBatch).not.toHaveBeenCalled();
+  });
+
+  it("carries prepared directive literals and explicit fields through the durable sender", async () => {
+    const executionIdentityToken = createExecutionIdentityAdmissionToken("run-prepared");
+    const [entry] = createStructuredOutboundPayloadPlan([
+      {
+        text: "[[reply_to:literal]] [[audio_as_voice]]",
+        mediaUrl: "https://example.invalid/audio.ogg",
+        replyToId: "source-message",
+      },
+    ]);
+    if (!entry) {
+      throw new Error("expected a sendable prepared plan");
+    }
+    const plan = { ...entry, sourceIndex: 3 };
+    const result = await deliverStructuredInboundReplyWithMessageSendContextCore({
+      cfg: {},
+      channel: "telegram",
+      agentId: "main",
+      info: { kind: "final" },
+      plan,
+      threadId: null,
+      executionIdentityToken,
+      ctxPayload: ctxPayload({ OriginatingTo: "chat-1", MessageThreadId: "context-thread" }),
+    });
+
+    expect(result.status).toBe("handled_visible");
+    expect(mocks.sendDurableMessageBatch).not.toHaveBeenCalled();
+    expect(mocks.sendStructuredDurableMessageBatch).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        plan: [plan],
+        channel: "telegram",
+        to: "chat-1",
+        threadId: null,
+        replyToId: "source-message",
+        durability: "best_effort",
+        runId: "run-prepared",
+        executionIdentityToken,
+      }),
+    );
   });
 
   it("does not require unknown-send reconciliation for the default best-effort final path", async () => {

@@ -759,7 +759,6 @@ src/security/audit-extra.sync.ts
 src/security/audit.ts
 src/sessions/session-state-events.ts
 src/shared/json-schema-defaults.ts
-src/shared/text/assistant-visible-text.ts
 src/skills/lifecycle/clawhub.test.ts
 src/skills/lifecycle/install.ts
 src/skills/security/scanner.ts

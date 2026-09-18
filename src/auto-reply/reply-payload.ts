@@ -177,11 +177,11 @@ export function buildTtsSupplementMediaPayload(payload: ReplyPayload): ReplyPayl
     btw: _btw,
     ...mediaPayload
   } = payload;
-  return {
+  return copyReplyPayloadMetadata(payload, {
     ...mediaPayload,
     spokenText: supplement.spokenText,
     ttsSupplement: supplement,
-  };
+  });
 }
 
 /** WeakMap-backed metadata attached to payload objects without changing wire shape. */
@@ -197,6 +197,8 @@ export type SessionWriterDeliveryAuthority = {
 };
 
 export type ReplyPayloadMetadata = {
+  /** Raw parsing classified the text as silent before removing its control token. */
+  silentReply?: true;
   /** The model failed after a committed recovery compaction in the same turn. */
   postCompactionModelFailure?: true;
   assistantMessageIndex?: number;

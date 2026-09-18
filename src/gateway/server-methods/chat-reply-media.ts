@@ -13,6 +13,7 @@ import {
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
@@ -97,20 +98,21 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
     const previousMediaFailures = getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? [];
     const mediaFailures: ReplyMediaFailure[] = [...previousMediaFailures];
     let text = payload.text;
-    for (const [index, mediaUrl] of mediaUrls.entries()) {
-      const attachment = payload.attachments?.[index];
+    for (const { url: mediaUrl, attachment } of collectReplyMediaEntries(payload, mediaUrls)) {
       if (shouldPreserveDisplayMediaUrl(payload, mediaUrl)) {
         mergedMediaUrls.push(mediaUrl);
         mergedAttachments.push(attachment ?? {});
         continue;
       }
-      const normalizedPayload = await normalizeMediaPaths({
-        ...payload,
-        text,
-        mediaUrl,
-        mediaUrls: [mediaUrl],
-        attachments: attachment ? [attachment] : undefined,
-      });
+      const normalizedPayload = await normalizeMediaPaths(
+        copyReplyPayloadMetadata(payload, {
+          ...payload,
+          text,
+          mediaUrl,
+          mediaUrls: [mediaUrl],
+          attachments: attachment ? [attachment] : undefined,
+        }),
+      );
       const normalizedMediaUrls = resolveSendableOutboundReplyParts(normalizedPayload).mediaUrls;
       mediaFailures.push(
         ...(getReplyPayloadMetadata(normalizedPayload)?.assistantMediaFailures ?? []).slice(

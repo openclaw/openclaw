@@ -1,7 +1,6 @@
 // Lifecycle handler tests cover terminal agent_end behavior, sanitized errors,
 // lifecycle events, and deferred reply cleanup.
 import { describe, expect, it, vi } from "vitest";
-import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-fixtures.js";
 import { handleAgentEnd, handleAgentStart } from "./embedded-agent-subscribe.handlers.lifecycle.js";
@@ -71,11 +70,6 @@ function createContext(
       pendingToolAudioAsVoice: false,
       deferredBlockReplies: [],
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
-      blockState: {
-        thinking: true,
-        final: true,
-        inlineCode: createInlineCodeState(),
-      },
     },
     log: {
       debug: vi.fn(),
@@ -1239,22 +1233,6 @@ describe("handleAgentEnd", () => {
       stream: "lifecycle",
       data: { phase: "end" },
     });
-  });
-
-  it("final-flushes block replies before clearing pending fence fragments", async () => {
-    const ctx = createContext(undefined);
-    ctx.state.blockState.pendingFenceFragment = "```";
-    ctx.flushBlockReplyBuffer = vi.fn((options?: { final?: boolean }) => {
-      if (vi.mocked(ctx.flushBlockReplyBuffer).mock.calls.length === 1) {
-        expect(options).toEqual({ final: true });
-        expect(ctx.state.blockState.pendingFenceFragment).toBe("```");
-      }
-    });
-
-    await handleAgentEnd(ctx);
-
-    expect(ctx.flushBlockReplyBuffer).toHaveBeenNthCalledWith(1, { final: true });
-    expect(ctx.state.blockState.pendingFenceFragment).toBeUndefined();
   });
 
   it("emits lifecycle end when block reply flush throws", () => {

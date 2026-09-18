@@ -1,3 +1,4 @@
+import type { AssistantMessage } from "../../llm/types.js";
 import type {
   InternalSessionTranscriptUpdate,
   SessionTranscriptUpdate,
@@ -358,6 +359,7 @@ export type LatestTranscriptAssistantText = {
   id?: string;
   text: string;
   timestamp?: number;
+  openclawDelivery?: AssistantMessage["openclawDelivery"];
 };
 
 export type SessionTranscriptWriteLockAccessorContext = {

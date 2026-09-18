@@ -46,6 +46,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { TemplateContext } from "../templating.js";
 import { createReplyAgentRestartRecoveryController } from "./agent-runner-execute.js";
+import { registerReasoningFallbackTests } from "./agent-runner.reasoning-fallback.test-support.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
@@ -4932,35 +4933,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it.each([
-    { lane: "reasoning", payload: { text: "internal", isReasoning: true } },
-    { lane: "commentary", payload: { text: "internal", isCommentary: true } },
-  ])("does not let streamed $lane suppress the empty-reply fallback", async ({ payload }) => {
-    const onBlockReply = vi.fn();
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onBlockReply?.(payload);
-      return { payloads: [], meta: {} };
-    });
-    const { run } = createMinimalRun({
-      blockStreamingEnabled: true,
-      opts: {
-        onBlockReply,
-        reasoningPayloadsEnabled: true,
-        commentaryPayloadsEnabled: true,
-      },
-    });
-
-    const result = await run();
-    const payloads = Array.isArray(result) ? result : [result];
-
-    expect(onBlockReply).toHaveBeenCalled();
-    expect(onBlockReply.mock.calls[0]?.[0]).toEqual(expect.objectContaining(payload));
-    expect(payloads).toContainEqual(
-      expect.objectContaining({
-        text: expect.stringContaining("did not produce a visible reply"),
-        isError: true,
-      }),
-    );
+  registerReasoningFallbackTests({
+    runEmbeddedAgentMock: state.runEmbeddedAgentMock,
+    createMinimalRun,
   });
 
   it.each([

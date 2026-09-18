@@ -178,7 +178,11 @@ export function findNextLineEnding(text: string, start: number): number {
 
 type PositionedNode = {
   type?: string;
-  position?: { start?: { offset?: number }; end?: { offset?: number } };
+  value?: string;
+  position?: {
+    start?: { offset?: number; line?: number };
+    end?: { offset?: number; line?: number };
+  };
   children?: PositionedNode[];
 };
 
@@ -187,6 +191,12 @@ type MarkdownCodeRegion = {
   end: number;
   block: boolean;
   source?: MarkdownInlineSource;
+};
+
+type MarkdownCompletedParagraph = {
+  start: number;
+  end: number;
+  hasReferenceCandidate: boolean;
 };
 
 type MarkdownInlineSource = {
@@ -265,7 +275,7 @@ function captureInlineSources(text: string, sources: Map<number, MarkdownInlineS
 
 export function parseMarkdownOwnership(text: string, options?: MarkdownOwnershipOptions) {
   if (!text) {
-    return { regions: [], codeSpans: [], textSpans: [], retainStart: 0 };
+    return { regions: [], codeSpans: [], textSpans: [], retainStart: 0, completedParagraphs: [] };
   }
   const sources = new Map<number, MarkdownInlineSource>();
   const tables = options?.syntax !== "commonmark";
@@ -276,31 +286,65 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
       ...(options?.includeSource ? [captureInlineSources(text, sources)] : []),
     ],
   }) as PositionedNode;
+  const completedParagraphs: MarkdownCompletedParagraph[] = [];
   const regions: MarkdownCodeRegion[] = [];
   const textSpans: Array<[number, number]> = [];
-  const pending: PositionedNode[] = [tree];
-  while (pending.length > 0) {
-    const node = expectDefined(pending.pop(), "Markdown ownership node");
-    const start = node.position?.start?.offset;
-    const end = node.position?.end?.offset;
-    if (options?.includeText && node.type === "text" && start !== undefined && end !== undefined) {
-      textSpans.push([start, end]);
-    }
+  const blocks = tree.children ?? [];
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = expectDefined(blocks[index], "Markdown block");
+    const next = blocks[index + 1]?.position?.start;
+    const blockStart = block.position?.start?.offset;
+    const endLine = block.position?.end?.line;
+    let paragraph: MarkdownCompletedParagraph | undefined;
     if (
-      (node.type === "code" || node.type === "inlineCode") &&
-      start !== undefined &&
-      end !== undefined
+      block.type === "paragraph" &&
+      blockStart !== undefined &&
+      endLine !== undefined &&
+      next?.offset !== undefined &&
+      next.line !== undefined &&
+      next.line > endLine + 1
     ) {
-      const source = sources.get(start);
-      if (source) {
-        while (source.offsets.length <= end - start) {
-          source.offsets.push(source.value.length);
-        }
-      }
-      regions.push({ start, end, block: node.type === "code", ...(source ? { source } : {}) });
+      // Include the blank separator so projections can retain the completed block boundary.
+      // Unresolved reference labels can still become image alt text after a later definition.
+      paragraph = {
+        start: blockStart,
+        end: next.offset,
+        hasReferenceCandidate: false,
+      };
+      completedParagraphs.push(paragraph);
     }
-    for (const child of node.children?.toReversed() ?? []) {
-      pending.push(child);
+    const pending: PositionedNode[] = [block];
+    while (pending.length > 0) {
+      const node = expectDefined(pending.pop(), "Markdown ownership node");
+      if (paragraph && node.type === "text" && node.value?.includes("[")) {
+        paragraph.hasReferenceCandidate = true;
+      }
+      const start = node.position?.start?.offset;
+      const end = node.position?.end?.offset;
+      if (
+        options?.includeText &&
+        node.type === "text" &&
+        start !== undefined &&
+        end !== undefined
+      ) {
+        textSpans.push([start, end]);
+      }
+      if (
+        (node.type === "code" || node.type === "inlineCode") &&
+        start !== undefined &&
+        end !== undefined
+      ) {
+        const source = sources.get(start);
+        if (source) {
+          while (source.offsets.length <= end - start) {
+            source.offsets.push(source.value.length);
+          }
+        }
+        regions.push({ start, end, block: node.type === "code", ...(source ? { source } : {}) });
+      }
+      for (const child of node.children?.toReversed() ?? []) {
+        pending.push(child);
+      }
     }
   }
   regions.sort((left, right) => left.start - right.start);
@@ -309,6 +353,7 @@ export function parseMarkdownOwnership(text: string, options?: MarkdownOwnership
     codeSpans: regions.map(({ start, end }): [number, number] => [start, end]),
     textSpans,
     retainStart: tree.children?.at(-1)?.position?.start?.offset ?? text.length,
+    completedParagraphs,
   };
 }
 

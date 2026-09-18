@@ -2,6 +2,7 @@ import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { OutboundPayloadPlan } from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   isFastModeAutoProgressPayload,
@@ -13,10 +14,8 @@ import {
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
-  applyTextToPayload,
   deliverFinalAnswerText,
   handlePreviewFinalizedResult,
-  normalizeDeliveryPayload,
   registerTelegramQuestionDeliveryForMessage,
   sendPayload,
 } from "./bot-message-dispatch-delivery.js";
@@ -31,6 +30,11 @@ import {
   splitTextIntoLaneSegments,
   takeQueuedAnswerBlockRotation,
 } from "./bot-message-dispatch-draft.js";
+import {
+  applyTextToPayload,
+  normalizeDeliveryPayload,
+  normalizePreparedDeliveryPayload,
+} from "./bot-message-dispatch-payload.js";
 import {
   markFinalDelivered,
   markFinalStarted,
@@ -113,7 +117,7 @@ function resolvePayloadTelegramControls(
   );
   const text = appendTelegramDroppedControlFallback(payload.text ?? "", droppedControls);
   return {
-    payload: text === (payload.text ?? "") ? payload : { ...payload, text },
+    payload: text === (payload.text ?? "") ? payload : applyTextToPayload(payload, text),
     buttons,
   };
 }
@@ -226,20 +230,37 @@ export function formatTelegramGroupThreadReply(
 
 export async function deliverReply(
   turn: Turn,
-  incomingPayload: Parameters<NonNullable<Deliver>>[0],
+  payload: Parameters<NonNullable<Deliver>>[0],
   info: Parameters<NonNullable<Deliver>>[1],
+): Promise<TelegramReplyDeliveryResult> {
+  return deliverReplyWithNormalization(turn, payload, info, normalizeDeliveryPayload);
+}
+
+export async function deliverPreparedReply(
+  turn: Turn,
+  plan: OutboundPayloadPlan,
+  info: Parameters<NonNullable<Deliver>>[1],
+): Promise<TelegramReplyDeliveryResult> {
+  return deliverReplyWithNormalization(turn, plan.payload, info, normalizePreparedDeliveryPayload);
+}
+
+async function deliverReplyWithNormalization(
+  turn: Turn,
+  incomingPayload: ReplyPayload,
+  info: Parameters<NonNullable<Deliver>>[1],
+  normalizePayload: typeof normalizeDeliveryPayload,
 ): Promise<TelegramReplyDeliveryResult> {
   if (turn.isSuperseded()) {
     return await settleTerminalNoVisibleDelivery(turn, info, { abandonBufferedFinal: true });
   }
   let payload = incomingPayload;
   if (info.participant && (payload.text || payload.mediaUrl || payload.mediaUrls?.length)) {
-    payload = {
-      ...payload,
-      text: formatTelegramGroupThreadReply(payload.text ?? "", info.participant),
-    };
+    payload = applyTextToPayload(
+      payload,
+      formatTelegramGroupThreadReply(payload.text ?? "", info.participant),
+    );
   }
-  const normalizedPayload = normalizeDeliveryPayload(turn, payload);
+  const normalizedPayload = normalizePayload(turn, payload);
   if (!normalizedPayload) {
     return await settleTerminalNoVisibleDelivery(turn, info);
   }
@@ -271,7 +292,7 @@ export async function deliverReply(
     payload.text.trimEnd() === effectivePayload.text &&
     !effectivePayload.mediaUrl &&
     !effectivePayload.mediaUrls?.length
-      ? { ...effectivePayload, text: payload.text }
+      ? applyTextToPayload(effectivePayload, payload.text)
       : effectivePayload;
   const split = splitTextIntoLaneSegments(turn, { text: lanePayload.text }, payload.isReasoning);
   const segments = split.segments;
@@ -493,7 +514,7 @@ export async function deliverReply(
     if (reply.hasMedia) {
       const payloadWithoutReasoning =
         typeof effectivePayload.text === "string"
-          ? { ...effectivePayload, text: "" }
+          ? applyTextToPayload(effectivePayload, "")
           : effectivePayload;
       delivered = await sendPayload(turn, payloadWithoutReasoning, {
         durable: info.kind === "final",

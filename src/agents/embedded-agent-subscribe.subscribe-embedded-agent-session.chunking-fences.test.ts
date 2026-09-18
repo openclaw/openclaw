@@ -88,7 +88,8 @@ describe("oversized fenced block chunking", () => {
       await subscription.waitForPendingEvents();
       expect(extractTextPayloads(onBlockReply.mock.calls)).toEqual([
         "Intro",
-        "~~~xml\n<final>literal</final>\n~~~\n\nAfter",
+        "~~~xml\n<final>literal</final>\n~~~",
+        "After",
       ]);
     } finally {
       emit({

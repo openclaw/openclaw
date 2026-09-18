@@ -191,10 +191,10 @@ function createTraceTelegramDeps(captured: CapturedDispatch): TelegramBotDeps {
     listSkillCommandsForAgents:
       (() => []) as unknown as TelegramBotDeps["listSkillCommandsForAgents"],
     wasSentByBot: (() => false) as TelegramBotDeps["wasSentByBot"],
-    deliverInboundReplyWithMessageSendContext: (async () => ({
+    deliverStructuredInboundReplyWithMessageSendContext: async () => ({
       status: "unsupported",
       reason: "missing_outbound_handler",
-    })) as unknown as TelegramBotDeps["deliverInboundReplyWithMessageSendContext"],
+    }),
     emitTelegramMessageSentHooks: (() => {}) as TelegramBotDeps["emitTelegramMessageSentHooks"],
     recordOutboundMessageForPromptContext: (async () =>
       true) as TelegramBotDeps["recordOutboundMessageForPromptContext"],

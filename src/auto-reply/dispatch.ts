@@ -50,7 +50,10 @@ import {
 } from "./reply/reply-operation-run-state.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 
-type InternalDispatchReplyOptions = Omit<InternalGetReplyOptions, "onBlockReply">;
+type InternalDispatchReplyOptions = Omit<
+  InternalGetReplyOptions,
+  "onBlockReply" | "onPreparedBlockReply"
+>;
 
 type ReplyPayloadRunState = {
   runId?: string;

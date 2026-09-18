@@ -21,11 +21,14 @@ import { createAgentRunSupersededAbortError } from "../../agents/run-termination
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
+import type { BlockReplyContext, ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
@@ -40,6 +43,7 @@ import { resolveRunModelHasVision } from "./agent-runner-run-params.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { parseReplyDirectives } from "./reply-directives.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 
 export async function runCliFallbackCandidate(
@@ -53,6 +57,16 @@ export async function runCliFallbackCandidate(
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
+  const onPreparedBlockReply = turn.opts?.onPreparedBlockReply;
+  const onNativeBlockReply =
+    turn.opts?.onBlockReply ??
+    (onPreparedBlockReply
+      ? async (payload: ReplyPayload, context?: BlockReplyContext) => {
+          for (const plan of createStructuredOutboundPayloadPlan([payload])) {
+            await onPreparedBlockReply(plan, context);
+          }
+        }
+      : undefined);
   const expectedLifecycleRevision = turn.getActiveSessionEntry()?.lifecycleRevision;
   const selectedModelEntry = findModelInCatalog(
     params.candidateRun.thinkingCatalog ?? [],
@@ -306,12 +320,23 @@ export async function runCliFallbackCandidate(
                   if (bridgeCliDurableCommentary) {
                     // Block mode treats completed CLI text as an ordinary answer block so
                     // the existing pipeline owns coalescing and final-payload dedupe.
-                    deliveries.push(
-                      params.presentation.blockReplyHandler?.({
-                        text: payload.text,
-                        ...(turn.blockStreamingEnabled ? {} : { isCommentary: true }),
-                      }),
-                    );
+                    const parsed = parseReplyDirectives(payload.text, {
+                      currentMessageId:
+                        turn.sessionCtx.MessageSidFull ?? turn.sessionCtx.MessageSid,
+                    });
+                    const reply: ReplyPayload = {
+                      text: parsed.text,
+                      mediaUrls: parsed.mediaUrls,
+                      replyToId: parsed.replyToId,
+                      replyToCurrent: parsed.replyToCurrent,
+                      ...(parsed.replyToTag ? { replyToTag: true } : {}),
+                      audioAsVoice: parsed.audioAsVoice,
+                      ...(turn.blockStreamingEnabled ? {} : { isCommentary: true }),
+                    };
+                    if (parsed.isSilent) {
+                      setReplyPayloadMetadata(reply, { silentReply: true });
+                    }
+                    deliveries.push(params.presentation.blockReplyHandler?.(reply));
                   }
                   await Promise.all(deliveries);
                 }
@@ -454,7 +479,7 @@ export async function runCliFallbackCandidate(
             abortSignal: params.runAbortSignal,
             // Native input is already host-authored. Keep its stable delivery
             // context out of the model-output normalization wrapper.
-            onBlockReply: turn.opts?.onBlockReply,
+            onBlockReply: onNativeBlockReply,
             onPartialReply: turn.opts?.onPartialReply,
             onExecutionPhase: params.signalExecutionPhaseForTyping,
             replyOperation: turn.replyOperation,

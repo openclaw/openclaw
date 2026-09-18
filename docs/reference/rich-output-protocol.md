@@ -37,7 +37,9 @@ Legacy final-reply text may still be normalized for compatibility, but this is n
 
 Legacy final assistant replies can still attach local media with a plain
 standalone `MEDIA:` line. The parser only recognizes lines whose trimmed text
-starts with `MEDIA:` outside Markdown wrappers and code fences.
+starts with `MEDIA:` outside Markdown wrappers and fenced or indented code blocks.
+Up to three leading spaces are accepted; four-space or tab indentation follows
+CommonMark code-block rules.
 
 Valid legacy final reply:
 

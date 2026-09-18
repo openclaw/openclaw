@@ -1,3 +1,5 @@
+import { copyReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload";
+
 // Keep sent-block media out of both delivery fields so outbound planning cannot restore it.
 export function deduplicateBlockSentMedia<
   T extends { mediaUrl?: string; mediaUrls?: string[]; text?: string },
@@ -12,9 +14,9 @@ export function deduplicateBlockSentMedia<
   if (remainingMedia.length === 0 && !payload.text) {
     return undefined;
   }
-  return {
+  return copyReplyPayloadMetadata(payload, {
     ...payload,
     mediaUrls: remainingMedia,
     mediaUrl: sentBlockMediaUrls.has(payload.mediaUrl?.trim() ?? "") ? undefined : payload.mediaUrl,
-  };
+  });
 }

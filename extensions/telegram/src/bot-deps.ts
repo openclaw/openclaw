@@ -9,7 +9,7 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelMessageReplyPipeline,
-  deliverInboundReplyWithMessageSendContext,
+  deliverStructuredInboundReplyWithMessageSendContext,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -33,7 +33,11 @@ import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-r
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
-import { deliverReplies, emitTelegramMessageSentHooks } from "./bot/delivery.js";
+import {
+  deliverReplies,
+  deliverStructuredReplies,
+  emitTelegramMessageSentHooks,
+} from "./bot/delivery.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { editMessageTelegram } from "./send.js";
@@ -79,7 +83,8 @@ export type TelegramBotDeps = {
   resolveApproval?: ResolveTelegramApproval;
   createTelegramDraftStream?: typeof createTelegramDraftStream;
   deliverReplies?: typeof deliverReplies;
-  deliverInboundReplyWithMessageSendContext?: typeof deliverInboundReplyWithMessageSendContext;
+  deliverStructuredReplies?: typeof deliverStructuredReplies;
+  deliverStructuredInboundReplyWithMessageSendContext?: typeof deliverStructuredInboundReplyWithMessageSendContext;
   emitTelegramMessageSentHooks?: typeof emitTelegramMessageSentHooks;
   editMessageTelegram?: typeof editMessageTelegram;
   recordOutboundMessageForPromptContext?: typeof recordOutboundMessageForPromptContext;
@@ -156,8 +161,11 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   get deliverReplies() {
     return deliverReplies;
   },
-  get deliverInboundReplyWithMessageSendContext() {
-    return deliverInboundReplyWithMessageSendContext;
+  get deliverStructuredReplies() {
+    return deliverStructuredReplies;
+  },
+  get deliverStructuredInboundReplyWithMessageSendContext() {
+    return deliverStructuredInboundReplyWithMessageSendContext;
   },
   get emitTelegramMessageSentHooks() {
     return emitTelegramMessageSentHooks;

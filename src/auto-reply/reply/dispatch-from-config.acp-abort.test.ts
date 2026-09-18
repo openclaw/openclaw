@@ -1,12 +1,13 @@
 // Tests ACP dispatch abort behavior and emitted lifecycle hooks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, raceWithTimeoutResult } from "../../../test/helpers/promise.js";
 import type {
   AcpSessionResolution,
   SessionAcpMeta,
 } from "../../acp/control-plane/manager.types.js";
 import { resolveAcpSessionTarget } from "../../acp/control-plane/manager.utils.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type {
   AcpRuntime,
   AcpRuntimeEnsureInput,
@@ -69,26 +70,6 @@ function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
 
 function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
-}
-
-async function raceWithTimeoutResult<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  timeoutResult: T,
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((resolve) => {
-        timer = setTimeout(() => resolve(timeoutResult), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
 }
 
 function createMockAcpSessionManager() {
@@ -1104,6 +1085,13 @@ describe("dispatchReplyFromConfig ACP abort", () => {
           try {
             await options?.onToolResult?.({ text: "late tool should not send" });
             await options?.onBlockReply?.({ text: "late block should not send" });
+            const [plan] = createStructuredOutboundPayloadPlan([
+              { text: "late prepared block should not send" },
+            ]);
+            if (!plan || !options?.onPreparedBlockReply) {
+              throw new Error("Prepared block callback unavailable");
+            }
+            await options.onPreparedBlockReply(plan);
             return { text: "late final should not send" };
           } finally {
             resolverFinished.resolve();

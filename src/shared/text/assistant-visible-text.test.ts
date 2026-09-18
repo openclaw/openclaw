@@ -4,10 +4,10 @@ import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripAssistantInternalScaffolding,
-  stripDowngradedToolCallText,
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
 } from "./assistant-visible-text.js";
+import { stripDowngradedToolCallText } from "./downgraded-tool-call-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 
 describe("stripAssistantInternalScaffolding", () => {

@@ -7,7 +7,6 @@ import {
 import { assertSqliteJsonlReadBudget } from "../../infra/sqlite-jsonl-budget.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -48,6 +47,7 @@ import {
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { projectResetBoundaryNavigationSql } from "./session-model-context-projection.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { projectAssistantTranscriptText } from "./transcript-assistant-delivery.js";
 
 export type SqliteTranscriptSnapshotRow = {
   eventJson: string;
@@ -488,7 +488,7 @@ export function loadLatestAssistantText(
         if (!latest) {
           continue;
         }
-        const text = parseLatestAssistantText(latest);
+        const text = projectAssistantTranscriptText(latest.message, latest.id);
         if (text) {
           return text;
         }
@@ -500,23 +500,6 @@ export function loadLatestAssistantText(
       operationLabel: "latest assistant fenced read",
     },
   );
-}
-
-function parseLatestAssistantText(
-  latest: LatestTranscriptAssistantMessage,
-): LatestTranscriptAssistantText | undefined {
-  const message = latest.message as { timestamp?: unknown };
-  const text = extractAssistantPhaseText(latest.message)?.trim();
-  if (!text) {
-    return undefined;
-  }
-  return {
-    ...(latest.id ? { id: latest.id } : {}),
-    text,
-    ...(typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
-      ? { timestamp: message.timestamp }
-      : {}),
-  };
 }
 
 function parseLatestAssistantMessageEvent(

@@ -207,6 +207,7 @@ export async function executeFollowupTurn(params: {
     commentaryPayloadsEnabled,
     runId: turn.runId,
     onBlockReply: undefined,
+    onPreparedBlockReply: undefined,
     onPartialReply: undefined,
     onAssistantMessageStart: undefined,
     onToolStart: wrapVisibility(sourceOpts?.onToolStart, shouldEmitToolLifecycle),

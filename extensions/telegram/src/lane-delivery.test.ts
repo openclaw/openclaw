@@ -145,7 +145,7 @@ describe("createLaneTextDeliverer", () => {
     answer.lastDeliveredText.mockReturnValue(nextAssistantBlock);
     const harness = createHarness({
       answerStream: answer,
-      resolveFinalTextCandidate: () => nextAssistantBlock,
+      resolveFinalPayloadCandidate: ({ payload }) => ({ ...payload, text: nextAssistantBlock }),
     });
     harness.lanes.answer.lastPartialText = previousBlock;
     harness.lanes.answer.hasStreamedMessage = true;
@@ -260,7 +260,8 @@ describe("createLaneTextDeliverer", () => {
     answer.currentMessageSnapshot.mockReturnValue({ text: fullAnswer, sourceText: fullAnswer });
     const harness = createHarness({
       answerStream: answer,
-      resolveFinalTextCandidate: () => fullAnswer,
+      resolveFinalPayloadCandidate: ({ payload, candidateTexts }) =>
+        candidateTexts.includes(fullAnswer) ? undefined : { ...payload, text: fullAnswer },
     });
 
     const result = await deliverFinalAnswer(harness, truncatedFinal);
@@ -311,7 +312,8 @@ describe("createLaneTextDeliverer", () => {
     answer.lastDeliveredText.mockImplementation(() => deliveredText);
     const harness = createHarness({
       answerStream: answer,
-      resolveFinalTextCandidate: () => fullAnswer,
+      resolveFinalPayloadCandidate: ({ payload, candidateTexts }) =>
+        candidateTexts.includes(fullAnswer) ? undefined : { ...payload, text: fullAnswer },
     });
 
     answer.update(fullAnswer);
@@ -341,7 +343,8 @@ describe("createLaneTextDeliverer", () => {
     answer.lastDeliveredText.mockImplementation(() => deliveredText);
     const harness = createHarness({
       answerStream: answer,
-      resolveFinalTextCandidate: () => fullAnswer,
+      resolveFinalPayloadCandidate: ({ payload, candidateTexts }) =>
+        candidateTexts.includes(fullAnswer) ? undefined : { ...payload, text: fullAnswer },
     });
 
     answer.update(fullAnswer);
@@ -365,7 +368,8 @@ describe("createLaneTextDeliverer", () => {
     answer.lastDeliveredText.mockReturnValue("older preview");
     const harness = createHarness({
       answerStream: answer,
-      resolveFinalTextCandidate: () => fullAnswer,
+      resolveFinalPayloadCandidate: ({ payload, candidateTexts }) =>
+        candidateTexts.includes(fullAnswer) ? undefined : { ...payload, text: fullAnswer },
     });
     harness.lanes.answer.lastPartialText = fullAnswer;
     harness.lanes.answer.hasStreamedMessage = true;
@@ -645,7 +649,8 @@ describe("createLaneTextDeliverer", () => {
     answer.currentMessageSnapshot.mockReturnValue({ text: fullAnswer, sourceText: fullAnswer });
     const harness = createHarness({
       answerStream: answer,
-      resolveFinalTextCandidate: () => fullAnswer,
+      resolveFinalPayloadCandidate: ({ payload, candidateTexts }) =>
+        candidateTexts.includes(fullAnswer) ? undefined : { ...payload, text: fullAnswer },
     });
     harness.lanes.answer.hasStreamedMessage = true;
 

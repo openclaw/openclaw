@@ -2,9 +2,11 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { logVerbose } from "../../globals.js";
+import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
+  isSilentReplyPayloadText,
   isSilentReplyPrefixText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
@@ -86,7 +88,9 @@ export function createAgentTurnPresentation(params: {
     const sanitized = errorContext
       ? renderUserFacingText(text, { errorContext: true, conversationContext, streaming: true })
       : sanitizeUserFacingText(text, { conversationContext, streaming: true });
-    return sanitized.trim() ? { text: sanitized, skip: false } : { skip: true };
+    return sanitized.trim()
+      ? { text: sanitized, skip: isSilentReplyPayloadText(sanitized, SILENT_REPLY_TOKEN) }
+      : { skip: true };
   };
 
   const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
@@ -132,24 +136,33 @@ export function createAgentTurnPresentation(params: {
 
   const blockReplyPipeline = params.turn.blockReplyPipeline;
   // One handler owns threading and direct-send dedupe for this fallback cycle.
-  const blockReplyHandler = params.turn.opts?.onBlockReply
-    ? createBlockReplyDeliveryHandler({
-        onBlockReply: params.turn.opts.onBlockReply,
-        currentMessageId:
-          params.turn.sessionCtx.MessageSidFull ?? params.turn.sessionCtx.MessageSid,
-        replyThreading: params.turn.replyThreading,
-        normalizeStreamingText,
-        applyReplyToMode: params.turn.applyReplyToMode,
-        normalizeMediaPaths: params.replyMediaContext.normalizePayload,
-        typingSignals: params.turn.typingSignals,
-        reasoningPayloadsEnabled: params.turn.opts?.reasoningPayloadsEnabled,
-        commentaryPayloadsEnabled: params.turn.opts?.commentaryPayloadsEnabled,
-        blockStreamingEnabled: params.turn.blockStreamingEnabled,
-        blockReplyPipeline,
-        directlySentBlockKeys: params.directlySentBlockKeys,
-        directBlockDeliveries: params.directBlockDeliveries,
-      })
-    : undefined;
+  const blockReplyHandler =
+    params.turn.opts?.onPreparedBlockReply || params.turn.opts?.onBlockReply
+      ? createBlockReplyDeliveryHandler({
+          onBlockReply: async (payload, context) => {
+            if (params.turn.opts?.onPreparedBlockReply) {
+              for (const plan of createStructuredOutboundPayloadPlan([payload])) {
+                await params.turn.opts.onPreparedBlockReply(plan, context);
+              }
+              return;
+            }
+            await params.turn.opts?.onBlockReply?.(payload, context);
+          },
+          currentMessageId:
+            params.turn.sessionCtx.MessageSidFull ?? params.turn.sessionCtx.MessageSid,
+          replyThreading: params.turn.replyThreading,
+          normalizeStreamingText,
+          applyReplyToMode: params.turn.applyReplyToMode,
+          normalizeMediaPaths: params.replyMediaContext.normalizePayload,
+          typingSignals: params.turn.typingSignals,
+          reasoningPayloadsEnabled: params.turn.opts?.reasoningPayloadsEnabled,
+          commentaryPayloadsEnabled: params.turn.opts?.commentaryPayloadsEnabled,
+          blockStreamingEnabled: params.turn.blockStreamingEnabled,
+          blockReplyPipeline,
+          directlySentBlockKeys: params.directlySentBlockKeys,
+          directBlockDeliveries: params.directBlockDeliveries,
+        })
+      : undefined;
 
   return {
     classifyStreamingPartial,

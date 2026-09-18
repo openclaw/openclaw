@@ -4,6 +4,7 @@ import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outco
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
 import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
+import type { OutboundPayloadPlan } from "../infra/outbound/reply-payload-parts.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -251,6 +252,11 @@ export type GetReplyOptions = {
     context?: BlockReplyContext,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
+  /** Receives a block whose producer has already resolved inline directives. */
+  onPreparedBlockReply?: (
+    plan: OutboundPayloadPlan,
+    context?: BlockReplyContext,
+  ) => Promise<void> | void;
   onToolResult?: (
     payload: ReplyPayload,
   ) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
