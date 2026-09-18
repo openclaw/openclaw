@@ -192,6 +192,7 @@ function runCiManifestFixture(options: {
   iosCapabilities?: boolean;
   iosBuildCapability?: boolean;
   androidCiCapabilities?: boolean;
+  androidAccessNativeCapability?: boolean;
   nativeI18nCapabilities?: boolean;
   macosNodeParts?: boolean;
   windowsPlanner?: boolean;
@@ -503,6 +504,17 @@ function runCiManifestFixture(options: {
     }
     if (options.protocolCoverage ?? options.bundledPlanner) {
       writeFileSync(path.join(root, "scripts", "check-protocol-event-coverage.mjs"), "");
+    }
+    if (options.androidAccessNativeCapability ?? options.bundledPlanner) {
+      const nativeTest = path.join(
+        root,
+        "apps/android/app/src/androidTest/java/ai/openclaw/app/gateway/CloudflareAccessNativeTest.kt",
+      );
+      mkdirSync(path.dirname(nativeTest), { recursive: true });
+      writeFileSync(
+        nativeTest,
+        "package ai.openclaw.app.gateway\n\nclass CloudflareAccessNativeTest\n",
+      );
     }
     const targetWorkflow = path.join(root, ".github", "workflows", "ci.yml");
     mkdirSync(path.dirname(targetWorkflow), { recursive: true });
@@ -6423,6 +6435,7 @@ describe("ci workflow guards", () => {
         run_ios_build: "false",
         run_android: "false",
         run_android_job: "false",
+        run_android_access_native: "false",
         run_native_i18n: "false",
         android_matrix: JSON.stringify({ include: [] }),
       });
@@ -7362,6 +7375,106 @@ describe("ci workflow guards", () => {
     expect(uiTest.run).not.toContain("--retry");
     expect(uiTest.run).toContain("pnpm --dir ui test");
   });
+
+  it.each<
+    { label: string; selected: boolean; frozen: boolean } & Partial<
+      Parameters<typeof runCiManifestFixture>[0]
+    >
+  >([
+    { label: "frozen target without native test", selected: false, frozen: true },
+    {
+      label: "frozen target with native test",
+      androidAccessNativeCapability: true,
+      selected: true,
+      frozen: true,
+    },
+    {
+      label: "current PR without native test",
+      eventName: "pull_request",
+      selected: true,
+      frozen: false,
+    },
+    { label: "current push without native test", eventName: "push", selected: true, frozen: false },
+    {
+      label: "same-source dispatch without native test",
+      scopeEnv: { OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40) },
+      selected: true,
+      frozen: false,
+    },
+    {
+      label: "Android disabled",
+      androidAccessNativeCapability: true,
+      scopeEnv: { OPENCLAW_CI_RUN_ANDROID: "false" },
+      selected: false,
+      frozen: true,
+    },
+    {
+      label: "noncanonical repository",
+      androidAccessNativeCapability: true,
+      repository: "fixture/openclaw",
+      selected: false,
+      frozen: true,
+    },
+    {
+      label: "docs-only target",
+      androidAccessNativeCapability: true,
+      scopeEnv: { OPENCLAW_CI_DOCS_ONLY: "true" },
+      selected: false,
+      frozen: true,
+    },
+    {
+      label: "historical compatibility",
+      androidAccessNativeCapability: true,
+      historicalCompatibility: true,
+      selected: false,
+      frozen: true,
+    },
+    {
+      label: "release-candidate compatibility",
+      androidAccessNativeCapability: true,
+      releaseCandidateCompatibility: true,
+      selected: false,
+      frozen: true,
+    },
+    {
+      label: "target-context compatibility",
+      androidAccessNativeCapability: true,
+      targetContextCompatibility: true,
+      selected: false,
+      frozen: true,
+    },
+  ])(
+    "binds native Access job and gate selection to $label",
+    ({ label: _label, selected, frozen, ...options }) => {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "workflow_dispatch",
+        historicalCompatibility: false,
+        androidAccessNativeCapability: false,
+        changedPaths: [],
+        ...options,
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.frozen_target).toBe(String(frozen));
+      const context = {
+        eventName: options.eventName ?? ("workflow_dispatch" as const),
+        repository: options.repository ?? "openclaw/openclaw",
+        runAttempt: 1,
+        preflightOutputs: manifest.outputs,
+      };
+      const job = readCiWorkflow().jobs["android-access-native"];
+      expect(evaluateWorkflowExpression(`\${{ ${job.if} }}`, context)).toBe(selected);
+      expect(manifest.outputs.run_android_access_native).toBe(String(selected));
+      for (const result of ["success", "skipped", "failure", "cancelled"]) {
+        const gate = runCiGateFixture(
+          renderCiGateEnvironment(context, { "android-access-native": result }),
+        );
+        expect(gate.status, `${result}: ${gate.stdout}${gate.stderr}`).toBe(
+          result === "success" || (!selected && result === "skipped") ? 0 : 1,
+        );
+      }
+    },
+  );
 
   it("uses the target-owned UI project capability for frozen manual matrices and commands", () => {
     for (const [runnerBackend, legacyJobCount] of [

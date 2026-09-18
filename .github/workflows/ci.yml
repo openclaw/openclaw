@@ -203,6 +203,7 @@ jobs:
       run_ios_build: ${{ steps.manifest.outputs.run_ios_build }}
       run_ios_screenshots: ${{ steps.changed_scope.outputs.run_ios_screenshots }}
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
+      run_android_access_native: ${{ steps.manifest.outputs.run_android_access_native }}
       use_compatible_android_ci: ${{ steps.manifest.outputs.use_compatible_android_ci }}
       run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
@@ -1678,6 +1679,12 @@ jobs:
           const runAndroid =
             parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !npmQualification &&
             !docsOnly && isCanonicalRepository;
+          // Frozen targets may predate this class; current source must still fail
+          // native validation if the required test disappears.
+          const runAndroidAccessNative = runAndroid && !compatibilityTarget &&
+            (!frozenTarget || existsSync(
+              "apps/android/app/src/androidTest/java/ai/openclaw/app/gateway/CloudflareAccessNativeTest.kt",
+            ));
           const runWindows =
             parseBoolean(process.env.OPENCLAW_CI_RUN_WINDOWS) &&
             !docsOnly &&
@@ -2237,6 +2244,7 @@ jobs:
             run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
             run_ios_build: runIosBuild,
             run_android_job: runAndroid,
+            run_android_access_native: runAndroidAccessNative,
             use_compatible_android_ci: useCompatibleAndroidCi,
             run_protocol_event_coverage: runProtocolEventCoverage,
             android_matrix: createMatrix(
@@ -2325,7 +2333,7 @@ jobs:
               "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
               "macos-swift": count(manifest.run_macos_swift, 2),
               "ios-build": count(manifest.run_ios_build),
-              "android-access-native": count(manifest.run_android_job && !compatibilityTarget, 2),
+              "android-access-native": count(manifest.run_android_access_native, 2),
               "docker-seed-e2e": count(manifest.run_docker_seed_e2e && eventName === "pull_request" &&
                 process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY),
             }).reduce((total, rows) => total + rows, 0);
@@ -6776,7 +6784,7 @@ jobs:
     permissions:
       contents: read
     needs: [preflight]
-    if: needs.preflight.outputs.run_android_job == 'true' && needs.preflight.outputs.compatibility_target != 'true'
+    if: needs.preflight.outputs.run_android_access_native == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -7053,7 +7061,7 @@ jobs:
             ios-screenshot-shard=${{ needs.ios-screenshot-shard.result }}|${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
             ios-screenshot-evidence=${{ needs.ios-screenshot-evidence.result }}|${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
             android=${{ needs.android.result }}|${{ needs.preflight.outputs.run_android_job }}
-            android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_job == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
+            android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_access_native }}
             docker-seed-e2e=${{ needs.docker-seed-e2e.result }}|${{ needs.preflight.outputs.run_docker_seed_e2e }}
         run: |
           set -euo pipefail

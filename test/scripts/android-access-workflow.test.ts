@@ -50,8 +50,10 @@ describe("Android Access native workflow", () => {
   it("runs the packaged class on current Android targets and includes its result in CI", () => {
     expect(job.permissions).toEqual({ contents: "read" });
     expect(job["runs-on"]).toBe("ubuntu-24.04");
-    expect(job.if).toContain("run_android_job == 'true'");
-    expect(job.if).toContain("compatibility_target != 'true'");
+    expect(workflow.jobs.preflight.outputs.run_android_access_native).toBe(
+      "${{ steps.manifest.outputs.run_android_access_native }}",
+    );
+    expect(job.if).toBe("needs.preflight.outputs.run_android_access_native == 'true'");
     expect(step.run).toContain(":app:connectedPlayDebugAndroidTest");
     expect(step.run).toContain(
       "-Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.gateway.CloudflareAccessNativeTest",
@@ -60,7 +62,7 @@ describe("Android Access native workflow", () => {
     expect(step.run).toContain('zipalign" -c -P 16 -v 4 "$apk"');
     expect(workflow.jobs["ci-gate"].needs).toContain("android-access-native");
     expect(workflow.jobs["ci-gate"].steps[0].env.JOB_RESULTS).toContain(
-      "android-access-native=${{ needs.android-access-native.result }}|",
+      "android-access-native=${{ needs.android-access-native.result }}|${{ needs.preflight.outputs.run_android_access_native }}",
     );
   });
 
