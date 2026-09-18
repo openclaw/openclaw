@@ -332,15 +332,12 @@ export function renderConfigForm(props: ConfigFormProps) {
           });
         })()
       : filteredEntries.map(([key, node]) => {
-          const meta = SECTION_META[key] ?? {
-            label: key.charAt(0).toUpperCase() + key.slice(1),
-            description: node.description ?? "",
-          };
+          const meta = SECTION_META[key];
 
           return renderSection({
             id: `config-section-${key}`,
-            label: meta.label,
-            description: meta.description,
+            label: meta?.label ?? key.charAt(0).toUpperCase() + key.slice(1),
+            description: meta?.description ?? node.description ?? "",
             node,
             nodeValue: value[key],
             path: [key],
