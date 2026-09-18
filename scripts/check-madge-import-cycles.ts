@@ -12,6 +12,10 @@ import {
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = ["src", "extensions", "ui"] as const;
 const sourceExtensions = [".ts"] as const;
+const sourceFileOptions: ts.CreateSourceFileOptions = {
+  languageVersion: ts.ScriptTarget.Latest,
+  jsDocParsingMode: ts.JSDocParsingMode.ParseNone,
+};
 const ignoredPathPartPattern =
   /(^|\/)(node_modules|dist|build|coverage|\.artifacts|\.git|assets)(\/|$)/;
 
@@ -77,7 +81,7 @@ function createImportGraph(files: readonly string[]): Map<string, string[]> {
     const sourceFile = ts.createSourceFile(
       file,
       readFileSync(absoluteFile, "utf8"),
-      ts.ScriptTarget.Latest,
+      sourceFileOptions,
       false,
     );
     const imports = collectStaticModuleSpecifiers(sourceFile).flatMap((specifier) => {
