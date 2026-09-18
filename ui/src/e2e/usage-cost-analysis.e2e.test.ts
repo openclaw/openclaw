@@ -1,7 +1,21 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  createCostAnalysisResponses,
+  createRecordedCostResponses,
+  createUsageDailyEntries,
+  dailyEntry,
+  dayOffset,
+  emptyTotals,
+  emptyUsageResponses,
+  chartTotals as totals,
+} from "../pages/usage/test-helpers/usage-fixtures.test-support.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import {
+  takeControlUiViewportScreenshot,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -14,90 +28,155 @@ const suite = createControlUiE2eSuite({
 
 const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
 
-const totals = {
-  input: 1_200_000,
-  output: 300_000,
-  cacheRead: 2_400_000,
-  cacheWrite: 100_000,
-  totalTokens: 4_000_000,
-  totalCost: 32,
-  inputCost: 12,
-  outputCost: 12,
-  cacheReadCost: 6,
-  cacheWriteCost: 2,
-  missingCostEntries: 0,
-};
-
-const emptyTotals = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-};
-
-function dayOffset(offset: number): string {
-  const date = new Date();
-  date.setHours(12, 0, 0, 0);
-  date.setDate(date.getDate() + offset);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function dailyEntry(offset: number, totalCost: number, totalTokens: number) {
-  return {
-    ...totals,
-    date: dayOffset(offset),
-    input: totalTokens,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens,
-    totalCost,
-    inputCost: totalCost,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-  };
-}
-
-const daily = [
-  dailyEntry(-89, 5, 500_000),
-  dailyEntry(-29, 7, 700_000),
-  dailyEntry(-6, 9, 900_000),
-  dailyEntry(0, 11, 1_100_000),
-];
-
-function emptyUsageResponses() {
-  const updatedAt = Date.now();
-  const date = dayOffset(0);
-  return {
-    "sessions.usage": {
-      updatedAt,
-      startDate: date,
-      endDate: date,
-      sessions: [],
-      totals: emptyTotals,
-      aggregates: {
-        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
-        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-        byModel: [],
-        byProvider: [],
-        byAgent: [],
-        byChannel: [],
-        daily: [],
-      },
-    },
-    "usage.cost": { updatedAt, days: 1, daily: [], totals: emptyTotals },
-  };
-}
+const daily = createUsageDailyEntries();
 
 suite.define(() => {
+  it("shows the recorded cost hint through ordinary Usage filters", async () => {
+    const normalHint = "Average cost per message when providers report costs.";
+    const missingHint = `${normalHint} Cost data is missing for some or all sessions in this range.`;
+    const updatedAt = Date.now();
+    const date = dayOffset(0);
+    const empty = emptyUsageResponses();
+    const responses = createRecordedCostResponses(updatedAt, date, empty);
+    const initialResponses = structuredClone(responses);
+    const artifactDir = recordVisuals
+      ? createControlUiE2eArtifactDir("usage-known-zero-cost", suite.artifactDir)
+      : null;
+    const observations: Array<{
+      stage: string;
+      query: string;
+      hint: string;
+      value: string;
+      labels: string[];
+      visible: boolean;
+    }> = [];
+    const screenshots: string[] = [];
+    const diagnostics: Array<{ stage: string; geometryFile: string; screenshot: string }> = [];
+    await suite.withPage(
+      {
+        locale: "en-US",
+        timezoneId: "UTC",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+      },
+      async ({ page }) => {
+        await page.clock.setFixedTime(new Date(updatedAt));
+        const gateway = await installMockGateway(page, {
+          communityInviteDismissed: true,
+          methodResponses: responses,
+        });
+        await page.goto(`${suite.server.baseUrl}usage`);
+        const query = page.locator(".usage-query-input");
+        const hintButton = page.locator("#usage-summary-hint-average-cost");
+        const card = page.locator(".usage-summary-card").filter({ has: hintButton });
+        const tooltipHost = hintButton.locator("xpath=..");
+        const tooltip = tooltipHost.locator("wa-tooltip");
+        const tooltipBody = tooltip.locator('[part="body"]');
+        const popup = tooltip.locator('wa-popup [part="popup"]');
+        const hintContent = tooltipHost.locator('[slot="content"]');
+        const value = card.locator(".usage-summary-value");
+        const steps = [
+          { stage: "mixed", query: "", count: 3, value: "$0.03" },
+          { stage: "known-zero", query: 'label:"Known zero"', count: 1, value: "$0.00" },
+          { stage: "cleared", query: "", count: 3, value: "$0.03" },
+          { stage: "positive", query: 'label:"Known positive"', count: 1, value: "$0.10" },
+          { stage: "unknown", query: 'label:"Unpriced usage"', count: 1, value: "$0.00" },
+        ];
+        for (const step of steps) {
+          if (step.stage !== "mixed") {
+            await query.fill(step.query);
+            await query.press("Enter");
+          }
+          await expect.poll(() => page.locator(".session-bar-title").count()).toBe(step.count);
+          await expect.poll(async () => (await value.textContent())?.trim()).toBe(step.value);
+          await card.evaluate((element) =>
+            element.scrollIntoView({ block: "center", behavior: "instant" }),
+          );
+          await hintButton.click();
+          await expect.poll(() => tooltip.getAttribute("open")).toBe("");
+          await expect.poll(() => tooltipBody.isVisible()).toBe(true);
+          await expect.poll(() => hintContent.isVisible()).toBe(true);
+          await waitForControlUiProofSurface(popup, [hintContent, value]);
+          const geometry: Array<{
+            name: string;
+            bounds: Awaited<ReturnType<typeof card.boundingBox>>;
+          }> = [];
+          for (const [name, surface] of [
+            ["card", card],
+            ["tooltip-body", tooltipBody],
+            ["hint-content", hintContent],
+          ] as const) {
+            geometry.push({ name, bounds: await surface.boundingBox() });
+          }
+          if (artifactDir) {
+            const geometryFile = path.join(artifactDir, `${step.stage}-geometry.json`);
+            const screenshot = path.join(artifactDir, `${step.stage}.png`);
+            await writeFile(geometryFile, JSON.stringify({ stage: step.stage, geometry }, null, 2));
+            await writeFile(
+              screenshot,
+              await takeControlUiViewportScreenshot(page, popup, [hintButton, hintContent, value]),
+            );
+            diagnostics.push({ stage: step.stage, geometryFile, screenshot });
+            if (["mixed", "known-zero"].includes(step.stage)) {
+              screenshots.push(screenshot);
+            }
+          }
+          for (const { name, bounds } of geometry) {
+            if (!bounds) {
+              throw new Error(`Expected visible cost hint bounds: ${step.stage}/${name}`);
+            }
+            const label = `${step.stage}/${name}`;
+            expect(bounds.width, `${label} width`).toBeGreaterThan(0);
+            expect(bounds.height, `${label} height`).toBeGreaterThan(0);
+            expect(bounds.x, `${label} left`).toBeGreaterThanOrEqual(0);
+            expect(bounds.y, `${label} top`).toBeGreaterThanOrEqual(0);
+            expect(bounds.x + bounds.width, `${label} right`).toBeLessThanOrEqual(1440);
+            expect(bounds.y + bounds.height, `${label} bottom`).toBeLessThanOrEqual(900);
+          }
+          const observed = {
+            stage: step.stage,
+            query: await query.inputValue(),
+            hint: (await hintContent.textContent())?.trim() ?? "",
+            value: (await value.textContent())?.trim() ?? "",
+            labels: (await page.locator(".session-bar-title").allTextContents()).toSorted(),
+            visible: await tooltipBody.isVisible(),
+          };
+          observations.push(observed);
+          if (step.stage !== "known-zero") {
+            expect(observed.hint).toBe(step.stage === "positive" ? normalHint : missingHint);
+          }
+          await hintButton.press("Escape");
+          await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
+          await expect.poll(() => tooltipBody.isVisible()).toBe(false);
+        }
+        expect(responses).toEqual(initialResponses);
+        const requests = await gateway.getRequests();
+        const forbidden = requests.filter(({ method }) =>
+          ["chat.send", "config.set", "config.patch", "sessions.patch"].includes(method),
+        );
+        expect(forbidden).toEqual([]);
+        expect(requests.some(({ method }) => method === "sessions.usage")).toBe(true);
+        expect(requests.some(({ method }) => method === "usage.status")).toBe(true);
+        const record = {
+          observations,
+          screenshots,
+          diagnostics,
+          responses,
+          responsesUnchanged: true,
+          forbiddenRequests: forbidden,
+          requests: requests.map(({ method }) => method),
+        };
+        if (artifactDir) {
+          await writeFile(path.join(artifactDir, "receipts.json"), JSON.stringify(record, null, 2));
+        }
+        expect(
+          observations.find(({ stage }) => stage === "known-zero")?.hint,
+          "USAGE_KNOWN_ZERO_BROWSER",
+        ).toBe(normalHint);
+      },
+    );
+  });
+
   it.each([
     { timeZone: "utc", quarterIndex: 8 },
     { timeZone: "local", quarterIndex: 28 },
@@ -655,227 +734,7 @@ suite.define(() => {
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
-          methodResponses: {
-            "agents.list": {
-              agents: [
-                { id: "main", name: "Main" },
-                { id: "writer", name: "Writer" },
-              ],
-              defaultId: "main",
-              mainKey: "main",
-              scope: "agent",
-            },
-            "sessions.usage": {
-              updatedAt: Date.now(),
-              startDate: dayOffset(-89),
-              endDate: dayOffset(0),
-              sessions: [
-                {
-                  key: "agent:main:cost-analysis",
-                  label: "Cost analysis",
-                  agentId: "main",
-                  modelProvider: "openai",
-                  model: "gpt-5.5",
-                  updatedAt: Date.now(),
-                  usage: {
-                    ...totals,
-                    activityDates: daily.map((entry) => entry.date),
-                    dailyBreakdown: daily.map((entry) => ({
-                      ...entry,
-                      cost: entry.totalCost,
-                      tokens: entry.totalTokens,
-                    })),
-                    messageCounts: {
-                      total: 40,
-                      user: 20,
-                      assistant: 20,
-                      toolCalls: 12,
-                      toolResults: 12,
-                      errors: 0,
-                    },
-                    modelUsage: [
-                      {
-                        provider: "openai",
-                        model: "gpt-5.5",
-                        count: 30,
-                        totals: { ...totals, totalCost: 22 },
-                      },
-                      {
-                        provider: "anthropic",
-                        model: "claude-opus-4-6",
-                        count: 10,
-                        totals: { ...totals, totalCost: 10 },
-                      },
-                    ],
-                  },
-                },
-              ],
-              totals,
-              aggregates: {
-                messages: {
-                  total: 40,
-                  user: 20,
-                  assistant: 20,
-                  toolCalls: 12,
-                  toolResults: 12,
-                  errors: 0,
-                },
-                tools: { totalCalls: 12, uniqueTools: 2, tools: [{ name: "exec", count: 8 }] },
-                byModel: [
-                  {
-                    provider: "openai",
-                    model: "gpt-5.5",
-                    count: 30,
-                    totals: { ...totals, totalCost: 22 },
-                  },
-                  {
-                    provider: "anthropic",
-                    model: "claude-opus-4-6",
-                    count: 10,
-                    totals: { ...totals, totalCost: 10 },
-                  },
-                ],
-                byProvider: [
-                  { provider: "openai", count: 30, totals: { ...totals, totalCost: 22 } },
-                  { provider: "anthropic", count: 10, totals: { ...totals, totalCost: 10 } },
-                ],
-                byAgent: [{ agentId: "main", totals }],
-                byChannel: [],
-                daily: daily.map((entry) => ({
-                  date: entry.date,
-                  tokens: entry.totalTokens,
-                  cost: entry.totalCost,
-                  messages: 10,
-                  toolCalls: 3,
-                  errors: 0,
-                })),
-              },
-            },
-            "usage.cost": {
-              updatedAt: Date.now(),
-              days: 90,
-              daily,
-              totals,
-            },
-            "usage.status": {
-              updatedAt: Date.now(),
-              providers: [
-                {
-                  provider: "openai",
-                  displayName: "OpenAI",
-                  plan: "Admin API",
-                  windows: [],
-                  billing: [
-                    { type: "spend", label: "30-day API spend", amount: 98.75, unit: "USD" },
-                  ],
-                  costHistory: {
-                    unit: "USD",
-                    periodDays: 30,
-                    daily: [
-                      {
-                        date: dayOffset(-6),
-                        amount: 38.5,
-                        requests: 12_300,
-                        inputTokens: 4_200_000,
-                        cacheReadTokens: 2_100_000,
-                        cacheWriteTokens: 0,
-                        outputTokens: 850_000,
-                        totalTokens: 5_050_000,
-                      },
-                      {
-                        date: dayOffset(0),
-                        amount: 60.25,
-                        requests: 18_450,
-                        inputTokens: 6_100_000,
-                        cacheReadTokens: 3_400_000,
-                        cacheWriteTokens: 0,
-                        outputTokens: 1_200_000,
-                        totalTokens: 7_300_000,
-                      },
-                    ],
-                    models: [
-                      {
-                        name: "gpt-5.5",
-                        requests: 30_750,
-                        inputTokens: 10_300_000,
-                        cacheReadTokens: 5_500_000,
-                        cacheWriteTokens: 0,
-                        outputTokens: 2_050_000,
-                        totalTokens: 12_350_000,
-                      },
-                    ],
-                    categories: [{ name: "Responses", amount: 98.75 }],
-                  },
-                },
-                {
-                  provider: "anthropic",
-                  displayName: "Anthropic",
-                  plan: "Admin API",
-                  windows: [],
-                  billing: [
-                    { type: "spend", label: "30-day API spend", amount: 42.4, unit: "USD" },
-                  ],
-                  costHistory: {
-                    unit: "USD",
-                    periodDays: 30,
-                    daily: [
-                      {
-                        date: dayOffset(-6),
-                        amount: 17.15,
-                        inputTokens: 1_800_000,
-                        cacheReadTokens: 900_000,
-                        cacheWriteTokens: 200_000,
-                        outputTokens: 350_000,
-                        totalTokens: 3_250_000,
-                      },
-                      {
-                        date: dayOffset(0),
-                        amount: 25.25,
-                        inputTokens: 2_600_000,
-                        cacheReadTokens: 1_400_000,
-                        cacheWriteTokens: 300_000,
-                        outputTokens: 500_000,
-                        totalTokens: 4_800_000,
-                      },
-                    ],
-                    models: [
-                      {
-                        name: "claude-opus-4-8",
-                        inputTokens: 4_400_000,
-                        cacheReadTokens: 2_300_000,
-                        cacheWriteTokens: 500_000,
-                        outputTokens: 850_000,
-                        totalTokens: 8_050_000,
-                      },
-                    ],
-                    categories: [{ name: "Claude API", amount: 42.4 }],
-                  },
-                },
-                {
-                  provider: "openrouter",
-                  displayName: "OpenRouter",
-                  plan: "Production",
-                  windows: [{ label: "API key budget", usedPercent: 25 }],
-                  billing: [
-                    {
-                      type: "balance",
-                      label: "Account balance",
-                      amount: 64.5,
-                      unit: "USD",
-                    },
-                    {
-                      type: "budget",
-                      label: "API key budget",
-                      used: 5,
-                      limit: 20,
-                      unit: "USD",
-                    },
-                  ],
-                  summary: "$1.25 today · $5.00 this month",
-                },
-              ],
-            },
-          },
+          methodResponses: createCostAnalysisResponses(daily),
         });
 
         await page.goto(`${suite.server.baseUrl}usage`);
