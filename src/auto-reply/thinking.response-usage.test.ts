@@ -1,5 +1,6 @@
 /** Tests response-usage configuration precedence independently from thinking profiles. */
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../plugin-sdk/core.js";
 import { resolveEffectiveResponseUsage } from "./thinking.js";
 
 describe("resolveEffectiveResponseUsage", () => {
@@ -14,9 +15,15 @@ describe("resolveEffectiveResponseUsage", () => {
   });
 
   it("applies per-channel config entry when session is unset", () => {
-    const cfg = { default: "off", discord: "full", telegram: "tokens" } as const;
+    const cfg: NonNullable<OpenClawConfig["messages"]>["responseUsage"] = {
+      default: "off",
+      discord: "full",
+      telegram: "tokens",
+      matrix: undefined,
+    };
     expect(resolveEffectiveResponseUsage(undefined, cfg, "discord")).toBe("full");
     expect(resolveEffectiveResponseUsage(undefined, cfg, "telegram")).toBe("tokens");
+    expect(resolveEffectiveResponseUsage(undefined, cfg, "matrix")).toBe("off");
     // Unknown channel falls back to config default
     expect(resolveEffectiveResponseUsage(undefined, cfg, "whatsapp")).toBe("off");
   });

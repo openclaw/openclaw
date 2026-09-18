@@ -47,10 +47,21 @@ export type BroadcastConfig = {
 };
 
 type MessagesSchemaInput = DefinedSchemaInput<typeof MessagesSchema>;
+type ResponseUsageMode = Extract<MessagesSchemaInput["responseUsage"], string>;
 
-export type MessagesConfig = Omit<MessagesSchemaInput, "groupChat" | "visibleReplies"> & {
+export type MessagesConfig = Omit<
+  MessagesSchemaInput,
+  "groupChat" | "responseUsage" | "visibleReplies"
+> & {
   /** @deprecated Doctor-only legacy input. */
   removeAckAfterReply?: boolean;
+  /** Authored channel entries can be undefined before JSON serialization omits them. */
+  responseUsage?:
+    | ResponseUsageMode
+    | {
+        default?: ResponseUsageMode;
+        [channel: string]: ResponseUsageMode | undefined;
+      };
   visibleReplies?: "automatic" | "message_tool";
   groupChat?: GroupChatConfig;
 };

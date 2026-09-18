@@ -9,6 +9,10 @@ type IsOptional<T, K extends keyof T> = Pick<T, K> extends Required<Pick<T, K>> 
 
 describe("memory core host engine foundation contracts", () => {
   it("preserves the released resolved-config authoring shapes", () => {
+    expectTypeOf<ResolvedMemorySearchConfig["enabled"]>().toEqualTypeOf<boolean>();
+    const disabled: Pick<ResolvedMemorySearchConfig, "enabled"> = { enabled: false };
+    expectTypeOf(disabled).toMatchTypeOf<{ enabled: boolean }>();
+
     expectTypeOf<IsOptional<ResolvedMemorySearchConfig, "inputType">>().toEqualTypeOf<true>();
     expectTypeOf<IsOptional<ResolvedMemorySearchConfig, "queryInputType">>().toEqualTypeOf<true>();
     expectTypeOf<
