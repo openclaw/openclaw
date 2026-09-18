@@ -267,6 +267,8 @@ export function renderCardModal(props: WorkboardProps) {
     {
       label: editing ? t("workboard.editCard") : t("workboard.newCard"),
       description: editing ? t("workboard.editCardHelp") : t("workboard.newCardHelp"),
+      // Unsaved drafts must survive accidental backdrop clicks.
+      lightDismiss: false,
       style:
         "--openclaw-modal-width: 700px; --openclaw-modal-max-height: calc(100dvh - 40px); --openclaw-modal-backdrop-filter: blur(1px); --wa-color-overlay-modal: rgba(0, 0, 0, 0.32);",
       onCancel: () => {
