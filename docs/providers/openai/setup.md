@@ -253,6 +253,48 @@ sidebarTitle: "Setup"
     Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix
     profile ids and order entries before relying on profile ordering.
 
+    ### Advanced Account Security enrollment
+
+    OpenAI [Advanced Account Security
+    (AAS)](https://help.openai.com/en/articles/20001221-advanced-account-security)
+    enforces passkey or security-key sign-in. Enrollment signs out every
+    existing session, so OpenClaw-held OAuth credentials are signed out with
+    everything else, and active sessions may be shorter. Do not expect a
+    fixed token lifetime or unattended refresh to keep working indefinitely
+    after enrollment.
+
+    To recover, sign in again through OpenClaw with the enrolled passkey or
+    security key, targeting the same agent and profile the failing route
+    uses:
+
+    ```bash
+    openclaw models auth login --provider openai
+    openclaw models auth login --agent <id> --provider openai
+    openclaw models auth login --provider openai --profile-id openai:ritsuko
+    ```
+
+    A successful standalone `codex login` does not replace an
+    OpenClaw-managed credential. The default agent-scoped mode keeps OAuth
+    material in OpenClaw's auth store and refreshes it from there; letting a
+    native Codex login own the credential is the separate, explicit
+    user-home mode. See [Auth and environment
+    isolation](/plugins/codex-harness-reference/auth#auth-and-environment-isolation).
+
+    Verify with a real request through the intended profile, runtime, and
+    model. A model listing or a completed browser callback is not proof of
+    model access:
+
+    ```bash
+    openclaw models status --probe --probe-provider openai
+    ```
+
+    If a fresh login still fails, note the exact sanitized error and the
+    stage it failed at — browser or security-key interaction, localhost
+    callback, token exchange, token refresh, or the model request — and
+    include both when asking for help. Do not disable AAS, delete credential
+    or thread stores, paste tokens into a report, or switch to API-key
+    billing as a generic workaround.
+
     ### Status indicator
 
     Chat `/status` shows which model runtime is active for the current
