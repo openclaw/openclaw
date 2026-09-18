@@ -17,8 +17,8 @@ import {
 } from "../../embedded-agent-runner/message-visibility.js";
 import {
   buildRequesterCompletionDeliveryResult,
-  hasMessagingToolDeliveryToSource,
   isGatewayAgentRunPending,
+  resolveMessagingToolDeliveryEvidence,
   resolvePrivateCompletionDeliveryResult,
 } from "./subagent-announce-completion-delivery.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
@@ -32,7 +32,12 @@ type DirectAnnounceResponseContext = {
     requesterIsSubagent: boolean;
   };
   parentOnly: boolean;
-  deliveryTarget: Parameters<typeof hasMessagingToolDeliveryToSource>[1];
+  cfg: Parameters<typeof resolveMessagingToolDeliveryEvidence>[0]["cfg"];
+  requesterSessionKey: string;
+  requesterAgentId?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  deliveryTarget: Parameters<typeof resolveMessagingToolDeliveryEvidence>[0]["deliveryTarget"];
   shouldDeliverAgentFinal: boolean;
   requiresMessageToolDelivery: boolean;
   isSubagentCompletion: boolean;
@@ -60,6 +65,11 @@ function missingVisibleReplyResult(): SubagentAnnounceDeliveryResult {
 export function createDirectAnnounceResponseClassifier(context: DirectAnnounceResponseContext) {
   const {
     params,
+    cfg,
+    requesterSessionKey,
+    requesterAgentId,
+    signal,
+    timeoutMs,
     parentOnly,
     deliveryTarget,
     shouldDeliverAgentFinal,
@@ -73,9 +83,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
     textCompletionDirectDeliveryKind,
     tryTextCompletionDirectDelivery,
   } = context;
-  return (
-    directAnnounceResponse: unknown,
-  ): SubagentAnnounceDeliveryResult | Promise<SubagentAnnounceDeliveryResult> => {
+  return async (directAnnounceResponse: unknown): Promise<SubagentAnnounceDeliveryResult> => {
     if (isGatewayAgentRunPending(directAnnounceResponse)) {
       return parentOnly || params.sourceTool === "subagent_settle"
         ? {
@@ -95,16 +103,17 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         params.requesterIsSubagent ? undefined : effectiveDirectOrigin,
       );
     }
-    const hasFinalMessagingToolDelivery = Boolean(
-      directAnnounceResult &&
-      hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget, {
-        requireFinalReply: true,
-      }),
-    );
-    const hasMessagingToolDelivery = Boolean(
-      directAnnounceResult &&
-      hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
-    );
+    const { hasFinalMessagingToolDelivery, hasMessagingToolDelivery } = directAnnounceResult
+      ? await resolveMessagingToolDeliveryEvidence({
+          cfg,
+          requesterSessionKey,
+          requesterAgentId,
+          result: directAnnounceResult,
+          deliveryTarget,
+          signal,
+          timeoutMs,
+        })
+      : { hasFinalMessagingToolDelivery: false, hasMessagingToolDelivery: false };
     const requiresAutomaticFinalReceipt =
       shouldDeliverAgentFinal && (params.expectsCompletionMessage || params.requireVisibleReply);
     const automaticEvidence = getAutomaticDeliveryEvidence(directAnnounceResult ?? {});

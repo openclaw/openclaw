@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -21,7 +22,7 @@ import {
   hasAgentRunContextExecutionOwner,
   getAgentRunLifecycleGeneration,
 } from "../infra/agent-run-registry.js";
-import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
+import { matchSourceDeliveryTargetWithPlugin } from "../infra/outbound/source-delivery-target-match.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
@@ -60,7 +61,11 @@ function hasHarnessCompletionFinalReceipt(
         normalizeOptionalString(sent.accountId) === normalizeOptionalString(target.accountId) &&
         sent.sourceReplyFinal === true &&
         sent.visible === true &&
-        sourceDeliveryTargetsMatch(sent, target),
+        matchSourceDeliveryTargetWithPlugin(
+          sent,
+          target,
+          getLoadedChannelPluginForRead(requiredProvider),
+        ),
     )
   ) {
     return true;

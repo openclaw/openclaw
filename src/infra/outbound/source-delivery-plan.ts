@@ -3,7 +3,11 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
-import { normalizeTargetForProvider } from "./target-normalization.js";
+import {
+  matchSourceDeliveryTargetWithPlugin,
+  type SourceDeliveryMessageToolTarget,
+  type SourceDeliveryTarget,
+} from "./source-delivery-target-match.js";
 
 /** Owner responsible for making source delivery visible to the user. */
 type SourceVisibleDeliveryOwner =
@@ -22,27 +26,6 @@ type SourceDeliveryPlanReason =
   | "cron_none"
   | "media_completion"
   | "subagent_completion";
-
-/** Configured or inferred destination source delivery must satisfy. */
-type SourceDeliveryTarget = {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-};
-
-/** Message-tool destination observed during a run. */
-type SourceDeliveryMessageToolTarget = {
-  tool?: string;
-  provider?: string;
-  accountId?: string;
-  to?: string;
-  threadId?: string;
-  threadImplicit?: boolean;
-  threadSuppressed?: boolean;
-  text?: string;
-  mediaUrls?: string[];
-};
 
 /** Visible message-tool delivery with target verification state. */
 export type SourceDeliveryVisibleDelivery = {
@@ -87,87 +70,15 @@ function isMessageToolOwnedDelivery(owner: SourceVisibleDeliveryOwner): boolean 
   return owner === "message_tool" || owner === "message_tool_then_direct_fallback";
 }
 
-function normalizeDeliveryTarget(channel: string, to: string): string {
-  const toTrimmed = to.trim();
-  return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
-}
-
-function deliveryTargetsMatch(channel: string, targetTo: string, deliveryTo: string): boolean {
-  const targetToTrimmed = targetTo.trim();
-  const deliveryToTrimmed = deliveryTo.trim();
-  if (targetToTrimmed === deliveryToTrimmed) {
-    return true;
-  }
-  const targetPrefixed = targetToTrimmed.match(/^([a-z][a-z0-9_-]*):(.*)$/i);
-  const deliveryPrefixed = deliveryToTrimmed.match(/^([a-z][a-z0-9_-]*):(.*)$/i);
-  const targetKind = targetPrefixed?.[1]?.toLowerCase();
-  const deliveryKind = deliveryPrefixed?.[1]?.toLowerCase();
-  if (
-    targetKind &&
-    targetKind === deliveryKind &&
-    ["channel", "conversation", "group", "user"].includes(targetKind)
-  ) {
-    // Provider-owned ID comparison can bypass generic target normalization.
-    const targetId = targetPrefixed?.[2]?.trim();
-    const deliveryId = deliveryPrefixed?.[2]?.trim();
-    const comparison = getChannelPlugin(channel)?.messaging?.targetIdComparison;
-    if (comparison === "case-sensitive") {
-      return targetId === deliveryId;
-    }
-    if (comparison === "lowercase") {
-      return targetId?.toLowerCase() === deliveryId?.toLowerCase();
-    }
-  }
-  return (
-    normalizeDeliveryTarget(channel, targetToTrimmed) ===
-    normalizeDeliveryTarget(channel, deliveryToTrimmed)
-  );
-}
-
-function normalizeDeliveryThreadId(threadId: string | number | undefined): string | undefined {
-  return stringifyRouteThreadId(threadId)?.trim() || undefined;
-}
-
-const TOPIC_THREAD_SUFFIX = /:topic:(\d+)$/i;
-
 /** Compares a message-tool target with the required source delivery target. */
 export function sourceDeliveryTargetsMatch(
   target: SourceDeliveryMessageToolTarget,
   delivery: SourceDeliveryTarget,
 ): boolean {
-  if (!delivery.channel || !delivery.to || !target.to) {
-    return false;
-  }
-  const channel = delivery.channel.trim().toLowerCase();
-  const provider = target.provider?.trim().toLowerCase();
-  if (provider && provider !== "message" && provider !== channel) {
-    return false;
-  }
-  if (delivery.accountId && target.accountId && target.accountId !== delivery.accountId) {
-    return false;
-  }
-  const targetTo = target.to.trim();
-  const deliveryTo = delivery.to.trim();
-  const targetTopic = TOPIC_THREAD_SUFFIX.exec(targetTo);
-  const deliveryTopic = TOPIC_THREAD_SUFFIX.exec(deliveryTo);
-  if (
-    !deliveryTargetsMatch(
-      channel,
-      targetTopic ? targetTo.slice(0, targetTopic.index) : targetTo,
-      deliveryTopic ? deliveryTo.slice(0, deliveryTopic.index) : deliveryTo,
-    )
-  ) {
-    return false;
-  }
-  const deliveryThreadId = normalizeDeliveryThreadId(delivery.threadId) ?? deliveryTopic?.[1];
-  const targetThreadId = normalizeDeliveryThreadId(target.threadId) ?? targetTopic?.[1];
-  if (!deliveryThreadId && !targetThreadId) {
-    return true;
-  }
-  if (deliveryThreadId && !targetThreadId) {
-    return target.threadImplicit === true && target.threadSuppressed !== true;
-  }
-  return deliveryThreadId === targetThreadId;
+  const channel = delivery.channel?.trim().toLowerCase();
+  return channel
+    ? matchSourceDeliveryTargetWithPlugin(target, delivery, getChannelPlugin(channel))
+    : false;
 }
 
 /** Builds a source delivery plan from ownership and fallback inputs. */
