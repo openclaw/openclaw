@@ -70,6 +70,44 @@ export function measureConnectedTranscriptRows(
   return changed;
 }
 
+export function measureTranscriptRowRef(
+  element: HTMLElement,
+  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  canMeasureVisibleRows: boolean,
+): void {
+  if (
+    canMeasureVisibleRows &&
+    !virtualizer.options.useCachedMeasurements &&
+    element.isConnected &&
+    virtualizer.scrollElement?.clientHeight
+  ) {
+    const visibleIndex = virtualizer.indexFromElement(element);
+    const range = virtualizer.range;
+    if (
+      range &&
+      visibleIndex >= range.startIndex &&
+      visibleIndex <= range.endIndex &&
+      !virtualizer.itemSizeCache.has(virtualizer.options.getItemKey(visibleIndex))
+    ) {
+      // Native scrolling defers TanStack's first measurement until after paint.
+      // Resolve a visible new key before its intrinsic placeholder can paint.
+      const visibility = element.style.getPropertyValue("content-visibility");
+      const priority = element.style.getPropertyPriority("content-visibility");
+      element.style.setProperty("content-visibility", "visible");
+      try {
+        virtualizer.resizeItem(visibleIndex, measureElement(element, undefined, virtualizer));
+      } finally {
+        if (visibility) {
+          element.style.setProperty("content-visibility", visibility, priority);
+        } else {
+          element.style.removeProperty("content-visibility");
+        }
+      }
+    }
+  }
+  virtualizer.measureElement(element);
+}
+
 export function measureTranscriptRow(
   element: HTMLElement,
   entry: ResizeObserverEntry | undefined,
