@@ -151,7 +151,9 @@ it("compensation closes with its callback and cannot grant an unmanaged fallback
             expect(() => assertGatewayServiceFallbackAllowed("detached launch")).toThrow(
               "not an update-owned",
             );
-            late = ready.then(() => assertGatewayServiceUpdateCurrent());
+            late = ready.then(() => {
+              assertGatewayServiceUpdateCurrent();
+            });
             return true;
           },
         ),

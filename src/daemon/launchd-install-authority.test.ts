@@ -83,7 +83,7 @@ it.each([
   const activations: string[] = [];
   const bootstrapDefinitions: string[] = [];
   native.command.mockImplementation(async ([binary, nativeAction]) => {
-    const action = expectDefined(nativeAction);
+    const action = expectDefined(nativeAction, "Expected a native launchctl action");
     expect(binary).toBe("launchctl");
     if (action === "bootout" || action === "unload") {
       loaded = false;
