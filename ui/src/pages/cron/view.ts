@@ -28,7 +28,7 @@ import "../../styles/cron.css";
 import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import { renderChannelPicker, type ChannelPickerOption } from "../../components/channel-picker.ts";
 import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
-import { icon, icons } from "../../components/icons.ts";
+import { icon } from "../../components/icons.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon.ts";
@@ -62,7 +62,7 @@ import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { renderSegmented } from "./segmented-control.ts";
-import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
+import { renderCronSuggestions } from "./suggestions.ts";
 import { renderRunsSection, runStatusLabel } from "./view-runs.ts";
 
 registerCronEnglish();
@@ -526,7 +526,9 @@ function renderListView(props: CronProps) {
               )
             : [
                 renderSettingsSection({}, renderJobsTable(props, hasAnyJobsFilters)),
-                showStarterAutomations ? renderSuggestions(props) : nothing,
+                showStarterAutomations
+                  ? renderCronSuggestions(props.onOpenCreate, props.busy)
+                  : nothing,
               ]
         }
       </div>
@@ -615,6 +617,7 @@ function renderToolbar(props: CronProps, hasAdvancedJobsFilters: boolean) {
                     type="button"
                     class="btn primary btn--sm cron-new-task"
                     data-test-id="cron-new-task"
+                    ?disabled=${props.busy}
                     @click=${() => props.onOpenCreate()}
                   >
                     ${icon("plus")} ${t("cron.list.newTask")}
@@ -1077,34 +1080,6 @@ function renderJobMenu(props: CronProps, job: CronJob) {
       }
     </wa-dropdown>
   `;
-}
-
-function renderSuggestions(props: CronProps) {
-  // Starter ideas are drill-in rows: activating one prefills the create form.
-  return renderSettingsSection(
-    { title: t("cron.suggestions.title") },
-    CRON_SUGGESTIONS.map(
-      (suggestion) => html`
-        <button
-          type="button"
-          class="settings-row settings-row--nav cron-suggestion"
-          data-suggestion=${suggestion.id}
-          @click=${() => props.onOpenCreate(suggestionFormPatch(suggestion))}
-        >
-          <div class="settings-row__text">
-            <span class="settings-row__title">
-              <span aria-hidden="true">${suggestion.emoji}</span> ${t(suggestion.nameKey)}
-            </span>
-            <span class="settings-row__desc">${t(suggestion.taglineKey)}</span>
-          </div>
-          <div class="settings-row__control">
-            <span class="settings-row__value">${t(suggestion.scheduleKey)}</span>
-            <span class="settings-row__chevron">${icons.chevronRight}</span>
-          </div>
-        </button>
-      `,
-    ),
-  );
 }
 
 // ── Detail view ──
