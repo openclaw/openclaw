@@ -130,4 +130,34 @@ describe("resolveFeishuMessageDedupeKey", () => {
 
     expect(resolveFeishuMessageDedupeKey(event)).toBe(JSON.stringify(["om_post", ...expected]));
   });
+
+  it("includes top-level post files[] in the replay key", () => {
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-user" } },
+      message: {
+        message_id: "om_post_files",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "post",
+        content: JSON.stringify({
+          title: "",
+          content: [[{ tag: "text", text: "这是账本" }]],
+          files: [
+            {
+              file_key: "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
+              file_name: "amount-2026-08-01_2026-08-31.csv",
+              is_folder: false,
+            },
+          ],
+        }),
+      },
+    };
+
+    expect(resolveFeishuMessageDedupeKey(event)).toBe(
+      JSON.stringify([
+        "om_post_files",
+        "file_key:file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
+      ]),
+    );
+  });
 });

@@ -167,6 +167,98 @@ describe("parsePostContent", () => {
     ]);
   });
 
+  it("collects top-level files[] from captioned and multi-file posts", () => {
+    const captioned = JSON.stringify({
+      title: "",
+      content: [[{ tag: "text", text: "这是账本" }]],
+      content_v2: [[{ tag: "text", text: "这是账本" }]],
+      files: [
+        {
+          file_key: "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
+          file_name: "amount-2026-08-01_2026-08-31.csv",
+          is_folder: false,
+        },
+      ],
+    });
+
+    expect(parsePostContent(captioned)).toEqual({
+      textContent: "这是账本",
+      attachments: [
+        {
+          kind: "file",
+          key: "file_v3_0015l_1a389bce-aabb-ccdd-eeff-1234567890ab",
+          fileName: "amount-2026-08-01_2026-08-31.csv",
+        },
+      ],
+      mentionedOpenIds: [],
+    });
+
+    const multiFile = JSON.stringify({
+      title: "",
+      content: [[]],
+      content_v2: [[]],
+      files: [
+        {
+          file_key: "file_v3_zip_aug",
+          file_name: "usage_data_2026-08-01_2026-08-31.zip",
+          is_folder: false,
+        },
+        {
+          file_key: "file_v3_zip_sep",
+          file_name: "usage_data_2026-09-01_2026-09-18.zip",
+          is_folder: false,
+        },
+        {
+          file_key: "file_v3_folder",
+          file_name: "ignored-folder",
+          is_folder: true,
+        },
+        {
+          file_key: "invalid/key",
+          file_name: "bad.csv",
+          is_folder: false,
+        },
+      ],
+    });
+
+    expect(parsePostContent(multiFile).attachments).toEqual([
+      { kind: "file", key: "file_v3_zip_aug", fileName: "usage_data_2026-08-01_2026-08-31.zip" },
+      { kind: "file", key: "file_v3_zip_sep", fileName: "usage_data_2026-09-01_2026-09-18.zip" },
+    ]);
+
+    expect(
+      parsePostContent(
+        JSON.stringify({
+          post: {
+            zh_cn: {
+              title: "",
+              content: [[{ tag: "text", text: "附件" }]],
+              files: [
+                {
+                  file_key: "file_v3_locale",
+                  file_name: "locale.csv",
+                  is_folder: false,
+                },
+              ],
+            },
+          },
+        }),
+      ).attachments,
+    ).toEqual([{ kind: "file", key: "file_v3_locale", fileName: "locale.csv" }]);
+  });
+
+  it("does not duplicate top-level files[] already present as media tags", () => {
+    const content = JSON.stringify({
+      title: "",
+      content: [[{ tag: "media", file_key: "file_shared", file_name: "shared.csv" }]],
+      files: [{ file_key: "file_shared", file_name: "shared.csv", is_folder: false }],
+    });
+
+    expect(parsePostContent(content).attachments).toEqual([
+      { kind: "file", key: "file_shared", fileName: "shared.csv" },
+    ]);
+  });
+
   it("supports locale wrappers", () => {
     const wrappedByPost = JSON.stringify({
       post: {

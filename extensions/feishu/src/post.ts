@@ -19,6 +19,7 @@ type PostParseResult = {
 type PostPayload = {
   title: string;
   content: unknown[];
+  files?: unknown;
 };
 
 function toStringOrEmpty(value: unknown): string {
@@ -168,6 +169,32 @@ function renderElement(
   }
 }
 
+function appendTopLevelPostFiles(
+  attachments: PostParseResult["attachments"],
+  files: unknown,
+): void {
+  if (!Array.isArray(files)) {
+    return;
+  }
+  const seenFileKeys = new Set(
+    attachments
+      .filter((attachment) => attachment.kind === "file")
+      .map((attachment) => attachment.key),
+  );
+  for (const entry of files) {
+    if (!isRecord(entry) || entry.is_folder === true) {
+      continue;
+    }
+    const fileKey = normalizeFeishuExternalKey(toStringOrEmpty(entry.file_key));
+    if (!fileKey || seenFileKeys.has(fileKey)) {
+      continue;
+    }
+    seenFileKeys.add(fileKey);
+    const fileName = toStringOrEmpty(entry.file_name) || undefined;
+    attachments.push({ kind: "file", key: fileKey, ...(fileName ? { fileName } : {}) });
+  }
+}
+
 function toPostPayload(candidate: unknown): PostPayload | null {
   if (!isRecord(candidate) || !Array.isArray(candidate.content)) {
     return null;
@@ -175,6 +202,7 @@ function toPostPayload(candidate: unknown): PostPayload | null {
   return {
     title: toStringOrEmpty(candidate.title),
     content: candidate.content,
+    ...(Array.isArray(candidate.files) ? { files: candidate.files } : {}),
   };
 }
 
@@ -258,6 +286,11 @@ export function renderPostContent(
         );
       }
       paragraphs.push(renderedParagraph);
+    }
+
+    appendTopLevelPostFiles(attachments, payload.files);
+    if (isRecord(parsed)) {
+      appendTopLevelPostFiles(attachments, parsed.files);
     }
 
     const title = escapeMarkdownText(payload.title.trim());
