@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
+import {
+  resumeScheduledTaskAutoStartAfterUpdate,
+  suspendScheduledTaskAutoStartForUpdate,
+} from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import { resolveTaskName, writeTaskXmlTempFile } from "./schtasks-layout.js";
 import {
@@ -9,7 +13,11 @@ import {
   terminateScheduledTaskGatewayListeners,
   terminateScheduledTaskNodeHost,
 } from "./schtasks-process.js";
-import { isScheduledTaskDefinitelyNotRunning, resolveFallbackRuntime } from "./schtasks-runtime.js";
+import {
+  isScheduledTaskDefinitelyNotRunning,
+  resolveFallbackRuntime,
+  waitForScheduledTaskRunningEvidence,
+} from "./schtasks-runtime.js";
 import { probeScheduledTaskExists, probeScheduledTaskState } from "./schtasks-state-probe.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import {
@@ -51,6 +59,7 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
     return xml;
   };
   const original = await readXml();
+  const originalRuntime = original === null ? null : probeScheduledTaskState(taskName);
   const backupPath = `${scriptPath}.task.xml.bak`;
   if (original !== null) {
     assertGatewayServiceUpdateCurrent();
@@ -153,8 +162,50 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
           if (restored.code !== 0 || (await readXml()) !== original) {
             throw new Error(`Could not restore Scheduled Task ${taskName} from ${backupPath}.`);
           }
+          receipt = original;
         } finally {
           await fs.rm(path.dirname(temporary), { recursive: true, force: true });
+        }
+        if (
+          originalRuntime?.status !== "found" ||
+          (originalRuntime.state !== 1 &&
+            originalRuntime.state !== 3 &&
+            originalRuntime.state !== 4)
+        ) {
+          throw new Error(
+            `Scheduled Task ${taskName} previous running state could not be verified.`,
+          );
+        }
+        if (originalRuntime.state === 4) {
+          // Disabling a running task only suspends its triggers; preserve both prior facts.
+          const restoreDisabled = originalRuntime.enabled === false;
+          try {
+            if (restoreDisabled) {
+              await resumeScheduledTaskAutoStartAfterUpdate(env, { beforeMutation: assertReceipt });
+            }
+            const run = await execSchtasks(["/Run", "/TN", taskName]);
+            if (
+              run.code !== 0 ||
+              (restoreDisabled && !(await waitForScheduledTaskRunningEvidence(env)))
+            ) {
+              throw new Error(
+                `Scheduled Task ${taskName} previous launch did not confirm completion.`,
+              );
+            }
+          } finally {
+            if (restoreDisabled) {
+              await suspendScheduledTaskAutoStartForUpdate(env, {
+                beforeMutation: () => assertReceipt(true),
+                restoreOnFailure: false,
+              });
+              await assertReceipt();
+            }
+          }
+          if (!(await waitForScheduledTaskRunningEvidence(env))) {
+            throw new Error(
+              `Scheduled Task ${taskName} previous running state could not be restored.`,
+            );
+          }
         }
       }
       return true;

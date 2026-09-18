@@ -188,8 +188,9 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       await write(...args);
       if (
         custodyLoss === "before-publication" &&
-        String(args[0]).endsWith(".tmp") &&
-        path.basename(String(args[0])).startsWith("openclaw-gateway.service.")
+        typeof args[0] === "string" &&
+        args[0].endsWith(".tmp") &&
+        path.basename(args[0]).startsWith("openclaw-gateway.service.")
       ) {
         current = false;
       }
@@ -278,9 +279,15 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
           args.find((arg) => ["daemon-reload", "enable", "restart", "stop"].includes(arg))!,
         );
         const action = nativeActions.at(-1);
-        if (action === "restart") running = true;
-        if (action === "stop") running = false;
-        if (action === custodyLoss) current = false;
+        if (action === "restart") {
+          running = true;
+        }
+        if (action === "stop") {
+          running = false;
+        }
+        if (action === custodyLoss) {
+          current = false;
+        }
         stdout = "";
       } else {
         unexpectedProcesses.push(argv.join(" "));
@@ -378,7 +385,9 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
             requireEffective: true,
             requireLoadedCommand: true,
           });
-          if (!inspected.command) throw new Error("Missing fixture service command");
+          if (!inspected.command) {
+            throw new Error("Missing fixture service command");
+          }
           try {
             await repairGatewayServiceInstallation({
               service,
@@ -388,7 +397,9 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
               updateRepairMode: false,
               maintenance: {
                 assertCurrent: () => {
-                  if (!current) throw new Error("Doctor custody released during installation");
+                  if (!current) {
+                    throw new Error("Doctor custody released during installation");
+                  }
                 },
                 assertReadCurrent: () => {},
               },

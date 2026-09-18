@@ -9,7 +9,7 @@ import { buildLaunchAgentPlist } from "../../daemon/launchd-plist.js";
 import { decodeLaunchAgentPlistFixture } from "../../daemon/launchd-plist.test-support.js";
 import {
   resolveLaunchAgentPlistPath,
-  resolveLaunchAgentEnvFilePath,
+  resolveLaunchAgentEnvironmentReadOptions,
   resolveLaunchAgentEnvWrapperPath,
 } from "../../daemon/launchd-service-files.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
@@ -785,7 +785,10 @@ describe("preserved update activation with real version guards", () => {
     mockProcessPlatform("darwin");
     const label = "ai.openclaw.gateway";
     const plistPath = resolveLaunchAgentPlistPath(process.env);
-    const envPath = resolveLaunchAgentEnvFilePath(process.env, label);
+    const envPath = resolveLaunchAgentEnvironmentReadOptions(
+      process.env,
+      label,
+    ).expectedEnvironmentFilePath;
     const wrapperPath = resolveLaunchAgentEnvWrapperPath(process.env, label);
     const demandOnly = scenario.endsWith("demand");
     let plist = buildLaunchAgentPlist({

@@ -177,12 +177,12 @@ export async function installLaunchAgent(
   const { files, loaded } = await withGatewayServiceInstallationRecovery(
     async () => {
       await assertExternalLaunchAgentMutation(args.env, "install");
-      const files = await captureLaunchAgentInstallFiles(args.env);
-      const loaded = await snapshotLaunchAgentLoadedState(
-        files.originals.get(targetPlistPath)!.snapshot?.contents ?? null,
+      const captured = await captureLaunchAgentInstallFiles(args.env);
+      const wasLoaded = await snapshotLaunchAgentLoadedState(
+        captured.originals.get(targetPlistPath)!.snapshot?.contents ?? null,
         serviceTarget,
       );
-      return { files, loaded };
+      return { files: captured, loaded: wasLoaded };
     },
     async () => false,
   );

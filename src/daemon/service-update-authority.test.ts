@@ -111,7 +111,9 @@ it("Doctor compensation retains the original updater fence", async () => {
   await expect(
     withGatewayServiceUpdateAuthority(
       () => {
-        if (!parentCurrent) throw new Error("original updater retired");
+        if (!parentCurrent) {
+          throw new Error("original updater retired");
+        }
       },
       () =>
         withGatewayServiceUpdateAuthority(
@@ -139,7 +141,9 @@ it("compensation closes with its callback and cannot grant an unmanaged fallback
   await expect(
     withGatewayServiceUpdateAuthority(
       () => {
-        if (!current) throw new Error("Doctor custody released");
+        if (!current) {
+          throw new Error("Doctor custody released");
+        }
       },
       () =>
         withGatewayServiceInstallationRecovery(

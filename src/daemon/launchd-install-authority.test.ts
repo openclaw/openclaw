@@ -118,7 +118,11 @@ it.each([
   const write = fs.writeFile;
   vi.spyOn(fs, "writeFile").mockImplementation(async (...parameters) => {
     await write(...parameters);
-    if (boundary === "before-publication" && String(parameters[0]).endsWith(".tmp")) {
+    if (
+      boundary === "before-publication" &&
+      typeof parameters[0] === "string" &&
+      parameters[0].endsWith(".tmp")
+    ) {
       current = false;
     }
   });

@@ -184,7 +184,9 @@ describe("native service runtime pin persistence", () => {
           programArguments,
           runtimePinUpdate: { expected, pin },
           assertCurrent: () => {
-            if (!current) throw new Error("Custody released during native readback");
+            if (!current) {
+              throw new Error("Custody released during native readback");
+            }
           },
         }),
       ).rejects.toMatchObject({ code: "service-authority-revoked", outcome: undefined });

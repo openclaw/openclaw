@@ -19,14 +19,28 @@ const native = vi.hoisted(() => ({
   run: vi.fn<typeof import("./schtasks-control.js").runScheduledTaskOrThrow>(),
   probe: vi.fn<typeof import("./schtasks-state-probe.js").probeScheduledTaskState>(),
   runtime: vi.fn<typeof import("./schtasks-runtime.js").resolveFallbackRuntime>(),
+  running: vi.fn<typeof import("./schtasks-runtime.js").waitForScheduledTaskRunningEvidence>(),
 }));
 vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.exec }));
-vi.mock("./schtasks-control.js", () => ({ runScheduledTaskOrThrow: native.run }));
+vi.mock("./schtasks-control.js", async (original) => ({
+  ...(await original<typeof import("./schtasks-control.js")>()),
+  runScheduledTaskOrThrow: native.run,
+}));
+vi.mock("./service-operation-lock.js", () => ({
+  withGatewayServiceOperationLock: async (
+    _env: unknown,
+    operation: (assertCurrent: () => void) => Promise<unknown>,
+  ) =>
+    operation(() => {
+      assertGatewayServiceUpdateCurrent();
+    }),
+}));
 vi.mock("./schtasks-state-probe.js", () => ({ probeScheduledTaskState: native.probe }));
 vi.mock("./schtasks-runtime.js", async (original) => ({
   ...(await original<typeof import("./schtasks-runtime.js")>()),
   isStartupEntryInstalled: async () => false,
   resolveFallbackRuntime: native.runtime,
+  waitForScheduledTaskRunningEvidence: native.running,
 }));
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -37,10 +51,12 @@ beforeEach(() => {
   native.run.mockReset().mockResolvedValue("scheduled-task");
   native.probe.mockReset().mockReturnValue({ status: "found", state: 1, enabled: false });
   native.runtime.mockReset().mockResolvedValue({ status: "stopped" });
+  native.running.mockReset().mockResolvedValue(true);
 });
 afterEach(() => vi.restoreAllMocks());
 
-async function fixture() {
+async function fixture(enabled = false) {
+  const savedXml = enabled ? originalXml.replace("<Enabled>false", "<Enabled>true") : originalXml;
   const root = temporary.make("openclaw-task-rollback-");
   const env = {
     USERPROFILE: root,
@@ -57,7 +73,7 @@ async function fixture() {
   });
   await fs.writeFile(scriptPath, original);
   await fs.writeFile(launcherPath, "original hidden launcher");
-  const registration = { xml: originalXml };
+  const registration = { xml: savedXml };
   native.exec.mockImplementation(async (command) => {
     assertGatewayServiceUpdateCurrent();
     if (command[0] === "/Query") {
@@ -68,6 +84,9 @@ async function fixture() {
     }
     if (command.includes("/DISABLE")) {
       registration.xml = registration.xml.replace(/(<Settings>[\s\S]*?<Enabled>)true/u, "$1false");
+    }
+    if (command.includes("/ENABLE")) {
+      registration.xml = registration.xml.replace(/(<Settings>[\s\S]*?<Enabled>)false/u, "$1true");
     }
     return { code: 0, stdout: "", stderr: "" };
   });
@@ -80,13 +99,13 @@ async function fixture() {
   const assertRestored = async () => {
     expect(await fs.readFile(scriptPath)).toEqual(original);
     expect(await fs.readFile(launcherPath, "utf8")).toBe("original hidden launcher");
-    expect(registration.xml).toBe(originalXml);
+    expect(registration.xml).toBe(savedXml);
   };
   const assertBackups = async () => {
     expect(await fs.readFile(`${scriptPath}.bak`)).toEqual(original);
     expect(await fs.readFile(`${launcherPath}.bak`, "utf8")).toBe("original hidden launcher");
     expect((await fs.readFile(`${scriptPath}.task.xml.bak`)).subarray(2).toString("utf16le")).toBe(
-      originalXml,
+      savedXml,
     );
   };
   return { args, scriptPath, launcherPath, original, registration, assertRestored, assertBackups };
@@ -160,9 +179,10 @@ it.each([
     await writeFile(...parameters);
     if (
       phase === "before-publication" &&
-      String(parameters[0]).startsWith(`${scriptPath}.`) &&
-      !String(parameters[0]).includes(".bak") &&
-      !String(parameters[0]).includes(".task.xml")
+      typeof parameters[0] === "string" &&
+      parameters[0].startsWith(`${scriptPath}.`) &&
+      !parameters[0].includes(".bak") &&
+      !parameters[0].includes(".task.xml")
     ) {
       revoked = true;
     }
@@ -183,7 +203,9 @@ it.each([
   await expect(
     withGatewayServiceUpdateAuthority(
       () => {
-        if (revoked) throw new Error("Doctor custody revoked");
+        if (revoked) {
+          throw new Error("Doctor custody revoked");
+        }
       },
       () => installScheduledTask(args),
       { updateOwned: false, assertRecoveryCurrent: () => {} },
@@ -243,25 +265,37 @@ it.each([
     const execute = native.exec.getMockImplementation()!;
     native.exec.mockImplementation(async (command) => {
       const result = await execute(command);
-      if (command[0] === "/Create") revoked = true;
+      if (command[0] === "/Create") {
+        revoked = true;
+      }
       return result;
     });
   }
   native.run.mockImplementation(async () => {
     revoked = true;
-    if (failure === "foreign-registration") registration.xml = originalXml;
-    if (failure === "foreign-launcher") await fs.writeFile(scriptPath, "unrelated replacement");
+    if (failure === "foreign-registration") {
+      registration.xml = originalXml;
+    }
+    if (failure === "foreign-launcher") {
+      await fs.writeFile(scriptPath, "unrelated replacement");
+    }
     return "scheduled-task";
   });
-  if (failure === "queued")
+  if (failure === "queued") {
     native.probe.mockReturnValue({ status: "found", state: 2, enabled: false });
-  if (failure === "unknown-state")
+  }
+  if (failure === "unknown-state") {
     native.probe.mockReturnValue({ status: "unknown", detail: "unavailable" });
-  if (failure === "unknown-process") native.runtime.mockResolvedValue({ status: "unknown" });
+  }
+  if (failure === "unknown-process") {
+    native.runtime.mockResolvedValue({ status: "unknown" });
+  }
   await expect(
     withGatewayServiceUpdateAuthority(
       () => {
-        if (revoked) throw new Error("Doctor custody revoked");
+        if (revoked) {
+          throw new Error("Doctor custody revoked");
+        }
       },
       () => installScheduledTask(args),
       { updateOwned: false, assertRecoveryCurrent: () => {} },
@@ -279,5 +313,84 @@ it.each([
         ([command]) => command.includes("/DISABLE") || command[0] === "/End",
       ),
     ).toBe(false);
+  }
+});
+
+it.each([
+  "running",
+  "running-disabled",
+  "stopped",
+  "revival-unconfirmed",
+  "revival-denied",
+  "disabled-revival-unconfirmed",
+])("restores the original Scheduled Task runtime after rollback (%s)", async (scenario) => {
+  const enabled = scenario !== "running-disabled" && scenario !== "disabled-revival-unconfirmed";
+  const { args, scriptPath, original, registration, assertRestored, assertBackups } =
+    await fixture(enabled);
+  const originallyRunning = scenario !== "stopped";
+  let taskRunning = originallyRunning;
+  let taskEnabled = enabled;
+  native.probe.mockImplementation(() => ({
+    status: "found",
+    state: taskRunning ? 4 : 3,
+    enabled: taskEnabled,
+  }));
+  let revoked = false;
+  native.run.mockImplementation(async () => {
+    revoked = true;
+    return "scheduled-task";
+  });
+  const execute = native.exec.getMockImplementation()!;
+  native.exec.mockImplementation(async (command) => {
+    if (command[0] === "/Run") {
+      // Revival must launch the verified old files and XML under recovery custody.
+      assertGatewayServiceUpdateCurrent();
+      expect(await fs.readFile(scriptPath)).toEqual(original);
+      expect(registration.xml).toBe(originalXml.replace("<Enabled>false", "<Enabled>true"));
+      if (scenario === "revival-denied") {
+        return { code: 1, stdout: "", stderr: "Access denied" };
+      }
+      taskRunning = !scenario.endsWith("revival-unconfirmed");
+    }
+    if (command[0] === "/End") {
+      taskRunning = false;
+    }
+    if (command.includes("/DISABLE")) {
+      taskEnabled = false;
+    }
+    if (command.includes("/ENABLE")) {
+      taskEnabled = true;
+    }
+    return execute(command);
+  });
+  native.running.mockImplementation(async () => taskRunning);
+  const pending = scenario.includes("revival-");
+  await expect(
+    withGatewayServiceUpdateAuthority(
+      () => {
+        if (revoked) {
+          throw new Error("Doctor custody revoked");
+        }
+      },
+      () => installScheduledTask(args),
+      { updateOwned: false, assertRecoveryCurrent: () => {} },
+    ),
+  ).rejects.toMatchObject({
+    code: "service-authority-revoked",
+    outcome: pending ? "recovery-pending" : "restored",
+  });
+  await assertRestored();
+  await assertBackups();
+  expect(native.exec.mock.calls.filter(([command]) => command[0] === "/Run")).toHaveLength(
+    originallyRunning ? 1 : 0,
+  );
+  expect(native.exec.mock.calls.some(([command]) => command.includes("/ENABLE"))).toBe(!enabled);
+  expect(taskRunning).toBe(originallyRunning && !pending);
+  if (pending) {
+    expect(args.warn).toHaveBeenCalledWith(
+      expect.stringContaining("recovery did not confirm completion"),
+    );
+  } else {
+    expect(args.warn).not.toHaveBeenCalled();
   }
 });

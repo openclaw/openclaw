@@ -109,7 +109,9 @@ it.each([
   });
   const installation = withGatewayServiceUpdateAuthority(
     () => {
-      if (!current) throw new Error("Doctor custody revoked during service preparation");
+      if (!current) {
+        throw new Error("Doctor custody revoked during service preparation");
+      }
     },
     () =>
       installSystemdService({

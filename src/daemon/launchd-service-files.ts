@@ -315,12 +315,12 @@ async function captureLaunchAgentFiles(paths: string[]) {
     originals,
     publish,
     assertCurrent,
-    async restore(): Promise<boolean> {
+    restore: async (): Promise<boolean> => {
       if (!published.size) {
         return false;
       }
       await assertCurrent();
-      for (const file of [...published.keys()].reverse()) {
+      for (const file of [...published.keys()].toReversed()) {
         const original = originals.get(file)!;
         if (original.snapshot !== null && original.state) {
           await publish(file, original.snapshot.contents, original.snapshot.mode);
@@ -390,6 +390,7 @@ export async function writeLaunchAgentPlist(
   args: GatewayServiceInstallArgs,
   publication?: LaunchAgentFilePublication,
 ): Promise<{ plistPath: string; stdoutPath: string }> {
+  assertGatewayServiceUpdateCurrent();
   if (!publication) {
     const captured = await captureLaunchAgentInstallFiles(args.env);
     return withGatewayServiceInstallationRecovery(
