@@ -377,10 +377,16 @@ describe("config cli roster integration", () => {
             ]),
           ).rejects.toMatchObject({ name: "ExitError", code: 1 });
           expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-          expect(registeredRuntimeErrors.join("\n")).toContain(
-            'Cannot set model reference "<configured model reference>" at agents.entries.main.model',
+          // The operator typed this ref on the command line, so the rejection names it and
+          // carries the resolver's own reason; only an inherited or env-expanded ref is
+          // redacted. The exact reason is pinned by config-model-validation.reporting.test.ts.
+          const errors = registeredRuntimeErrors.join("\n");
+          expect(errors).toContain(
+            'Cannot set model reference "missing-roster-provider/missing-model" at agents.entries.main.model: ',
           );
-          expect(registeredRuntimeErrors.join("\n")).toContain("openclaw models list");
+          expect(errors).not.toContain("<configured model reference>");
+          expect(errors).not.toContain("Unable to resolve authored model reference");
+          expect(errors).toContain("openclaw models list");
         },
       );
     },
