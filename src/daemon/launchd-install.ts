@@ -14,26 +14,18 @@ import {
   resolveLaunchAgentGuiDomain,
 } from "./launchd-runtime.js";
 import {
-  LAUNCH_AGENT_ENV_FILE_MODE,
-  LAUNCH_AGENT_ENV_WRAPPER_MODE,
-  type LaunchAgentFileSnapshot,
-  publishLaunchAgentPlist,
-  readExistingLaunchAgentPlist,
-  resolveLaunchAgentEnvFilePath,
-  resolveLaunchAgentEnvWrapperPath,
+  captureLaunchAgentInstallFiles,
   resolveLaunchAgentPlistPath,
   writeLaunchAgentPlist,
 } from "./launchd-service-files.js";
 import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
 import { formatLine, normalizeWindowsPathSeparators, writeFormattedLines } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
-import { publishServiceFile } from "./service-stage.js";
-import type {
-  GatewayServiceEnv,
-  GatewayServiceInstallArgs,
-  GatewayServiceManageArgs,
-} from "./service-types.js";
-import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
+import type { GatewayServiceInstallArgs, GatewayServiceManageArgs } from "./service-types.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  withGatewayServiceInstallationRecovery,
+} from "./service-update-authority.js";
 
 export async function uninstallLaunchAgent({
   env,
@@ -135,14 +127,6 @@ export async function stageLaunchAgent({
   return { plistPath };
 }
 
-type LaunchAgentInstallSnapshot = {
-  plist: LaunchAgentFileSnapshot | null;
-  envFileContents: Buffer | null;
-  wrapperContents: Buffer | null;
-  loaded: boolean;
-  definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"];
-};
-
 async function snapshotLaunchAgentLoadedState(
   plistContents: Buffer | null,
   serviceTarget: string,
@@ -164,167 +148,19 @@ async function snapshotLaunchAgentLoadedState(
   return loaded;
 }
 
-async function restoreLaunchAgentOwnedFile(params: {
-  path: string;
-  contents: Buffer | null;
-  mode: number;
-}): Promise<void> {
-  if (params.contents === null) {
-    assertGatewayServiceUpdateCurrent();
-    await fs.unlink(params.path).catch((error: unknown) => {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    });
-    return;
-  }
-  await publishServiceFile({
-    filePath: params.path,
-    contents: params.contents,
-    mode: params.mode,
-  });
-}
-
-async function restoreLaunchAgentInstallArtifacts(params: {
-  env: GatewayServiceEnv;
-  label: string;
-  plistPath: string;
-  snapshot: LaunchAgentInstallSnapshot;
-}): Promise<void> {
-  await assertNoSystemLaunchDaemonOwnership(params.label);
-  const ancillary = [
-    {
-      path: resolveLaunchAgentEnvFilePath(params.env, params.label),
-      contents: params.snapshot.envFileContents,
-      mode: LAUNCH_AGENT_ENV_FILE_MODE,
-    },
-    {
-      path: resolveLaunchAgentEnvWrapperPath(params.env, params.label),
-      contents: params.snapshot.wrapperContents,
-      mode: LAUNCH_AGENT_ENV_WRAPPER_MODE,
-    },
-  ];
-  const restoreAncillary = async (present: boolean) => {
-    for (const file of ancillary.filter((entry) => (entry.contents !== null) === present)) {
-      await restoreLaunchAgentOwnedFile(file);
-    }
-  };
-  await restoreAncillary(true);
-  if (params.snapshot.plist !== null) {
-    await publishLaunchAgentPlist({
-      label: params.label,
-      plistPath: params.plistPath,
-      contents: params.snapshot.plist.contents,
-      mode: params.snapshot.plist.mode,
-    });
-  }
-  if (params.snapshot.plist === null) {
-    assertGatewayServiceUpdateCurrent();
-    await fs.unlink(params.plistPath).catch((error: unknown) => {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw error;
-      }
-    });
-  }
-  await restoreAncillary(false);
-}
-
-async function restoreLaunchAgentInstall(params: {
-  domain: string;
-  env: GatewayServiceEnv;
-  label: string;
-  plistPath: string;
-  snapshot: LaunchAgentInstallSnapshot;
-}): Promise<void> {
-  const serviceTarget = `${params.domain}/${params.label}`;
-  // A failed bootstrap may leave no registered job. Restore files directly in
-  // that state; only a loaded replacement must be removed before rollback.
-  const currentState = await probeLaunchAgentState(serviceTarget);
-  if (currentState.state === "unknown") {
-    throw new Error(
-      `launchctl print could not determine whether ${serviceTarget} is loaded during LaunchAgent rollback: ${currentState.detail ?? "unknown error"}`,
-    );
-  }
-  if (currentState.state !== "not-loaded") {
-    const bootout = await execLaunchctl(["bootout", serviceTarget]);
-    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
-      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
-    }
-  }
-  await restoreLaunchAgentInstallArtifacts({
-    env: params.env,
-    label: params.label,
-    plistPath: params.plistPath,
-    snapshot: params.snapshot,
-  });
-  if (params.snapshot.loaded && params.snapshot.plist !== null) {
-    await bootstrapLaunchAgentOrThrow({
-      domain: params.domain,
-      serviceTarget,
-      plistPath: params.plistPath,
-      actionHint: "openclaw gateway start",
-      retryPendingTeardown: true,
-    });
-  }
-}
-
 async function deactivateLaunchAgentDefinition(domain: string, plistPath: string): Promise<void> {
   for (const args of [
     ["bootout", domain, plistPath],
     ["unload", plistPath],
   ]) {
+    assertGatewayServiceUpdateCurrent();
     const result = await execLaunchctl(args);
+    assertGatewayServiceUpdateCurrent();
     if (result.code !== 0 && !isLaunchctlNotLoaded(result)) {
       throw new Error(
         `launchctl ${args[0]} failed during LaunchAgent install: ${formatLaunchctlResultDetail(result)}`,
       );
     }
-  }
-}
-
-async function activateLaunchAgent(params: {
-  env: GatewayServiceEnv;
-  plistPath: string;
-  snapshot: LaunchAgentInstallSnapshot;
-}) {
-  const domain = resolveLaunchAgentGuiDomain();
-  const label = resolveLaunchAgentLabel(params.env);
-  try {
-    // Recheck immediately before activation so a system daemon installed after
-    // the plist write cannot race us into two KeepAlive managers.
-    await assertNoSystemLaunchDaemonOwnership(label);
-    // Plist-form bootout reports EIO for a valid definition that was never loaded.
-    // The pre-publication snapshot is the authoritative cutover fact.
-    if (params.snapshot.loaded) {
-      await deactivateLaunchAgentDefinition(domain, params.plistPath);
-    }
-    // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.
-    await bootstrapLaunchAgentOrThrow({
-      domain,
-      serviceTarget: `${domain}/${label}`,
-      plistPath: params.plistPath,
-      actionHint: "openclaw gateway install --force",
-      retryPendingTeardown: true,
-    });
-  } catch (error) {
-    if (params.snapshot.definitionTransaction) {
-      throw error;
-    }
-    try {
-      await restoreLaunchAgentInstall({
-        domain,
-        env: params.env,
-        label,
-        plistPath: params.plistPath,
-        snapshot: params.snapshot,
-      });
-    } catch (rollbackError) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`${detail}\nThe previous LaunchAgent supervision could not be restored.`, {
-        cause: rollbackError,
-      });
-    }
-    throw error;
   }
 }
 
@@ -334,53 +170,77 @@ export async function installLaunchAgent(
   if (args.beforeLoad) {
     throw new Error("Deferred native service load is not supported on this platform.");
   }
-  await assertExternalLaunchAgentMutation(args.env, "install");
   const targetPlistPath = resolveLaunchAgentPlistPath(args.env);
-  const previous = await readExistingLaunchAgentPlist(targetPlistPath);
   const label = resolveLaunchAgentLabel(args.env);
   const domain = resolveLaunchAgentGuiDomain();
-  // Plist, generated environment files, and launchd registration form one cutover.
-  // Capture every prior owner before publication so any later failure can restore it.
-  const snapshot: LaunchAgentInstallSnapshot = {
-    definitionTransaction: args.definitionTransaction,
-    plist: previous,
-    envFileContents:
-      (await readExistingLaunchAgentPlist(resolveLaunchAgentEnvFilePath(args.env, label)))
-        ?.contents ?? null,
-    wrapperContents:
-      (await readExistingLaunchAgentPlist(resolveLaunchAgentEnvWrapperPath(args.env, label)))
-        ?.contents ?? null,
-    loaded: await snapshotLaunchAgentLoadedState(previous?.contents ?? null, `${domain}/${label}`),
-  };
-  let plistPath: string;
-  let stdoutPath: string;
-  try {
-    ({ plistPath, stdoutPath } = await writeLaunchAgentPlist(args));
-  } catch (error) {
-    // The receipt owner restores the native reference before retiring generated inputs.
-    if (args.definitionTransaction) {
-      throw error;
-    }
-    try {
-      await restoreLaunchAgentInstallArtifacts({
-        env: args.env,
-        label,
-        plistPath: targetPlistPath,
-        snapshot,
+  const serviceTarget = `${domain}/${label}`;
+  const { files, loaded } = await withGatewayServiceInstallationRecovery(
+    async () => {
+      await assertExternalLaunchAgentMutation(args.env, "install");
+      const files = await captureLaunchAgentInstallFiles(args.env);
+      const loaded = await snapshotLaunchAgentLoadedState(
+        files.originals.get(targetPlistPath)!.snapshot?.contents ?? null,
+        serviceTarget,
+      );
+      return { files, loaded };
+    },
+    async () => false,
+  );
+  let activationAttempted = false;
+  const { plistPath, stdoutPath } = await withGatewayServiceInstallationRecovery(
+    async () => {
+      const published = await writeLaunchAgentPlist(args, files);
+      await files.assertCurrent();
+      // Recheck immediately before activation; another supervisor can appear during publication.
+      await assertNoSystemLaunchDaemonOwnership(label);
+      assertGatewayServiceUpdateCurrent();
+      activationAttempted = true;
+      if (loaded) {
+        await deactivateLaunchAgentDefinition(domain, published.plistPath);
+      }
+      await bootstrapLaunchAgentOrThrow({
+        domain,
+        serviceTarget,
+        plistPath: published.plistPath,
+        actionHint: "openclaw gateway install --force",
+        retryPendingTeardown: true,
+        assertCurrent: assertGatewayServiceUpdateCurrent,
       });
-    } catch (rollbackError) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`${detail}\nThe previous LaunchAgent files could not be restored.`, {
-        cause: rollbackError,
-      });
-    }
-    throw error;
-  }
-  await activateLaunchAgent({
-    env: args.env,
-    plistPath,
-    snapshot,
-  });
+      return published;
+    },
+    async () => {
+      if (activationAttempted) {
+        await files.assertCurrent();
+        const current = await probeLaunchAgentState(serviceTarget);
+        if (current.state === "unknown") {
+          throw new Error(
+            `launchctl print could not determine whether ${serviceTarget} is loaded during LaunchAgent rollback: ${current.detail ?? "unknown error"}`,
+          );
+        }
+        if (current.state !== "not-loaded") {
+          await files.assertCurrent();
+          const bootout = await execLaunchctl(["bootout", serviceTarget]);
+          if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+            throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+          }
+        }
+      }
+      const restored = await files.restore();
+      if (activationAttempted && loaded) {
+        await files.assertCurrent();
+        await assertNoSystemLaunchDaemonOwnership(label);
+        await bootstrapLaunchAgentOrThrow({
+          domain,
+          serviceTarget,
+          plistPath: targetPlistPath,
+          actionHint: "openclaw gateway start",
+          retryPendingTeardown: true,
+          assertCurrent: assertGatewayServiceUpdateCurrent,
+        });
+      }
+      return restored || activationAttempted;
+    },
+  );
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
   // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the
   // real listener startup past setup's health deadline.

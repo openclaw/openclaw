@@ -4,6 +4,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { PreManagedServiceStop } from "../cli/update-cli/update-command-service-maintenance.js";
 import { isDefaultInstallIdentity, resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { assertLegacyGatewayStoppedForMaintenance } from "../infra/gateway-lock-legacy.js";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
@@ -15,6 +16,7 @@ import {
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { UpdateDoctorError } from "../infra/update-doctor-result.js";
+import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update-failure-facts.js";
 import { inspectUpdateRepairDriverAdmission } from "../infra/update-run-activity.js";
 import { listUpdateRuns, recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -92,6 +94,7 @@ export async function beginDoctorMaintenance(params: {
       release(): Promise<void>;
       finish(cfg: OpenClawConfig): Promise<void>;
       warnings?: string[];
+      failureFacts?: UpdateFailureFact[];
     }
   | undefined
 > {
@@ -112,6 +115,7 @@ export async function beginDoctorMaintenance(params: {
     | undefined;
   const coordinators: Array<{ release(): void }> = [];
   const warnings: string[] = [];
+  const failureFacts: UpdateFailureFact[] = [];
   let repairStoresMayBeOpen = false;
   // Service safety outlives database handles released for an update child.
   let retainStoppedInstallation = false;
@@ -359,6 +363,34 @@ export async function beginDoctorMaintenance(params: {
         cleanupFailure ??= { error };
         throw error;
       }
+      if (error instanceof GatewayServiceAuthorityError) {
+        const { formatDaemonServiceInstallCommand } = await import("../cli/daemon-cli/shared.js");
+        const serviceEnv = before.serviceEnv;
+        const outcome = error.outcome ?? "recovery-pending";
+        const recovery =
+          outcome === "unchanged"
+            ? "The previous service definition was left unchanged."
+            : outcome === "restored"
+              ? "The previous service definition was restored from its captured backup."
+              : "Restoration was not verified; inspect the current service before replacing it.";
+        const message = `Doctor could not finish Gateway installation or activation under its maintenance authority (${outcome}). ${recovery} Run \`${formatCliCommand("openclaw gateway status --deep", serviceEnv)}\`; after the active maintenance or update finishes, run \`${formatDaemonServiceInstallCommand(serviceEnv, before.servicePort)}\` from the active CLI. Reason: ${error.message}`;
+        failureFacts.push(
+          createUpdateFailureFact(
+            {
+              check: "gateway-restoration",
+              code: `${error.code}-${outcome}`,
+              message,
+            },
+            serviceEnv,
+          ),
+        );
+        warnings.push(message);
+        params.runtime.error(message);
+        if (outcome === "recovery-pending") {
+          throw new UpdateDoctorError(message, failureFacts, { cause: error });
+        }
+        return;
+      }
       if (error instanceof UpdateDoctorError) {
         throw error;
       }
@@ -600,6 +632,7 @@ export async function beginDoctorMaintenance(params: {
   let custody: "held" | "restoring" | "released" = "held";
   const maintenance = {
     warnings,
+    failureFacts,
     run: <T>(operation: () => T) => resources!.run(operation),
     releaseState: () => settle(releaseState),
     async release() {

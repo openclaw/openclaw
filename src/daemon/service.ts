@@ -64,6 +64,7 @@ import type {
   GatewayServiceStageArgs,
   GatewayServiceState,
 } from "./service-types.js";
+import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
 import { readSystemdDefinitionMutationCapability } from "./systemd-definition-mutation.js";
 import { admitSystemdServiceReadBinding } from "./systemd-peer.js";
 import { findSystemdGatewayInstallation, isSystemdServiceAbsent } from "./systemd-scope.js";
@@ -622,15 +623,12 @@ function guardGatewayServiceMutation<
     }
     const assertCaller = args.assertCurrent;
     return await withGatewayServiceOperationLock(args.env ?? process.env, async (assertNative) => {
-      const assertCurrent = () => {
-        assertNative();
-        assertCaller?.();
-      };
       await assertFutureConfigActionAllowed(action);
-      assertCurrent();
-      const result = await mutate({ ...args, assertCurrent });
-      assertCurrent();
-      return result;
+      return await withGatewayServiceUpdateAuthority(
+        assertCaller,
+        (assertCurrent) => mutate({ ...args, assertCurrent }),
+        { updateOwned: false, assertRecoveryCurrent: assertNative },
+      );
     });
   };
 }
@@ -640,40 +638,37 @@ function withGatewayServiceMutationGuards(
   kind: ServiceKind,
 ): GatewayService {
   const write = (action: string, mutate: GatewayService["install"]) =>
-    guardGatewayServiceMutation(
-      action,
-      async (args: GatewayServiceInstallArgs & { assertCurrent?: () => void }) => {
-        const scope = { kind, env: { ...args.env } };
-        const update = args.runtimePinUpdate ?? {
-          expected: readDaemonRuntimePinForInstall(scope, null, true),
-        };
-        // Pin-unaware callers cannot decide whether existing intent should survive a rewrite.
-        if (!args.runtimePinUpdate && update.expected.stored) {
-          throw new Error(
-            "This service has explicit runtime intent. Reinstall with --runtime-path to preserve the pin or --runtime to choose a new runtime before rewriting it.",
-          );
-        }
+    guardGatewayServiceMutation(action, async (args: GatewayServiceInstallArgs) => {
+      const scope = { kind, env: { ...args.env } };
+      const update = args.runtimePinUpdate ?? {
+        expected: readDaemonRuntimePinForInstall(scope, null, true),
+      };
+      // Pin-unaware callers cannot decide whether existing intent should survive a rewrite.
+      if (!args.runtimePinUpdate && update.expected.stored) {
+        throw new Error(
+          "This service has explicit runtime intent. Reinstall with --runtime-path to preserve the pin or --runtime to choose a new runtime before rewriting it.",
+        );
+      }
+      assertDaemonRuntimePinCurrent(scope, update.expected);
+      if (update.pin || update.expected.stored) {
+        const previous = await service.readCommand(args.env);
+        args.assertCurrent?.();
+        assertDaemonRuntimePinPlan(update.expected, previous);
         assertDaemonRuntimePinCurrent(scope, update.expected);
-        if (update.pin || update.expected.stored) {
-          const previous = await service.readCommand(args.env);
-          args.assertCurrent?.();
-          assertDaemonRuntimePinPlan(update.expected, previous);
-          assertDaemonRuntimePinCurrent(scope, update.expected);
-        }
-        await mutate(args);
-        if (update.pin || update.expected.stored) {
-          const command = await service.readCommand(args.env);
-          args.assertCurrent?.();
-          assertDaemonRuntimePinDefinition(
-            { programArguments: args.programArguments, workingDirectory: args.workingDirectory },
-            command,
-          );
-          commitDaemonRuntimePin(scope, update, command);
-        } else {
-          assertDaemonRuntimePinCurrent(scope, update.expected);
-        }
-      },
-    );
+      }
+      await mutate(args);
+      if (update.pin || update.expected.stored) {
+        const command = await service.readCommand(args.env);
+        args.assertCurrent?.();
+        assertDaemonRuntimePinDefinition(
+          { programArguments: args.programArguments, workingDirectory: args.workingDirectory },
+          command,
+        );
+        commitDaemonRuntimePin(scope, update, command);
+      } else {
+        assertDaemonRuntimePinCurrent(scope, update.expected);
+      }
+    });
   return {
     ...service,
     stage: write("rewrite the gateway service", service.stage),

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
+import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import type { GatewayService } from "../daemon/service.js";
 import { createMockGatewayService, mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { readLoadedSystemdServiceRuntime } from "../daemon/systemd-loaded-runtime.js";
@@ -132,6 +133,7 @@ async function runInstallationCase(params: {
   platform: "linux" | "darwin" | "win32";
   mode: "maintenance" | "direct";
   installFails?: boolean;
+  revoked?: "unchanged" | "restored" | "recovery-pending" | "unclassified";
   initiallyStopped?: boolean;
   releaseStateBeforeFinish?: boolean;
   inspectionFailure?: "unavailable" | "lost-before-install";
@@ -259,6 +261,12 @@ async function runInstallationCase(params: {
         install: async (plan) => {
           expect(getOpenClawDatabaseMaintenanceScope()).toBeUndefined();
           events.push("install");
+          if (params.revoked) {
+            throw new GatewayServiceAuthorityError(
+              new Error("Doctor custody was released"),
+              params.revoked === "unclassified" ? undefined : params.revoked,
+            );
+          }
           if (installFails) {
             throw new Error("Synthetic native install rollback");
           }
@@ -353,6 +361,29 @@ async function runInstallationCase(params: {
           expect(running).toBe(false);
           expect(command.programArguments[1]).toBe(path.join(oldRoot, "dist/index.js"));
           expect(mocks.health).not.toHaveBeenCalled();
+          return;
+        }
+        if (params.revoked) {
+          const outcome = params.revoked === "unclassified" ? "recovery-pending" : params.revoked;
+          const code = `service-authority-revoked-${outcome}`;
+          expect(events).toEqual(["stop", "repair-state", "install"]);
+          expect(running).toBe(false);
+          expect(command.programArguments[1]).toBe(path.join(oldRoot, "dist/index.js"));
+          expect(maintenance?.failureFacts).toEqual([
+            expect.objectContaining({ check: "gateway-restoration", code }),
+          ]);
+          expect(maintenance?.warnings).toEqual([
+            expect.stringContaining("openclaw gateway install --force --port 19989"),
+          ]);
+          expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(outcome));
+          expect(mocks.health).not.toHaveBeenCalled();
+          if (outcome === "recovery-pending") {
+            expect(finishError).toMatchObject({
+              failureFacts: [expect.objectContaining({ code })],
+            });
+          } else {
+            expect(finishError).toBeUndefined();
+          }
           return;
         }
         expect(finishError).toBeUndefined();
@@ -469,4 +500,9 @@ it.each(["unavailable", "lost-before-install"] as const)(
   "leaves a stale service unchanged when native inspection is %s",
   async (inspectionFailure) =>
     runInstallationCase({ platform: "linux", mode: "direct", inspectionFailure }),
+);
+
+it.each(["unchanged", "restored", "recovery-pending", "unclassified"] as const)(
+  "records native authority loss as a warning and blocks only pending recovery (%s)",
+  (revoked) => runInstallationCase({ platform: "linux", mode: "maintenance", revoked }),
 );

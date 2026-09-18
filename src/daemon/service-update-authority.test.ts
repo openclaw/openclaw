@@ -3,16 +3,58 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as processExec from "../process/exec.js";
 import { execFileUtf8 } from "./exec-file.js";
 import { publishLaunchAgentPlist } from "./launchd-service-files.js";
 import {
+  assertGatewayServiceFallbackAllowed,
   assertGatewayServiceUpdateCurrent,
+  isUpdateOwnedGatewayServiceCommand,
+  withGatewayServiceInstallationRecovery,
   withGatewayServiceUpdateAuthority,
 } from "./service-update-authority.js";
 
 vi.mock("./launchd-system.js", () => ({ assertNoSystemLaunchDaemonOwnership: async () => {} }));
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it("retains recovery material when a native writer has not settled", async () => {
+  vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
+    stdout: "",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+    cleanup: "uncertain",
+  });
+  const restore = vi.fn(async () => true);
+  await expect(
+    withGatewayServiceUpdateAuthority(
+      () => {},
+      () =>
+        withGatewayServiceInstallationRecovery(
+          () => execFileUtf8(process.execPath, ["-e", "process.exit(0)"]),
+          restore,
+        ),
+    ),
+  ).rejects.toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+  expect(restore).not.toHaveBeenCalled();
+});
+
+it("a retained installer guard stays bound to its original closed scope", async () => {
+  let retained!: () => void;
+  await withGatewayServiceUpdateAuthority(
+    undefined,
+    async (assertCurrent) => {
+      retained = assertCurrent;
+      await Promise.resolve();
+      assertCurrent();
+    },
+    { updateOwned: false, assertRecoveryCurrent: () => {} },
+  );
+  expect(() => retained()).toThrow("has closed");
+});
 
 it.skipIf(process.platform === "win32")(
   "native client retains its registered receiver process group",
@@ -63,6 +105,63 @@ it.each([false, true])("native subprocess refuses a revoked owner: revoked=%s", 
   }
 });
 
+it("Doctor compensation retains the original updater fence", async () => {
+  let parentCurrent = true;
+  const restore = vi.fn(async () => true);
+  await expect(
+    withGatewayServiceUpdateAuthority(
+      () => {
+        if (!parentCurrent) throw new Error("original updater retired");
+      },
+      () =>
+        withGatewayServiceUpdateAuthority(
+          assertGatewayServiceUpdateCurrent,
+          () =>
+            withGatewayServiceInstallationRecovery(async () => {
+              expect(isUpdateOwnedGatewayServiceCommand()).toBe(true);
+              await Promise.resolve();
+              parentCurrent = false;
+            }, restore),
+          { updateOwned: false, assertRecoveryCurrent: () => {} },
+        ),
+    ),
+  ).rejects.toMatchObject({ code: "service-authority-revoked", outcome: "recovery-pending" });
+  expect(restore).not.toHaveBeenCalled();
+});
+
+it("compensation closes with its callback and cannot grant an unmanaged fallback", async () => {
+  let current = true;
+  let release!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let late!: Promise<void>;
+  await expect(
+    withGatewayServiceUpdateAuthority(
+      () => {
+        if (!current) throw new Error("Doctor custody released");
+      },
+      () =>
+        withGatewayServiceInstallationRecovery(
+          async () => {
+            expect(isUpdateOwnedGatewayServiceCommand()).toBe(false);
+            current = false;
+          },
+          async () => {
+            expect(() => assertGatewayServiceFallbackAllowed("detached launch")).toThrow(
+              "not an update-owned",
+            );
+            late = ready.then(() => assertGatewayServiceUpdateCurrent());
+            return true;
+          },
+        ),
+      { updateOwned: false, assertRecoveryCurrent: () => {} },
+    ),
+  ).rejects.toMatchObject({ code: "service-authority-revoked", outcome: "restored" });
+  release();
+  await expect(late).rejects.toThrow("has closed");
+});
+
 it("native plist publication rechecks after asynchronous preparation, without stale rollback", async () => {
   const root = dirs.make("native-plist-authority-");
   const plistPath = path.join(root, "test.plist");
@@ -91,19 +190,23 @@ it("native plist publication rechecks after asynchronous preparation, without st
   expect(await fs.readFile(plistPath, "utf8")).toBe("original");
 });
 
-it("async work cannot retain an admitted native owner after command completion", async () => {
-  let release!: () => void;
-  const ready = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let late!: Promise<void>;
-  await withGatewayServiceUpdateAuthority(
-    () => {},
-    async () => {
-      late = ready.then(() => assertGatewayServiceUpdateCurrent());
-    },
-  );
-  release();
-  await expect(late).rejects.toThrow("has closed");
-  expect(assertGatewayServiceUpdateCurrent).not.toThrow();
-});
+it.each([true, false])(
+  "async work cannot retain native authority after completion (update=%s)",
+  async (updateOwned) => {
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let late!: Promise<void>;
+    await withGatewayServiceUpdateAuthority(
+      () => {},
+      async () => {
+        late = ready.then(() => assertGatewayServiceFallbackAllowed("late detached launch"));
+      },
+      { updateOwned },
+    );
+    release();
+    await expect(late).rejects.toThrow("has closed");
+    expect(assertGatewayServiceUpdateCurrent).not.toThrow();
+  },
+);

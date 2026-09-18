@@ -283,7 +283,7 @@ describe("installScheduledTask", () => {
         "OpenClaw Gateway",
         "/XML",
       ]);
-      expect(schtasksCalls[3]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+      expect(schtasksCalls[4]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
     });
   });
 
@@ -327,7 +327,7 @@ describe("installScheduledTask", () => {
 
       expectInitialTaskQuery();
       expect(schtasksCalls[1]?.[0]).toBe("/Create");
-      expectTaskRunCall(2);
+      expectTaskRunCall(3);
     });
   });
 
@@ -373,7 +373,7 @@ describe("installScheduledTask", () => {
       expect(xml).toContain("<UserId>WORKSTATION\\alice</UserId>");
       expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
       expect(launcher).toContain(`WScript.Quit shell.Run("""${scriptPath}""", 0, True)`);
-      expectTaskRunCall(xmlIndex + 1);
+      expectTaskRunCall(xmlIndex + 2);
     });
   });
 
@@ -470,7 +470,7 @@ describe("installScheduledTask", () => {
       );
       expect(launcher).toContain("WScript.Shell");
       expect(launcher).toContain(`WScript.Quit shell.Run("""${scriptPath}""", 0, True)`);
-      expectTaskRunCall(2, "OpenClaw Custom Gateway");
+      expectTaskRunCall(3, "OpenClaw Custom Gateway");
     });
   });
 
@@ -520,7 +520,7 @@ describe("installScheduledTask", () => {
       domain: "WORKSTATION",
       user: "WORKSTATION\\alice",
       query: missingTaskResponse,
-      commands: ["/Query", "/Create", "/Run"],
+      commands: ["/Query", "/Create", "/Query", "/Run"],
       xmlIndex: 1,
     },
     {
@@ -528,7 +528,7 @@ describe("installScheduledTask", () => {
       domain: "WORKGROUP",
       user: "alice",
       query: missingTaskResponse,
-      commands: ["/Query", "/Create", "/Run"],
+      commands: ["/Query", "/Create", "/Query", "/Run"],
       xmlIndex: 1,
     },
     {
@@ -536,7 +536,7 @@ describe("installScheduledTask", () => {
       domain: "WORKSTATION",
       user: "WORKSTATION\\alice",
       query: okSchtasksResponse,
-      commands: ["/Query", "/Change", "/Create", "/Run"],
+      commands: ["/Query", "/Change", "/Create", "/Query", "/Run"],
       xmlIndex: 2,
     },
   ])(
@@ -558,7 +558,7 @@ describe("installScheduledTask", () => {
         ]);
         expect(createCall).not.toContain("/RU");
         expect(createCall).not.toContain("/NP");
-        expectTaskRunCall(xmlIndex + 1);
+        expectTaskRunCall(xmlIndex + 2);
         const xml = xmlPayloadCaptures.find((entry) => entry.index === xmlIndex)?.xml;
         expect(xml).toContain("<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>");
         expect(xml).toContain("<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>");
@@ -584,7 +584,7 @@ describe("installScheduledTask", () => {
       expectInitialTaskQuery();
       expect(schtasksCalls[1]?.[0]).toBe("/Change");
       expect(schtasksCalls[2]?.[0]).toBe("/Create");
-      expectTaskRunCall(3);
+      expectTaskRunCall(4);
     });
   });
 
@@ -612,24 +612,37 @@ describe("installScheduledTask", () => {
   it.each([
     {
       kind: "existing",
-      responses: [okSchtasksResponse, okSchtasksResponse, okSchtasksResponse, accessDeniedResponse],
-      commands: ["/Query", "/Change", "/Create", "/Run"],
-      runIndex: 3,
+      responses: [
+        okSchtasksResponse,
+        okSchtasksResponse,
+        okSchtasksResponse,
+        okSchtasksResponse,
+        accessDeniedResponse,
+      ],
+      commands: ["/Query", "/Change", "/Create", "/Query", "/Run", "/Query", "/Change", "/End"],
+      runIndex: 4,
     },
     {
       kind: "new",
-      responses: [missingTaskResponse, okSchtasksResponse, accessDeniedResponse],
-      commands: ["/Query", "/Create", "/Run"],
-      runIndex: 2,
+      responses: [
+        missingTaskResponse,
+        okSchtasksResponse,
+        okSchtasksResponse,
+        accessDeniedResponse,
+      ],
+      commands: ["/Query", "/Create", "/Query", "/Run", "/Query", "/Change", "/End"],
+      runIndex: 3,
     },
   ])(
     "propagates /Run failure after registering a $kind task",
     async ({ responses, commands, runIndex }) => {
       await withUserProfileDir(async (_tmpDir, env) => {
         schtasksResponses.push(...responses);
-        await expect(installDefaultGatewayTask(env)).rejects.toThrow(
-          "schtasks run failed: ERROR: Access is denied.",
-        );
+        await expect(installDefaultGatewayTask(env)).rejects.toMatchObject({
+          errors: expect.arrayContaining([
+            expect.objectContaining({ message: "schtasks run failed: ERROR: Access is denied." }),
+          ]),
+        });
         expectInitialTaskQuery();
         expect(schtasksCalls.map((call) => call[0])).toEqual(commands);
         expectTaskRunCall(runIndex);

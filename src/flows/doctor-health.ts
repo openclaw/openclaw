@@ -286,6 +286,14 @@ async function runDoctorHealthFlowWithResult(
     doctorResult = {
       ...(ctx.postInstallDoctorResult ?? { status: "ok" }),
       ...(warnings.length ? { warnings } : {}),
+      ...(maintenance?.failureFacts?.length
+        ? {
+            failureFacts: [
+              ...maintenance.failureFacts,
+              ...(ctx.postInstallDoctorResult?.failureFacts ?? []),
+            ],
+          }
+        : {}),
     };
     if (updateResult && doctorResult.status === "advisory") {
       exitCode = UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE;

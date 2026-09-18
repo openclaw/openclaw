@@ -271,7 +271,11 @@ function expectNoGatewayTermination() {
 function addMissingTaskInstallResponses(responses: NativeResponse[]): void {
   queueNativeResponses(
     { code: 1, stdout: "", stderr: "ERROR: The system cannot find the file specified." },
-    ...responses,
+    ...responses.flatMap((response, index) =>
+      index === 0 && "code" in response && response.code === 0
+        ? [response, { code: 0, stdout: "", stderr: "" }]
+        : [response],
+    ),
   );
 }
 
