@@ -4,7 +4,7 @@
  * normalized payload selected by hook processing.
  */
 export const adjustedParamsByToolCallId = new Map<string, unknown>();
-export const preExecutionBlockedToolCallIds = new Set<string>();
+const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
 const startedToolCallIds = new Set<string>();
 const trackedToolCallIds = new Set<string>();
@@ -43,6 +43,23 @@ export function consumePreExecutionBlockedToolCall(toolCallId: string, runId?: s
 /** Snapshot whether policy prevented execution without stealing cleanup from the tool owner. */
 export function peekPreExecutionBlockedToolCall(toolCallId: string, runId?: string): boolean {
   return preExecutionBlockedToolCallIds.has(buildAdjustedParamsKey({ runId, toolCallId }));
+}
+
+const MAX_TRACKED_PRE_EXECUTION_BLOCKED = 1024;
+
+/** Record that policy prevented the target tool from starting (test + wrapper entrypoint). */
+export function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {
+  if (!toolCallId) {
+    return;
+  }
+  preExecutionBlockedToolCallIds.add(buildAdjustedParamsKey({ runId, toolCallId }));
+  while (preExecutionBlockedToolCallIds.size > MAX_TRACKED_PRE_EXECUTION_BLOCKED) {
+    const oldest = preExecutionBlockedToolCallIds.values().next().value;
+    if (!oldest) {
+      break;
+    }
+    preExecutionBlockedToolCallIds.delete(oldest);
+  }
 }
 
 /** Record active wrapper ownership so a racing timeout can inspect the boundary. */
