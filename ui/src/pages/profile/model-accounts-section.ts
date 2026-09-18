@@ -355,6 +355,7 @@ export function renderModelAccountsSection(
               </button>
               ${renderLearnMoreLink(
                 "https://docs.openclaw.ai/concepts/multi-user#per-person-model-accounts",
+                false,
               )}
             `,
           })

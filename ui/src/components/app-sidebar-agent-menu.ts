@@ -24,6 +24,7 @@ import {
   requestDebugOverlayToggle,
 } from "../pages/debug/debug-overlay-contract.ts";
 import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
+import { renderExternalLinkLabel } from "./external-link.ts";
 import { icons, type IconName } from "./icons.ts";
 import "./sidebar-build-chip.ts";
 import "./viewer-facepile.ts";
@@ -303,7 +304,9 @@ function renderIdentityMenuHelpSubmenu() {
             tabindex="-1"
           >
             <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons[link.icon]}</span>
-            <span class="sidebar-customize-menu__text">${link.label()}</span>
+            <span class="sidebar-customize-menu__text"
+              >${renderExternalLinkLabel(link.label(), link.href, "menu")}</span
+            >
           </a>
         </wa-dropdown-item>
       `,

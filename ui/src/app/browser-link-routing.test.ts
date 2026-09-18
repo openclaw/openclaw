@@ -2,6 +2,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
+import {
+  externalLinkOpensInPanel,
+  refreshExternalLinkPresentation,
+  subscribeExternalLinkPresentation,
+} from "../lib/external-link-presentation.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 
 let nativeRouting: ReturnType<typeof startNativeLinkRouting> | undefined;
@@ -92,6 +97,31 @@ describe("Control UI browser link routing", () => {
       "https://example.com/middle",
       "https://example.com/new-window",
     ]);
+  });
+
+  it("updates link presentation with routing availability and releases it on disposal", () => {
+    let available = false;
+    nativeRouting = startNativeLinkRouting({
+      shouldOpenInControlUiBrowser: () => available,
+    });
+    const anchor = appendLink("https://example.com/report");
+    const observed: boolean[] = [];
+    const stop = subscribeExternalLinkPresentation(() => observed.push(externalLinkOpensInPanel()));
+    try {
+      expect(externalLinkOpensInPanel()).toBe(false);
+      available = true;
+      refreshExternalLinkPresentation();
+      expect(externalLinkOpensInPanel()).toBe(true);
+      const requests: string[] = [];
+      collectBrowserRequests(requests);
+      anchor.dispatchEvent(mouseEvent("click"));
+      expect(requests).toEqual([anchor.href]);
+      nativeRouting.dispose();
+      expect(externalLinkOpensInPanel()).toBe(false);
+      expect(observed).toEqual([true, false]);
+    } finally {
+      stop();
+    }
   });
 
   it("preserves link handlers that cancel navigation", async () => {

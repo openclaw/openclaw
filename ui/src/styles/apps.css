@@ -176,6 +176,10 @@
   color: var(--bg);
 }
 
+.apps-card__cta--docs {
+  padding-inline: var(--space-2);
+}
+
 .apps-card__cta:hover {
   transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--border) 40%, var(--text) 60%);

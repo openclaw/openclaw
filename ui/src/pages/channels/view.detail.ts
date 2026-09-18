@@ -1,9 +1,11 @@
 // Channel detail overlay: full status + advanced schema config form for one
 // channel, reusing the per-channel settings-language renderers.
+
 import { asNullableRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import type { NostrProfile } from "../../api/types.ts";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
+import { renderExternalLinkLabel } from "../../components/external-link.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/modal-dialog.ts";
@@ -248,7 +250,7 @@ export function renderChannelDetail(params: {
               target="_blank"
               rel="noreferrer"
             >
-              ${t("common.docs")}
+              ${renderExternalLinkLabel(t("common.docs"))}
             </a>
             <button
               type="button"

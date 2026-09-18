@@ -2,6 +2,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { RouteId } from "../../app-route-paths.ts";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
+import { renderExternalLinkLabel } from "../../components/external-link.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
@@ -21,7 +22,7 @@ type AppsProps = {
 };
 
 type AppCardCta =
-  | { kind: "external"; href: string; label: () => string }
+  | { kind: "external"; href: string; label: () => string; showExternalIndicator?: boolean }
   | { kind: "internal"; routeId: RouteId; label: () => string };
 
 type AppCard = {
@@ -45,6 +46,7 @@ const docsCta = (path: string): AppCardCta => ({
   kind: "external",
   href: `https://docs.openclaw.ai${path}`,
   label: () => t("appsPage.ctaDocs"),
+  showExternalIndicator: true,
 });
 
 const APP_SECTIONS: readonly AppSection[] = [
@@ -179,6 +181,7 @@ const APP_SECTIONS: readonly AppSection[] = [
             kind: "external",
             href: "https://docs.openclaw.ai/tools/chrome-extension",
             label: () => t("appsPage.ctaSetupGuide"),
+            showExternalIndicator: true,
           },
         ],
       },
@@ -201,15 +204,24 @@ const APP_SECTIONS: readonly AppSection[] = [
   },
 ];
 
-const COMMUNITY_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: () => string }> =
-  [
-    {
-      href: COMMUNITY_DISCORD_URL,
-      icon: brandIcons.discord,
-      label: () => t("appsPage.linkDiscord"),
-    },
-    { href: "https://docs.openclaw.ai", icon: icons.book, label: () => t("appsPage.linkDocs") },
-  ];
+const COMMUNITY_LINKS: ReadonlyArray<{
+  href: string;
+  icon: TemplateResult;
+  label: () => string;
+  showExternalIndicator?: boolean;
+}> = [
+  {
+    href: COMMUNITY_DISCORD_URL,
+    icon: brandIcons.discord,
+    label: () => t("appsPage.linkDiscord"),
+  },
+  {
+    href: "https://docs.openclaw.ai",
+    icon: icons.book,
+    label: () => t("appsPage.linkDocs"),
+    showExternalIndicator: true,
+  },
+];
 
 function renderCta(cta: AppCardCta, index: number, props: AppsProps) {
   const className = index === 0 ? "apps-card__cta apps-card__cta--primary" : "apps-card__cta";
@@ -222,12 +234,12 @@ function renderCta(cta: AppCardCta, index: number, props: AppsProps) {
   }
   return html`
     <a
-      class=${className}
+      class=${cta.showExternalIndicator ? `${className} apps-card__cta--docs` : className}
       href=${cta.href}
       target=${EXTERNAL_LINK_TARGET}
       rel=${buildExternalLinkRel()}
     >
-      ${cta.label()}
+      ${cta.showExternalIndicator ? renderExternalLinkLabel(cta.label(), cta.href) : cta.label()}
     </a>
   `;
 }
@@ -308,7 +320,7 @@ function renderCommunity() {
               rel=${buildExternalLinkRel()}
             >
               <span class="apps-pill__icon" aria-hidden="true">${link.icon}</span>
-              <span>${link.label()}</span>
+              <span>${link.showExternalIndicator ? renderExternalLinkLabel(link.label(), link.href) : link.label()}</span>
             </a>
           `,
         )}

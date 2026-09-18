@@ -1,6 +1,7 @@
 // Devices page renders the mobile device pairing setup dialog.
 import { html, nothing } from "lit";
 import { handleCopyButton, renderCopyButton } from "../../components/copy-button.ts";
+import { renderExternalLinkLabel } from "../../components/external-link.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
@@ -343,16 +344,8 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
         </div>
 
         <footer class="device-pair-setup__footer">
-          <a
-            href=${pairingDocsUrl}
-            target=${EXTERNAL_LINK_TARGET}
-            rel=${buildExternalLinkRel()}
-            aria-label=${t("devices.pairing.helpNewTab")}
-          >
-            <span>${t("devices.pairing.help")}</span>
-            <span class="device-pair-setup__external-icon" aria-hidden="true"
-              >${icons.externalLink}</span
-            >
+          <a href=${pairingDocsUrl} target=${EXTERNAL_LINK_TARGET} rel=${buildExternalLinkRel()}>
+            <span>${renderExternalLinkLabel(t("devices.pairing.help"), pairingDocsUrl)}</span>
           </a>
           <button class="btn btn--ghost" type="button" @click=${props.onManageDevices}>
             ${t("devices.pairing.manageDevices")}

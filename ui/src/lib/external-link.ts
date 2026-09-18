@@ -5,6 +5,18 @@ const REQUIRED_EXTERNAL_REL_TOKENS = ["noopener", "noreferrer"] as const;
 
 export const EXTERNAL_LINK_TARGET = "_blank";
 
+export function isExternalLinkHref(href: string): boolean {
+  try {
+    const url = new URL(href, globalThis.location?.href);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      url.origin !== globalThis.location?.origin
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function buildExternalLinkRel(currentRel?: string): string {
   const extraTokens: string[] = [];
   const seen = new Set<string>(REQUIRED_EXTERNAL_REL_TOKENS);

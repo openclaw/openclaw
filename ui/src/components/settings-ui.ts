@@ -9,6 +9,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
+import { renderExternalLinkLabel } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import "./tooltip.ts";
 
@@ -103,13 +104,13 @@ export function renderSettingsHelpTrigger(props: SettingsHelpTriggerProps): Temp
   `;
 }
 
-export function renderLearnMoreLink(url: string): TemplateResult {
+export function renderLearnMoreLink(url: string, showExternalIndicator = true): TemplateResult {
   return html`<a
     class="learn-more-link"
     href=${url}
     target=${EXTERNAL_LINK_TARGET}
     rel=${buildExternalLinkRel()}
-    >${t("common.learnMore")}</a
+    >${showExternalIndicator ? renderExternalLinkLabel(t("common.learnMore"), url) : t("common.learnMore")}</a
   >`;
 }
 

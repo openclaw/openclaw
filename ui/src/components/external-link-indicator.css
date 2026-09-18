@@ -1,0 +1,49 @@
+.external-link-label {
+  display: inline;
+  white-space: normal;
+}
+
+.external-link-tail {
+  white-space: nowrap;
+}
+
+.external-link-indicator {
+  display: inline-block;
+  flex: none;
+  width: 1em;
+  height: 1em;
+  margin-inline-start: 0.4em;
+  color: currentColor;
+  font-size: 0.8em;
+  line-height: 1;
+  vertical-align: -0.125em;
+}
+
+.external-link-indicator > svg {
+  display: block;
+  width: 1em;
+  height: 1em;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+/* Text-link cues retain the label color inside toolbars that mute other SVGs. */
+.external-link-label .external-link-tail .external-link-indicator > svg {
+  color: inherit;
+}
+
+/* Header help ends the prose; its cue uses the gutter without rewrapping the text. */
+.page-subtitle .external-link-indicator {
+  margin-inline-end: -1.4em;
+}
+
+.external-link-label--menu {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.external-link-label--menu > .external-link-indicator {
+  margin-inline-start: auto;
+  color: var(--muted);
+}

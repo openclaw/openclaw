@@ -8,6 +8,7 @@ import {
   type BrowserPanelToggleDetail,
 } from "../components/panel-toggle-contract.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
+import { bindExternalLinkPresentation } from "../lib/external-link-presentation.ts";
 import {
   anchorFromNavigationEvent,
   externalHttpLinkFromEvent,
@@ -151,6 +152,15 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
   ) {
     return { dispose() {} };
   }
+  const browserLinkTarget = () =>
+    hasNativeBrowserBridge()
+      ? options.canPresentBrowserPanel?.() === false
+        ? "external"
+        : "panel"
+      : options.shouldOpenInControlUiBrowser?.()
+        ? "panel"
+        : null;
+  const stopPresentation = bindExternalLinkPresentation(() => browserLinkTarget() === "panel");
   let menu: NativeLinkMenu | null = null;
   let menuModule: Promise<unknown> | undefined;
   let menuRequest = 0;
@@ -222,14 +232,15 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
 
   const handleClick = (event: MouseEvent) => {
     const webLink = externalHttpLinkFromEvent(event);
-    if (
+    const target =
       webLink &&
       (hasNativeBrowserBridge()
         ? shouldHandleNavigationClick(event)
-        : shouldHandleControlUiBrowserActivation(event)) &&
-      (hasNativeBrowserBridge() || options.shouldOpenInControlUiBrowser?.())
-    ) {
-      if (hasNativeBrowserBridge() && options.canPresentBrowserPanel?.() === false) {
+        : shouldHandleControlUiBrowserActivation(event))
+        ? browserLinkTarget()
+        : null;
+    if (webLink && target) {
+      if (target === "external") {
         if (postMessage) {
           postNativeLink(postMessage, webLink.url, "external");
         }
@@ -287,6 +298,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
 
   const dispose = () => {
     disposed = true;
+    stopPresentation();
     options.signal?.removeEventListener("abort", dispose);
     window.removeEventListener("click", handleClick);
     window.removeEventListener("auxclick", handleClick);

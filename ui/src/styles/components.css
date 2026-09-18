@@ -5433,15 +5433,6 @@ td.data-table-key-col {
   color: var(--text);
 }
 
-.device-pair-setup__external-icon {
-  display: inline-flex;
-}
-
-.device-pair-setup__external-icon svg {
-  width: 14px;
-  height: 14px;
-}
-
 @media (max-width: 640px) {
   .device-pair-setup {
     max-height: 90dvh;
