@@ -43,7 +43,7 @@ function menuPosition(x: number, y: number, width: number, height: number): Menu
   };
 }
 
-export type SidebarFilterMenuView = "root" | "specific-owner";
+export type SidebarFilterMenuView = "root" | "filters" | "view" | "specific-owner";
 
 type SidebarMenusRenderer = typeof import("./sidebar-menus-render.ts");
 

@@ -1130,7 +1130,24 @@
 }
 
 .workboard-filter-popover {
-  --filter-popover-max-height: var(--workboard-popover-max-height);
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: visible;
+}
+
+.workboard-filter-popover__panel {
+  width: min(336px, calc(100vw - 24px));
+  max-height: var(--workboard-popover-max-height, calc(100dvh - 24px));
+  overflow-y: auto;
+  padding: 10px;
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--radius-lg);
+  background: var(--popover);
+  box-shadow: var(--overlay-shadow);
 }
 
 .workboard-filter-heading {
@@ -1160,6 +1177,14 @@
   display: grid;
   gap: 6px;
   padding-bottom: 10px;
+}
+
+.workboard-filter-section__label {
+  display: block;
+  padding: 2px 6px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
 }
 
 .workboard-filter-section__options {
@@ -1246,6 +1271,131 @@
   font-size: 0.7rem;
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+
+.workboard-filter-fields {
+  display: grid;
+  gap: 6px;
+  padding: 10px 6px;
+  border-top: 1px solid var(--border);
+}
+
+.workboard-filter-fields:last-child {
+  padding-bottom: 2px;
+}
+
+.workboard-filter-fields > .workboard-filter-section__label {
+  padding-inline: 0;
+}
+
+.workboard-filter-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 174px;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  color: var(--text);
+  font-size: 0.76rem;
+}
+
+.workboard-filter-display {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 2px 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.workboard-filter-choice {
+  display: grid;
+  gap: 6px;
+}
+
+.workboard-filter-choice .workboard-filter-section__label {
+  padding: 0;
+}
+
+.workboard-filter-choice .btn > span:first-child {
+  display: inline-flex;
+  flex: none;
+}
+
+.workboard-filter-row .picker-select__trigger {
+  min-height: 30px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+
+.workboard-filter-row .picker-select__label {
+  font-weight: inherit;
+}
+
+.workboard-filter-archived input {
+  appearance: none;
+  justify-self: end;
+  width: 30px;
+  height: 18px;
+  margin: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-hover);
+  cursor: var(--cursor-action);
+}
+
+.workboard-filter-archived input::before {
+  display: block;
+  width: 12px;
+  height: 12px;
+  margin: 2px;
+  border-radius: 50%;
+  background: var(--muted);
+  content: "";
+  transition: transform 120ms ease;
+}
+
+.workboard-filter-archived input:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.workboard-filter-archived input:checked::before {
+  transform: translateX(12px);
+  background: var(--accent-foreground);
+}
+
+.workboard-filter-archived input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workboard-filter-archived input::before {
+    transition: none;
+  }
+}
+
+.workboard-filter-display .workboard-view-toggle {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  width: 100%;
+  min-width: 0;
+  border-color: var(--border-strong);
+}
+
+.workboard-filter-display .workboard-view-toggle .btn {
+  min-height: 28px;
+  padding: 0 6px;
+  gap: 5px;
+  border-radius: 5px;
+  font-size: 0.72rem;
+}
+
+.workboard-filter-display .workboard-view-toggle .btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 .workboard-filter-trigger {
@@ -4228,6 +4378,20 @@ workboard-inline-text {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 12px;
+}
+
+.workboard-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--workboard-control-radius) + 2px);
+}
+
+.workboard-toolbar .workboard-view-toggle .btn.is-active {
+  background: var(--bg-hover);
+  color: var(--text-strong);
 }
 
 /* The list responds to available board space, including the sidebar. */

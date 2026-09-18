@@ -10,6 +10,7 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -150,12 +151,8 @@ suite.define(() => {
         if (restartable) {
           await page.getByRole("button", { name: "Unarchive", exact: true }).waitFor();
           await page.getByRole("button", { name: "Filter & sort" }).click();
-          await page
-            .locator(".sidebar-session-sort-menu")
-            .getByRole("group", { name: "Status", exact: true })
-            .getByRole("button", { name: "All", exact: true })
-            .click();
-          await page.keyboard.press("Escape");
+          await chooseSidebarMenuOption(page, "Status", "All");
+          await closeSidebarMenu(page);
         }
         const sidebarRow = page.locator(
           `.sidebar-recent-session[data-session-key="${sessionKey}"]`,

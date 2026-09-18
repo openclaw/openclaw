@@ -14,7 +14,7 @@ import {
   type SidebarSessionSortMode,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import { renderFilterChoices, renderFilterSwitch } from "./filter-controls.ts";
+import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { icons } from "./icons.ts";
 import { renderPicker } from "./select-picker.ts";
 import "./sidebar-session-filter-popover.ts";
@@ -358,143 +358,279 @@ export function renderSidebarSessionSortMenu(params: {
       ?.closest("openclaw-app-sidebar")
       ?.querySelector<HTMLElement>(".sidebar-session-owner-filter .picker-select__trigger");
   const closeOwnerPicker = () => {
-    params.onViewChange("root");
+    params.onViewChange("filters");
     ownerTrigger()?.focus();
   };
   const selectedOwner = params.owners.find((owner) => owner.id === params.ownerFilterId);
+  const page = params.view === "specific-owner" ? "filters" : params.view;
+  const filtersLabel = t("chat.sidebar.menuFilters");
+  const viewLabel = t("chat.sidebar.menuView");
+  const statusLabel = (value: SidebarSessionStatusFilter) =>
+    value === "active"
+      ? t("common.active")
+      : value === "archived"
+        ? t("sessionsView.archived")
+        : t("sessionsView.all");
+  const filtersSummary = [
+    statusLabel(params.statusFilter),
+    ...(ownerVisible
+      ? [
+          params.involvingMe
+            ? t("sessionsView.involvingMe")
+            : params.ownerFilterId
+              ? (selectedOwner?.label ?? t("sessionsView.specificOwner"))
+              : t("sessionsView.allOwners"),
+        ]
+      : []),
+    ...(params.showCron ? [`+ ${t("chat.sidebar.automationIncluded")}`] : []),
+    ...(params.showSystem ? [`+ ${t("chat.sidebar.systemIncluded")}`] : []),
+  ].join(" · ");
+  const viewSummary = [
+    ...(params.rosterMode
+      ? []
+      : [groupingOptions.find((option) => option.value === params.grouping)?.label]),
+    ...SIDEBAR_SESSION_SORT_OPTIONS.filter((option) => option.mode === params.sortMode).map(
+      (option) => t(option.labelKey),
+    ),
+    t(params.showPreview ? "chat.sidebar.previewOn" : "chat.sidebar.previewOff"),
+  ].join(" · ");
+  const navigationItem = (view: "filters" | "view", label: string, summary: string) => html` <button
+    type="button"
+    role="menuitem"
+    id=${`sidebar-sessions-${view}`}
+    class="sidebar-session-menu-nav"
+    aria-haspopup="menu"
+    aria-expanded="false"
+    @click=${() => params.onViewChange(view)}
+  >
+    <span class="sidebar-session-menu-nav__copy"
+      ><span>${label}</span><small>${summary}</small></span
+    >
+    <span class="sidebar-session-menu-chevron" aria-hidden="true">${icons.chevronRight}</span>
+  </button>`;
+  const switchItem = (
+    id: string,
+    label: string,
+    checked: boolean,
+    onChange: (checked: boolean) => void,
+  ) => html` <button
+    type="button"
+    role="menuitemcheckbox"
+    id=${id}
+    aria-checked=${String(checked)}
+    class="sidebar-session-menu-switch"
+    @click=${() => onChange(!checked)}
+  >
+    <span>${label}</span
+    ><span inert aria-hidden="true"
+      ><wa-switch size="small" .checked=${checked} tabindex="-1"></wa-switch
+    ></span>
+  </button>`;
+  const pickerRow = (label: string, content: unknown) =>
+    html`<div class="sidebar-session-menu-choice" role="none">
+      <span aria-hidden="true">${label}</span>${content}
+    </div>`;
+  const back = () => params.onViewChange("root");
   return keyed(
     params.position,
     html` <openclaw-sidebar-session-filter-popover
       class="sidebar-session-sort-menu"
       .anchor=${params.trigger}
-      .label=${t("chat.sidebar.sortSessions")}
-      .onClose=${(restoreFocus: boolean) => {
-        if (restoreFocus && params.view === "specific-owner") {
-          closeOwnerPicker();
-        } else {
-          params.onClose(restoreFocus);
-        }
-      }}
+      .view=${page}
+      .label=${page === "filters" ? filtersLabel : page === "view" ? viewLabel : t("chat.sidebar.sortSessions")}
+      .onBack=${params.view === "specific-owner" ? closeOwnerPicker : back}
+      .onClose=${params.onClose}
       .content=${html`
-        <div class="filter-display">
-          ${
-            params.rosterMode
-              ? nothing
-              : renderFilterChoices({
-                  label: t("sessionsView.groupBy"),
-                  value: params.grouping,
-                  options: groupingOptions.filter(
-                    (option) => option.value !== "person" || params.peopleSortAvailable,
-                  ),
-                  columns: 2,
-                  keyboardNavigation: true,
-                  onChange: params.onGroupingChange,
-                })
-          }
-          ${renderFilterChoices({
-            label: t("chat.sidebar.sortBy"),
-            value: params.sortMode,
-            options: SIDEBAR_SESSION_SORT_OPTIONS.filter(
-              (option) => option.mode !== "people" || params.peopleSortAvailable,
-            ).map((option) => ({ value: option.mode, label: t(option.labelKey) })),
-            keyboardNavigation: true,
-            onChange: params.onSortModeChange,
-          })}
-          ${renderFilterChoices({
-            label: t("sessionsView.status"),
-            value: params.statusFilter,
-            options: SIDEBAR_SESSION_STATUS_OPTIONS.map((value) => ({
-              value,
-              label:
-                value === "active"
-                  ? t("common.active")
-                  : value === "archived"
-                    ? t("sessionsView.archived")
-                    : t("sessionsView.all"),
-            })),
-            keyboardNavigation: true,
-            onChange: params.onStatusFilterChange,
-          })}
-        </div>
         ${
-          ownerVisible
-            ? html`<div class="sidebar-session-owner-filter filter-choice">
-                <span class="filter-section__label">${t("sessionsView.owners")}</span>
-                ${renderPicker({
-                  label: t("sessionsView.owners"),
-                  value: params.involvingMe
-                    ? "involving-me"
-                    : params.ownerFilterId !== null
-                      ? "specific"
-                      : "all",
-                  options: [
-                    { value: "all", label: t("sessionsView.allOwners") },
-                    { value: "involving-me", label: t("sessionsView.involvingMe") },
-                    ...(params.owners.length > 0 || params.ownerFilterId !== null
-                      ? [
-                          {
-                            value: "specific",
-                            label: t("sessionsView.specificOwner"),
-                            description: selectedOwner?.label ?? selectedOwner?.id,
-                            disabled: params.owners.length === 0,
-                          },
-                        ]
-                      : []),
-                  ],
-                  showSelectedDescription: true,
-                  showOptionTooltips: false,
-                  onChange: (value) => {
-                    if (value === "specific") {
-                      params.onViewChange("specific-owner");
-                    } else {
-                      params.onOwnerFilterChange(null, value === "involving-me");
+          page === "root"
+            ? html`
+                ${navigationItem("filters", filtersLabel, filtersSummary)}
+                ${navigationItem("view", viewLabel, viewSummary)}
+                <a
+                  role="menuitem"
+                  id="sidebar-sessions-sources"
+                  class="sidebar-session-filter-footer"
+                  href=${params.sessionSourcesHref}
+                  @click=${(event: MouseEvent) => {
+                    if (shouldHandleNavigationClick(event)) {
+                      event.preventDefault();
+                      params.onOpenSessionSources();
                     }
-                  },
-                })}
-              </div>`
-            : nothing
+                  }}
+                  ><span aria-hidden="true">${icons.settings}</span
+                  >${t("chat.sidebar.sessionSources")}</a
+                >
+              `
+            : html`
+                <button
+                  type="button"
+                  role="menuitem"
+                  id="sidebar-sessions-back"
+                  class="sidebar-session-menu-back"
+                  @click=${back}
+                >
+                  <span class="sidebar-session-menu-chevron" aria-hidden="true"
+                    >${icons.arrowLeft}</span
+                  >${t("common.back")}<span class="sidebar-session-menu-heading"
+                    >${page === "filters" ? filtersLabel : viewLabel}</span
+                  >
+                </button>
+                ${
+                  page === "filters"
+                    ? html`
+                        ${pickerRow(
+                          t("sessionsView.status"),
+                          renderPicker({
+                            id: "sidebar-sessions-status",
+                            menuItem: true,
+                            label: t("sessionsView.status"),
+                            value: params.statusFilter,
+                            options: SIDEBAR_SESSION_STATUS_OPTIONS.map((value) => ({
+                              value,
+                              label: statusLabel(value),
+                            })),
+                            showOptionTooltips: false,
+                            onChange: (value) => {
+                              const status = SIDEBAR_SESSION_STATUS_OPTIONS.find(
+                                (option) => option === value,
+                              );
+                              if (status) {
+                                params.onStatusFilterChange(status);
+                              }
+                            },
+                          }),
+                        )}
+                        ${
+                          ownerVisible
+                            ? html`<div class="sidebar-session-owner-filter">
+                                ${pickerRow(
+                                  t("sessionsView.owners"),
+                                  renderPicker({
+                                    id: "sidebar-sessions-owner",
+                                    menuItem: true,
+                                    label: t("sessionsView.owners"),
+                                    value: params.involvingMe
+                                      ? "involving-me"
+                                      : params.ownerFilterId !== null
+                                        ? "specific"
+                                        : "all",
+                                    options: [
+                                      { value: "all", label: t("sessionsView.allOwners") },
+                                      {
+                                        value: "involving-me",
+                                        label: t("sessionsView.involvingMe"),
+                                      },
+                                      ...(params.owners.length > 0 || params.ownerFilterId !== null
+                                        ? [
+                                            {
+                                              value: "specific",
+                                              label: t("sessionsView.specificOwner"),
+                                              description:
+                                                selectedOwner?.label ?? selectedOwner?.id,
+                                              disabled: params.owners.length === 0,
+                                            },
+                                          ]
+                                        : []),
+                                    ],
+                                    showSelectedDescription: true,
+                                    showOptionTooltips: false,
+                                    onChange: (value) => {
+                                      if (value === "specific") {
+                                        params.onViewChange("specific-owner");
+                                      } else {
+                                        params.onOwnerFilterChange(null, value === "involving-me");
+                                      }
+                                    },
+                                  }),
+                                )}
+                              </div>`
+                            : nothing
+                        }
+                        <div class="sidebar-session-menu-section">
+                          ${t("chat.sidebar.includedSessions")}
+                        </div>
+                        ${switchItem("sidebar-sessions-cron", t("chat.sidebar.automationIncluded"), params.showCron, params.onShowCronChange)}
+                        ${switchItem("sidebar-sessions-system", t("chat.sidebar.systemIncluded"), params.showSystem, params.onShowSystemChange)}
+                      `
+                    : html`
+                        ${
+                          params.rosterMode
+                            ? nothing
+                            : pickerRow(
+                                t("sessionsView.groupBy"),
+                                renderPicker({
+                                  id: "sidebar-sessions-group",
+                                  menuItem: true,
+                                  label: t("sessionsView.groupBy"),
+                                  value: params.grouping,
+                                  options: groupingOptions.filter(
+                                    (option) =>
+                                      option.value !== "person" || params.peopleSortAvailable,
+                                  ),
+                                  showOptionTooltips: false,
+                                  onChange: (value) => {
+                                    const option = groupingOptions.find(
+                                      (candidate) => candidate.value === value,
+                                    );
+                                    if (option) {
+                                      params.onGroupingChange(option.value);
+                                    }
+                                  },
+                                }),
+                              )
+                        }
+                        ${pickerRow(
+                          t("chat.sidebar.sortBy"),
+                          renderPicker({
+                            id: "sidebar-sessions-sort",
+                            menuItem: true,
+                            label: t("chat.sidebar.sortBy"),
+                            value: params.sortMode,
+                            options: SIDEBAR_SESSION_SORT_OPTIONS.filter(
+                              (option) => option.mode !== "people" || params.peopleSortAvailable,
+                            ).map((option) => ({ value: option.mode, label: t(option.labelKey) })),
+                            showOptionTooltips: false,
+                            onChange: (value) => {
+                              const option = SIDEBAR_SESSION_SORT_OPTIONS.find(
+                                (candidate) => candidate.mode === value,
+                              );
+                              if (option) {
+                                params.onSortModeChange(option.mode);
+                              }
+                            },
+                          }),
+                        )}
+                        ${switchItem("sidebar-sessions-preview", t("sessionsView.showSessionPreview"), params.showPreview, params.onShowPreviewChange)}
+                        ${
+                          params.rosterMode
+                            ? nothing
+                            : pickerRow(
+                                t("sessionsView.hideEmptyGroups"),
+                                renderPicker({
+                                  id: "sidebar-sessions-empty",
+                                  menuItem: true,
+                                  label: t("sessionsView.hideEmptyGroups"),
+                                  value: params.emptyGroupsMode,
+                                  options: EMPTY_GROUPS_OPTIONS.map((option) => ({
+                                    value: option.mode,
+                                    label: t(option.labelKey),
+                                  })),
+                                  showOptionTooltips: false,
+                                  onChange: (value) => {
+                                    const option = EMPTY_GROUPS_OPTIONS.find(
+                                      (candidate) => candidate.mode === value,
+                                    );
+                                    if (option) {
+                                      params.onEmptyGroupsModeChange(option.mode);
+                                    }
+                                  },
+                                }),
+                              )
+                        }
+                      `
+                }
+              `
         }
-        <div class="filter-fields sidebar-session-visibility">
-          ${renderFilterSwitch({ label: t("sessionsView.showSessionPreview"), checked: params.showPreview, onChange: params.onShowPreviewChange })}
-          ${renderFilterSwitch({ label: t("sessionsView.showCronSessions"), checked: params.showCron, onChange: params.onShowCronChange })}
-          ${renderFilterSwitch({ label: t("sessionsView.showSystemSessions"), checked: params.showSystem, onChange: params.onShowSystemChange })}
-          ${
-            params.rosterMode
-              ? nothing
-              : html`<div class="filter-choice sidebar-session-empty-groups-filter">
-                  <span class="filter-section__label">${t("sessionsView.hideEmptyGroups")}</span>
-                  ${renderPicker({
-                    label: t("sessionsView.hideEmptyGroups"),
-                    value: params.emptyGroupsMode,
-                    options: EMPTY_GROUPS_OPTIONS.map((option) => ({
-                      value: option.mode,
-                      label: t(option.labelKey),
-                    })),
-                    showOptionTooltips: false,
-                    onChange: (value) => {
-                      const option = EMPTY_GROUPS_OPTIONS.find(
-                        (candidate) => candidate.mode === value,
-                      );
-                      if (option) {
-                        params.onEmptyGroupsModeChange(option.mode);
-                      }
-                    },
-                  })}
-                </div>`
-          }
-        </div>
-        <a
-          class="sidebar-session-filter-footer"
-          href=${params.sessionSourcesHref}
-          @click=${(event: MouseEvent) => {
-            if (shouldHandleNavigationClick(event)) {
-              event.preventDefault();
-              params.onOpenSessionSources();
-            }
-          }}
-        >
-          <span aria-hidden="true">${icons.settings}</span>${t("chat.sidebar.sessionSources")}
-        </a>
         ${
           params.view === "specific-owner"
             ? html`<wa-dropdown
@@ -525,7 +661,7 @@ export function renderSidebarSessionSortMenu(params: {
                 }}
                 @wa-after-hide=${(event: Event) => {
                   event.stopPropagation();
-                  params.onViewChange("root");
+                  params.onViewChange("filters");
                 }}
               >
                 ${renderSidebarMenuTrigger(params.position, t("sessionsView.specificOwner"))}

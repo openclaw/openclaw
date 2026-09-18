@@ -8,6 +8,7 @@ import {
   requireRecord,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -134,12 +135,8 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const selectFilter = async (label: "Archived" | "All" | "Active") => {
           await page.getByRole("button", { name: "Filter & sort" }).click();
-          await page
-            .locator(".sidebar-session-sort-menu")
-            .getByRole("group", { name: "Status", exact: true })
-            .getByRole("button", { name: label, exact: true })
-            .click();
-          await page.keyboard.press("Escape");
+          await chooseSidebarMenuOption(page, "Status", label);
+          await closeSidebarMenu(page);
         };
         await selectFilter(statusFilter);
         await page.getByText("Archived planning", { exact: true }).first().waitFor();

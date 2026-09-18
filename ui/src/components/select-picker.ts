@@ -23,6 +23,7 @@ type PickerSection<Option> = { group?: PickerGroup; options: Option[]; expanded:
 
 export type PickerParams<Option extends PickerOption> = {
   id?: string;
+  menuItem?: boolean;
   label: string;
   value: string | null;
   options: readonly Option[];
@@ -352,6 +353,7 @@ export class SelectPicker<
       <div @focusout=${this.handleFocusOut} @keydown=${this.handleKeydown}>
         <button
           id=${this.params.id ?? nothing}
+          role=${this.params.menuItem ? "menuitem" : nothing}
           class="picker-select__trigger"
           type="button"
           aria-label=${

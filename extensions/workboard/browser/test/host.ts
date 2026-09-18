@@ -96,12 +96,6 @@ export function createWorkboardTestHost() {
       mountSelectPicker: () => {
         throw new Error("This test did not install DOM components");
       },
-      mountFilterChoices: () => {
-        throw new Error("This test did not install DOM components");
-      },
-      mountFilterSwitch: () => {
-        throw new Error("This test did not install DOM components");
-      },
       mountAgentAvatar: () => {
         throw new Error("This test did not install DOM components");
       },

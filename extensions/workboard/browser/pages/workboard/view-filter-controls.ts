@@ -1,10 +1,7 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
-import {
-  renderSelectPicker,
-  renderFilterChoices as renderHostFilterChoices,
-} from "../../components/host-components.ts";
+import { renderSelectPicker } from "../../components/host-components.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import type {
@@ -214,7 +211,7 @@ export function renderFilterSelect<Value extends string>(params: {
   options: readonly WorkboardSelectOption<Value>[];
   onChange: (value: Value) => void;
 }) {
-  return html`<div class="filter-row">
+  return html`<div class="workboard-filter-row">
     <span>${params.label}</span>
     ${renderSelectPicker({
       value: params.value,
@@ -236,16 +233,24 @@ export function renderFilterChoices<Value extends string>(params: {
   options: readonly { value: Value; label: string; icon: keyof typeof icons; title?: string }[];
   onChange: (value: Value) => void;
 }) {
-  return renderHostFilterChoices({
-    ...params,
-    options: params.options.map((option) => ({ ...option, icon: icons[option.icon] })),
-    onChange: (value) => {
-      const option = params.options.find((candidate) => candidate.value === value);
-      if (option) {
-        params.onChange(option.value);
-      }
-    },
-  });
+  return html`<div class="workboard-filter-choice">
+    <span class="workboard-filter-section__label">${params.label}</span>
+    <div class="workboard-view-toggle" role="group" aria-label=${params.label}>
+      ${params.options.map(
+        (option) => html`<button
+          class="btn ${params.value === option.value ? "is-active" : ""}"
+          type="button"
+          aria-pressed=${params.value === option.value}
+          aria-label=${option.title ?? option.label}
+          title=${option.title ?? option.label}
+          @click=${() => params.onChange(option.value)}
+        >
+          <span aria-hidden="true">${icons[option.icon]}</span>
+          <span>${option.label}</span>
+        </button>`,
+      )}
+    </div>
+  </div>`;
 }
 
 export function renderMultiFilter<Value extends string>(params: {
@@ -263,7 +268,7 @@ export function renderMultiFilter<Value extends string>(params: {
 }) {
   return html`<div class="workboard-filter-section">
     <div class="workboard-filter-section__heading">
-      <span class="filter-section__label">${params.label}</span>
+      <span class="workboard-filter-section__label">${params.label}</span>
     </div>
     <div
       class="workboard-filter-section__options ${

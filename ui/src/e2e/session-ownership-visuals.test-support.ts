@@ -7,6 +7,7 @@ import {
   takeControlUiViewportScreenshot,
   waitForControlUiProofSurface,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { openSidebarMenuPage } from "./sidebar-session-menu.test-support.ts";
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
@@ -108,15 +109,16 @@ export async function captureSessionOwnerPageProof(
   );
 }
 
-export async function openSidebarSortMenu(page: Page) {
+export async function openSidebarSortMenu(page: Page, section: "Filters" | "View" = "Filters") {
   const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
   await expect.poll(() => filterAndSort.count(), { timeout: 2_000 }).toBe(1);
   const menu = page.locator(".sidebar-session-sort-menu");
   if (!(await menu.isVisible())) {
     await filterAndSort.click();
   }
+  await openSidebarMenuPage(page, section);
   await waitForControlUiProofSurface(menu.locator(".sidebar-session-filter-panel"), [
-    menu.getByRole("group").first(),
+    menu.getByRole("menuitem").first(),
   ]);
   return menu;
 }

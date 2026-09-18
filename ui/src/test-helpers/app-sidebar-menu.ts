@@ -20,12 +20,19 @@ export function sessionMenuChoice(menu: Element, value: string) {
   if (!labels) {
     throw new Error(`Unknown session choice ${value}`);
   }
-  return menu.querySelector<HTMLButtonElement>(
-    `[role="group"][aria-label="${labels[0]}"] button[aria-label="${labels[1]}"]`,
+  return (
+    [
+      ...menu.querySelectorAll<HTMLElement>(
+        `[role="listbox"][aria-label="${labels[0]}"] [role="option"]`,
+      ),
+    ].find((option) => option.textContent?.trim() === labels[1]) ?? null
   );
 }
 
-export async function openSessionMenu(sidebar: SidebarLifecycleState): Promise<HTMLElement> {
+export async function openSessionMenu(
+  sidebar: SidebarLifecycleState,
+  view?: "filters" | "view",
+): Promise<HTMLElement> {
   if (!sidebar.querySelector(".sidebar-session-sort-menu")) {
     const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort");
     if (!trigger) {
@@ -41,6 +48,22 @@ export async function openSessionMenu(sidebar: SidebarLifecycleState): Promise<H
   await waitForFast(() =>
     expect(menu.querySelector(".sidebar-session-filter-panel")).not.toBeNull(),
   );
+  if (view) {
+    const label = view === "filters" ? "Filters" : "View";
+    if (menu.querySelector('[role="menu"]')?.getAttribute("aria-label") !== label) {
+      menu.querySelector<HTMLButtonElement>("#sidebar-sessions-back")?.click();
+      await sidebar.updateComplete;
+      await waitForFast(() =>
+        expect(menu.querySelector(`#sidebar-sessions-${view}`)).not.toBeNull(),
+      );
+      menu.querySelector<HTMLButtonElement>(`#sidebar-sessions-${view}`)!.click();
+      await sidebar.updateComplete;
+      await waitForFast(() =>
+        expect(menu.querySelector('[role="menu"]')?.getAttribute("aria-label")).toBe(label),
+      );
+      await waitForFast(() => expect(menu.querySelector(".picker-select__trigger")).not.toBeNull());
+    }
+  }
   return menu;
 }
 
@@ -57,7 +80,10 @@ async function chooseSelect(menu: HTMLElement, label: string, optionLabel: strin
     ...menu.querySelectorAll<HTMLElement>(
       `[role="listbox"][aria-label="${label}"] [role="option"]`,
     ),
-  ].find((candidate) => candidate.textContent?.trim() === optionLabel);
+  ].find(
+    (candidate) =>
+      candidate.querySelector(".picker-select__label")?.textContent?.trim() === optionLabel,
+  );
   if (!option) {
     throw new Error(`Expected ${label} option ${optionLabel}`);
   }
@@ -65,7 +91,7 @@ async function chooseSelect(menu: HTMLElement, label: string, optionLabel: strin
 }
 
 export async function openOwnerMenu(sidebar: SidebarLifecycleState): Promise<HTMLElement> {
-  const menu = await openSessionMenu(sidebar);
+  const menu = await openSessionMenu(sidebar, "filters");
   if (!menu.querySelector(".sidebar-session-owner-picker")) {
     await chooseSelect(menu, "Owners", "Specific owner");
     await sidebar.updateComplete;
@@ -82,13 +108,17 @@ export async function openOwnerMenu(sidebar: SidebarLifecycleState): Promise<HTM
 
 // Historical values remain in fixtures; interactions go through the current visible controls.
 export async function activateSessionMenuValue(sidebar: SidebarLifecycleState, value: string) {
-  const menu = await openSessionMenu(sidebar);
+  const view =
+    value.startsWith("grouping:") ||
+    value.startsWith("sort:") ||
+    value.startsWith("empty-groups:") ||
+    value === "show-preview"
+      ? "view"
+      : "filters";
+  const menu = await openSessionMenu(sidebar, view);
   if (choiceLabels[value]) {
-    const button = sessionMenuChoice(menu, value);
-    if (!button) {
-      throw new Error(`Expected session choice ${value}`);
-    }
-    button.click();
+    const [label, optionLabel] = choiceLabels[value];
+    await chooseSelect(menu, label, optionLabel);
   } else if (value === "involving-me" || value === "owner:") {
     await chooseSelect(menu, "Owners", value === "owner:" ? "All owners" : "Involving me");
   } else if (value.startsWith("owner:")) {
@@ -110,17 +140,16 @@ export async function activateSessionMenuValue(sidebar: SidebarLifecycleState, v
   } else {
     const labels: Record<string, string> = {
       "show-preview": "Show message preview",
-      "show-cron": "Show automation sessions",
-      "show-system": "Show system sessions",
+      "show-cron": "Automation",
+      "show-system": "System",
     };
-    const label = [...menu.querySelectorAll("label")].find(
+    const item = [...menu.querySelectorAll<HTMLButtonElement>('[role="menuitemcheckbox"]')].find(
       (candidate) => candidate.textContent?.trim() === labels[value],
     );
-    const input = label?.querySelector<HTMLInputElement>('input[role="switch"]');
-    if (!input) {
+    if (!item) {
       throw new Error(`Expected session switch ${value}`);
     }
-    input.click();
+    item.click();
   }
   await sidebar.updateComplete;
 }

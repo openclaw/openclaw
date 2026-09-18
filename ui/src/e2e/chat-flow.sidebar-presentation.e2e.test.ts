@@ -16,6 +16,7 @@ import {
   requireRecord,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { closeSidebarMenu, openSidebarMenuPage } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -479,10 +480,14 @@ suite.define(() => {
         );
       }
       await page.locator(".sidebar-session-toolbar .sidebar-session-sort").click();
-      const previewToggle = page.getByRole("switch", { name: "Show message preview", exact: true });
-      expect(await previewToggle.isChecked()).toBe(false);
+      await openSidebarMenuPage(page, "View");
+      const previewToggle = page.getByRole("menuitemcheckbox", {
+        name: "Show message preview",
+        exact: true,
+      });
+      expect(await previewToggle.getAttribute("aria-checked")).toBe("false");
       await previewToggle.click();
-      await page.keyboard.press("Escape");
+      await closeSidebarMenu(page);
       await busyRow.locator(".sidebar-recent-session__subtitle").waitFor();
       const sidebar = page.locator("openclaw-app-sidebar");
       expect(await sidebar.getByRole("img", { name: "Dashboard available" }).count()).toBe(0);

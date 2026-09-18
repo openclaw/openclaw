@@ -7,6 +7,7 @@ import {
   installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
+import { openSidebarMenuPage } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -48,91 +49,90 @@ suite.define(() => {
       await trigger.focus();
       await page.keyboard.press("Enter");
       const menu = page.locator(".sidebar-session-sort-menu");
-      const grouping = menu.getByRole("group", { name: "Group by", exact: true });
-      await expectBrowser(
-        grouping.getByRole("button", { name: "Custom groups", exact: true }),
-      ).toBeFocused();
-      await page.keyboard.press("ArrowRight");
-      const project = grouping.getByRole("button", { name: "Project", exact: true });
-      await expectBrowser(project).toBeFocused();
-      await expectBrowser(project).toHaveAttribute("aria-pressed", "true");
-      await page.keyboard.press("ArrowLeft");
-      await expectBrowser(
-        grouping.getByRole("button", { name: "Custom groups", exact: true }),
-      ).toHaveAttribute("aria-pressed", "true");
-
-      await page.keyboard.press("Tab");
-      const sort = menu.getByRole("group", { name: "Sort by", exact: true });
-      await expectBrowser(sort.getByRole("button", { pressed: true })).toBeFocused();
-      await page.keyboard.press("End");
-      await expectBrowser(
-        sort.getByRole("button", { name: "Owners", exact: true }),
-      ).toHaveAttribute("aria-pressed", "true");
+      const filters = menu.getByRole("menuitem", { name: /^Filters/ });
+      const view = menu.getByRole("menuitem", { name: /^View/ });
+      await expectBrowser(filters).toBeFocused();
+      await page.keyboard.press("ArrowDown");
+      await expectBrowser(view).toBeFocused();
+      await page.keyboard.press("Enter");
+      const grouping = menu.getByRole("menuitem", { name: /^Group by:/ });
+      await expectBrowser(grouping).toBeFocused();
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("Enter");
+      await expectBrowser(grouping).toHaveAccessibleName("Group by: Project");
+      await page.keyboard.press("Enter");
       await page.keyboard.press("Home");
-      await expectBrowser(
-        sort.getByRole("button", { name: "Created", exact: true }),
-      ).toHaveAttribute("aria-pressed", "true");
-      await page.keyboard.press("Tab");
-      await expectBrowser(
-        menu
-          .getByRole("group", { name: "Status", exact: true })
-          .getByRole("button", { pressed: true }),
-      ).toBeFocused();
-      await page.keyboard.press("Tab");
-      const owners = menu.getByRole("button", { name: /^Owners:/ });
+      await page.keyboard.press("Enter");
+      await expectBrowser(grouping).toHaveAccessibleName("Group by: Custom groups");
+      await page.keyboard.press("ArrowDown");
+      const sort = menu.getByRole("menuitem", { name: /^Sort by:/ });
+      await expectBrowser(sort).toBeFocused();
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("End");
+      await page.keyboard.press("Enter");
+      await expectBrowser(sort).toHaveAccessibleName("Sort by: Owners");
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Home");
+      await page.keyboard.press("Enter");
+      await expectBrowser(sort).toHaveAccessibleName("Sort by: Created");
+      await page.keyboard.press("ArrowDown");
+      const preview = menu.getByRole("menuitemcheckbox", {
+        name: "Show message preview",
+        exact: true,
+      });
+      await expectBrowser(preview).toBeFocused();
+      await page.keyboard.press("Space");
+      await expectBrowser(preview).toHaveAttribute("aria-checked", "true");
+      await page.keyboard.press("ArrowDown");
+      const emptyGroups = menu.getByRole("menuitem", { name: /^Hide empty groups:/ });
+      await expectBrowser(emptyGroups).toBeFocused();
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Escape");
+      await expectBrowser(emptyGroups).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expectBrowser(view).toBeFocused();
+      await page.keyboard.press("ArrowUp");
+      await page.keyboard.press("Enter");
+      await expectBrowser(menu.getByRole("menuitem", { name: /^Status:/ })).toBeFocused();
+      await page.keyboard.press("ArrowDown");
+      const owners = menu.getByRole("menuitem", { name: /^Owners:/ });
       await expectBrowser(owners).toBeFocused();
       await page.keyboard.press("Enter");
       await expectBrowser(menu.getByRole("listbox", { name: "Owners", exact: true })).toBeVisible();
       await page.keyboard.press("Escape");
       await expectBrowser(owners).toBeFocused();
-      await expectBrowser(menu).toBeVisible();
-      await page.keyboard.press("Tab");
-      await expectBrowser(
-        menu.getByRole("switch", { name: "Show message preview", exact: true }),
-      ).toBeFocused();
-      await page.keyboard.press("Tab");
-      await expectBrowser(
-        menu.getByRole("switch", { name: "Show automation sessions", exact: true }),
-      ).toBeFocused();
-      await page.keyboard.press("Tab");
-      await expectBrowser(
-        menu.getByRole("switch", { name: "Show system sessions", exact: true }),
-      ).toBeFocused();
-      await page.keyboard.press("Tab");
-      await expectBrowser(menu.getByRole("button", { name: /^Hide empty groups:/ })).toBeFocused();
-      await page.keyboard.press("Tab");
-      await expectBrowser(
-        menu.getByRole("link", { name: "Session sources…", exact: true }),
-      ).toBeFocused();
-
-      await owners.focus();
+      await page.keyboard.press("ArrowDown");
+      const automation = menu.getByRole("menuitemcheckbox", { name: "Automation", exact: true });
+      await expectBrowser(automation).toBeFocused();
+      await page.keyboard.press("Space");
+      await expectBrowser(automation).toHaveAttribute("aria-checked", "true");
+      await page.keyboard.press("ArrowDown");
+      const system = menu.getByRole("menuitemcheckbox", { name: "System", exact: true });
+      await expectBrowser(system).toBeFocused();
+      await page.keyboard.press("Space");
+      await expectBrowser(system).toHaveAttribute("aria-checked", "true");
+      await page.keyboard.press("ArrowUp");
+      await page.keyboard.press("ArrowUp");
+      await expectBrowser(owners).toBeFocused();
       await page.keyboard.press("Enter");
       await page.keyboard.press("End");
       await page.keyboard.press("Enter");
       const picker = menu.locator(".sidebar-session-owner-picker");
-      await expectBrowser(picker.getByRole("menuitemradio")).toHaveCount(5);
+      await picker.getByRole("menuitemradio").first().waitFor();
       await page.keyboard.press("Escape");
       await expectBrowser(picker).toHaveCount(0);
       await expectBrowser(owners).toBeFocused();
-      await expectBrowser(menu).toBeVisible();
+      await expectBrowser(menu.getByRole("menu", { name: "Filters", exact: true })).toBeVisible();
       await page.keyboard.press("Enter");
       await page.keyboard.press("End");
       await page.keyboard.press("Enter");
       await expectBrowser(
         picker.getByRole("menuitem", { name: "Back", exact: true }),
       ).toBeFocused();
-      await page.keyboard.press("Tab");
-      await expectBrowser(picker).toHaveCount(0);
-      await expectBrowser(
-        menu.getByRole("switch", { name: "Show message preview", exact: true }),
-      ).toBeFocused();
-      await expectBrowser(menu).toBeVisible();
+      await expectBrowser(picker.getByRole("menuitemradio")).toHaveCount(5);
       await page.keyboard.press("Escape");
-      await expectBrowser(menu).toHaveCount(0);
-      await expectBrowser(trigger).toBeFocused();
-
-      await page.keyboard.press("Enter");
-      await owners.focus();
+      await expectBrowser(owners).toBeFocused();
       await page.keyboard.press("Enter");
       await page.keyboard.press("End");
       await page.keyboard.press("Enter");
@@ -164,6 +164,17 @@ suite.define(() => {
       await expectBrowser(
         picker.getByRole("menuitemradio", { name: "Ada Lovelace Byron", exact: true }),
       ).toHaveAttribute("aria-checked", "true");
+      await page.keyboard.press("Escape");
+      await expectBrowser(owners).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expectBrowser(filters).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expectBrowser(menu).toHaveCount(0);
+      await expectBrowser(trigger).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expectBrowser(filters).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expectBrowser(menu).toHaveCount(0);
     } finally {
       await context.close();
     }
@@ -196,6 +207,7 @@ suite.define(() => {
           await page.getByRole("button", { name: "Expand sidebar" }).click();
         }
         await page.getByRole("button", { name: "Filter & sort" }).click();
+        await openSidebarMenuPage(page, "Filters");
         const menu = page.locator(".sidebar-session-sort-menu");
         const menuBounds = await menu.locator(".sidebar-session-filter-panel").boundingBox();
         expect(menuBounds).not.toBeNull();
@@ -203,7 +215,7 @@ suite.define(() => {
         expect(menuBounds!.y).toBeGreaterThanOrEqual(0);
         expect(menuBounds!.x + menuBounds!.width).toBeLessThanOrEqual(viewport.width);
         expect(menuBounds!.y + menuBounds!.height).toBeLessThanOrEqual(viewport.height);
-        const owners = menu.getByRole("button", { name: /^Owners:/ });
+        const owners = menu.getByRole("menuitem", { name: /^Owners:/ });
         await owners.click();
         await menu.getByRole("option", { name: /^Specific owner/ }).click();
         const picker = menu.locator(".sidebar-session-owner-picker");
@@ -262,7 +274,8 @@ suite.define(() => {
       await page.locator("html").evaluate((element) => element.setAttribute("dir", "rtl"));
       await page.getByRole("button", { name: "Expand sidebar" }).click();
       await page.getByRole("button", { name: "Filter & sort" }).click();
-      await page.getByRole("button", { name: /^Owners:/ }).click();
+      await openSidebarMenuPage(page, "Filters");
+      await page.getByRole("menuitem", { name: /^Owners:/ }).click();
       await page.getByRole("option", { name: /^Specific owner/ }).click();
       await expect
         .poll(() =>

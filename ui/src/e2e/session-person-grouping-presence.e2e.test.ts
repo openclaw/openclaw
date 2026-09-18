@@ -10,6 +10,7 @@ import {
   openSidebarSortMenu,
   routeAvatarFixtures,
 } from "./session-ownership-visuals.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI person-grouped session presence",
@@ -87,11 +88,8 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       await page.getByText("Ada research", { exact: true }).first().waitFor();
       const menu = await openSidebarSortMenu(page);
-      await menu
-        .getByRole("group", { name: "Group by", exact: true })
-        .getByRole("button", { name: "Person", exact: true })
-        .click();
-      await page.keyboard.press("Escape");
+      await chooseSidebarMenuOption(menu.page(), "Group by", "Person");
+      await closeSidebarMenu(page);
       const adaSection = page.locator('[data-session-section="person:profile:profile-ada"]');
       const bobSection = page.locator('[data-session-section="person:profile:profile-bob"]');
       await expectBrowser(adaSection).toContainText("Ada research");

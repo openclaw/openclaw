@@ -8,6 +8,11 @@ import {
   installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
+import {
+  chooseSidebarMenuOption,
+  closeSidebarMenu,
+  openSidebarMenuPage,
+} from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -48,10 +53,7 @@ suite.define(() => {
         const filter = page.getByRole("button", { name: "Filter & sort" });
         const menu = page.locator(".sidebar-session-sort-menu");
         await filter.click();
-        await menu
-          .getByRole("group", { name: "Group by", exact: true })
-          .getByRole("button", { name: "Person", exact: true })
-          .click();
+        await chooseSidebarMenuOption(menu.page(), "Group by", "Person");
         const people = page.locator('[data-session-section^="person:"]');
         const other = page.locator('[data-session-section="ungrouped"]');
         await expectBrowser(people).toHaveCount(8);
@@ -68,7 +70,8 @@ suite.define(() => {
             sessions: allSessions.sessions.slice(0, 1),
           });
         }
-        await menu.getByRole("button", { name: /^Owners:/ }).click();
+        await openSidebarMenuPage(page, "Filters");
+        await menu.getByRole("menuitem", { name: /^Owners:/ }).click();
         if (involvingMe) {
           await menu.getByRole("option", { name: "Involving me", exact: true }).click();
         } else {
@@ -90,7 +93,8 @@ suite.define(() => {
         await captureUiProof(suite, page, `filtered-has-more-${hasMore}.png`);
         await expectBrowser(other).toHaveCount(0);
 
-        const emptyGroups = menu.getByRole("button", { name: /^Hide empty groups:/ });
+        await openSidebarMenuPage(page, "View");
+        const emptyGroups = menu.getByRole("menuitem", { name: /^Hide empty groups:/ });
         await emptyGroups.click();
         await captureUiProof(suite, page, `empty-group-choice-${involvingMe}-${hasMore}.png`);
         await menu.getByRole("option", { name: "Never", exact: true }).click();
@@ -102,21 +106,16 @@ suite.define(() => {
         await expectBrowser(other).toHaveCount(0);
 
         // An owner filter must not hide matching rows that really belong in Other.
-        await menu
-          .getByRole("group", { name: "Group by", exact: true })
-          .getByRole("button", { name: "Custom groups", exact: true })
-          .click();
+        await chooseSidebarMenuOption(menu.page(), "Group by", "Custom groups");
         await expectBrowser(other).toContainText("Owner 1 session");
-        await menu
-          .getByRole("group", { name: "Group by", exact: true })
-          .getByRole("button", { name: "Person", exact: true })
-          .click();
+        await chooseSidebarMenuOption(menu.page(), "Group by", "Person");
         await expectBrowser(other).toHaveCount(0);
 
         await gateway.setMethodResponse("sessions.list", allSessions);
-        await menu.getByRole("button", { name: /^Owners:/ }).click();
+        await openSidebarMenuPage(page, "Filters");
+        await menu.getByRole("menuitem", { name: /^Owners:/ }).click();
         await menu.getByRole("option", { name: "All owners", exact: true }).click();
-        await page.keyboard.press("Escape");
+        await closeSidebarMenu(page);
         await expectBrowser(people).toHaveCount(8);
         await expectBrowser(
           other.getByRole("button", { name: "Other", exact: true }),
@@ -148,7 +147,8 @@ suite.define(() => {
       };
       await openMenu();
       const menu = page.locator(".sidebar-session-sort-menu");
-      const choice = menu.getByRole("button", { name: /^Hide empty groups:/ });
+      await openSidebarMenuPage(page, "View");
+      const choice = menu.getByRole("menuitem", { name: /^Hide empty groups:/ });
       await choice.scrollIntoViewIfNeeded();
       await captureUiProof(suite, page, "empty-groups-mobile-root.png");
       await choice.click();
@@ -171,10 +171,11 @@ suite.define(() => {
       await expectBrowser(page.locator('[data-session-section="category:Empty"]')).toHaveCount(0);
       await page.reload();
       await openMenu();
+      await openSidebarMenuPage(page, "View");
       await expectBrowser(choice).toHaveAccessibleName("Hide empty groups: Always");
       await choice.click();
       await menu.getByRole("option", { name: "Never", exact: true }).click();
-      await page.keyboard.press("Escape");
+      await closeSidebarMenu(page);
       await expectBrowser(page.locator('[data-session-section="category:Empty"]')).toBeVisible();
     } finally {
       await context.close();

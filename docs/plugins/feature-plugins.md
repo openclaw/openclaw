@@ -226,10 +226,6 @@ ownership. Use `mountSelectPicker` for a list of `{ value, label, description? }
 options, a selected `value`, an `accessibleLabel`, and an `onSelect` callback.
 With `searchable: true`, lists longer than eight options show a search field.
 The picker matches option labels, values, and descriptions.
-Use `mountFilterChoices` for labeled segmented choices and `mountFilterSwitch`
-for a labeled boolean preference. Choices accept optional plugin-owned icon DOM
-and opt-in arrow-key navigation; both components report changes to the plugin
-through `onChange` without storing preferences.
 
 ## Build and reload
 

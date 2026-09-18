@@ -9,8 +9,6 @@ type DialogProps = Parameters<Components["mountDialog"]>[1];
 type PickerProps = Parameters<Components["mountAgentPicker"]>[1];
 type AvatarProps = Parameters<Components["mountAgentAvatar"]>[1];
 type SelectPickerProps = Parameters<Components["mountSelectPicker"]>[1];
-type FilterChoicesProps = Parameters<Components["mountFilterChoices"]>[1];
-type FilterSwitchProps = Parameters<Components["mountFilterSwitch"]>[1];
 type AppearancePickerProps = Parameters<Components["mountAppearancePicker"]>[1];
 type AppearanceGlyphProps = Parameters<Components["mountAppearanceGlyph"]>[1];
 type SessionSummaryProps = Parameters<Components["mountSessionSummary"]>[1];
@@ -87,51 +85,6 @@ const mountAgentAvatar = createHostComponent((container, props: AvatarProps) =>
 const mountSelectPicker = createHostComponent((container, props: SelectPickerProps) =>
   workboardHost().components.mountSelectPicker(container, props),
 );
-type FilterChoicesContentProps = Omit<FilterChoicesProps, "options"> & {
-  options: readonly (Omit<FilterChoicesProps["options"][number], "icon"> & { icon?: unknown })[];
-};
-const mountFilterChoices = createHostComponent((container, initial: FilterChoicesContentProps) => {
-  let iconRoots: HTMLElement[] = [];
-  const clearIcons = () => {
-    for (const icon of iconRoots) {
-      render(nothing, icon);
-    }
-    iconRoots = [];
-  };
-  const prepare = (props: FilterChoicesContentProps): FilterChoicesProps => {
-    clearIcons();
-    return {
-      ...props,
-      options: props.options.map((option) => {
-        if (!option.icon) {
-          return { ...option, icon: undefined };
-        }
-        // The plugin keeps its icon artwork; the host owns the interactive control.
-        const icon = document.createElement("span");
-        icon.style.display = "contents";
-        render(option.icon, icon);
-        iconRoots.push(icon);
-        return { ...option, icon };
-      }),
-    };
-  };
-  try {
-    const handle = workboardHost().components.mountFilterChoices(container, prepare(initial));
-    return {
-      update: (props: FilterChoicesContentProps) => handle.update(prepare(props)),
-      dispose() {
-        handle.dispose();
-        clearIcons();
-      },
-    };
-  } catch (error) {
-    clearIcons();
-    throw error;
-  }
-});
-const mountFilterSwitch = createHostComponent((container, props: FilterSwitchProps) =>
-  workboardHost().components.mountFilterSwitch(container, props),
-);
 const mountAppearancePicker = createHostComponent((container, props: AppearancePickerProps) =>
   workboardHost().components.mountAppearancePicker(container, props),
 );
@@ -156,14 +109,6 @@ export function renderAgentAvatar(props: AvatarProps) {
 
 export function renderSelectPicker(props: SelectPickerProps, className = "") {
   return html`<div class=${className} ${mountSelectPicker(props)}></div>`;
-}
-
-export function renderFilterChoices(props: FilterChoicesContentProps) {
-  return html`<div style="display: contents" ${mountFilterChoices(props)}></div>`;
-}
-
-export function renderFilterSwitch(props: FilterSwitchProps, className = "") {
-  return html`<div class=${className} style="display: contents" ${mountFilterSwitch(props)}></div>`;
 }
 
 export function renderAppearancePicker(props: AppearancePickerProps, className = "") {
