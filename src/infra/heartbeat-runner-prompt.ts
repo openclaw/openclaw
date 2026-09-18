@@ -1,6 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
-  HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
+  HEARTBEAT_RESPONSE_TOOL_COMPLETION_INSTRUCTIONS,
   isHeartbeatContentEffectivelyEmpty,
 } from "../auto-reply/heartbeat.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -253,7 +253,7 @@ export function resolveHeartbeatRunPrompt(params: {
       .map((task) => `- ${task.name}: ${task.prompt}`)
       .join("\n");
     const completionInstruction = params.useHeartbeatResponseTool
-      ? `After completing all due tasks:\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`
+      ? `After completing all due tasks:\n${HEARTBEAT_RESPONSE_TOOL_COMPLETION_INSTRUCTIONS}`
       : `After completing all due tasks, reply ${SILENT_REPLY_TOKEN}.`;
     const taskPrompt = `Run the following periodic tasks (only those due based on their intervals):
 
