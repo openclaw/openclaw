@@ -984,6 +984,14 @@
     "target": "Google Chat"
   },
   {
+    "source": "Google (Vertex AI)",
+    "target": "Google（Vertex AI）"
+  },
+  {
+    "source": "google-vertex",
+    "target": "google-vertex"
+  },
+  {
     "source": "Matrix",
     "target": "Matrix"
   },
