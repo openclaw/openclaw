@@ -314,6 +314,11 @@ export type RunEmbeddedAgentParams = {
   bootstrapContextRunKind?: BootstrapContextRunKind;
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
+  /**
+   * The runtime copied `toolsAllow` from the creating turn instead of an
+   * operator authoring it. Diagnostics only: it must never widen the cap.
+   */
+  toolsAllowIsDefault?: boolean;
   /** Preserve the visible tool schemas while allowing execution only for these names. */
   toolExecutionAllow?: readonly string[];
   /** Exact attempt authority attached to the active steering backend. */
@@ -546,6 +551,7 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "silentReplyPromptMode"
   | "ownerNumbers"
   | "toolsAllow"
+  | "toolsAllowIsDefault"
   | "runtimePluginToolGrant"
   | "inputProvenance"
   | "scheduledToolPolicy"

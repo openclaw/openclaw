@@ -703,6 +703,7 @@ function createCronPromptExecutor(
           bootstrapContextMode,
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
+          toolsAllowIsDefault: params.agentPayload?.toolsAllowIsDefault === true,
           scheduledRuntimeAuthority: params.job.runtimeAuthority,
           scheduledRuntimeAuthorityRecoveryRequired:
             params.job.runtimeAuthorityRecoveryRequired === true,

@@ -7,6 +7,8 @@ export function collectAttemptExplicitToolAllowlistSources(params: {
   // run's tools, instead of re-resolving with divergent session inputs.
   capabilityProfile: ResolvedConversationCapabilityProfile;
   toolsAllow?: string[];
+  /** The runtime copied this allowlist from the creating turn; no operator wrote it. */
+  toolsAllowIsDefault?: boolean;
 }) {
   const {
     agentId,
@@ -34,6 +36,11 @@ export function collectAttemptExplicitToolAllowlistSources(params: {
     { label: "sandbox tools.allow", allow: sandboxPolicy?.allow },
     { label: "subagent tools.allow", allow: subagentPolicy?.allow },
     { label: "inherited tools.allow", allow: inheritedToolPolicy?.allow },
-    { label: "runtime toolsAllow", allow: params.toolsAllow, enforceWhenToolsDisabled: true },
+    {
+      label: "runtime toolsAllow",
+      allow: params.toolsAllow,
+      enforceWhenToolsDisabled: true,
+      runtimeSupplied: params.toolsAllowIsDefault === true,
+    },
   ]);
 }

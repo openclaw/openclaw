@@ -148,6 +148,72 @@ describe("tool allowlist guard", () => {
     ).toBeNull();
   });
 
+  it("does not blame an unregistered plugin for a runtime-supplied default allowlist", () => {
+    // A cron job created through the `automations` tool inherits its creator
+    // turn's surface verbatim (`toolsAllowIsDefault`). The operator never wrote
+    // that list, so "fix the allowlist or enable the plugin" misdirects them.
+    const error = buildEmptyExplicitToolAllowlistError({
+      sources: [
+        {
+          label: "runtime toolsAllow",
+          entries: ["ls", "read", "graphiti__add_memory"],
+          enforceWhenToolsDisabled: true,
+          runtimeSupplied: true,
+        },
+      ],
+      hasCallableTools: false,
+      toolsEnabled: true,
+    });
+
+    expect(error?.message).toContain("runtime toolsAllow: ls, read, graphiti__add_memory");
+    expect(error?.message).toContain("captured automatically from the session that created it");
+    expect(error?.message).not.toContain("enable the plugin that registers the requested tool");
+  });
+
+  it("names scheduled account authority instead of an unregistered plugin", () => {
+    const error = buildEmptyExplicitToolAllowlistError({
+      sources: [
+        {
+          label: "runtime toolsAllow",
+          entries: ["ls", "read"],
+          enforceWhenToolsDisabled: true,
+          runtimeSupplied: true,
+        },
+      ],
+      hasCallableTools: false,
+      toolsEnabled: true,
+      scheduledToolPolicyMode: "account",
+    });
+
+    expect(error?.message).toContain("scheduled \"account\" tool policy");
+    expect(error?.message).not.toContain("enable the plugin that registers the requested tool");
+  });
+
+  it("keeps the plugin hint for operator-authored allowlists", () => {
+    const error = buildEmptyExplicitToolAllowlistError({
+      sources: [{ label: "tools.allow", entries: ["query_db"] }],
+      hasCallableTools: false,
+      toolsEnabled: true,
+      scheduledToolPolicyMode: "account",
+    });
+
+    expect(error?.message).toContain("no registered tools matched");
+    expect(error?.message).toContain("enable the plugin that registers the requested tool");
+    expect(error?.message).not.toContain("captured automatically");
+  });
+
+  it("marks a runtime-supplied source only when the allowlist was a default", () => {
+    expect(
+      collectExplicitToolAllowlistSources([
+        { label: "runtime toolsAllow", allow: ["read"], runtimeSupplied: true },
+        { label: "tools.allow", allow: ["read"], runtimeSupplied: false },
+      ]),
+    ).toEqual([
+      { label: "runtime toolsAllow", entries: ["read"], runtimeSupplied: true },
+      { label: "tools.allow", entries: ["read"] },
+    ]);
+  });
+
   it("keeps source labels for config and runtime allowlists", () => {
     const sources = collectExplicitToolAllowlistSources([
       { label: "tools.allow", allow: [" read ", ""] },
