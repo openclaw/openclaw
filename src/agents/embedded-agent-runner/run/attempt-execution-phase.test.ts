@@ -837,6 +837,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         agent: fixture.activeSession.agent,
         sessionManager: fixture.sessionManager,
         timeoutMs: 0,
+        abortSignal: fixture.input.attempt.abortSignal,
       });
       expect(fixture.activeSession.dispose).toHaveBeenCalledOnce();
     },

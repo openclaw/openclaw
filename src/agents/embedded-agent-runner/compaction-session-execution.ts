@@ -710,6 +710,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           await flushPendingToolResultsAfterIdle({
             agent: session?.agent,
             sessionManager,
+            abortSignal: params.abortSignal,
           });
         } catch {
           /* best-effort */
