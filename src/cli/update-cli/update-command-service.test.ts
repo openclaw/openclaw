@@ -70,6 +70,7 @@ vi.mock("./update-command-config-snapshot.js", () => ({
   createUpdateConfigSnapshot: mocks.createUpdateConfigSnapshot,
 }));
 
+import { prepareUpdateServiceResult } from "./update-command-result.js";
 import { maybeRestartService } from "./update-command-service.js";
 
 const gateway = { bootId: "test-boot", version: "2026.9.1", buildId: "new-build" };
@@ -456,9 +457,17 @@ describe("maybeRestartService", () => {
     );
   });
 
-  it.for(["installed", "registration rejected", "activation uncertain"])(
-    "keeps a Windows two-prefix reconciliation available (%s)",
-    async (outcome, { onTestFinished }) => {
+  it.for(
+    ["installed", "registration rejected", "activation uncertain", "definition unchanged"].flatMap(
+      (outcome) => ["default", "work"].map((profile) => ({ outcome, profile })),
+    ),
+  )(
+    "keeps a Windows two-prefix reconciliation available ($outcome, $profile)",
+    async ({ outcome, profile }, { onTestFinished }) => {
+      vi.stubEnv("OPENCLAW_PROFILE", "caller");
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
       const platform = mockProcessPlatform("win32");
       onTestFinished(() => platform.mockRestore());
       const home = await fs.realpath(tempDirs.make("update-task-prefixes-"));
@@ -489,10 +498,12 @@ describe("maybeRestartService", () => {
       onTestFinished(() => service.mockRestore());
       mocks.runUpdatedInstallGatewayCommand.mockImplementation(async (_params, action) => {
         if (action === "install") {
-          if (outcome !== "installed") {
+          if (outcome === "registration rejected" || outcome === "activation uncertain") {
             throw new Error(outcome);
           }
-          commandRoot = roots[1];
+          if (outcome === "installed") {
+            commandRoot = roots[1];
+          }
           return "unverified";
         }
         servingRoot = commandRoot;
@@ -519,6 +530,8 @@ describe("maybeRestartService", () => {
         result,
         opts: { json: true },
         refreshServiceEnv: true,
+        serviceEnv: { HOME: home, OPENCLAW_PROFILE: profile },
+        requireRunningServiceAfterRestart: true,
         serviceUpdateVerdict: {
           kind: "owned",
           root: roots[0],
@@ -535,12 +548,63 @@ describe("maybeRestartService", () => {
         outcome === "installed" ? ["install", "restart"] : ["install"],
       );
       if (outcome !== "installed") {
+        if (outcome !== "definition unchanged") {
+          expect(result.steps[0]?.advisory?.message).toContain(outcome);
+        }
+        const cli = profile === "default" ? "openclaw" : "openclaw --profile work";
         expect(result.steps).toEqual([
           expect.objectContaining({
-            advisory: expect.objectContaining({ message: expect.stringContaining(outcome) }),
+            command: `${cli} gateway install --force`,
+            advisory: expect.objectContaining({
+              message: expect.stringContaining(
+                `Run \`${cli} gateway install --force\`, then \`${cli} gateway restart\`.`,
+              ),
+            }),
+          }),
+          expect.objectContaining({
+            advisory: expect.objectContaining({
+              message: expect.stringContaining(`Inspect \`${cli} gateway status --deep\``),
+            }),
           }),
         ]);
       }
+    },
+  );
+
+  it.each(["default", "work"])(
+    "preserves the selected profile in skipped reconciliation: %s",
+    (profile) => {
+      const result: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
+      expect(
+        prepareUpdateServiceResult({
+          result,
+          root: "/cli-install",
+          shouldRestart: false,
+          preManagedServiceStop: {
+            stopped: false,
+            inspected: true,
+            runtimeInspected: true,
+            running: false,
+            serviceEnv: { OPENCLAW_PROFILE: profile },
+            serviceUpdateVerdict: {
+              kind: "owned",
+              root: "/service-install",
+              fingerprint: "original",
+              refreshDefinition: true,
+              requiresInstallRootRefresh: true,
+            },
+          },
+        }),
+      ).toBe(false);
+      const cli = profile === "default" ? "openclaw" : "openclaw --profile work";
+      expect(result.steps).toEqual([
+        expect.objectContaining({
+          command: `${cli} gateway install --force`,
+          advisory: expect.objectContaining({
+            message: expect.stringContaining(`Run \`${cli} doctor --fix\``),
+          }),
+        }),
+      ]);
     },
   );
 

@@ -8,6 +8,7 @@ import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../../shared/update-outcome.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { formatCliCommand } from "../command-format.js";
 import {
   checkTargetDatabaseSchemasForContexts,
   formatSchemaRefusalLines,
@@ -167,7 +168,7 @@ export async function preflightUpdateCommandSchemas(params: {
           inspectedService.serviceUpdateVerdict.requiresInstallRootRefresh
         ) {
           preflightNotes.push(
-            `Gateway service targets ${inspectedService.serviceUpdateVerdict.root}; ${shouldRestart ? "would reconcile it with" : "restart is disabled; run openclaw doctor --fix to reconcile it with"} the active installation ${root}.`,
+            `Gateway service targets ${inspectedService.serviceUpdateVerdict.root}; ${shouldRestart ? "would reconcile it with" : `restart is disabled; run ${formatCliCommand("openclaw doctor --fix", inspectedService.serviceEnv)} to reconcile it with`} the active installation ${root}.`,
           );
         }
       }

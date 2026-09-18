@@ -22,6 +22,7 @@ import { repairUpdateService } from "./update-command-repair-service.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
+  prepareUpdateServiceResult,
   UpdateCommandFailure,
   resolveAutomaticUpdateTriage,
   recordUpdateResultNextAction,
@@ -35,7 +36,6 @@ import { createWindowsTaskAutoStartGuard } from "./update-command-service-mainte
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
   recordFailedUpdateGatewayState,
-  prepareUpdateServiceResult,
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,

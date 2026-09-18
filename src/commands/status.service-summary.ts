@@ -76,7 +76,13 @@ export async function readServiceStatusSummary(
       ...(layout ? { layout } : {}),
       ...(wrapperPath ? { wrapperPath } : {}),
       ...(installationDrift
-        ? { installationDrift: formatGatewayServiceInstallationDrift(installationDrift) }
+        ? {
+            installationDrift: formatGatewayServiceInstallationDrift(
+              installationDrift,
+              undefined,
+              state.env,
+            ),
+          }
         : {}),
     };
   } catch (error) {

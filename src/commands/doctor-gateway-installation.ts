@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { formatCliCommand } from "../cli/command-format.js";
 import { SERVICE_AUDIT_CODES } from "../daemon/service-audit.js";
 import { sanitizeServiceInspectionError } from "../daemon/service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "../daemon/service-operation-lock.js";
@@ -65,7 +66,7 @@ export async function assertGatewayServiceInstallationRepairAllowed(
   }
   if (verdict.kind !== "owned" || !verdict.requiresInstallRootRefresh) {
     throw new Error(
-      "Gateway service installation is controlled by another owner; automatic installation repair was skipped. Inspect it with `openclaw gateway status --deep`.",
+      `Gateway service installation is controlled by another owner; automatic installation repair was skipped. Inspect it with \`${formatCliCommand("openclaw gateway status --deep", state.env)}\`.`,
     );
   }
 }
@@ -130,5 +131,5 @@ export async function resolveSystemdServiceRewriteBlock(
     return undefined;
   }
   issues.splice(0, issues.length, ...issues.filter((issue) => !isExecStartRepairIssue(issue)));
-  return `Gateway service ${unitName} is running; skipped command/entrypoint rewrites and leaving supervisor metadata unchanged. Stop the service first or use \`openclaw gateway install --force\` when you want to replace the active launcher.`;
+  return `Gateway service ${unitName} is running; skipped command/entrypoint rewrites and leaving supervisor metadata unchanged. Stop the service first or use \`${formatCliCommand("openclaw gateway install --force")}\` when you want to replace the active launcher.`;
 }
