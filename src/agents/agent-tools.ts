@@ -372,6 +372,8 @@ export function createOpenClawCodingToolsInternal(
         accountId: options?.agentAccountId,
       }),
       messageProvider: options?.messageProvider,
+      currentMessagingTarget:
+        options?.currentMessagingTarget ?? options?.currentChannelId ?? options?.messageTo,
       currentChannelId: options?.currentChannelId,
       currentThreadTs: options?.currentThreadTs,
       channelContext: options?.channelContext,
