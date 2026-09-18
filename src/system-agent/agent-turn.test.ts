@@ -915,43 +915,44 @@ describe("runSystemAgentTurn", () => {
         },
       );
 
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-    const call = expectDefined(
-      runEmbeddedAgent.mock.calls[0]?.[0],
-      "missing embedded runner call",
-    );
-    expect(call).not.toHaveProperty("streamParams");
-    expect(call).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.4",
-      lane: CommandLane.SystemAgentInference,
-      systemAgentTool: { agentId: "ops" },
-      memoryPromptAgentId: expectedMemoryPromptAgentId,
-      agentDir,
-      authProfileId: "openai:ops",
-      authProfileIdSource: "user",
-      agentHarnessRuntimeOverride: "codex",
-      agentId: "openclaw",
-      sessionKey: `agent:openclaw:${session.sessionId}`,
-      sandboxSessionKey: "agent:openclaw:main",
-      sessionId: session.sessionId,
-      workspaceDir: path.join(stateDir, "openclaw", "workspace"),
-      sessionFile: `in-memory:${session.sessionId}`,
-      messageChannel: "openclaw",
-      messageProvider: "openclaw",
-      toolsAllow: ["openclaw"],
-      disableMessageTool: true,
-    });
-    expect(call.agentHarnessId).toBeUndefined();
-    expect(listAgentEntries(call.config ?? {}).find((agent) => agent.id === "openclaw")).toEqual({
-      id: "openclaw",
-      params: { temperature: 0.2 },
-      tools: { allow: ["read"], deny: ["exec"] },
-    });
-    expect(expectDefined(call.systemAgentTool, "missing embedded OpenClaw tool").proposalRef).toBe(
-      session.proposalRef,
-    );
-  });
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      const call = expectDefined(
+        runEmbeddedAgent.mock.calls[0]?.[0],
+        "missing embedded runner call",
+      );
+      expect(call).not.toHaveProperty("streamParams");
+      expect(call).toMatchObject({
+        provider: "openai",
+        model: "gpt-5.4",
+        lane: CommandLane.SystemAgentInference,
+        systemAgentTool: { agentId: "ops" },
+        memoryPromptAgentId: expectedMemoryPromptAgentId,
+        agentDir,
+        authProfileId: "openai:ops",
+        authProfileIdSource: "user",
+        agentHarnessRuntimeOverride: "codex",
+        agentId: "openclaw",
+        sessionKey: `agent:openclaw:${session.sessionId}`,
+        sandboxSessionKey: "agent:openclaw:main",
+        sessionId: session.sessionId,
+        workspaceDir: path.join(stateDir, "openclaw", "workspace"),
+        sessionFile: `in-memory:${session.sessionId}`,
+        messageChannel: "openclaw",
+        messageProvider: "openclaw",
+        toolsAllow: ["openclaw"],
+        disableMessageTool: true,
+      });
+      expect(call.agentHarnessId).toBeUndefined();
+      expect(listAgentEntries(call.config ?? {}).find((agent) => agent.id === "openclaw")).toEqual({
+        id: "openclaw",
+        params: { temperature: 0.2 },
+        tools: { allow: ["read"], deny: ["exec"] },
+      });
+      expect(
+        expectDefined(call.systemAgentTool, "missing embedded OpenClaw tool").proposalRef,
+      ).toBe(session.proposalRef);
+    },
+  );
 
   it("threads operator-approval-only into the real ring-zero tool and stages the delegated proposal", async () => {
     useTempStateDir();
