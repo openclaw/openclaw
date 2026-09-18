@@ -231,10 +231,6 @@ export abstract class MatrixClientBase {
           databasePrefix: this.cryptoDatabasePrefix,
           stateRuntime: this.stateRuntime,
         });
-        const pendingGuard = this.messageWireDispatchGuards.beforeRequest(resource, init);
-        if (pendingGuard) {
-          await pendingGuard;
-        }
         return await guardedFetch(resource, init);
       }) as typeof fetch,
       scheduler: new MatrixSendScheduler((event) =>
