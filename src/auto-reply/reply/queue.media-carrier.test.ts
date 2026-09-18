@@ -80,9 +80,9 @@ function expectCombinedCarrierFacts(run: FollowupRun | undefined): void {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const key of queueKeys) {
-    clearFollowupQueue(key);
+    await clearFollowupQueue(key);
   }
   queueKeys.clear();
   for (const cleanup of evidenceCleanups) {
@@ -244,7 +244,7 @@ describe("followup prompt metadata carrier", () => {
         channelId: "test",
         participantId: "person-1",
       });
-      enqueueFollowupRun(key, run, settings);
+      await enqueueFollowupRun(key, run, settings);
     }
 
     scheduleFollowupDrain(key, async (run) => {
@@ -343,7 +343,7 @@ describe("followup prompt metadata carrier", () => {
       for (const [index, settings] of [first, second, second, first].entries()) {
         const run = createQueueTestRun({ prompt: `task ${index}`, messageId: `choice-${index}` });
         run.run = { ...run.run, traceAuthorized: true, ...settings };
-        enqueueFollowupRun(key, run, { mode: "collect", debounceMs: 0 });
+        await enqueueFollowupRun(key, run, { mode: "collect", debounceMs: 0 });
       }
       scheduleFollowupDrain(key, async (run) => {
         calls.push(run);
@@ -399,7 +399,7 @@ describe("followup prompt metadata carrier", () => {
         traceAuthorized: true,
         ownerNumbers: ["+15550000000"],
       };
-      enqueueFollowupRun(key, run, { mode: "collect", debounceMs: 0 });
+      await enqueueFollowupRun(key, run, { mode: "collect", debounceMs: 0 });
     }
 
     scheduleFollowupDrain(key, async (run) => {

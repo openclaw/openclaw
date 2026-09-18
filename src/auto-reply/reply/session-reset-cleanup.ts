@@ -68,12 +68,12 @@ type ClearSessionResetRuntimeStateResult = ClearSessionQueueResult & {
 };
 
 /** Clears queued follow-ups and pending system events visible to the resetting agent. */
-export function clearSessionResetRuntimeState(
+export async function clearSessionResetRuntimeState(
   keys: Array<string | undefined>,
   opts: { agentId: string; activeReplySessionId?: string },
-): ClearSessionResetRuntimeStateResult {
+): Promise<ClearSessionResetRuntimeStateResult> {
   clearEmbeddedSessionPromptStates(keys);
-  const cleared = clearSessionQueues(keys);
+  const cleared = await clearSessionQueues(keys);
   let systemEventsCleared = 0;
 
   for (const key of cleared.keys) {

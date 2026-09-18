@@ -77,7 +77,7 @@ describe("followup queue authority", () => {
     const failures: unknown[] = [];
     try {
       for (const [index, operatorAuthority] of variants.entries()) {
-        enqueueFollowupRun(
+        await enqueueFollowupRun(
           key,
           {
             ...createRun({ prompt: `request ${index}`, originatingChannel: "webchat" }),
@@ -138,7 +138,7 @@ describe("followup queue authority", () => {
       expect(observed[2]?.scopes).toEqual(["operator.admin"]);
       expect(source.references()).toBe(0);
     } finally {
-      clearFollowupQueue(key);
+      await clearFollowupQueue(key);
     }
   });
 
@@ -151,7 +151,7 @@ describe("followup queue authority", () => {
     const observations: boolean[] = [];
     try {
       for (const [index, abortSignal] of [firstCancel.signal, secondCancel.signal].entries()) {
-        enqueueFollowupRun(
+        await enqueueFollowupRun(
           key,
           {
             ...createRun({ prompt: `request ${index}` }),
@@ -198,18 +198,18 @@ describe("followup queue authority", () => {
       expect(effects).toEqual(["before revocation"]);
       expect(source.references()).toBe(0);
     } finally {
-      clearFollowupQueue(key);
+      await clearFollowupQueue(key);
     }
   });
 
   it.each(["old", "new", "summarize"] as const)(
     "releases original source holds exactly once across %s overflow and queue clearing",
-    (dropPolicy) => {
+    async (dropPolicy) => {
       const key = `test-operator-overflow-${dropPolicy}`;
       const source = createOperatorAuthority();
       try {
         for (let index = 0; index < 5; index += 1) {
-          enqueueFollowupRun(
+          await enqueueFollowupRun(
             key,
             {
               ...createRun({ prompt: `request ${index}` }),
@@ -220,11 +220,11 @@ describe("followup queue authority", () => {
         }
         source.releaseRequest();
         expect(source.references()).toBe(dropPolicy === "summarize" ? 3 : 1);
-        clearFollowupQueue(key);
-        clearFollowupQueue(key);
+        await clearFollowupQueue(key);
+        await clearFollowupQueue(key);
         expect(source.references()).toBe(0);
       } finally {
-        clearFollowupQueue(key);
+        await clearFollowupQueue(key);
       }
     },
   );
@@ -252,7 +252,7 @@ describe("followup queue authority", () => {
     let delivered = false;
     const failures: unknown[] = [];
     try {
-      enqueueFollowupRun(key, recovery.run, createQueueSettings());
+      await enqueueFollowupRun(key, recovery.run, createQueueSettings());
       completeFollowupRunLifecycle(parent);
       expect(source.references()).toBe(1);
       scheduleFollowupDrain(key, async (run) => {
@@ -270,7 +270,7 @@ describe("followup queue authority", () => {
       expect(delivered).toBe(true);
       expect(source.references()).toBe(0);
     } finally {
-      clearFollowupQueue(key);
+      await clearFollowupQueue(key);
     }
   });
 
@@ -296,9 +296,9 @@ describe("followup queue authority", () => {
       model: "gpt-5.6-luna",
     };
 
-    enqueueFollowupRun(key, pluginGrant, settings);
-    enqueueFollowupRun(key, scheduled, settings);
-    enqueueFollowupRun(key, handoff, settings);
+    await enqueueFollowupRun(key, pluginGrant, settings);
+    await enqueueFollowupRun(key, scheduled, settings);
+    await enqueueFollowupRun(key, handoff, settings);
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
@@ -327,9 +327,9 @@ describe("followup queue authority", () => {
     third.run.provider = "anthropic";
     third.run.model = "gpt-fallback";
 
-    enqueueFollowupRun(key, first, settings);
-    enqueueFollowupRun(key, second, settings);
-    enqueueFollowupRun(key, third, settings);
+    await enqueueFollowupRun(key, first, settings);
+    await enqueueFollowupRun(key, second, settings);
+    await enqueueFollowupRun(key, third, settings);
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
@@ -382,7 +382,7 @@ describe("followup queue authority", () => {
         if (mode === "theme-deny") {
           run.run.config = { tools: { deny: ["screen", "theme"] } };
         }
-        enqueueFollowupRun(key, run, settings);
+        await enqueueFollowupRun(key, run, settings);
       }
 
       scheduleFollowupDrain(key, runFollowup);

@@ -1094,7 +1094,7 @@ export async function runSessionCompactionIfNeeded(params: {
       const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
       if (queueKey) {
         params.followupRun.run.sessionFile = queueKey;
-        refreshQueuedFollowupSession({
+        await refreshQueuedFollowupSession({
           key: queueKey,
           previousSessionId,
           nextSessionId: entry.sessionId,

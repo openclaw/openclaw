@@ -58,7 +58,7 @@ describe("channel ingress drain async work ownership", () => {
         deliver: async (_raw, lifecycle) => {
           await turnGate.promise;
           await trackAsyncWork(() => events.push("turn"));
-          enqueueFollowupRun(followupKey, createQueueTestRun({ prompt: "followup" }), {
+          await enqueueFollowupRun(followupKey, createQueueTestRun({ prompt: "followup" }), {
             mode: "followup",
             debounceMs: 0,
           });
@@ -94,7 +94,7 @@ describe("channel ingress drain async work ownership", () => {
         turnGate.resolve();
         followupGate.resolve();
         await monitor.stop();
-        clearSessionQueues([followupKey]);
+        await clearSessionQueues([followupKey]);
         await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       }
     });

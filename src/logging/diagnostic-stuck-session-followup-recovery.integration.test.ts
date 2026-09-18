@@ -42,8 +42,8 @@ import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 describe("stuck session follow-up recovery", () => {
   const queueKeys = new Set<string>();
 
-  afterEach(() => {
-    clearSessionQueues([...queueKeys]);
+  afterEach(async () => {
+    await clearSessionQueues([...queueKeys]);
     queueKeys.clear();
     embeddedRunTesting.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
@@ -225,9 +225,9 @@ describe("stuck session follow-up recovery", () => {
           onAdopted: async () => {},
           onSettled: activeSettled,
         };
-        enqueueFollowupRun(sessionKey, active, settings, "none", runFollowup);
+        await enqueueFollowupRun(sessionKey, active, settings, "none", runFollowup);
         await activeEntered.promise;
-        enqueueFollowupRun(
+        await enqueueFollowupRun(
           sessionKey,
           createQueueTestRun({ prompt: "pending" }),
           settings,
@@ -294,7 +294,7 @@ describe("stuck session follow-up recovery", () => {
     };
 
     try {
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         sessionKey,
         createQueueTestRun({ prompt: "stale" }),
         settings,
@@ -302,7 +302,7 @@ describe("stuck session follow-up recovery", () => {
         runFollowup,
       );
       await firstEntered.promise;
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         sessionKey,
         createQueueTestRun({ prompt: "fresh" }),
         settings,
@@ -363,7 +363,7 @@ describe("stuck session follow-up recovery", () => {
 
     try {
       await laneEntered.promise;
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         sessionKey,
         createQueueTestRun({ prompt: "active" }),
         settings,
@@ -371,7 +371,7 @@ describe("stuck session follow-up recovery", () => {
         runFollowup,
       );
       await activeEntered.promise;
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         sessionKey,
         createQueueTestRun({ prompt: "pending" }),
         settings,

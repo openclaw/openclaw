@@ -214,7 +214,7 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
     };
     owner.ws.on("message", record);
     const queued = createQueueTestRun({ prompt: "preserve queued followup" });
-    enqueueFollowupRun(run.sessionKey, queued, { mode: "collect" });
+    await enqueueFollowupRun(run.sessionKey, queued, { mode: "collect" });
     const queue = getExistingFollowupQueue(run.sessionKey)!;
     try {
       // A no-op on this same method proves that scope/participation gates admit
@@ -268,7 +268,7 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
       expect(events).toContain("sessions.changed");
     } finally {
       owner.ws.off("message", record);
-      queueCleanup.clearSessionQueues([run.sessionKey]);
+      await queueCleanup.clearSessionQueues([run.sessionKey]);
       try {
         await run.finish();
       } finally {

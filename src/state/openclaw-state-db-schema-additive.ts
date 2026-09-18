@@ -118,6 +118,21 @@ export function ensureSecretStoreSchema(database: DatabaseSync): void {
   ensureColumn(database, "secret_store_entries", "allowed_hosts TEXT");
 }
 
+/**
+ * Lazily install durable follow-up queue storage on first feature use.
+ *
+ * Additive and version-free: the table carries no `user_version` bump, so a build
+ * without this feature simply never reads it.
+ */
+export function ensureFollowupQueueEntriesSchemaInDatabase(database: DatabaseSync): void {
+  database.exec(
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "followup_queue_entries", {
+      endMarker: "ON followup_queue_entries(updated_at DESC, queue_key);",
+      errorMessage: "OpenClaw followup queue schema marker is missing.",
+    }),
+  ); // sqlite-allow-raw -- Canonical additive DDL only.
+}
+
 /** Lazily install durable MCP OAuth callback correlation on first feature use. */
 export function ensureMcpOAuthPendingSchema(database: DatabaseSync): void {
   database.exec(

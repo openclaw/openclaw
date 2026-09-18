@@ -103,7 +103,7 @@ export async function runActiveReplySteer(
   const injectionTarget = replyRunRegistry.resolveCurrentMessageInjectionTarget(
     activeReplyOperation?.key ?? queueKey,
   );
-  const parked = parkSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
+  const parked = await parkSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
   if (!parked) {
     releaseAdmissionTicket();
     typing.cleanup();
@@ -124,7 +124,7 @@ export async function runActiveReplySteer(
   scheduleParkedFallback();
   releaseAdmissionTicket();
   const fallback = async (reason?: string): Promise<"handled"> => {
-    parked.fallback();
+    await parked.fallback();
     if (replyOperationRunState) {
       replyOperationRunState.admission = { status: "accepted", mode: "followup" };
     }
@@ -138,7 +138,7 @@ export async function runActiveReplySteer(
   try {
     const admission = await parked.admit();
     if (admission === "cancelled") {
-      parked.consume();
+      await parked.consume();
       typing.cleanup();
       return "handled";
     }
@@ -193,7 +193,11 @@ export async function runActiveReplySteer(
       waitForTranscriptCommit: true,
       queueIdentity: resolveAcceptedSteerRunId(params),
       abortSignal: resolveFollowupAbortSignal(followupRun),
-      onQueueAccepted: parked.accepted,
+      // Notification hook with a synchronous contract: the reservation's durable
+      // settlement handles and logs its own failure, so discard it explicitly.
+      onQueueAccepted: (accepted) => {
+        void parked.accepted(accepted);
+      },
       ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
       ...(followupRun.run.sourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
@@ -223,7 +227,7 @@ export async function runActiveReplySteer(
     }
     // Accepted or indeterminate input cannot be abandoned for replay, even
     // when the source's later adoption callback rejects.
-    parked.consume("consumed");
+    await parked.consume("consumed");
     if (finalization.status === "indeterminate") {
       typing.cleanup();
       return markReplyPayloadForSourceSuppressionDelivery({
@@ -261,17 +265,17 @@ export async function runActiveReplySteer(
     return "handled";
   } catch (error) {
     if (resolveFollowupAbortSignal(followupRun)?.aborted) {
-      parked.consume();
+      await parked.consume();
     } else {
-      parked.fallback();
+      await parked.fallback();
     }
     throw error;
   } finally {
     if (followupRun.steerPending) {
       if (resolveFollowupAbortSignal(followupRun)?.aborted) {
-        parked.consume();
+        await parked.consume();
       } else {
-        parked.fallback();
+        await parked.fallback();
       }
     }
   }

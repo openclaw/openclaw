@@ -30,8 +30,8 @@ describe("clearSessionQueues", () => {
     commandQueueMocks.clearCommandLane.mockReset().mockReturnValue(3);
   });
 
-  it("clears each normalized key once using canonical session lanes", () => {
-    const result = clearSessionQueues([
+  it("clears each normalized key once using canonical session lanes", async () => {
+    const result = await clearSessionQueues([
       " alpha ",
       undefined,
       "",

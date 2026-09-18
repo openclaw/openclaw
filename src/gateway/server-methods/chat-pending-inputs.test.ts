@@ -530,10 +530,12 @@ describe("pending input consumption receipts", () => {
             items: [{ runId: "retained-20" }],
           });
           expect(
-            abortQueuedChatTurnById(context.chatQueuedTurns, {
-              runId: "retained-0",
-              sessionKey: scope.sessionKey,
-            }).aborted,
+            (
+              await abortQueuedChatTurnById(context.chatQueuedTurns, {
+                runId: "retained-0",
+                sessionKey: scope.sessionKey,
+              })
+            ).aborted,
           ).toBe(true);
           const cancelledPage = await call({ inputRunIds: ["retained-0"], limit: 1 });
           expect(cancelledPage.pendingInputs).toMatchObject({ queuedCount: 0 });

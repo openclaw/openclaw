@@ -1,9 +1,14 @@
 // Tests queue state storage, dedupe, and cleanup primitives.
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { enqueueFollowupRun } from "./enqueue.js";
+import { persistFollowupQueues } from "./persist.js";
 import {
   clearFollowupQueue,
   clearRemovedQueuedAuthProfiles,
+  FOLLOWUP_QUEUES,
   getFollowupQueue,
   hasPendingFollowupQueueWork,
   refreshQueuedFollowupSession,
@@ -11,9 +16,14 @@ import {
 import type { FollowupRun } from "./types.js";
 
 const QUEUE_KEY = "agent:main:dm:test";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
-  clearFollowupQueue(QUEUE_KEY);
+afterEach(async () => {
+  try {
+    await clearFollowupQueue(QUEUE_KEY);
+  } catch {
+    FOLLOWUP_QUEUES.delete(QUEUE_KEY);
+  }
 });
 
 function makeRun(): FollowupRun["run"] {
@@ -36,8 +46,8 @@ function makeRun(): FollowupRun["run"] {
 }
 
 describe("clearRemovedQueuedAuthProfiles", () => {
-  it("releases removed accounts in every queued source without replacing newer choices", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+  it("releases removed accounts in every queued source without replacing newer choices", async () => {
+    const queue = await getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     const lastRun = makeRun();
     const queued = makeRun();
     const summarized = makeRun();
@@ -102,8 +112,8 @@ describe("clearRemovedQueuedAuthProfiles", () => {
 });
 
 describe("refreshQueuedFollowupSession", () => {
-  it("retargets queued runs to the persisted selection", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+  it("retargets queued runs to the persisted selection", async () => {
+    const queue = await getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     const lastRun = makeRun();
     const queuedRun: FollowupRun = {
       prompt: "queued message",
@@ -132,7 +142,7 @@ describe("refreshQueuedFollowupSession", () => {
       sourceRefs: new WeakMap(),
     });
 
-    refreshQueuedFollowupSession({
+    await refreshQueuedFollowupSession({
       key: QUEUE_KEY,
       nextProvider: "openai",
       nextModel: "gpt-4o",
@@ -171,8 +181,8 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
-  it("retargets queued runs with user model override source", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+  it("retargets queued runs with user model override source", async () => {
+    const queue = await getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     const queuedRun: FollowupRun = {
       prompt: "queued message",
       enqueuedAt: Date.now(),
@@ -180,7 +190,7 @@ describe("refreshQueuedFollowupSession", () => {
     };
     queue.items.push(queuedRun);
 
-    refreshQueuedFollowupSession({
+    await refreshQueuedFollowupSession({
       key: QUEUE_KEY,
       nextProvider: "ollama",
       nextModel: "qwen3.5:27b",
@@ -197,8 +207,8 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
-  it("clears queued model override strictness when retargeting to the configured default", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+  it("clears queued model override strictness when retargeting to the configured default", async () => {
+    const queue = await getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({
       prompt: "queued message",
       enqueuedAt: Date.now(),
@@ -209,7 +219,7 @@ describe("refreshQueuedFollowupSession", () => {
       },
     });
 
-    refreshQueuedFollowupSession({
+    await refreshQueuedFollowupSession({
       key: QUEUE_KEY,
       nextProvider: "anthropic",
       nextModel: "claude-opus-4-6",
@@ -223,8 +233,8 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
-  it("preserves queued Sol Ultra work when switching to Codex Luna", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+  it("preserves queued Sol Ultra work when switching to Codex Luna", async () => {
+    const queue = await getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({
       prompt: "queued message",
       enqueuedAt: Date.now(),
@@ -236,7 +246,7 @@ describe("refreshQueuedFollowupSession", () => {
       },
     });
 
-    refreshQueuedFollowupSession({
+    await refreshQueuedFollowupSession({
       key: QUEUE_KEY,
       nextProvider: "openai",
       nextModel: "gpt-5.6-luna",
@@ -256,15 +266,15 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
-  it("preserves harness-only Ultra when retargeting queued work", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+  it("preserves harness-only Ultra when retargeting queued work", async () => {
+    const queue = await getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({
       prompt: "queued message",
       enqueuedAt: Date.now(),
       run: { ...makeRun(), thinkLevel: "ultra" },
     });
 
-    refreshQueuedFollowupSession({
+    await refreshQueuedFollowupSession({
       key: QUEUE_KEY,
       nextProvider: "custom",
       nextModel: "reasoner",
@@ -326,8 +336,8 @@ describe("refreshQueuedFollowupSession", () => {
     },
   ] as const)(
     "retargets $source thinking $current with stored $stored to $model as $expected",
-    ({ source, current, stored, model, reasoning, expected }) => {
-      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    async ({ source, current, stored, model, reasoning, expected }) => {
+      const queue = await getFollowupQueue(QUEUE_KEY, { mode: "followup" });
       const runs = Array.from({ length: 4 }, () => ({
         ...makeRun(),
         thinkLevel: current,
@@ -348,7 +358,7 @@ describe("refreshQueuedFollowupSession", () => {
         summaryLines: ["queued"],
         sourceRefs: new WeakMap(),
       });
-      refreshQueuedFollowupSession({
+      await refreshQueuedFollowupSession({
         key: QUEUE_KEY,
         nextProvider: "openai",
         nextModel: model,
@@ -372,8 +382,8 @@ describe("refreshQueuedFollowupSession", () => {
     { requested: undefined, stored: "low", expected: ["low", "off", "low"] },
   ] as const)(
     "retains requested thinking $requested across repeated queued model switches",
-    ({ requested, stored, expected }) => {
-      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    async ({ requested, stored, expected }) => {
+      const queue = await getFollowupQueue(QUEUE_KEY, { mode: "followup" });
       const run: FollowupRun["run"] = {
         ...makeRun(),
         config: {
@@ -391,7 +401,7 @@ describe("refreshQueuedFollowupSession", () => {
       };
       queue.items.push({ prompt: "task", enqueuedAt: Date.now(), run });
       for (const [index, model] of ["gpt-5.6-sol", "non-reasoner", "gpt-5.6-luna"].entries()) {
-        refreshQueuedFollowupSession({
+        await refreshQueuedFollowupSession({
           key: QUEUE_KEY,
           nextProvider: "openai",
           nextModel: model,
@@ -455,8 +465,8 @@ describe("refreshQueuedFollowupSession", () => {
         config: { agents: { defaults: { thinkingDefault: "high" } } },
         expected: "high",
       },
-    ])("honors the configured $name default when retargeting", ({ config, expected }) => {
-      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+    ])("honors the configured $name default when retargeting", async ({ config, expected }) => {
+      const queue = await getFollowupQueue(QUEUE_KEY, { mode: "followup" });
       const run: FollowupRun["run"] = {
         ...makeRun(),
         config,
@@ -464,7 +474,7 @@ describe("refreshQueuedFollowupSession", () => {
         thinkLevelOverride: source,
       };
       queue.items.push({ prompt: "task", enqueuedAt: Date.now(), run });
-      refreshQueuedFollowupSession({
+      await refreshQueuedFollowupSession({
         key: QUEUE_KEY,
         nextProvider: "openai",
         nextModel: "gpt-5.6-sol",
@@ -478,15 +488,15 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
-  it("recomputes the retargeted model default when the session has no thinking override", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+  it("recomputes the retargeted model default when the session has no thinking override", async () => {
+    const queue = await getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({
       prompt: "queued message",
       enqueuedAt: Date.now(),
       run: { ...makeRun(), thinkLevel: "ultra" },
     });
 
-    refreshQueuedFollowupSession({
+    await refreshQueuedFollowupSession({
       key: QUEUE_KEY,
       nextProvider: "openai",
       nextModel: "gpt-5.6-sol",
@@ -501,81 +511,192 @@ describe("refreshQueuedFollowupSession", () => {
 });
 
 describe("getFollowupQueue", () => {
-  it("aborts work owned by a cleared queue", () => {
+  it("aborts work owned by a cleared queue", async () => {
     const queuedRun: FollowupRun = {
       prompt: "queued message",
       enqueuedAt: Date.now(),
       run: makeRun(),
     };
-    enqueueFollowupRun(QUEUE_KEY, queuedRun, { mode: "followup" });
+    await enqueueFollowupRun(QUEUE_KEY, queuedRun, { mode: "followup" });
 
     expect(queuedRun.queueAbortSignal?.aborted).toBe(false);
-    clearFollowupQueue(QUEUE_KEY);
+    await clearFollowupQueue(QUEUE_KEY);
     expect(queuedRun.queueAbortSignal?.aborted).toBe(true);
   });
 
-  it("trims overflow metadata when a live queue cap shrinks", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 3 });
-    for (const [contextKey, count] of [
-      ["oldest", 2],
-      ["middle", 3],
-      ["newest", 4],
-    ] as const) {
+  it("restores the queue when clear persistence fails", async () => {
+    const stateDir = tempDirs.make("openclaw-clear-persist-");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const queuedRun: FollowupRun = {
+        prompt: "must survive clear failure",
+        enqueuedAt: Date.now(),
+        run: makeRun(),
+      };
+      await enqueueFollowupRun(QUEUE_KEY, queuedRun, { mode: "followup" });
+      expect(queuedRun.queueAbortSignal?.aborted).toBe(false);
+      const blocker = path.join(stateDir, "not-a-directory");
+      fs.writeFileSync(blocker, "file");
+      process.env.OPENCLAW_STATE_DIR = path.join(blocker, "child");
+      await expect(clearFollowupQueue(QUEUE_KEY)).rejects.toThrow();
+      const restored = FOLLOWUP_QUEUES.get(QUEUE_KEY);
+      expect(restored?.items.map((item) => item.prompt)).toEqual(["must survive clear failure"]);
+      expect(queuedRun.queueAbortSignal?.aborted).toBe(false);
+      expect(restored?.items[0]?.queueAbortSignal?.aborted).toBe(false);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+  });
+
+  it("restores run fields when refresh persistence fails", async () => {
+    const stateDir = tempDirs.make("openclaw-refresh-persist-");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const queue = await getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+      const queuedRun: FollowupRun = {
+        prompt: "queued message",
+        enqueuedAt: Date.now(),
+        run: makeRun(),
+      };
+      queue.items.push(queuedRun);
+      const blocker = path.join(stateDir, "not-a-directory");
+      fs.writeFileSync(blocker, "file");
+      process.env.OPENCLAW_STATE_DIR = path.join(blocker, "child");
+      await expect(
+        refreshQueuedFollowupSession({
+          key: QUEUE_KEY,
+          nextProvider: "openai",
+          nextModel: "gpt-4o",
+          nextRouteResolution: "resolved",
+        }),
+      ).rejects.toThrow();
+      expect(queue.items[0]?.run.provider).toBe("anthropic");
+      expect(queue.items[0]?.run.model).toBe("claude-opus-4-6");
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+  });
+
+  it("trims overflow metadata when a live queue cap shrinks", async () => {
+    const stateDir = tempDirs.make("openclaw-cap-shrink-");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const queue = await getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 3 });
+      for (const [contextKey, count] of [
+        ["oldest", 2],
+        ["middle", 3],
+        ["newest", 4],
+      ] as const) {
+        queue.summaryElisions.push({
+          contextKey,
+          count,
+          sources: Array.from({ length: count }, () => ({
+            prompt: contextKey,
+            enqueuedAt: Date.now(),
+            run: makeRun(),
+          })),
+          summaryLines: Array.from({ length: count }, () => contextKey),
+          sourceRefs: new WeakMap(),
+        });
+      }
+      queue.droppedCount = 9;
+      queue.evictedSummaryCount = 5;
+      await persistFollowupQueues();
+
+      const updated = await getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 1 });
+
+      expect(updated.summaryElisions.map((entry) => entry.contextKey)).toEqual(["newest"]);
+      expect(updated.summaryElisions[0]?.sources).toHaveLength(1);
+      expect(updated.summaryElisions[0]?.summaryLines).toEqual(["newest"]);
+      expect(updated.evictedSummaryCount).toBe(13);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
+  });
+
+  it("rolls back cap-driven elision trimming when persistence fails", async () => {
+    const stateDir = tempDirs.make("openclaw-cap-trim-fail-");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const queue = await getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 3 });
       queue.summaryElisions.push({
-        contextKey,
-        count,
-        sources: Array.from({ length: count }, () => ({
-          prompt: contextKey,
+        contextKey: "keep",
+        count: 2,
+        sources: Array.from({ length: 2 }, () => ({
+          prompt: "keep",
           enqueuedAt: Date.now(),
           run: makeRun(),
         })),
-        summaryLines: Array.from({ length: count }, () => contextKey),
+        summaryLines: ["keep", "keep"],
         sourceRefs: new WeakMap(),
       });
+      queue.droppedCount = 2;
+      await persistFollowupQueues();
+
+      const blocker = path.join(stateDir, "not-a-directory");
+      fs.writeFileSync(blocker, "file");
+      process.env.OPENCLAW_STATE_DIR = path.join(blocker, "child");
+      await expect(getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 1 })).rejects.toThrow();
+      expect(queue.summaryElisions[0]?.sources).toHaveLength(2);
+      expect(queue.evictedSummaryCount).toBe(0);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
     }
-    queue.evictedSummaryCount = 5;
-
-    const updated = getFollowupQueue(QUEUE_KEY, { mode: "followup", cap: 1 });
-
-    expect(updated.summaryElisions.map((entry) => entry.contextKey)).toEqual(["newest"]);
-    expect(updated.summaryElisions[0]?.sources).toHaveLength(1);
-    expect(updated.summaryElisions[0]?.summaryLines).toEqual(["newest"]);
-    expect(updated.evictedSummaryCount).toBe(13);
   });
 });
 
 describe("hasPendingFollowupQueueWork", () => {
-  it("detects each actionable queued-work representation", () => {
+  it("detects each actionable queued-work representation", async () => {
     const cases = [
-      (queue: ReturnType<typeof getFollowupQueue>) => {
+      (queue: Awaited<ReturnType<typeof getFollowupQueue>>) => {
         queue.items.push({
           prompt: "queued message",
           enqueuedAt: Date.now(),
           run: makeRun(),
         });
       },
-      (queue: ReturnType<typeof getFollowupQueue>) => {
+      (queue: Awaited<ReturnType<typeof getFollowupQueue>>) => {
         queue.inFlight.add({
           prompt: "in-flight collected message",
           enqueuedAt: Date.now(),
           run: makeRun(),
         });
       },
-      (queue: ReturnType<typeof getFollowupQueue>) => {
+      (queue: Awaited<ReturnType<typeof getFollowupQueue>>) => {
         queue.droppedCount = 1;
       },
     ];
 
     for (const populate of cases) {
-      const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+      const queue = await getFollowupQueue(QUEUE_KEY, { mode: "followup" });
       populate(queue);
       expect(hasPendingFollowupQueueWork(["", ` ${QUEUE_KEY} `, QUEUE_KEY])).toBe(true);
-      clearFollowupQueue(QUEUE_KEY);
+      await clearFollowupQueue(QUEUE_KEY);
     }
   });
 
-  it("ignores empty queues and historical eviction accounting", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
+  it("ignores empty queues and historical eviction accounting", async () => {
+    const queue = await getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.evictedSummaryCount = 3;
 
     expect(hasPendingFollowupQueueWork([undefined, "", QUEUE_KEY])).toBe(false);

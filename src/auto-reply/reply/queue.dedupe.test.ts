@@ -54,7 +54,7 @@ describe("followup queue deduplication", () => {
     const key = `test-dedup-message-id-${Date.now()}`;
     const { calls, done, runFollowup } = createFollowupCollector();
 
-    const first = enqueueFollowupRun(
+    const first = await enqueueFollowupRun(
       key,
       createRun({
         prompt: "[Discord Guild #test channel id:123] Hello",
@@ -66,7 +66,7 @@ describe("followup queue deduplication", () => {
     );
     expect(first).toBe(true);
 
-    const second = enqueueFollowupRun(
+    const second = await enqueueFollowupRun(
       key,
       createRun({
         prompt: "[Discord Guild #test channel id:123] Hello (dupe)",
@@ -78,7 +78,7 @@ describe("followup queue deduplication", () => {
     );
     expect(second).toBe(false);
 
-    const third = enqueueFollowupRun(
+    const third = await enqueueFollowupRun(
       key,
       createRun({
         prompt: "[Discord Guild #test channel id:123] World",
@@ -95,10 +95,10 @@ describe("followup queue deduplication", () => {
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
   });
 
-  it("deduplicates message ids when numeric and string thread ids share a route", () => {
+  it("deduplicates message ids when numeric and string thread ids share a route", async () => {
     const key = `test-dedup-thread-normalized-${Date.now()}`;
 
-    const first = enqueueFollowupRun(
+    const first = await enqueueFollowupRun(
       key,
       createRun({
         prompt: "first",
@@ -111,7 +111,7 @@ describe("followup queue deduplication", () => {
     );
     expect(first).toBe(true);
 
-    const second = enqueueFollowupRun(
+    const second = await enqueueFollowupRun(
       key,
       createRun({
         prompt: "second",
@@ -129,7 +129,7 @@ describe("followup queue deduplication", () => {
     const key = `test-dedup-after-drain-${Date.now()}`;
     const { calls, done, runFollowup } = createFollowupCollector();
 
-    const first = enqueueFollowupRun(
+    const first = await enqueueFollowupRun(
       key,
       createRun({
         prompt: "first",
@@ -144,7 +144,7 @@ describe("followup queue deduplication", () => {
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
-    const redelivery = enqueueFollowupRun(
+    const redelivery = await enqueueFollowupRun(
       key,
       createRun({
         prompt: "first-redelivery",
@@ -164,7 +164,7 @@ describe("followup queue deduplication", () => {
     const { calls, done, runFollowup } = createFollowupCollector();
 
     expect(
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         key,
         createRun({
           prompt: "first",
@@ -183,7 +183,7 @@ describe("followup queue deduplication", () => {
     await done.promise;
 
     expect(
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         key,
         createRun({
           prompt: "redelivery",
@@ -248,7 +248,7 @@ describe("followup queue deduplication", () => {
       ).toBe(false);
       expect(calls).toHaveLength(1);
     } finally {
-      clearSessionQueues([key]);
+      await clearSessionQueues([key]);
       resetRecentQueuedMessageIdDedupe();
     }
   });
@@ -258,7 +258,7 @@ describe("followup queue deduplication", () => {
     const { calls, done, runFollowup } = createFollowupCollector();
 
     expect(
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         key,
         createRun({
           prompt: "original",
@@ -280,7 +280,7 @@ describe("followup queue deduplication", () => {
     // A provider redelivery of the same message must be rejected without
     // recreating a registry entry that nothing would ever delete again.
     expect(
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         key,
         createRun({
           prompt: "original (redelivery)",
@@ -298,7 +298,7 @@ describe("followup queue deduplication", () => {
     const key = `test-dedup-key-collision-${Date.now()}`;
     const { done, runFollowup } = createFollowupCollector();
 
-    const first = enqueueFollowupRun(
+    const first = await enqueueFollowupRun(
       key,
       createRun({
         prompt: "first",
@@ -313,7 +313,7 @@ describe("followup queue deduplication", () => {
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
 
-    const second = enqueueFollowupRun(
+    const second = await enqueueFollowupRun(
       key,
       createRun({
         prompt: "second",
@@ -326,10 +326,10 @@ describe("followup queue deduplication", () => {
     expect(second).toBe(true);
   });
 
-  it("admits identical prompts when routing matches and no message id is present", () => {
+  it("admits identical prompts when routing matches and no message id is present", async () => {
     const key = `test-dedup-whatsapp-${Date.now()}`;
 
-    const first = enqueueFollowupRun(
+    const first = await enqueueFollowupRun(
       key,
       createRun({
         prompt: "Hello world",
@@ -340,7 +340,7 @@ describe("followup queue deduplication", () => {
     );
     expect(first).toBe(true);
 
-    const second = enqueueFollowupRun(
+    const second = await enqueueFollowupRun(
       key,
       createRun({
         prompt: "Hello world",
@@ -351,7 +351,7 @@ describe("followup queue deduplication", () => {
     );
     expect(second).toBe(true);
 
-    const third = enqueueFollowupRun(
+    const third = await enqueueFollowupRun(
       key,
       createRun({
         prompt: "Hello world 2",
@@ -363,10 +363,10 @@ describe("followup queue deduplication", () => {
     expect(third).toBe(true);
   });
 
-  it("does not deduplicate across different providers without message id", () => {
+  it("does not deduplicate across different providers without message id", async () => {
     const key = `test-dedup-cross-provider-${Date.now()}`;
 
-    const first = enqueueFollowupRun(
+    const first = await enqueueFollowupRun(
       key,
       createRun({
         prompt: "Same text",
@@ -377,7 +377,7 @@ describe("followup queue deduplication", () => {
     );
     expect(first).toBe(true);
 
-    const second = enqueueFollowupRun(
+    const second = await enqueueFollowupRun(
       key,
       createRun({
         prompt: "Same text",
@@ -389,7 +389,7 @@ describe("followup queue deduplication", () => {
     expect(second).toBe(true);
   });
 
-  it("allows re-enqueueing a message whose queued run was abandoned before admission", () => {
+  it("allows re-enqueueing a message whose queued run was abandoned before admission", async () => {
     const key = `test-dedup-abandoned-retry-${Date.now()}`;
     const onAbandoned = vi.fn();
     const first = createRun({
@@ -399,11 +399,11 @@ describe("followup queue deduplication", () => {
       originatingTo: "group:G1",
     });
     first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
-    expect(enqueueFollowupRun(key, first, collectSettings)).toBe(true);
+    expect(await enqueueFollowupRun(key, first, collectSettings)).toBe(true);
 
     // Queue teardown drops the un-admitted run; durable ingress releases the
     // claim for retry when onAbandoned fires.
-    clearSessionQueues([key]);
+    await clearSessionQueues([key]);
     expect(onAbandoned).toHaveBeenCalledTimes(1);
 
     // The ingress retry redelivers the same message id on the same route. It
@@ -415,8 +415,8 @@ describe("followup queue deduplication", () => {
       originatingTo: "group:G1",
     });
     retry.turnAdoptionLifecycle = { onAdopted: () => {} };
-    expect(enqueueFollowupRun(key, retry, collectSettings)).toBe(true);
-    clearSessionQueues([key]);
+    expect(await enqueueFollowupRun(key, retry, collectSettings)).toBe(true);
+    await clearSessionQueues([key]);
   });
 
   it.each([
@@ -441,12 +441,12 @@ describe("followup queue deduplication", () => {
       first.abortSignal = controller.signal;
       first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned, onSettled };
       try {
-        expect(enqueueFollowupRun(key, first, settings, "message-id", runFollowup, false)).toBe(
-          true,
-        );
+        expect(
+          await enqueueFollowupRun(key, first, settings, "message-id", runFollowup, false),
+        ).toBe(true);
         for (let index = 0; index < siblings; index += 1) {
           expect(
-            enqueueFollowupRun(
+            await enqueueFollowupRun(
               key,
               createRun({
                 prompt: `healthy sibling ${index}`,
@@ -484,7 +484,7 @@ describe("followup queue deduplication", () => {
         retry.turnAdoptionLifecycle = { onAdopted: () => {} };
         // No drain, promise join, or owner-clear event may be needed before ingress retries.
         expect(
-          enqueueFollowupRun(key, retry, collectSettings, "message-id", runFollowup, false),
+          await enqueueFollowupRun(key, retry, collectSettings, "message-id", runFollowup, false),
         ).toBe(true);
         expect(onAbandoned).toHaveBeenCalledOnce();
         expect(onSettled).toHaveBeenCalledOnce();
@@ -494,12 +494,12 @@ describe("followup queue deduplication", () => {
         );
         expect(getExistingFollowupQueue(key)?.draining).toBe(false);
       } finally {
-        clearSessionQueues([key]);
+        await clearSessionQueues([key]);
       }
     },
   );
 
-  it("allows re-enqueueing a message evicted by old-item queue overflow", () => {
+  it("allows re-enqueueing a message evicted by old-item queue overflow", async () => {
     const key = `test-dedup-evicted-retry-${Date.now()}`;
     const evictSettings: QueueSettings = { mode: "collect", cap: 1, dropPolicy: "old" };
     const onAbandoned = vi.fn();
@@ -512,12 +512,12 @@ describe("followup queue deduplication", () => {
     });
     first.onQueueDisposition = onDisposition;
     first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
-    expect(enqueueFollowupRun(key, first, evictSettings)).toBe(true);
+    expect(await enqueueFollowupRun(key, first, evictSettings)).toBe(true);
 
     // A newer message overflows the cap; the oldest un-admitted run is evicted
     // and its claim is released for retry.
     expect(
-      enqueueFollowupRun(
+      await enqueueFollowupRun(
         key,
         createRun({
           prompt: "second",
@@ -538,11 +538,11 @@ describe("followup queue deduplication", () => {
       originatingTo: "group:G1",
     });
     retry.turnAdoptionLifecycle = { onAdopted: () => {} };
-    expect(enqueueFollowupRun(key, retry, evictSettings)).toBe(true);
-    clearSessionQueues([key]);
+    expect(await enqueueFollowupRun(key, retry, evictSettings)).toBe(true);
+    await clearSessionQueues([key]);
   });
 
-  it("allows re-enqueueing a message compacted into a summary elision before teardown", () => {
+  it("allows re-enqueueing a message compacted into a summary elision before teardown", async () => {
     const key = `test-dedup-elision-retry-${Date.now()}`;
     const summarizeSettings: QueueSettings = {
       mode: "collect",
@@ -558,7 +558,7 @@ describe("followup queue deduplication", () => {
       originatingTo: "group:G1",
     });
     first.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
-    expect(enqueueFollowupRun(key, first, summarizeSettings)).toBe(true);
+    expect(await enqueueFollowupRun(key, first, summarizeSettings)).toBe(true);
 
     // Overflow the cap twice: the first enqueue drops `first` into the summary
     // sources, the second compacts it into a summary elision. Compaction clones
@@ -569,7 +569,7 @@ describe("followup queue deduplication", () => {
       ["third", "m3"],
     ] as const) {
       expect(
-        enqueueFollowupRun(
+        await enqueueFollowupRun(
           key,
           createRun({ prompt, messageId, originatingChannel: "line", originatingTo: "group:G1" }),
           summarizeSettings,
@@ -579,7 +579,7 @@ describe("followup queue deduplication", () => {
 
     // Teardown abandons the elided run via its clone; the ingress retry for the
     // original message id must still be re-admittable.
-    clearSessionQueues([key]);
+    await clearSessionQueues([key]);
     expect(onAbandoned).toHaveBeenCalledTimes(1);
 
     const retry = createRun({
@@ -589,8 +589,8 @@ describe("followup queue deduplication", () => {
       originatingTo: "group:G1",
     });
     retry.turnAdoptionLifecycle = { onAdopted: () => {} };
-    expect(enqueueFollowupRun(key, retry, summarizeSettings)).toBe(true);
-    clearSessionQueues([key]);
+    expect(await enqueueFollowupRun(key, retry, summarizeSettings)).toBe(true);
+    await clearSessionQueues([key]);
   });
 
   it("does not let a stale abandoned lifecycle release a newer same-id owner", async () => {
@@ -609,11 +609,11 @@ describe("followup queue deduplication", () => {
         onAdopted: () => stalledAdmission.promise,
         onAbandoned: vi.fn(),
       };
-      expect(enqueueFollowupRun(key, first, collectSettings)).toBe(true);
+      expect(await enqueueFollowupRun(key, first, collectSettings)).toBe(true);
 
       const admission = admitFollowupRunLifecycle(first);
       await vi.advanceTimersByTimeAsync(0);
-      clearSessionQueues([key]);
+      await clearSessionQueues([key]);
 
       // Once the original key expires, a later delivery can legitimately own
       // the same identity while the old lifecycle is still settling.
@@ -625,7 +625,7 @@ describe("followup queue deduplication", () => {
         originatingTo: "group:G1",
       });
       replacement.turnAdoptionLifecycle = { onAdopted: () => {} };
-      expect(enqueueFollowupRun(key, replacement, collectSettings)).toBe(true);
+      expect(await enqueueFollowupRun(key, replacement, collectSettings)).toBe(true);
 
       stalledAdmission.reject(new Error("admission failed"));
       await expect(admission).rejects.toThrow("admission failed");
@@ -637,8 +637,8 @@ describe("followup queue deduplication", () => {
         originatingChannel: "line",
         originatingTo: "group:G1",
       });
-      expect(enqueueFollowupRun(key, redelivery, collectSettings)).toBe(false);
-      clearSessionQueues([key]);
+      expect(await enqueueFollowupRun(key, redelivery, collectSettings)).toBe(false);
+      await clearSessionQueues([key]);
     } finally {
       vi.useRealTimers();
     }
@@ -654,12 +654,12 @@ describe("followup queue deduplication", () => {
       originatingTo: "group:G1",
     });
     run.turnAdoptionLifecycle = { onAdopted: () => {}, onAbandoned };
-    expect(enqueueFollowupRun(key, run, collectSettings)).toBe(true);
+    expect(await enqueueFollowupRun(key, run, collectSettings)).toBe(true);
 
     await admitFollowupRunLifecycle(run);
     completeFollowupRunLifecycle(run);
     expect(onAbandoned).not.toHaveBeenCalled();
-    clearSessionQueues([key]);
+    await clearSessionQueues([key]);
 
     const redelivery = createRun({
       prompt: "first-redelivery",
@@ -667,6 +667,6 @@ describe("followup queue deduplication", () => {
       originatingChannel: "line",
       originatingTo: "group:G1",
     });
-    expect(enqueueFollowupRun(key, redelivery, collectSettings)).toBe(false);
+    expect(await enqueueFollowupRun(key, redelivery, collectSettings)).toBe(false);
   });
 });

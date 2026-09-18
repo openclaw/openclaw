@@ -551,7 +551,7 @@ export async function handleDirectiveOnly(
       // `/model` should retarget queued/future work without interrupting the
       // active run. Refresh queued followups so they pick up the persisted
       // selection once the current turn finishes.
-      refreshQueuedFollowupSession({
+      await refreshQueuedFollowupSession({
         key: sessionKey,
         nextProvider: modelSelection.provider,
         nextModel: modelSelection.model,

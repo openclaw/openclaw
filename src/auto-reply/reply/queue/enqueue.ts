@@ -7,6 +7,7 @@ import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { isIncognitoSessionKey } from "../../../shared/incognito-session-key.js";
 import {
   applyQueueDropPolicy,
   countPendingQueueItems,
@@ -23,6 +24,9 @@ import {
   rememberFollowupDrainCallback,
 } from "./drain.js";
 import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./lifecycle.js";
+import { isOutsideDurableQueueCustody } from "./persist-codec.js";
+import { isIncognitoFollowupQueue } from "./persist-snapshot-policy.js";
+import { persistFollowupQueues, persistFollowupQueuesOrThrow } from "./persist.js";
 import {
   peekRecentQueueMessageId,
   recordRecentQueueMessageId,
@@ -38,6 +42,7 @@ import {
   isFollowupRunAborted,
   resolveFollowupAbortSignal,
   type EnqueueFollowupRunOptions,
+  type FollowupQueueState,
   type FollowupRun,
   type QueueDedupeMode,
   type QueueSettings,
@@ -80,20 +85,20 @@ function isRunAlreadyQueued(run: FollowupRun, items: FollowupRun[]): boolean {
 
 function appendQueueItem(params: {
   key: string;
-  queue: ReturnType<typeof getFollowupQueue>;
+  queue: Awaited<ReturnType<typeof getFollowupQueue>>;
   run: FollowupRun;
   recentMessageIdKey?: string;
   runFollowup?: (run: FollowupRun) => Promise<void>;
   restartIfIdle: boolean;
   front: boolean;
-}): void {
+}): { releaseRecentMessageId: (() => void) | undefined } {
   params.queue.lastEnqueuedAt = Date.now();
   params.queue.lastRun = params.run.run;
   params.run.queueAbortSignal = params.queue.abortController.signal;
   params.queue.items[params.front ? "unshift" : "push"](params.run);
-  if (params.recentMessageIdKey) {
-    recordRecentQueueMessageId(params.run, params.recentMessageIdKey);
-  }
+  const releaseRecentMessageId = params.recentMessageIdKey
+    ? recordRecentQueueMessageId(params.run, params.recentMessageIdKey)
+    : undefined;
   const runFollowup = params.runFollowup;
   if (runFollowup) {
     rememberFollowupDrainCallback(params.key, runFollowup);
@@ -126,9 +131,135 @@ function appendQueueItem(params: {
   if (params.restartIfIdle && !params.queue.draining) {
     kickFollowupDrainIfIdle(params.key);
   }
+  return { releaseRecentMessageId };
 }
 
-export function enqueueFollowupRun(
+function captureQueueMutationState(queue: FollowupQueueState) {
+  return {
+    items: queue.items.slice(),
+    summarySources: queue.summarySources.slice(),
+    summaryLines: queue.summaryLines.slice(),
+    summaryElisions: queue.summaryElisions.map((elision) => ({
+      contextKey: elision.contextKey,
+      count: elision.count,
+      sources: elision.sources.slice(),
+      summaryLines: elision.summaryLines.slice(),
+      sourceRefs: elision.sourceRefs,
+    })),
+    droppedCount: queue.droppedCount,
+    lastEnqueuedAt: queue.lastEnqueuedAt,
+    lastRun: queue.lastRun,
+    evictedSummaryCount: queue.evictedSummaryCount,
+    cap: queue.cap,
+  };
+}
+
+function restoreQueueMutationState(
+  queue: FollowupQueueState,
+  snapshot: ReturnType<typeof captureQueueMutationState>,
+): void {
+  queue.items.splice(0, queue.items.length, ...snapshot.items);
+  queue.summarySources.splice(0, queue.summarySources.length, ...snapshot.summarySources);
+  queue.summaryLines.splice(0, queue.summaryLines.length, ...snapshot.summaryLines);
+  queue.summaryElisions.splice(0, queue.summaryElisions.length, ...snapshot.summaryElisions);
+  queue.droppedCount = snapshot.droppedCount;
+  queue.lastEnqueuedAt = snapshot.lastEnqueuedAt;
+  queue.lastRun = snapshot.lastRun;
+  queue.evictedSummaryCount = snapshot.evictedSummaryCount;
+  queue.cap = snapshot.cap;
+}
+
+function completeDeferredDrops(drops: readonly FollowupRun[]): void {
+  for (const dropped of drops) {
+    completeFollowupRunLifecycle(dropped);
+  }
+}
+
+function rollbackFailedDurableAdmission(params: {
+  key: string;
+  run: FollowupRun;
+  restore: () => void;
+  releaseRecentMessageId?: () => void;
+  err: unknown;
+}): false {
+  params.restore();
+  defaultRuntime.error?.(
+    `rejected followup enqueue for ${params.key}: persistence failed: ${String(params.err)}`,
+  );
+  // Failed durable admission never delivered. Release the exact message-id
+  // reservation first: runs without a turnAdoptionLifecycle have no abandonment
+  // hook, so lifecycle completion alone would leave the retry suppressed.
+  params.releaseRecentMessageId?.();
+  completeFollowupRunLifecycle(params.run);
+  return false;
+}
+
+async function appendQueueItemWithPersist(
+  params: Parameters<typeof appendQueueItem>[0],
+): Promise<boolean> {
+  const itemsSnapshot = params.queue.items.slice();
+  const lastEnqueuedAtSnapshot = params.queue.lastEnqueuedAt;
+  const lastRunSnapshot = params.queue.lastRun;
+  const { releaseRecentMessageId } = appendQueueItem(params);
+  try {
+    if (
+      isOutsideDurableQueueCustody(params.run) ||
+      isIncognitoFollowupQueue(params.key, params.queue)
+    ) {
+      // Never written by this owner, so admission must not depend on shared
+      // SQLite being reachable. Other keys may still owe a row, so the write is
+      // attempted best-effort rather than skipped.
+      await persistFollowupQueues();
+    } else {
+      await persistFollowupQueuesOrThrow();
+    }
+    bindDurableCancellation(params.run);
+    return true;
+  } catch (err) {
+    return rollbackFailedDurableAdmission({
+      key: params.key,
+      run: params.run,
+      releaseRecentMessageId,
+      restore: () => {
+        params.queue.items.length = 0;
+        params.queue.items.push(...itemsSnapshot);
+        params.queue.lastEnqueuedAt = lastEnqueuedAtSnapshot;
+        params.queue.lastRun = lastRunSnapshot;
+      },
+      err,
+    });
+  }
+}
+
+function bindDurableCancellation(run: FollowupRun): void {
+  const lifecycle = run.turnAdoptionLifecycle;
+  if (!lifecycle) {
+    return;
+  }
+  lifecycle.onCancellationRequested = async () => {
+    let found = false;
+    for (const queue of FOLLOWUP_QUEUES.values()) {
+      const sources = [
+        ...queue.items,
+        ...queue.inFlight,
+        ...queue.summarySources,
+        ...queue.summaryElisions.flatMap((entry) => entry.sources),
+      ];
+      for (const source of sources) {
+        if (source.turnAdoptionLifecycle === lifecycle) {
+          source.canceled = true;
+          found = true;
+        }
+      }
+    }
+    if (!found) {
+      throw new Error("queued followup cancellation owner is no longer durable");
+    }
+    await persistFollowupQueuesOrThrow();
+  };
+}
+
+export async function enqueueFollowupRun(
   key: string,
   run: FollowupRun,
   settings: QueueSettings,
@@ -136,7 +267,7 @@ export function enqueueFollowupRun(
   runFollowup?: (run: FollowupRun) => Promise<void>,
   restartIfIdle = true,
   options: EnqueueFollowupRunOptions = {},
-): boolean {
+): Promise<boolean> {
   if (isFollowupRunAborted(run)) {
     return false;
   }
@@ -153,7 +284,22 @@ export function enqueueFollowupRun(
   if (recentMessageIdKey && peekRecentQueueMessageId(recentMessageIdKey)) {
     return false;
   }
-  const queue = getFollowupQueue(key, settings);
+  let queue: Awaited<ReturnType<typeof getFollowupQueue>>;
+  try {
+    // Work this owner never writes must not depend on the durable row being
+    // readable — including on first use, where materializing the queue is what
+    // reads it. Incognito is decided by the key here because the queue does not
+    // exist yet to classify by its runs.
+    const memoryOnly = isOutsideDurableQueueCustody(run) || isIncognitoSessionKey(key);
+    queue = await getFollowupQueue(key, settings, memoryOnly ? { memoryOnly: true } : undefined);
+  } catch (err) {
+    // The key's durable row could not be reconciled, so this turn cannot be made
+    // durable. Reject it like a failed durable admission instead of accepting work
+    // a restart would lose; completing the lifecycle hands an ingress claim back.
+    defaultRuntime.error?.(`rejected followup enqueue for ${key}: ${String(err)}`);
+    completeFollowupRunLifecycle(run);
+    return false;
+  }
 
   const dedupe = dedupeMode === "none" ? undefined : isRunAlreadyQueued;
 
@@ -167,20 +313,33 @@ export function enqueueFollowupRun(
     if (!markFollowupRunEnqueued(run)) {
       return false;
     }
+    // Only a steer candidate opens an acceptance gate; a later prompt merely
+    // queues behind the anchor. Both go through durable admission, so both can
+    // be rolled back together when the durable write fails.
+    let previousAcceptanceTail: typeof queue.steerAcceptanceTail | undefined;
     if (options.steerCandidate) {
       const { promise: acceptance, resolve: settle } = createDeferredCore<boolean>();
-      run.steerPending = { phase: "waiting", predecessor: queue.steerAcceptanceTail, settle };
+      previousAcceptanceTail = queue.steerAcceptanceTail;
+      run.steerPending = { phase: "waiting", predecessor: previousAcceptanceTail, settle };
       queue.steerAcceptanceTail = acceptance;
     }
-    appendQueueItem({
-      key,
-      queue,
-      run,
-      recentMessageIdKey,
-      runFollowup,
-      restartIfIdle,
-      front: options.steerCandidate === true && options.position === "front",
-    });
+    if (
+      !(await appendQueueItemWithPersist({
+        key,
+        queue,
+        run,
+        recentMessageIdKey,
+        runFollowup,
+        restartIfIdle,
+        front: options.steerCandidate === true && options.position === "front",
+      }))
+    ) {
+      if (previousAcceptanceTail !== undefined) {
+        queue.steerAcceptanceTail = previousAcceptanceTail;
+        delete run.steerPending;
+      }
+      return false;
+    }
     return true;
   }
   // drop:new rejects this source without mutating the existing queue. Do not
@@ -188,12 +347,22 @@ export function enqueueFollowupRun(
   const pendingCount = countPendingQueueItems(queue.items, queue.inFlight);
   if (queue.dropPolicy === "new" && queue.cap > 0 && pendingCount >= queue.cap) {
     run.onQueueDisposition?.("queue-cap-new");
-    completeFollowupRunLifecycle(run);
+    if (options.deferPersist === true) {
+      options.collectDeferredDrops?.push(run);
+    } else {
+      completeFollowupRunLifecycle(run);
+    }
     return false;
   }
   if (!markFollowupRunEnqueued(run)) {
     return false;
   }
+
+  // Snapshot before overflow mutations so a failed durable admit can restore
+  // pre-existing queue work instead of permanently dropping/summarizing it.
+  const admissionSnapshot = captureQueueMutationState(queue);
+  const restoreAdmissionSnapshot = () => restoreQueueMutationState(queue, admissionSnapshot);
+  const deferredOverflowDrops: FollowupRun[] = [];
 
   const elidedSummaryLines: string[] = [];
   const shouldEnqueue = applyQueueDropPolicy({
@@ -217,7 +386,8 @@ export function enqueueFollowupRun(
       }
       for (const item of dropped) {
         item.onQueueDisposition?.("queue-cap-old");
-        completeFollowupRunLifecycle(item);
+        // Defer lifecycle completion until durable admit succeeds.
+        deferredOverflowDrops.push(item);
       }
     },
     isProtected: (item) => item.protectFromQueueOverflow === true || item.steerAnchor === true,
@@ -251,16 +421,25 @@ export function enqueueFollowupRun(
         if (queue.activeSummarySources.has(item)) {
           queue.activeSummarySources.add(compactSource);
         }
-        trimSummaryElisionsToCap(queue);
+        // Defer irreversible lifecycle completion until SQLite admission succeeds;
+        // a failed write must restore summarized sources as live queued work.
+        deferredOverflowDrops.push(
+          ...trimSummaryElisionsToCap(queue, { deferLifecycleCompletion: true }),
+        );
       }
     }
   }
   if (!shouldEnqueue) {
+    restoreAdmissionSnapshot();
     run.onQueueDisposition?.("queue-cap");
-    completeFollowupRunLifecycle(run);
+    if (options.deferPersist === true) {
+      options.collectDeferredDrops?.push(run);
+    } else {
+      completeFollowupRunLifecycle(run);
+    }
     return false;
   }
-  appendQueueItem({
+  const { releaseRecentMessageId } = appendQueueItem({
     key,
     queue,
     run,
@@ -269,6 +448,30 @@ export function enqueueFollowupRun(
     restartIfIdle,
     front: options.position === "front",
   });
+  if (options.deferPersist !== true) {
+    try {
+      if (isOutsideDurableQueueCustody(run) || isIncognitoFollowupQueue(key, queue)) {
+        // This run is never written, so its admission must not depend on shared
+        // SQLite being reachable. Other keys may still owe a snapshot, so the
+        // write is attempted best-effort rather than skipped outright.
+        await persistFollowupQueues();
+      } else {
+        await persistFollowupQueuesOrThrow();
+      }
+    } catch (err) {
+      return rollbackFailedDurableAdmission({
+        key,
+        run,
+        releaseRecentMessageId,
+        restore: restoreAdmissionSnapshot,
+        err,
+      });
+    }
+    bindDurableCancellation(run);
+    completeDeferredDrops(deferredOverflowDrops);
+  } else {
+    options.collectDeferredDrops?.push(...deferredOverflowDrops);
+  }
   return true;
 }
 
@@ -280,7 +483,11 @@ export function getFollowupQueueDepth(key: string): number {
   return countPendingQueueItems(queue.items, queue.inFlight);
 }
 
-function settleParkedSteerAcceptance(key: string, run: FollowupRun, accepted: boolean): boolean {
+async function settleParkedSteerAcceptance(
+  key: string,
+  run: FollowupRun,
+  accepted: boolean,
+): Promise<boolean> {
   const queue = getExistingFollowupQueue(key);
   const pending = run.steerPending;
   if (!queue?.items.includes(run) || !pending) {
@@ -289,7 +496,7 @@ function settleParkedSteerAcceptance(key: string, run: FollowupRun, accepted: bo
   pending.settle(accepted);
   if (!accepted) {
     delete run.steerPending;
-    reapplyDeferredOverflow(key);
+    await reapplyDeferredOverflow(key);
     kickFollowupDrainIfIdle(key);
   }
   return true;
@@ -299,16 +506,19 @@ function isParkedFollowupRunOwned(key: string, run: FollowupRun): boolean {
   return getExistingFollowupQueue(key)?.items.includes(run) === true;
 }
 
-function reapplyDeferredOverflow(key: string): void {
+async function reapplyDeferredOverflow(key: string): Promise<void> {
   const queue = getExistingFollowupQueue(key);
   if (!queue || queue.items.some((item) => item.steerPending)) {
     return;
   }
   const lastAnchor = queue.items.findLastIndex((item) => item.steerAnchor === true);
-  const suffix = queue.items.splice(lastAnchor + 1);
+  const suffix = queue.items.slice(lastAnchor + 1);
   if (suffix.length === 0) {
     return;
   }
+  const mutationSnapshot = captureQueueMutationState(queue);
+  const deferredDrops: FollowupRun[] = [];
+  queue.items.splice(lastAnchor + 1);
   const originalCap = queue.cap;
   const settings: QueueSettings = {
     mode: queue.mode,
@@ -317,30 +527,55 @@ function reapplyDeferredOverflow(key: string): void {
     dropPolicy: queue.dropPolicy,
   };
   for (const item of suffix) {
-    if (!enqueueFollowupRun(key, item, settings, "none", undefined, false)) {
-      completeFollowupRunLifecycle(item);
+    if (
+      !(await enqueueFollowupRun(key, item, settings, "none", undefined, false, {
+        deferPersist: true,
+        collectDeferredDrops: deferredDrops,
+      })) &&
+      !deferredDrops.includes(item)
+    ) {
+      deferredDrops.push(item);
     }
   }
   queue.cap = originalCap;
+  try {
+    await persistFollowupQueuesOrThrow();
+  } catch (err) {
+    restoreQueueMutationState(queue, mutationSnapshot);
+    defaultRuntime.error?.(
+      `failed to persist followup queue after deferred overflow for ${key}: ${String(err)}`,
+    );
+    return;
+  }
+  completeDeferredDrops(deferredDrops);
 }
 
 /** Remove an exactly committed steer while preserving every sibling's FIFO position. */
-function consumeParkedFollowupRun(
+async function consumeParkedFollowupRun(
   key: string,
   run: FollowupRun,
   disposition?: "consumed",
-): boolean {
+): Promise<boolean> {
   const queue = getExistingFollowupQueue(key);
   const index = queue?.items.indexOf(run) ?? -1;
   if (!queue || index < 0) {
     return false;
   }
   queue.items.splice(index, 1);
+  try {
+    await persistFollowupQueuesOrThrow();
+  } catch (err) {
+    queue.items.splice(index, 0, run);
+    defaultRuntime.error?.(
+      `rejected parked-steer consume for ${key}: persistence failed: ${String(err)}`,
+    );
+    return false;
+  }
   run.steerPending?.settle(true);
   delete run.steerPending;
   delete run.protectFromQueueOverflow;
   delete run.steerAnchor;
-  reapplyDeferredOverflow(key);
+  await reapplyDeferredOverflow(key);
   completeFollowupRunLifecycle(run, disposition);
   if (
     !queue.draining &&
@@ -359,21 +594,22 @@ function consumeParkedFollowupRun(
 
 type ParkedSteerReservation = {
   admit: () => Promise<"steer" | "fallback" | "cancelled">;
-  accepted: (accepted: boolean) => void;
-  fallback: () => void;
-  consume: (disposition?: "consumed") => void;
+  // Settlement writes the durable row through the shared-state worker.
+  accepted: (accepted: boolean) => Promise<void>;
+  fallback: () => Promise<void>;
+  consume: (disposition?: "consumed") => Promise<void>;
 };
 
-export function parkSteerCandidate(
+export async function parkSteerCandidate(
   key: string,
   run: FollowupRun,
   settings: QueueSettings,
   runFollowup: (run: FollowupRun) => Promise<void>,
-): ParkedSteerReservation | undefined {
+): Promise<ParkedSteerReservation | undefined> {
   if (
-    !enqueueFollowupRun(key, run, settings, "message-id", runFollowup, false, {
+    !(await enqueueFollowupRun(key, run, settings, "message-id", runFollowup, false, {
       steerCandidate: true,
-    })
+    }))
   ) {
     return undefined;
   }
@@ -408,9 +644,15 @@ export function parkSteerCandidate(
       pending.phase = "injecting";
       return "steer";
     },
-    accepted: (accepted) => settleParkedSteerAcceptance(key, run, accepted),
-    fallback: () => settleParkedSteerAcceptance(key, run, false),
-    consume: (disposition) => consumeParkedFollowupRun(key, run, disposition),
+    accepted: async (accepted) => {
+      await settleParkedSteerAcceptance(key, run, accepted);
+    },
+    fallback: async () => {
+      await settleParkedSteerAcceptance(key, run, false);
+    },
+    consume: async (disposition) => {
+      await consumeParkedFollowupRun(key, run, disposition);
+    },
   };
 }
 

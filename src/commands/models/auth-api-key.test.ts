@@ -463,12 +463,12 @@ describe("shared API-key editing and removal", () => {
           credential: { type: "api_key", provider: "sample", key: "reconnected" },
         });
         writeConfig(reconnectedConfig);
-        enqueueFollowupRun(queueKey, reconnectedRun, { mode: "followup" });
+        await enqueueFollowupRun(queueKey, reconnectedRun, { mode: "followup" });
         return result;
       },
     );
     try {
-      enqueueFollowupRun(queueKey, removedRun, { mode: "followup" });
+      await enqueueFollowupRun(queueKey, removedRun, { mode: "followup" });
       await removeModelAuthCredentials({
         cfg: config,
         agentDir: agentDir("writer"),
@@ -483,7 +483,7 @@ describe("shared API-key editing and removal", () => {
         fallbacks: ["sample/luna"],
       });
     } finally {
-      clearFollowupQueue(queueKey);
+      await clearFollowupQueue(queueKey);
     }
   });
 

@@ -416,9 +416,11 @@ describe("runHeartbeatOnce - isolated heartbeat outbound session mirror", () => 
           5_000,
           "heartbeat delivery confirmation was not observed",
         );
-        systemEventsCleared = clearSessionResetRuntimeState([targetSessionKey], {
-          agentId: "main",
-        }).systemEventsCleared;
+        systemEventsCleared = (
+          await clearSessionResetRuntimeState([targetSessionKey], {
+            agentId: "main",
+          })
+        ).systemEventsCleared;
       } finally {
         releaseCompletion.resolve();
         result = await withTestTimeout(heartbeat, 5_000, "heartbeat did not finish delivery");

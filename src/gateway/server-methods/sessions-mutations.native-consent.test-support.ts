@@ -39,7 +39,7 @@ export function registerSessionNativeRuntimeConsentTests(support: {
   ) => Promise<Parameters<RespondFn>>;
   prepareRuntime: Mock<typeof preparePublishedModelRuntimeChoice>;
   configMutationRequested: () => boolean;
-  queueRuntimeSelection: (sessionKey: string) => { provider: string; model: string };
+  queueRuntimeSelection: (sessionKey: string) => Promise<{ provider: string; model: string }>;
 }): void {
   const { catalogSnapshot, client, context, patchSession, queueRuntimeSelection } = support;
   describe("native runtime permission consent", () => {
@@ -366,7 +366,7 @@ export function registerSessionNativeRuntimeConsentTests(support: {
       runtimeId: "claude-cli",
       validate: () => undefined,
     });
-    const queued = queueRuntimeSelection(sessionKey);
+    const queued = await queueRuntimeSelection(sessionKey);
     try {
       expect(
         (
@@ -387,7 +387,7 @@ export function registerSessionNativeRuntimeConsentTests(support: {
         "nativeRuntimeConsent",
       );
     } finally {
-      clearFollowupQueue(sessionKey);
+      await clearFollowupQueue(sessionKey);
     }
   });
 }

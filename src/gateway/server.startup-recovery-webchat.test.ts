@@ -258,7 +258,7 @@ it(
       if (recovery) {
         await Promise.allSettled([recovery]);
       }
-      clearFollowupQueue(sessionKey);
+      await clearFollowupQueue(sessionKey);
       if (gateway) {
         await disconnectGatewayClient(gateway.client).catch(() => undefined);
         await gateway.server.close().catch(() => undefined);

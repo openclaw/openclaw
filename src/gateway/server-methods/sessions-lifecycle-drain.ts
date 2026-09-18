@@ -216,8 +216,8 @@ export async function prepareSessionLifecycleDrain(
               timeoutMs,
             });
           },
-          onAuthorizedAfterQueuedAbort: () => {
-            const cleared = clearSessionQueues(workIdentities);
+          onAuthorizedAfterQueuedAbort: async () => {
+            const cleared = await clearSessionQueues(workIdentities);
             let aborted = cleared.followupCleared > 0 || cleared.laneCleared > 0;
             for (const key of params.sessionKeys) {
               aborted = replyRunRegistry.abort(key) || aborted;

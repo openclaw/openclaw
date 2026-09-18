@@ -21,23 +21,37 @@ export function peekRecentQueueMessageId(key: string, now = Date.now()): boolean
   return RECENT_QUEUE_MESSAGE_IDS.peek(key, now);
 }
 
+/**
+ * Reserve `key` for this admission and return its exact release.
+ *
+ * The lifecycle hook covers abandonment, but a run may legitimately carry no
+ * `turnAdoptionLifecycle` (see `get-reply-run-execute.ts`). Callers that fail
+ * durable admission must release the reservation directly, otherwise the
+ * inbound retry of the same message is suppressed for the full TTL even though
+ * nothing was ever admitted.
+ */
 export function recordRecentQueueMessageId(
   run: { turnAdoptionLifecycle?: TurnAdoptionLifecycle },
   key: string,
   now = Date.now(),
-): void {
+): () => void {
   const ownerToken = {};
   RECENT_QUEUE_MESSAGE_IDS.delete(key);
   RECENT_QUEUE_MESSAGE_IDS.check(key, now, ownerToken);
+  // Owner-token delete frees only this entry; a later admission owns its own token.
+  const release = () => {
+    RECENT_QUEUE_MESSAGE_IDS.delete(key, ownerToken);
+  };
   const lifecycle = run.turnAdoptionLifecycle;
   if (lifecycle) {
     const onAbandoned = lifecycle.onAbandoned;
     lifecycle.onAbandoned = () => {
       // Lifecycle callbacks survive summary cloning. Free only this entry before retry.
-      RECENT_QUEUE_MESSAGE_IDS.delete(key, ownerToken);
+      release();
       onAbandoned?.();
     };
   }
+  return release;
 }
 
 export function resetRecentQueuedMessageIdDedupe(): void {

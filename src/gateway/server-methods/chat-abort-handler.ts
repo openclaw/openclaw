@@ -48,7 +48,7 @@ import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./type
 import { assertValidParams } from "./validation.js";
 
 type ChatAbortLifecycle = {
-  onAuthorizedAfterQueuedAbort?: () => boolean;
+  onAuthorizedAfterQueuedAbort?: () => boolean | Promise<boolean>;
   onDescendantsCancelled?: () => void;
   cascadeDescendants?: true;
 };
@@ -361,7 +361,7 @@ export async function handleChatAbortRequestWithLifecycle(
       ) {
         throw new Error("Run changed before cancellation; retry Stop.");
       }
-      const queuedRes = abortQueuedChatTurnById(chatQueuedTurns, {
+      const queuedRes = await abortQueuedChatTurnById(chatQueuedTurns, {
         runId,
         sessionKey: queued.sessionKey,
         stopReason: "rpc",

@@ -314,7 +314,7 @@ export function createGatewayWorkerPlacementRuntime(
             }
             authorize?.();
             placement = await startDispatch();
-            clearSessionQueues(lifecycleIdentities);
+            await clearSessionQueues(lifecycleIdentities);
             params.revokeSessionAuthority({
               sessionId,
               sessionKeys: lifecycleIdentities,

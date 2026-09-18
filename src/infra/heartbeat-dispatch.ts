@@ -320,6 +320,20 @@ async function prepareHeartbeatDispatchReply(
   const restoreActivity = () =>
     restoreHeartbeatUpdatedAt({ agentId, storePath, sessionKey, updatedAt: previousUpdatedAt });
   const suppressSelected = () => suppressPendingFinalDelivery(selected, { preserveActivity: true });
+  if (wakeSource === "followup-queue-restore") {
+    await restoreActivity();
+    // The carrier wake exists only to reach drain registration, so its own
+    // HEARTBEAT_OK/alert presentation never reaches the channel — every `ack`
+    // and `failure` outcome stops here even when showOk is enabled. A restored
+    // follow-up that produced a real agent reply is the opposite case: a
+    // `delivery` outcome falls through, because suppressing it would silently
+    // swallow the reply this recovery path ran to deliver.
+    if (outcome.kind !== "delivery") {
+      await suppressSelected();
+      finish({ status: "skipped", reason: "followup-queue-restore", silent: true }, false);
+      return {};
+    }
+  }
   if (outcome.kind === "ack") {
     if ("response" in outcome && outcome.response) {
       await record(outcome.response);

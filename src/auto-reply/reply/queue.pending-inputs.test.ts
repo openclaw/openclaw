@@ -50,8 +50,8 @@ describe("followup queue durable input consumption", () => {
     await upsertSessionEntryCore(scope(), { sessionId, updatedAt: 1 });
   });
 
-  afterEach(() => {
-    clearFollowupQueue(sessionKey);
+  afterEach(async () => {
+    await clearFollowupQueue(sessionKey);
     for (const recorder of recorders.splice(0)) {
       recorder.finishPendingInput?.("interrupted");
     }
@@ -114,8 +114,8 @@ describe("followup queue durable input consumption", () => {
     expect(second.run.userTurnTranscriptRecorder?.hasPersisted()).toBe(false);
     const before = await loadTranscriptEvents(scope());
     const settings = { mode: "collect" as const, debounceMs: 0 };
-    expect(enqueueFollowupRun(sessionKey, first.run, settings)).toBe(true);
-    expect(enqueueFollowupRun(sessionKey, second.run, settings)).toBe(true);
+    expect(await enqueueFollowupRun(sessionKey, first.run, settings)).toBe(true);
+    expect(await enqueueFollowupRun(sessionKey, second.run, settings)).toBe(true);
     const prompts: string[] = [];
     const consumers: UserTurnTranscriptRecorder[] = [];
     const failures: unknown[] = [];
@@ -162,8 +162,8 @@ describe("followup queue durable input consumption", () => {
       turnAdoptionLifecycle: { admission: "cancel-only", onAdopted: async () => {} },
     };
     const settings = { mode: "collect" as const, debounceMs: 0 };
-    expect(enqueueFollowupRun(sessionKey, staged.run, settings)).toBe(true);
-    expect(enqueueFollowupRun(sessionKey, unstaged, settings)).toBe(true);
+    expect(await enqueueFollowupRun(sessionKey, staged.run, settings)).toBe(true);
+    expect(await enqueueFollowupRun(sessionKey, unstaged, settings)).toBe(true);
     const calls: FollowupRun[] = [];
     scheduleFollowupDrain(sessionKey, async (run) => {
       calls.push(run);
@@ -185,8 +185,8 @@ describe("followup queue durable input consumption", () => {
       first.run.prompt = "first private source";
       second.run.prompt = "second private source";
       const settings = { mode: "collect" as const, debounceMs: 0 };
-      expect(enqueueFollowupRun(sessionKey, first.run, settings)).toBe(true);
-      expect(enqueueFollowupRun(sessionKey, second.run, settings)).toBe(true);
+      expect(await enqueueFollowupRun(sessionKey, first.run, settings)).toBe(true);
+      expect(await enqueueFollowupRun(sessionKey, second.run, settings)).toBe(true);
       const calls: FollowupRun[] = [];
       const failures: unknown[] = [];
       const pendingTotals: number[] = [];
@@ -278,7 +278,7 @@ describe("followup queue durable input consumption", () => {
     };
     for (const source of sources) {
       source.run.summaryLine = `${source.run.messageId} private summary`;
-      expect(enqueueFollowupRun(sessionKey, source.run, settings)).toBe(true);
+      expect(await enqueueFollowupRun(sessionKey, source.run, settings)).toBe(true);
     }
     const calls: FollowupRun[] = [];
     const failures: unknown[] = [];

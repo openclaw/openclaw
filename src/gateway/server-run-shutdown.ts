@@ -345,10 +345,14 @@ function abortActiveRuns(params: GatewayRunShutdownParams, restart: boolean): nu
 }
 
 /** Abort queued owners before active teardown can promote them into the closing runtime. */
-function abortQueuedTurns(params: GatewayRunShutdownParams, restart: boolean): number {
+async function abortQueuedTurns(
+  params: GatewayRunShutdownParams,
+  restart: boolean,
+): Promise<number> {
   const matches = Array.from(params.chatQueuedTurns, ([runId, entry]) => ({ runId, entry }));
-  return abortQueuedChatTurns(params.chatQueuedTurns, matches, restart ? "restart" : undefined)
-    .length;
+  return (
+    await abortQueuedChatTurns(params.chatQueuedTurns, matches, restart ? "restart" : undefined)
+  ).length;
 }
 
 /** Completes grace and requests cancellation before execution joining begins. */
@@ -363,7 +367,7 @@ export async function prepareGatewayRunShutdown(
   // Ordinary CLI stop already spent its grace period. Cancel only this Gateway's
   // remaining owners before joining them, without scheduling restart recovery.
   if (!params.restart) {
-    abortQueuedTurns(params, false);
+    await abortQueuedTurns(params, false);
     abortActiveRuns(params, false);
     return;
   }
@@ -394,7 +398,7 @@ export async function prepareGatewayRunShutdown(
     }
   }
 
-  const abortedQueuedTurns = abortQueuedTurns(params, true);
+  const abortedQueuedTurns = await abortQueuedTurns(params, true);
   if (drainResult?.drained === false && abortedQueuedTurns > 0) {
     shutdownLog.warn(`aborted ${abortedQueuedTurns} queued turn(s) during restart shutdown`);
   }

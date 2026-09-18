@@ -638,7 +638,7 @@ export async function executeSessionPatchMutations(params: {
                       recordSessionStatusModelPatchOutcome(outcome.applied);
                     }
                     if (outcome.ok && outcome.applied) {
-                      modelSelection.refreshSessionPatchQueuedSelection({
+                      await modelSelection.refreshSessionPatchQueuedSelection({
                         cfg,
                         entry: outcome.entry,
                         patch: target.fullPatch,
