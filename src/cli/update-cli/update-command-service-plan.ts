@@ -55,8 +55,8 @@ import {
   type UpdateRecoveryStep,
 } from "../../shared/update-outcome.js";
 import { resolveNodeVersionManager } from "../../shared/version-manager-path.js";
-import { CLI_NAME } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
+import { formatGatewayServiceInstallationDrift } from "../daemon-cli/shared.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import { resolveNodeRunner } from "./shared.js";
 import type {
@@ -329,16 +329,6 @@ export async function readManagedGatewayServiceForUpdate(
       return null;
     }
   });
-}
-
-export async function readManagedGatewayServiceCommandForUpdate(
-  env: NodeJS.ProcessEnv,
-  root?: string,
-  allowInstallRootChange = false,
-): Promise<GatewayServiceCommandConfig | null> {
-  return (
-    (await readManagedGatewayServiceForUpdate(env, root, allowInstallRootChange))?.command ?? null
-  );
 }
 
 type PackageRuntimePreflight = {
@@ -643,11 +633,12 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
     // A writable managed launcher follows the installation selected on PATH.
     // Deployment-owned definitions retain their existing package owner instead.
     if (inspection?.kind === "owned" && inspection.requiresInstallRootRefresh) {
+      const drift = await inspectGatewayServiceInstallationDrift(layout, params.root);
       return {
         rootRedirect: null,
         serviceUnitTarget,
         serviceRoot: layout.packageRootReal,
-        installationDrift: await inspectGatewayServiceInstallationDrift(layout, params.root),
+        installationDrift: drift ? formatGatewayServiceInstallationDrift(drift) : undefined,
       };
     }
     return {
@@ -713,48 +704,4 @@ export async function resolveUpdatedGatewayRestartPort(params: {
     }).readBestEffortConfig();
   }
   return resolveGatewayPort(config, env);
-}
-
-/** Describe the selected plan without changing roots, runtime, or service authority. */
-export function formatManagedServicePackageUpdatePlan(params: {
-  rootRedirect: ManagedServiceRootRedirect | null;
-  nodeRunner?: string;
-  installationDrift?: string;
-}): Array<{ level: "muted" | "warn"; message: string }> {
-  if (params.installationDrift) {
-    return [{ level: "warn", message: params.installationDrift }];
-  }
-  const { rootRedirect, nodeRunner } = params;
-  if (rootRedirect) {
-    return [
-      {
-        level: "muted",
-        message: `Targeting managed gateway service package root: ${rootRedirect.root}`,
-      },
-      {
-        level: "warn",
-        message: `Shell OpenClaw root differs from the managed gateway service root: ${rootRedirect.previousRoot}`,
-      },
-      {
-        level: "muted",
-        message: `After the update, make sure \`${CLI_NAME}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
-      },
-      ...(nodeRunner
-        ? [{ level: "muted" as const, message: `Managed gateway service Node: ${nodeRunner}` }]
-        : []),
-    ];
-  }
-  return nodeRunner
-    ? [
-        {
-          level: "warn",
-          message: `Current Node (${resolveNodeRunner()}) differs from the managed gateway service Node (${nodeRunner}).`,
-        },
-        {
-          level: "muted",
-          message:
-            "Using the managed service Node for this update so the gateway can start after the upgrade.",
-        },
-      ]
-    : [];
 }

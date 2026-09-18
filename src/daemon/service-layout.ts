@@ -20,11 +20,18 @@ export type GatewayServiceLayoutSummary = {
   entrypointSourceCheckout?: boolean;
 };
 
+export type GatewayServiceInstallationDrift = {
+  serviceRoot: string;
+  activeRoot: string;
+  serviceVersion?: string;
+  activeVersion?: string;
+};
+
 /** Local package evidence remains available when the Gateway cannot answer a probe. */
 export async function inspectGatewayServiceInstallationDrift(
   layout: Pick<GatewayServiceLayoutSummary, "packageRootReal" | "packageVersion"> | undefined,
   activeRoot: string,
-): Promise<string | undefined> {
+): Promise<GatewayServiceInstallationDrift | undefined> {
   const serviceRoot = layout?.packageRootReal;
   const activeRootReal = await tryRealpath(activeRoot);
   if (!serviceRoot || !activeRootReal || serviceRoot === activeRootReal) {
@@ -45,7 +52,7 @@ export async function inspectGatewayServiceInstallationDrift(
   const activeVersion = (await readPackageVersion(activeRootReal)) ?? undefined;
   const serviceVersion =
     layout.packageVersion ?? (await readPackageVersion(serviceRoot)) ?? undefined;
-  return `Gateway service targets a different OpenClaw install: ${serviceRoot} (${serviceVersion ?? "version unknown"}); active CLI: ${activeRootReal} (${activeVersion ?? "version unknown"}). Run \`openclaw doctor --fix\` or \`openclaw gateway install --force\` from the active CLI.`;
+  return { serviceRoot, activeRoot: activeRootReal, serviceVersion, activeVersion };
 }
 
 function shellQuoteArg(value: string): string {

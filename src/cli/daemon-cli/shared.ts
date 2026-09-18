@@ -9,6 +9,7 @@ import {
 import { resolveDaemonContainerContext } from "../../daemon/container-context.js";
 import "../../daemon/runtime-format.js";
 import { buildPlatformServiceStartHints } from "../../daemon/runtime-hints.js";
+import type { GatewayServiceInstallationDrift } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-user-transport.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
@@ -60,6 +61,30 @@ export function resolveDaemonInstallBlockMessage(
     );
   }
   return undefined;
+}
+
+export function resolveDaemonServiceInstallGuidance(
+  targetRole?: "target" | "diagnostic-only",
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  if (targetRole === "diagnostic-only") {
+    return undefined;
+  }
+  return (
+    resolveDaemonInstallBlockMessage("gateway", env) ??
+    `Run \`${formatCliCommand("openclaw doctor --fix", env)}\` or \`${formatCliCommand("openclaw gateway install --force", env)}\` from the active CLI.`
+  );
+}
+
+export function formatGatewayServiceInstallationDrift(
+  drift: GatewayServiceInstallationDrift,
+  targetRole?: "target" | "diagnostic-only",
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const { serviceRoot, serviceVersion, activeRoot, activeVersion } = drift;
+  const facts = `Gateway service targets a different OpenClaw install: ${serviceRoot} (${serviceVersion ?? "version unknown"}); active CLI: ${activeRoot} (${activeVersion ?? "version unknown"}).`;
+  const guidance = resolveDaemonServiceInstallGuidance(targetRole, env);
+  return guidance ? `${facts} ${guidance}` : facts;
 }
 
 /** Build terminal style helpers for status output with no-color fallback. */

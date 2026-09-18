@@ -120,6 +120,7 @@ async function runInstallationCase(params: {
   mode: "maintenance" | "direct";
   installFails?: boolean;
   initiallyStopped?: boolean;
+  releaseStateBeforeFinish?: boolean;
   inspectionFailure?: "unavailable" | "lost-before-install";
   inspectionScenario?: "slow-admission" | "competing-update";
   invocationPort?: string;
@@ -296,6 +297,9 @@ async function runInstallationCase(params: {
           expect(running).toBe(false);
           events.push("repair-state");
         });
+        if (params.releaseStateBeforeFinish) {
+          await maintenance?.releaseState();
+        }
         let finishError: unknown;
         try {
           await maintenance?.finish({
@@ -400,10 +404,14 @@ it.each(["linux", "darwin", "win32"] as const)(
 it("honors an explicit invoking Gateway port while repairing installation drift", async () =>
   runInstallationCase({ platform: "linux", mode: "direct", invocationPort: "19990" }));
 
-it.each([false, true])(
-  "keeps Windows activation with the repaired installation after Doctor maintenance (install fails=%s)",
-  async (installFails) =>
-    runInstallationCase({ platform: "win32", mode: "maintenance", installFails }),
+it.each([
+  { installFails: false, releaseStateBeforeFinish: false },
+  { installFails: true, releaseStateBeforeFinish: false },
+  { installFails: false, releaseStateBeforeFinish: true },
+  { installFails: true, releaseStateBeforeFinish: true },
+])(
+  "keeps Windows activation with the repaired installation (installFails=$installFails, releaseStateBeforeFinish=$releaseStateBeforeFinish)",
+  async (scenario) => runInstallationCase({ platform: "win32", mode: "maintenance", ...scenario }),
 );
 
 it.each(["unavailable", "lost-before-install"] as const)(

@@ -607,6 +607,9 @@ async function gatherDaemonStatusImpl(
   const hostDesktop = await (
     await import("../../gateway/desktop/host-source.js")
   ).inspectHostDesktop({ config: daemonCfg.desktop?.host });
+  const targetRole: "target" | "diagnostic-only" = serviceTargetsProbe
+    ? "target"
+    : "diagnostic-only";
 
   return {
     cli: resolveCliStatusSummary(),
@@ -621,7 +624,7 @@ async function gatherDaemonStatusImpl(
       loadState,
       loadedText: service.loadedText,
       notLoadedText: service.notLoadedText,
-      targetRole: serviceTargetsProbe ? "target" : "diagnostic-only",
+      targetRole,
       command,
       ...(serviceLayout ? { layout: serviceLayout } : {}),
       runtime: runtime?.inspectionFailure

@@ -1,6 +1,7 @@
 // Reads service manager state for status reports.
 // Converts gateway/node launchd/systemd state into a compact summary shape.
 
+import { formatGatewayServiceInstallationDrift } from "../cli/daemon-cli/shared.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { formatServiceLabel } from "../daemon/runtime-format.js";
 import {
@@ -74,7 +75,9 @@ export async function readServiceStatusSummary(
       runtime: state.runtime,
       ...(layout ? { layout } : {}),
       ...(wrapperPath ? { wrapperPath } : {}),
-      ...(installationDrift ? { installationDrift } : {}),
+      ...(installationDrift
+        ? { installationDrift: formatGatewayServiceInstallationDrift(installationDrift) }
+        : {}),
     };
   } catch (error) {
     // Status output should survive service-manager errors and show an unknown row.

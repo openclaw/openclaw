@@ -173,7 +173,8 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
 
 The Gateway service row compares its installed package with the active CLI.
 If they resolve to different installations, status names both package paths and
-versions and recommends `openclaw doctor --fix` or `openclaw gateway install --force`.
+versions. It recommends `openclaw doctor --fix` or `openclaw gateway install --force`
+when service installation is allowed, or reports the installation owner's refusal.
 This local diagnostic remains available when the Gateway connection fails,
 including a protocol mismatch. JSON exposes the comparison as
 `gatewayService.installationDrift`.

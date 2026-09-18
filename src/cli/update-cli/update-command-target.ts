@@ -41,12 +41,14 @@ import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { VERSION } from "../../version.js";
+import { CLI_NAME } from "../cli-name.js";
 import {
   DEFAULT_PACKAGE_NAME,
   normalizeTag,
   readPackageName,
   readPackageVersion,
   resolveGlobalManager,
+  resolveNodeRunner,
   resolveTargetVersion,
   UpdatePreMutationError,
   type UpdateCommandOptions,
@@ -67,7 +69,6 @@ import {
 } from "./update-command-run.js";
 import {
   resolveManagedServicePackageUpdatePlan,
-  formatManagedServicePackageUpdatePlan,
   type ManagedServiceRootRedirect,
 } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
@@ -87,6 +88,50 @@ export async function resolveFreshUpdateMetadata(target: {
   );
   await target.refuseUpdate("target-metadata-preflight", failure.message, failure.failureFacts);
   return undefined;
+}
+
+/** Describe the selected plan without changing roots, runtime, or service authority. */
+function formatManagedServicePackageUpdatePlan(params: {
+  rootRedirect: ManagedServiceRootRedirect | null;
+  nodeRunner?: string;
+  installationDrift?: string;
+}): Array<{ level: "muted" | "warn"; message: string }> {
+  if (params.installationDrift) {
+    return [{ level: "warn", message: params.installationDrift }];
+  }
+  const { rootRedirect, nodeRunner } = params;
+  if (rootRedirect) {
+    return [
+      {
+        level: "muted",
+        message: `Targeting managed gateway service package root: ${rootRedirect.root}`,
+      },
+      {
+        level: "warn",
+        message: `Shell OpenClaw root differs from the managed gateway service root: ${rootRedirect.previousRoot}`,
+      },
+      {
+        level: "muted",
+        message: `After the update, make sure \`${CLI_NAME}\` on PATH resolves to the managed service root or reinstall the gateway service from the shell install you want to use.`,
+      },
+      ...(nodeRunner
+        ? [{ level: "muted" as const, message: `Managed gateway service Node: ${nodeRunner}` }]
+        : []),
+    ];
+  }
+  return nodeRunner
+    ? [
+        {
+          level: "warn",
+          message: `Current Node (${resolveNodeRunner()}) differs from the managed gateway service Node (${nodeRunner}).`,
+        },
+        {
+          level: "muted",
+          message:
+            "Using the managed service Node for this update so the gateway can start after the upgrade.",
+        },
+      ]
+    : [];
 }
 
 export async function resolveUpdateCommandTarget(

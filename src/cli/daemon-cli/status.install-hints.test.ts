@@ -235,6 +235,7 @@ describe.each(deniedInvocations)(
           expect(output).toMatch(recovery);
           expect(output).not.toMatch(/\bgateway\s+install\b/);
           expect(output).not.toMatch(/\bdoctor\s+--repair\b/);
+          expect(output).not.toMatch(/\bdoctor\s+--fix\b/);
           expect(output).not.toContain("launchctl bootout");
           expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
         });
@@ -262,6 +263,7 @@ describe("eligible status recovery", () => {
           expect(output).toContain("The Gateway did not report its own version");
           expect(output).not.toMatch(/\breinstall\b/i);
           expect(output).not.toMatch(/\bgateway\s+install\b/);
+          expect(output).not.toMatch(/\bdoctor\s+--fix\b/);
           expect(output).not.toContain("Nix mode detected");
         },
       );
@@ -339,6 +341,9 @@ describe("eligible status recovery", () => {
         print(await createStatus("missing-unit", accountHome), { json: false });
         expect(humanOutput()).toContain("openclaw --profile work gateway install");
         expect(humanOutput()).not.toContain("service management skipped");
+        print(await createStatus("version-mismatch", accountHome), { json: false });
+        expect(humanOutput()).toContain("openclaw --profile work doctor --fix");
+        expect(humanOutput()).toContain("openclaw --profile work gateway install --force");
       },
     );
   });

@@ -113,6 +113,8 @@ export async function beginDoctorMaintenance(params: {
   const coordinators: Array<{ release(): void }> = [];
   const warnings: string[] = [];
   let repairStoresMayBeOpen = false;
+  // Service safety outlives database handles released for an update child.
+  let retainStoppedInstallation = false;
   let resources: OpenClawDatabaseMaintenanceScope | undefined;
   let inspectingActivation = false;
   let parentMustStopGateway = false;
@@ -157,10 +159,6 @@ export async function beginDoctorMaintenance(params: {
   };
   const release = async (assertCustody?: () => void) => {
     await settle(async () => {
-      const retainStoppedInstallation =
-        repairStoresMayBeOpen &&
-        stopped?.serviceUpdateVerdict?.kind === "owned" &&
-        stopped.serviceUpdateVerdict.requiresInstallRootRefresh === true;
       await releaseState();
       assertCustody?.();
       const recovery = stopped?.windowsTaskAutoStartRecovery;
@@ -200,7 +198,9 @@ export async function beginDoctorMaintenance(params: {
           root,
         );
         if (drift) {
-          const message = `${drift} The service was already stopped; Doctor left its definition and stop state unchanged. Use \`openclaw gateway install --force\` to replace and start it.`;
+          const { formatGatewayServiceInstallationDrift } =
+            await import("../cli/daemon-cli/shared.js");
+          const message = `${formatGatewayServiceInstallationDrift(drift, undefined, env)} The service was already stopped; Doctor left its definition and stop state unchanged.`;
           warnings.push(message);
           params.runtime.log(message);
         }
@@ -548,6 +548,9 @@ export async function beginDoctorMaintenance(params: {
         throw error;
       }
       stopped?.windowsTaskAutoStartRecovery?.beginMutation();
+      retainStoppedInstallation =
+        stopped?.serviceUpdateVerdict?.kind === "owned" &&
+        stopped.serviceUpdateVerdict.requiresInstallRootRefresh === true;
       repairStoresMayBeOpen = true;
     });
   } catch (error) {

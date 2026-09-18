@@ -17,7 +17,6 @@ vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.exec }));
 vi.mock("./schtasks-control.js", () => ({ runScheduledTaskOrThrow: native.run }));
 vi.mock("./schtasks-runtime.js", () => ({
   isStartupEntryInstalled: async () => false,
-  isRegisteredScheduledTask: async () => true,
 }));
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);

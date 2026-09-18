@@ -1,5 +1,6 @@
 // Status service-summary tests cover managed gateway service status parsing and log path reporting.
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -8,6 +9,7 @@ import type { GatewayServiceEnvArgs } from "../daemon/service-types.js";
 import { resolveGatewayService, type GatewayService } from "../daemon/service.js";
 import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { readServiceStatusSummary } from "./status.service-summary.js";
 import { getStatusOverviewRowValue } from "./status.test-support.ts";
@@ -32,9 +34,14 @@ function requireMockArg(mock: { mock: { calls: unknown[][] } }, label: string): 
 }
 
 describe("readServiceStatusSummary", () => {
-  it.each(["2026.9.4", "2026.9.17"])(
-    "reports both installation paths and versions without Gateway metadata (service %s)",
-    async (serviceVersion) => {
+  it.each([
+    { serviceVersion: "2026.9.4" },
+    { serviceVersion: "2026.9.17" },
+    { serviceVersion: "2026.9.4", refusal: "Nix mode detected", nix: true },
+    { serviceVersion: "2026.9.4", refusal: "managed by an external supervisor", external: true },
+  ])(
+    "reports installation facts with usable guidance ($serviceVersion, $refusal)",
+    async ({ serviceVersion, refusal, nix, external }) => {
       const root = await fs.realpath(tempDirs.make("openclaw-status-prefix-drift-"));
       const serviceRoot = path.join(root, "prefix-a", "lib", "node_modules", "openclaw");
       const activeRoot = path.join(root, "prefix-b", "lib", "node_modules", "openclaw");
@@ -60,7 +67,24 @@ describe("readServiceStatusSummary", () => {
         })),
         readRuntime: vi.fn(async () => ({ status: "running" })),
       });
-      const summary = await readServiceStatusSummary(service, "Daemon", undefined, activeRoot);
+      const accountHome = os.userInfo().homedir;
+      const summary = await withEnvAsync(
+        {
+          HOME: accountHome,
+          USERPROFILE: accountHome,
+          OPENCLAW_HOME: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_PROFILE: undefined,
+          OPENCLAW_CONTAINER_HINT: undefined,
+          OPENCLAW_NIX_MODE: nix ? "1" : undefined,
+          OPENCLAW_SUPERVISOR_MODE: external ? "external" : undefined,
+          OPENCLAW_LAUNCHD_LABEL: undefined,
+          OPENCLAW_SYSTEMD_UNIT: undefined,
+          OPENCLAW_WINDOWS_TASK_NAME: undefined,
+        },
+        () => readServiceStatusSummary(service, "Daemon", undefined, activeRoot),
+      );
       const output = getStatusOverviewRowValue("Gateway service", {
         gatewayService: summary,
         gatewayReachable: false,
@@ -69,8 +93,15 @@ describe("readServiceStatusSummary", () => {
       });
       expect(output).toContain(`${serviceRoot} (${serviceVersion})`);
       expect(output).toContain(`${activeRoot} (2026.9.17)`);
-      expect(output).toContain("openclaw doctor --fix");
-      expect(output).toContain("openclaw gateway install --force");
+      expect(typeof summary.installationDrift).toBe("string");
+      if (refusal) {
+        expect(output).toContain(refusal);
+        expect(output).not.toContain("openclaw doctor --fix");
+        expect(output).not.toContain("openclaw gateway install --force");
+      } else {
+        expect(output).toContain("openclaw doctor --fix");
+        expect(output).toContain("openclaw gateway install --force");
+      }
 
       const alias = path.join(root, "active-package");
       await fs.symlink(serviceRoot, alias, "dir");

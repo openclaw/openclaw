@@ -61,6 +61,7 @@ import type { TempHomeEnv } from "../test-utils/temp-home.js";
 import { VERSION } from "../version.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 import { createCliRuntimeCapture, getMockCallOutput } from "./test-runtime-capture.js";
+import { registerAlreadyCurrentAdmissionTests } from "./update-cli/update-command-current-admission.test-support.js";
 import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
 import { createGlobalUserServiceCommand } from "./update-cli/update-command-service-state.test-support.js";
 import { isLegacyUpdateDoctorCommand } from "./update-cli/update-command-transport.test-support.js";
@@ -7251,50 +7252,39 @@ describe("update-cli", () => {
     },
   );
 
-  it.each(["unavailable plugin", "changed service owner"])(
-    "handles %s before already-current convergence",
-    async (failure) => {
-      const root = await mockPackageInstallAtCaseDir("openclaw-update", VERSION);
+  registerAlreadyCurrentAdmissionTests({
+    prepareCurrentPackage: async (prefix) => {
+      const root = await mockPackageInstallAtCaseDir(prefix, VERSION);
       readPackageVersion.mockResolvedValue(VERSION);
       primeNpmChannelTag("latest", VERSION);
-      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
-      if (failure === "unavailable plugin") {
-        pluginAvailabilityPreflight.mockResolvedValueOnce([
-          {
-            pluginId: "brave",
-            reason: "Plugin target unavailable",
-            message: "Plugin brave availability could not be confirmed.",
-            guidance: [],
-          },
-        ]);
-      } else {
-        pluginAvailabilityPreflight.mockImplementationOnce(async () => {
-          primeServiceCommand(["node", "/foreign/openclaw/dist/index.js", "gateway", "run"]);
-          return [];
-        });
-      }
-      const command = updateCommand({ yes: true, json: true });
-      if (failure === "unavailable plugin") {
-        await command;
-        expect(lastWriteJsonCall()).toMatchObject({ status: "skipped", reason: "already-current" });
-        expect(updateNpmInstalledPlugins).toHaveBeenCalled();
-        expect(getErrorOutput()).toContain("Plugin brave availability could not be confirmed");
-      } else {
-        await expect(command).rejects.toEqual(new ExitError(1));
-        expect(lastWriteJsonCall()).toMatchObject({
-          status: "error",
-          reason: "managed-service-preflight",
-        });
-        expectNoSideEffects(
-          updateNpmInstalledPlugins,
-          syncPluginsForUpdateChannel,
-          serviceStop,
-          serviceRestart,
-        );
-      }
-      expect(packageInstallCommandCall()).toBeUndefined();
+      return root;
     },
-  );
+    createCaseDir,
+    writeServicePackage: (root) =>
+      writeOpenClawPackageFixture(root, VERSION, { entrySource: "export {};\n" }),
+    mockFileBackedPathExists,
+    mockRunningManagedGateway,
+    primeServiceCommand,
+    useFileBackedConfig,
+    resolveConfigPath,
+    updateCommand,
+    ExitError,
+    lastWriteJsonCall,
+    getErrorOutput,
+    packageInstallCommandCall,
+    freshRestartCalls,
+    expectNoSideEffects,
+    mocks: {
+      pluginAvailabilityPreflight,
+      syncPluginsForUpdateChannel,
+      updateNpmInstalledPlugins,
+      replaceConfigFile: vi.mocked(replaceConfigFile),
+      serviceStop,
+      serviceStart,
+      serviceRestart,
+      prepareRestartScript,
+    },
+  });
 
   it.each([true, false])(
     "converges a current Git core using its before-only version receipt (runtime compatible=%s)",

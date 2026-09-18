@@ -1,6 +1,6 @@
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
-import type { createCliStatusTextStyles } from "./shared.js";
+import { resolveDaemonServiceInstallGuidance, type createCliStatusTextStyles } from "./shared.js";
 import type { DaemonStatus } from "./status.gather.js";
 
 function formatCliVersionLine(cli: DaemonStatus["cli"]): string | null {
@@ -17,7 +17,6 @@ export function printDaemonStatusVersions(
     infoText,
     warnText,
   }: Pick<ReturnType<typeof createCliStatusTextStyles>, "label" | "infoText" | "warnText">,
-  reinstallGuidance: string,
 ) {
   const gatewayVersion = status.rpc?.server?.version?.trim() || status.gateway?.version?.trim();
   const cliVersionLine = formatCliVersionLine(status.cli);
@@ -66,7 +65,10 @@ export function printDaemonStatusVersions(
           `Warning: this OpenClaw command is version ${status.cli.version}, but the installed Gateway service is version ${serviceInstallVersion}.`,
         ),
       );
-      defaultRuntime.error(warnText(reinstallGuidance));
+      const guidance = resolveDaemonServiceInstallGuidance(status.service.targetRole);
+      if (guidance) {
+        defaultRuntime.error(warnText(guidance));
+      }
     }
     defaultRuntime.log("");
   }
