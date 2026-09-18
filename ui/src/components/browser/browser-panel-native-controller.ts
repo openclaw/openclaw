@@ -17,7 +17,7 @@ import { BrowserPanelNativePresentation } from "./browser-panel-native-presentat
 import type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
 import {
-  browserPanelNormalizedPoint,
+  browserPanelStageNormalizedPoint,
   browserPanelRemotePoint,
   loadBrowserPanelImage,
   type BrowserPanelView,
@@ -355,16 +355,23 @@ export class BrowserPanelNativeController {
     const view = this.controller.view;
     const stage = this.controller.host.renderRoot.querySelector<HTMLElement>(".bp-stage");
     const point = browserPanelRemotePoint(stage, event, view);
-    const normalized = browserPanelNormalizedPoint(stage, event);
+    const normalized = browserPanelStageNormalizedPoint(stage, event);
     if (
       !tab ||
       view?.kind !== "native" ||
       view.targetId !== tab.id ||
       view.url !== tab.url ||
-      !point ||
       !normalized ||
       this.controller.mode !== "inspect"
     ) {
+      return;
+    }
+    if (!point) {
+      // The pointer is in the letterbox margin outside the native snapshot:
+      // clear the highlight and invalidate queued/in-flight native replies.
+      this.inspectionGeneration += 1;
+      this.controller.setState("inspected", null);
+      this.controller.paintOverlay();
       return;
     }
     const generation = ++this.inspectionGeneration;

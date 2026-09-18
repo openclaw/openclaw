@@ -2232,6 +2232,7 @@ export const en: TranslationMap & {
     urlPlaceholder: "Enter a URL and press Enter",
     dockBottom: "Dock to bottom",
     dockRight: "Dock to right",
+    fixedViewport: "Keep the remote page's viewport fixed and scale the frame to fit",
     annotate: "Annotate page",
     inspect: "Inspect element",
     annotateSend: "Send to chat",

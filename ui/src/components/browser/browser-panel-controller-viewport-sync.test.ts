@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createBrowserClient,
   createBrowserPanelTestController,
@@ -28,6 +28,38 @@ function requestsForPath(request: ReturnType<typeof createBrowserClient>["reques
 }
 
 describe("BrowserPanelController viewport sync", () => {
+  let fixedViewport = false;
+  beforeEach(() => {
+    fixedViewport = false;
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) =>
+        fixedViewport && key === "openclaw.browserPanel.fixedViewport" ? "1" : null,
+    });
+  });
+
+  it("keeps the remote viewport while the panel resizes in fixed-viewport mode", async () => {
+    fixedViewport = true;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { client, request } = createBrowserClient(async () => ({ ok: true }));
+    const controller = createBrowserPanelTestController(client, "tab-a");
+
+    controller.handleViewportResize(640, 480);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(actionRequests(request, "resize")).toHaveLength(0);
+
+    // Turning fixed-viewport viewing back off resumes panel-driven resizing.
+    controller.viewport.setFixedViewport(false);
+    controller.view = {
+      ...controller.view!,
+      metrics: { cssWidth: 640, cssHeight: 480, title: "A", url: "https://example.test/a" },
+    };
+    controller.handleViewportResize(800, 600);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(actionRequests(request, "resize").map((envelope) => envelope.body)).toEqual([
+      { kind: "resize", targetId: "tab-a", width: 800, height: 600 },
+    ]);
+  });
+
   it("waits for a successful view before resizing or recapturing", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const { client, request } = createBrowserClient(async () => ({ ok: true }));
