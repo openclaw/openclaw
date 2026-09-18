@@ -3,9 +3,10 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import JSZip from "jszip";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import {
   consumePreparedNpmPackage,
@@ -17,6 +18,11 @@ import {
   verifyPreparedNpmRegistry,
 } from "../../scripts/plugin-npm-prepared-release.mjs";
 import { createPluginPublicationArtifact } from "../../scripts/plugin-publication-artifact.mjs";
+
+vi.mock("node:timers/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers/promises")>()),
+  setTimeout: vi.fn(async () => undefined),
+}));
 
 const producer = {
   repository: "openclaw/openclaw",
@@ -552,6 +558,29 @@ describe("prepared npm registry readback", () => {
     });
     expect(result).toEqual({ alreadyPublished: true });
     expect(tarballReads).toBe(2);
+  });
+
+  it("verifies an accepted publication after several minutes of registry propagation", async () => {
+    const { bytes, packument, params } = registryFixture();
+    let elapsed = 0;
+    vi.mocked(delay).mockImplementation(async (ms) => {
+      elapsed += ms ?? 0;
+      return undefined;
+    });
+    try {
+      const result = await verifyPreparedNpmRegistry({
+        ...params,
+        allowMissing: false,
+        fetchImpl: async (url: string) =>
+          url.endsWith(".tgz")
+            ? new Response(bytes)
+            : Response.json(elapsed >= 180_000 ? packument : { ...packument, versions: {} }),
+      });
+      expect(result).toEqual({ alreadyPublished: true });
+      expect(elapsed).toBe(180_000);
+    } finally {
+      vi.mocked(delay).mockImplementation(async () => undefined);
+    }
   });
 
   it("reports pending verification rather than absence after accepted publication", async () => {

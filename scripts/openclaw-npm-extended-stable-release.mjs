@@ -359,7 +359,8 @@ export async function verifyExtendedStableRegistryReadback({
   expectedVersion,
   query,
   sleep,
-  attempts = 12,
+  // Initial read plus five minutes of replication waits.
+  attempts = 31,
   delayMs = 10_000,
 }) {
   let exactVersion = "missing";

@@ -1943,14 +1943,15 @@ jobs:
           set -euo pipefail
           exact_version=missing
           tagged_version=missing
-          for attempt in {1..12}; do
+          # Initial read plus five minutes of replication waits, matching core.
+          for attempt in {1..31}; do
             exact_version="$(npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version 2>/dev/null || true)"
             tagged_version="$(npm view "${PACKAGE_NAME}@extended-stable" version 2>/dev/null || true)"
             if [[ "${exact_version}" == "${PACKAGE_VERSION}" && "${tagged_version}" == "${PACKAGE_VERSION}" ]]; then
               echo "Verified ${PACKAGE_NAME}@${PACKAGE_VERSION} and @extended-stable."
               exit 0
             fi
-            if [[ "${attempt}" != "12" ]]; then
+            if [[ "${attempt}" != "31" ]]; then
               sleep 10
             fi
           done

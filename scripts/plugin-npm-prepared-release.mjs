@@ -434,12 +434,13 @@ export async function verifyPreparedNpmRegistry(params) {
   }
   const version = registry.packument?.versions?.[params.version];
   if (!version) {
-    if (params.allowMissing !== true && (params.remainingReadbacks ?? 5) > 0) {
-      // npm replication can lag an accepted publish; conflicts never enter this retry.
-      await delay(5_000);
+    if (params.allowMissing !== true && (params.remainingReadbacks ?? 30) > 0) {
+      // Allow five minutes of replication waits after an accepted publish.
+      // Conflicts never enter this retry, and prepublish absence stays immediate.
+      await delay(10_000);
       return verifyPreparedNpmRegistry({
         ...params,
-        remainingReadbacks: (params.remainingReadbacks ?? 5) - 1,
+        remainingReadbacks: (params.remainingReadbacks ?? 30) - 1,
       });
     }
     requireValue(
