@@ -22,9 +22,13 @@ const requireRecord = createRequireRecord("object", "expected-label");
 type MockCallSource = { mock: { calls: ArrayLike<ReadonlyArray<unknown>> } };
 function mockParams(source: MockCallSource, callIndex: number, label: string) {
   const call = source.mock.calls[callIndex];
-  if (!call) throw new Error(`expected mock call: ${label}`);
+  if (!call) {
+    throw new Error(`expected mock call: ${label}`);
+  }
   const value = call[0];
-  if (!value) throw new Error(`expected mock params: ${label}`);
+  if (!value) {
+    throw new Error(`expected mock params: ${label}`);
+  }
   return requireRecord(value, label) as Record<string, unknown>;
 }
 beforeAll(async () => {

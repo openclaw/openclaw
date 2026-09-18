@@ -10,11 +10,7 @@ import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-bindin
 import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { CommandLane } from "../process/lanes.js";
-import {
-  cleanupSystemAgentSession,
-  createSystemAgentSession,
-  type SystemAgentSession,
-} from "./agent-turn.js";
+import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-turn.js";
 import {
   runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl,
   type SystemAgentTurnDeps,
