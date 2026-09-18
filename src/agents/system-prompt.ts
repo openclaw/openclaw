@@ -1103,9 +1103,7 @@ export function buildAgentSystemPrompt(params: {
         : []),
       ...(renderOpenClawToolWorkflowHints
         ? [
-            ...(waitToolHints.length > 0
-              ? [`Long wait: no rapid poll. Use ${waitToolHints.join(" or ")}.`]
-              : []),
+            ...(hasExec ? [`Long wait: no rapid poll. Use ${waitToolHints.join(" or ")}.`] : []),
             ...(hasSessionsSpawn
               ? [
                   "Large work: `sessions_spawn`; follow the accepted completion mode.",

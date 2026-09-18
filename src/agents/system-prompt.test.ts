@@ -895,8 +895,14 @@ describe("buildAgentSystemPrompt", () => {
       {
         name: "process-only tool surface",
         toolNames: ["process"],
-        includes: ["Use process(poll, timeout=<ms>)."],
-        excludes: ["exec approval-pending", "exec yieldMs", "Config read: `gateway`"],
+        includes: [],
+        excludes: [
+          "Long wait: no rapid poll.",
+          "exec approval-pending",
+          "exec yieldMs",
+          "process(poll",
+          "Config read: `gateway`",
+        ],
       },
       {
         name: "gateway-only tool surface",
@@ -925,6 +931,27 @@ describe("buildAgentSystemPrompt", () => {
         expect(prompt, `${testCase.name}:${value}`).not.toContain(value);
       }
     }
+  });
+
+  it("only renders exec long-wait guidance for agents registered with exec", () => {
+    const withoutExec = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read", "write", "browser"],
+    });
+    const withExec = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read", "write", "browser", "exec"],
+    });
+
+    expect(withoutExec).not.toContain("Long wait: no rapid poll.");
+    expect(withoutExec).not.toContain("exec yieldMs");
+    expect(withExec).toContain("Long wait: no rapid poll. Use exec yieldMs.");
+    for (const tool of ["read", "write", "browser"] as const) {
+      expect(withoutExec).toContain(`- ${tool}:`);
+      expect(withExec).toContain(`- ${tool}:`);
+    }
+    expect(withoutExec).not.toContain("- exec:");
+    expect(withExec).toContain("- exec:");
   });
 
   it("keeps guidance for callable tools with deferred schemas", () => {

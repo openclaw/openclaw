@@ -1,5 +1,6 @@
 /** Shared Playwright download capture and output handling. */
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import { writeExternalFileWithinOutputRoot } from "./output-files.js";
@@ -65,10 +66,17 @@ export async function saveBrowserDownload(
   const requestedPath = opts.outputPath?.trim();
   const implicitRoot = opts.outputRoot ?? DEFAULT_DOWNLOAD_DIR;
   const managedPath = requestedPath || buildManagedDownloadPath(implicitRoot, suggestedFilename);
+  let destinationParentError: unknown;
   const savedPath = await writeExternalFileWithinOutputRoot({
     rootDir: requestedPath ? opts.outputRoot : implicitRoot,
     path: managedPath,
     write: async (tempPath) => {
+      try {
+        await fs.mkdir(path.dirname(tempPath), { recursive: true });
+      } catch (error) {
+        destinationParentError = error;
+        throw error;
+      }
       await saveAs(tempPath);
       opts.signal?.throwIfAborted();
       onReadyToPublish?.();
@@ -78,6 +86,11 @@ export async function saveBrowserDownload(
     // cancel here; an aborted capture already owns its cancellation.
     if (!opts.signal?.aborted) {
       void download.cancel?.().catch(() => {});
+    }
+    if (destinationParentError) {
+      throw new Error("Failed to create validated download destination parent", {
+        cause: destinationParentError,
+      });
     }
     throw error;
   });
