@@ -1,6 +1,7 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/registry.kernel.js";
+import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { serveWorkerTasks } from "../infra/worker-task-pool.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
@@ -30,6 +31,7 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
     typeof coordinatorRuntime.keepAlive === "boolean" &&
     (input.command.type === "admit" ||
       input.command.type === "fleet.list" ||
+      input.command.type === "exec-approvals.read" ||
       (input.command.type === "fleet.get" && typeof input.command.tenantId === "string"))
   );
 }
@@ -38,7 +40,7 @@ serveWorkerTasks((input): OpenClawStateReadReply => {
   let sourceAdmitted: true | undefined;
   try {
     if (!isReadRequest(input)) {
-      throw new Error("Fleet registry reader requires a captured state location and read command");
+      throw new Error("Shared-state reader requires a captured state location and read command");
     }
     return withStateDatabaseCoordinatorRuntimeDirectory(input.context.coordinatorRuntime, () => {
       if (input.checkFreshAdmission) {
@@ -54,6 +56,14 @@ serveWorkerTasks((input): OpenClawStateReadReply => {
       return withOpenClawStateReadOnlyLocation(
         ({ db }) => {
           sourceAdmitted = true;
+          if (command.type === "exec-approvals.read") {
+            return {
+              ok: true,
+              type: "exec-approvals.read",
+              sourceAdmitted,
+              row: readExecApprovalsConfigRow(db),
+            };
+          }
           return command.type === "fleet.list"
             ? { ok: true, type: "fleet.list", sourceAdmitted, cells: listFleetCellsInDatabase(db) }
             : {

@@ -8,7 +8,10 @@ import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -154,8 +157,25 @@ export async function loadExecApprovalsReadOnlyAsync(
     path: stateDbPath,
     env: { OPENCLAW_STATE_DIR: resolveOpenClawStateDirForDatabasePath(stateDbPath) },
   };
-  await Promise.resolve();
-  return loadExecApprovalsReadOnlyWithOptions(owner);
+  try {
+    assertNoPendingLegacyExecApprovals({ env: owner.env });
+    const reply = await executeExistingOpenClawStateRead(owner, { type: "exec-approvals.read" });
+    if (reply && (!reply.ok || reply.type !== "exec-approvals.read")) {
+      throw new Error("Unexpected exec approvals read result");
+    }
+    return snapshotFromExecApprovalsRow({
+      path: resolveExecApprovalsDisplayPath(owner.env),
+      row: reply?.row,
+      onMalformed: () =>
+        warnFailClosed("exec approvals SQLite row is malformed; denying host execution"),
+    }).file;
+  } catch (error) {
+    if (error instanceof ExecApprovalsMigrationRequiredError) {
+      throw error;
+    }
+    warnFailClosed("exec approvals SQLite state is unavailable; denying host execution", error);
+    return createFailClosedExecApprovalsFallback();
+  }
 }
 
 export async function loadExecApprovalsAsync(): Promise<ExecApprovalsFile> {

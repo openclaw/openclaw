@@ -1,0 +1,209 @@
+import fs from "node:fs";
+import path from "node:path";
+import { performance } from "node:perf_hooks";
+import { isMainThread } from "node:worker_threads";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
+import {
+  withDisposableOpenClawStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { loadMcpToolGrants } from "./exec-approvals-mcp.js";
+import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
+import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
+import { loadExecApprovalsReadOnlyAsync } from "./exec-approvals-store.js";
+import { testing } from "./exec-approvals-store.test-support.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
+
+const loggerWarn = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: (name: string) => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: name === "infra/exec-approvals" ? loggerWarn : vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    testing.reset();
+    cleanup();
+  }),
+);
+
+beforeEach(() => {
+  testing.reset();
+  loggerWarn.mockReset();
+});
+
+function fixture() {
+  const root = tempDirs.make("openclaw-exec-policy-reader-");
+  return {
+    root,
+    env: { OPENCLAW_STATE_DIR: root },
+    databasePath: path.join(root, "state", "openclaw.sqlite"),
+  };
+}
+
+const grant = {
+  server: "fixture-server",
+  tool: "fixture-tool",
+  source: "allow-always" as const,
+  addedAt: 1,
+};
+
+function seed(env: NodeJS.ProcessEnv, tool = grant.tool, raw?: string) {
+  const source = openOpenClawStateDatabase({ env });
+  writeExecApprovalsConfigRow({
+    db: source.db,
+    file: { version: 1, agents: { main: { mcpTools: [{ ...grant, tool }] } } },
+    raw,
+  });
+  return source;
+}
+
+function watchNativeSql() {
+  const { DatabaseSync, StatementSync } = requireNodeSqlite();
+  return [
+    vi.spyOn(DatabaseSync.prototype, "prepare"),
+    vi.spyOn(DatabaseSync.prototype, "exec"),
+    ...(["get", "all", "run", "iterate"] as const).map((method) =>
+      vi.spyOn(StatementSync.prototype, method),
+    ),
+  ];
+}
+
+it.each(["cached", "fresh"] as const)(
+  "loads exact-agent policy grants from a %s source without caller SQLite",
+  async (mode) => {
+    expect(isMainThread).toBe(true);
+    const { env } = fixture();
+    const source = seed(env);
+    if (mode === "fresh") {
+      await closeOpenClawStateDatabaseAsync();
+    }
+    const calls = watchNativeSql();
+    const startedAt = performance.now();
+    expect(await loadMcpToolGrants("main", { env })).toEqual([grant]);
+    expect(await loadMcpToolGrants("other", { env })).toEqual([]);
+    expect(await loadMcpToolGrants("*", { env })).toEqual([]);
+    const callerSqlCalls = calls.reduce((total, call) => total + call.mock.calls.length, 0);
+    console.info("exec policy read", {
+      mode,
+      callerSqlCalls,
+      elapsedMs: Math.round(performance.now() - startedAt),
+    });
+    expect(callerSqlCalls).toBe(0);
+    expect(source.db.isOpen).toBe(mode === "cached");
+  },
+);
+
+it("keeps a captured source when its caller changes the environment", async () => {
+  const original = fixture();
+  const foreign = fixture();
+  seed(original.env);
+  seed(foreign.env, "foreign-tool");
+  const loaded = loadMcpToolGrants("main", { env: original.env });
+  original.env.OPENCLAW_STATE_DIR = foreign.root;
+  expect(await loaded).toEqual([grant]);
+});
+
+it("reads current policy on the next call while inherited snapshots retain their original rows", async () => {
+  const { env } = fixture();
+  seed(env);
+  await withOpenClawStateDatabaseReadSnapshot(
+    async () => {
+      seed(env, "updated-tool");
+      const calls = watchNativeSql();
+      try {
+        expect(await loadMcpToolGrants("main", { env })).toEqual([grant]);
+        expect(calls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
+      } finally {
+        vi.restoreAllMocks();
+      }
+    },
+    { env },
+  );
+  expect(await loadMcpToolGrants("main", { env })).toEqual([{ ...grant, tool: "updated-tool" }]);
+});
+
+it("joins an admitted policy read before its disposable source is released", async () => {
+  const { env, databasePath } = fixture();
+  seed(env);
+  let outcome: unknown;
+  await withDisposableOpenClawStateReads(databasePath, async () => {
+    void loadMcpToolGrants("main", { env }).then(
+      (value) => {
+        outcome = value;
+      },
+      (error: unknown) => {
+        outcome = error;
+      },
+    );
+  });
+  expect(outcome).toEqual([grant]);
+});
+
+it.each(["missing-database", "missing-row"] as const)(
+  "preserves noncreating %s reads",
+  async (mode) => {
+    const { env, databasePath } = fixture();
+    if (mode === "missing-row") {
+      openOpenClawStateDatabase({ env });
+    }
+    expect(await loadMcpToolGrants("main", { env })).toEqual([]);
+    expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).toBeUndefined();
+    expect(fs.existsSync(databasePath)).toBe(mode === "missing-row");
+  },
+);
+
+it.each(["{not-json", '{"version":1,"agents":{"__proto__":{"security":42}}}'])(
+  "fails closed and retains host warning throttling for malformed policy %s",
+  async (raw) => {
+    const { env } = fixture();
+    seed(env, grant.tool, raw);
+    expect(await loadMcpToolGrants("main", { env })).toEqual([]);
+    expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults).toMatchObject({
+      security: "deny",
+      ask: "off",
+    });
+    expect(loggerWarn).toHaveBeenCalledTimes(1);
+    expect(loggerWarn.mock.calls[0]?.[0]).toContain("malformed");
+  },
+);
+
+it.each(["", ".doctor-importing"])("preserves the typed legacy gate for %s", async (suffix) => {
+  const { root, env, databasePath } = fixture();
+  const legacy = path.join(root, `exec-approvals.json${suffix}`);
+  fs.writeFileSync(legacy, "{}");
+  await expect(loadMcpToolGrants("main", { env })).rejects.toBeInstanceOf(
+    ExecApprovalsMigrationRequiredError,
+  );
+  expect(fs.existsSync(databasePath)).toBe(false);
+  fs.rmSync(legacy);
+  expect(await loadMcpToolGrants("main", { env })).toEqual([]);
+});
+
+it("fails closed without a native retry when the worker read fails", async () => {
+  const { env } = fixture();
+  seed(env);
+  vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockRejectedValue(
+    new Error("fixture reader failed"),
+  );
+  const calls = watchNativeSql();
+  expect(await loadMcpToolGrants("main", { env })).toEqual([]);
+  expect((await loadExecApprovalsReadOnlyAsync({ env })).defaults?.security).toBe("deny");
+  expect(calls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
+  expect(loggerWarn).toHaveBeenCalledTimes(1);
+  expect(loggerWarn.mock.calls[0]?.[0]).toContain("unavailable");
+});
