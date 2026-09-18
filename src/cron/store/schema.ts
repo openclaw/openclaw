@@ -21,9 +21,6 @@ export const CRON_JOB_READ_COLUMNS = [
   "agent_id",
   "payload_kind",
   "job_json",
-  "grant_definition_revision",
-  "grant_definition_generation",
-  "grant_definition_updated_at",
   "state_json",
   "runtime_updated_at_ms",
   "schedule_identity",
@@ -31,11 +28,24 @@ export const CRON_JOB_READ_COLUMNS = [
   "updated_at",
 ] as const;
 
+// Writable opens install the additive projections before callers use this shape.
+export const CRON_JOB_GENERATION_READ_COLUMNS = [
+  ...CRON_JOB_READ_COLUMNS.slice(0, 6),
+  "grant_definition_revision",
+  "grant_definition_generation",
+  "grant_definition_updated_at",
+  ...CRON_JOB_READ_COLUMNS.slice(6),
+] as const;
+
 /** Complete stored row used by independent cron inventories. */
 export type CronJobRow = Selectable<CronJobsTable>;
 
 /** Read shape consumed by cron decoding, conflict checks, and owner migration. */
 export type CronJobReadRow = Pick<CronJobRow, (typeof CRON_JOB_READ_COLUMNS)[number]>;
+export type CronJobGenerationReadRow = Pick<
+  CronJobRow,
+  (typeof CRON_JOB_GENERATION_READ_COLUMNS)[number]
+>;
 
 /** Insert/update shape for rows in the cron_jobs SQLite table. */
 export type CronJobInsert = Insertable<CronJobsTable>;

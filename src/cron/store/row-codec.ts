@@ -24,8 +24,17 @@ import {
 import type { CronJobState, CronStoredJob, CronStoreFile } from "../types.js";
 import { deliveryFromJson, deliveryToJson } from "./delivery-codec.js";
 import { normalizeNumber, tryParseJsonObject } from "./scalar-codec.js";
-import type { CronJobInsert, CronJobReadRow, CronJobRow } from "./schema.js";
-import { CRON_JOB_READ_COLUMNS, getCronStoreKysely } from "./schema.js";
+import type {
+  CronJobGenerationReadRow,
+  CronJobInsert,
+  CronJobReadRow,
+  CronJobRow,
+} from "./schema.js";
+import {
+  CRON_JOB_GENERATION_READ_COLUMNS,
+  CRON_JOB_READ_COLUMNS,
+  getCronStoreKysely,
+} from "./schema.js";
 import type { LoadedCronStore } from "./types.js";
 
 function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
@@ -214,11 +223,23 @@ export function loadCronRows(
   db: DatabaseSync,
   storeKey: string,
   jobIds?: ReadonlySet<string>,
-): CronJobReadRow[] {
+): CronJobReadRow[];
+export function loadCronRows(
+  db: DatabaseSync,
+  storeKey: string,
+  jobIds: ReadonlySet<string> | undefined,
+  opts: { includeGrantDefinitionProjection: true },
+): CronJobGenerationReadRow[];
+export function loadCronRows(
+  db: DatabaseSync,
+  storeKey: string,
+  jobIds?: ReadonlySet<string>,
+  opts?: { includeGrantDefinitionProjection: true },
+) {
   // Preserve authorization of every stored column even when no row matches.
   let query = getCronStoreKysely(db)
     .selectFrom(getCronStoreKysely(db).selectFrom("cron_jobs").selectAll().as("cron_rows"))
-    .select(CRON_JOB_READ_COLUMNS)
+    .select(opts ? CRON_JOB_GENERATION_READ_COLUMNS : CRON_JOB_READ_COLUMNS)
     .where("store_key", "=", storeKey)
     .orderBy("sort_order", "asc")
     .orderBy("updated_at", "asc")
@@ -354,7 +375,7 @@ export function deleteStaleCronJobFamilyRows(
 /** Replaces all persisted cron rows and returns the canonical jobs that were written. */
 type CronRowReplaceOptions = {
   preserveRuntimeState?: boolean;
-  knownExistingRow?: CronJobReadRow | null;
+  knownExistingRow?: CronJobGenerationReadRow | null;
 };
 
 type CronRowReplaceResult = {
