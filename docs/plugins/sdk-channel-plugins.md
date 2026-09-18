@@ -708,6 +708,28 @@ If completion is rejected, cleanup removes only files created by that operation;
 preexisting files, replacements, and shared files are preserved. The source abort
 signal also reaches the binary transfer where the caller supplies one.
 
+## Delivery progress callbacks
+
+`ChannelPollContext` and `ChannelMessageActionContext` can include an optional
+`onDeliveryResult` callback. It lets the host retain an acknowledged platform send
+when a poll or channel action performs more fallible work afterward, such as sending
+additional caption chunks.
+
+- Invoke the callback after each concrete platform send is acknowledged and before
+  starting the next asynchronous or fallible step.
+- Pass the channel-local `ChannelMessageSendResult`: its receipt and optional legacy
+  message id. Core attaches the selected channel identity when it normalizes the
+  result; plugins must not invent a different channel.
+- Await the callback. If it rejects, propagate that rejection, but do not retry or
+  replay the already acknowledged platform send. Callback failure does not prove
+  that the provider send failed.
+- Keep the callback optional. When it is absent, preserve the adapter's existing
+  send behavior; do not fabricate progress receipts or require plugin changes.
+
+The final action result still reports the operation's ordinary success or error.
+This progress callback records accepted sub-sends so partial delivery can be
+reconciled without duplicating recipient-visible messages.
+
 ## Scheduled channel administration
 
 `ChannelMessageActionAdapter` exposes the optional
