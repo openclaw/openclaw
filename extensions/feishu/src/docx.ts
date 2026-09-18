@@ -1198,7 +1198,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
               requiredTool: { family: "doc", label: "Doc" },
             });
             const client = createFeishuClient(account);
-            const mediaMaxBytes = (account.config.mediaMaxMb ?? 30) * 1024 * 1024;
+            const mediaMaxBytes = Math.floor((account.config.mediaMaxMb ?? 30) * 1024 * 1024);
             const imageReadTimeoutMs = resolveConfiguredHttpTimeoutMs(account);
             switch (p.action) {
               case "read":

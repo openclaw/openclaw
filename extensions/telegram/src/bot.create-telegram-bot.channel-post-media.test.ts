@@ -480,7 +480,7 @@ describe("createTelegramBot channel_post media", () => {
       contentType: "image/jpeg",
     });
 
-    createTelegramBot({ token: "tok", mediaMaxMb: 0 });
+    createTelegramBot({ token: "tok", mediaMaxMb: 0.1 / (1024 * 1024) });
     const handler = getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
 
     await handler(

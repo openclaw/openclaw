@@ -1375,7 +1375,7 @@ async function sendMessageSlackQueuedInner(params: {
       mediaReadFile: opts.mediaReadFile,
       caption: firstChunk,
       threadTs: opts.threadTs,
-      maxBytes: mediaMaxBytes,
+      maxBytes: typeof mediaMaxBytes === "number" ? Math.floor(mediaMaxBytes) : undefined,
       ...(opts.forceDocument ? { optimizeImages: false } : {}),
       onPlatformSendDispatch: dispatchOnce,
       assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,

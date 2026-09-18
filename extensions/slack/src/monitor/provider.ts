@@ -295,7 +295,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const slackCfg = account.config;
   const slashCommand = resolveSlackSlashCommandConfig(opts.slashCommand ?? slackCfg.slashCommand);
-  const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
+  const mediaMaxBytes = Math.floor((opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024);
   const slackDispatcher = resolveSlackProxyDispatcher();
   const clientOptions = resolveSlackWebClientOptions({}, slackDispatcher);
   const durableIngress = createSlackDurableIngress({
