@@ -13,6 +13,11 @@ export function setOwnSchemaProperty(
   });
 }
 
+/** Thrown when a tool schema graph revisits a node on its own walk path. */
+export function createCircularToolSchemaError(): TypeError {
+  return new TypeError("Tool schema contains a circular reference and cannot be normalized.");
+}
+
 type SchemaDefs = {
   $defs: Map<string, unknown>;
   definitions: Map<string, unknown>;
@@ -134,6 +139,62 @@ function tryResolveLocalRef(
   return resolveLocalJsonPointer(rootDocument, ref);
 }
 
+type InlineVisitTask = {
+  kind: "visit";
+  node: unknown;
+  defs: SchemaDefs | undefined;
+  refStack: Set<string> | undefined;
+  // Nodes on the current raw-descent path. A $ref expansion starts a fresh segment: cycles
+  // spanning $ref edges repeat a ref string and are already bounded by refStack, while cycles
+  // inside one segment are bounded here the way the call stack bounded them before.
+  ancestors: Set<object>;
+  assign: (value: unknown) => void;
+};
+
+type InlineAssembleArrayTask = {
+  kind: "assemble-array";
+  node: object;
+  ancestors: Set<object>;
+  assign: (value: unknown) => void;
+  entries: unknown[];
+};
+
+type InlineAssembleRefTask = {
+  kind: "assemble-ref";
+  node: object;
+  ancestors: Set<object>;
+  assign: (value: unknown) => void;
+  obj: Record<string, unknown>;
+  resolved: unknown;
+};
+
+type InlineAssembleRecordTask = {
+  kind: "assemble-record";
+  node: object;
+  ancestors: Set<object>;
+  assign: (value: unknown) => void;
+  obj: Record<string, unknown>;
+  // Plan entries in source order; child results write back through the entry.
+  plan: Array<
+    | { kind: "skip" }
+    | { kind: "literal"; key: string; value: unknown }
+    | {
+        kind: "map";
+        key: string;
+        entries: Array<[string, unknown]>;
+      }
+    | { kind: "object"; key: string; value: unknown }
+    | { kind: "array"; key: string; entries: unknown[] }
+    | { kind: "other"; key: string; value: unknown }
+  >;
+};
+
+type InlineTask =
+  | InlineVisitTask
+  | InlineAssembleArrayTask
+  | InlineAssembleRefTask
+  | InlineAssembleRecordTask;
+
 function inlineLocalSchemaRefsWithDefs(
   schema: unknown,
   defs: SchemaDefs | undefined,
@@ -141,99 +202,237 @@ function inlineLocalSchemaRefsWithDefs(
   state: { unresolvedLocalRefs: boolean },
   rootDocument: unknown,
 ): unknown {
-  if (Array.isArray(schema)) {
-    return schema.map((entry) =>
-      inlineLocalSchemaRefsWithDefs(entry, defs, refStack, state, rootDocument),
-    );
-  }
-
-  if (!isSchemaRecord(schema)) {
-    return schema;
-  }
-  const obj = schema;
-  const nextDefs = extendSchemaDefs(defs, obj);
-  const refValue = typeof obj.$ref === "string" ? obj.$ref : undefined;
-
-  if (refValue) {
-    if (refStack?.has(refValue)) {
-      return {};
+  let rootResult: unknown = schema;
+  const rootAncestors = new Set<object>();
+  const tasks: InlineTask[] = [
+    {
+      kind: "visit",
+      node: schema,
+      defs,
+      refStack,
+      ancestors: rootAncestors,
+      assign: (value) => {
+        rootResult = value;
+      },
+    },
+  ];
+  let task: InlineTask | undefined;
+  while ((task = tasks.pop()) !== undefined) {
+    if (task.kind === "assemble-array") {
+      task.ancestors.delete(task.node);
+      task.assign(task.entries);
+      continue;
     }
-    const resolved = tryResolveLocalRef(refValue, nextDefs, rootDocument);
-    if (resolved === undefined) {
-      if (refValue.startsWith("#/")) {
-        state.unresolvedLocalRefs = true;
+    if (task.kind === "assemble-ref") {
+      task.ancestors.delete(task.node);
+      const inlined = task.resolved;
+      if (!isSchemaRecord(inlined)) {
+        task.assign(inlined);
+        continue;
       }
-      return { ...obj };
-    }
-    const nextRefStack = refStack ? new Set(refStack) : new Set<string>();
-    nextRefStack.add(refValue);
-    const inlined = inlineLocalSchemaRefsWithDefs(
-      resolved,
-      nextDefs,
-      nextRefStack,
-      state,
-      rootDocument,
-    );
-    if (!isSchemaRecord(inlined)) {
-      return inlined;
-    }
-    const result: Record<string, unknown> = { ...inlined };
-    copySchemaMeta(obj, result);
-    if (obj.nullable === true) {
-      result.nullable = true;
-    }
-    return result;
-  }
-
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (key === "$defs" || key === "definitions" || key === "components") {
-      continue;
-    }
-    if (SCHEMA_LITERAL_KEYS.has(key)) {
-      setOwnSchemaProperty(result, key, value);
-      continue;
-    }
-    if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
-      const entries = Object.entries(value);
-      for (const entry of entries) {
-        entry[1] = inlineLocalSchemaRefsWithDefs(entry[1], nextDefs, refStack, state, rootDocument);
+      const result: Record<string, unknown> = { ...inlined };
+      copySchemaMeta(task.obj, result);
+      if (task.obj.nullable === true) {
+        result.nullable = true;
       }
-      setOwnSchemaProperty(result, key, Object.fromEntries(entries));
+      task.assign(result);
       continue;
     }
-    if (SCHEMA_OBJECT_KEYS.has(key) && isSchemaRecord(value)) {
-      setOwnSchemaProperty(
-        result,
-        key,
-        inlineLocalSchemaRefsWithDefs(value, nextDefs, refStack, state, rootDocument),
-      );
+    if (task.kind === "assemble-record") {
+      task.ancestors.delete(task.node);
+      const { obj, plan } = task;
+      const result: Record<string, unknown> = {};
+      for (const entry of plan) {
+        if (entry.kind === "skip") {
+          continue;
+        }
+        if (entry.kind === "map") {
+          setOwnSchemaProperty(result, entry.key, Object.fromEntries(entry.entries));
+          continue;
+        }
+        if (entry.kind === "array") {
+          setOwnSchemaProperty(result, entry.key, entry.entries);
+          continue;
+        }
+        setOwnSchemaProperty(result, entry.key, entry.value);
+      }
+      if (state.unresolvedLocalRefs) {
+        if ("$defs" in obj) {
+          result.$defs = obj.$defs;
+        }
+        if ("definitions" in obj) {
+          result.definitions = obj.definitions;
+        }
+        if ("components" in obj) {
+          result.components = obj.components;
+        }
+      }
+      task.assign(result);
       continue;
     }
-    if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
-      setOwnSchemaProperty(
-        result,
-        key,
-        value.map((entry) =>
-          inlineLocalSchemaRefsWithDefs(entry, nextDefs, refStack, state, rootDocument),
-        ),
-      );
+
+    // visit
+    const { node, defs: taskDefs, refStack: taskRefStack, ancestors, assign } = task;
+    if (!isSchemaRecord(node) && !Array.isArray(node)) {
+      assign(node);
       continue;
     }
-    setOwnSchemaProperty(result, key, value);
+    if (ancestors.has(node)) {
+      throw createCircularToolSchemaError();
+    }
+    ancestors.add(node);
+    if (Array.isArray(node)) {
+      const entries: unknown[] = Array.from({ length: node.length });
+      tasks.push({ kind: "assemble-array", node, ancestors, assign, entries });
+      for (let index = node.length - 1; index >= 0; index -= 1) {
+        const slot = index;
+        tasks.push({
+          kind: "visit",
+          node: node[slot],
+          defs: taskDefs,
+          refStack: taskRefStack,
+          ancestors,
+          assign: (value) => {
+            entries[slot] = value;
+          },
+        });
+      }
+      continue;
+    }
+
+    const obj = node;
+    const nextDefs = extendSchemaDefs(taskDefs, obj);
+    const refValue = typeof obj.$ref === "string" ? obj.$ref : undefined;
+
+    if (refValue) {
+      if (taskRefStack?.has(refValue)) {
+        ancestors.delete(node);
+        assign({});
+        continue;
+      }
+      const resolved = tryResolveLocalRef(refValue, nextDefs, rootDocument);
+      if (resolved === undefined) {
+        ancestors.delete(node);
+        if (refValue.startsWith("#/")) {
+          state.unresolvedLocalRefs = true;
+        }
+        assign({ ...obj });
+        continue;
+      }
+      const nextRefStack = taskRefStack ? new Set(taskRefStack) : new Set<string>();
+      nextRefStack.add(refValue);
+      const refTask: InlineAssembleRefTask = {
+        kind: "assemble-ref",
+        node,
+        ancestors,
+        assign,
+        obj,
+        resolved: undefined,
+      };
+      tasks.push(refTask);
+      tasks.push({
+        kind: "visit",
+        node: resolved,
+        defs: nextDefs,
+        refStack: nextRefStack,
+        ancestors: new Set<object>(),
+        assign: (value) => {
+          refTask.resolved = value;
+        },
+      });
+      continue;
+    }
+
+    const assemble: InlineAssembleRecordTask = {
+      kind: "assemble-record",
+      node,
+      ancestors,
+      assign,
+      obj,
+      plan: [],
+    };
+    const children: InlineVisitTask[] = [];
+    for (const [key, value] of Object.entries(obj)) {
+      if (key === "$defs" || key === "definitions" || key === "components") {
+        assemble.plan.push({ kind: "skip" });
+        continue;
+      }
+      if (SCHEMA_LITERAL_KEYS.has(key)) {
+        assemble.plan.push({ kind: "literal", key, value });
+        continue;
+      }
+      if (SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
+        const mapEntry: Extract<InlineAssembleRecordTask["plan"][number], { kind: "map" }> = {
+          kind: "map",
+          key,
+          entries: [],
+        };
+        assemble.plan.push(mapEntry);
+        for (const [childKey, childValue] of Object.entries(value)) {
+          children.push({
+            kind: "visit",
+            node: childValue,
+            defs: nextDefs,
+            refStack: taskRefStack,
+            ancestors,
+            assign: (childResult) => {
+              mapEntry.entries.push([childKey, childResult]);
+            },
+          });
+        }
+        continue;
+      }
+      if (SCHEMA_OBJECT_KEYS.has(key) && isSchemaRecord(value)) {
+        const planEntry: Extract<InlineAssembleRecordTask["plan"][number], { kind: "object" }> = {
+          kind: "object",
+          key,
+          value: undefined,
+        };
+        assemble.plan.push(planEntry);
+        children.push({
+          kind: "visit",
+          node: value,
+          defs: nextDefs,
+          refStack: taskRefStack,
+          ancestors,
+          assign: (childResult) => {
+            planEntry.value = childResult;
+          },
+        });
+        continue;
+      }
+      if (SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
+        const arrayEntry: Extract<InlineAssembleRecordTask["plan"][number], { kind: "array" }> = {
+          kind: "array",
+          key,
+          entries: Array.from({ length: value.length }),
+        };
+        assemble.plan.push(arrayEntry);
+        value.forEach((entry, index) => {
+          children.push({
+            kind: "visit",
+            node: entry,
+            defs: nextDefs,
+            refStack: taskRefStack,
+            ancestors,
+            assign: (childResult) => {
+              arrayEntry.entries[index] = childResult;
+            },
+          });
+        });
+        continue;
+      }
+      assemble.plan.push({ kind: "other", key, value });
+    }
+    tasks.push(assemble);
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      const child = children[index];
+      if (child) {
+        tasks.push(child);
+      }
+    }
   }
-  if (state.unresolvedLocalRefs) {
-    if ("$defs" in obj) {
-      result.$defs = obj.$defs;
-    }
-    if ("definitions" in obj) {
-      result.definitions = obj.definitions;
-    }
-    if ("components" in obj) {
-      result.components = obj.components;
-    }
-  }
-  return result;
+  return rootResult;
 }
 
 /** Inline local $ref pointers so providers receive self-contained tool schemas. */
