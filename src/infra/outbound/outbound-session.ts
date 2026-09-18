@@ -67,6 +67,7 @@ export type ResolveOutboundSessionRouteParams = {
   agentId: string;
   accountId?: string | null;
   target: string;
+  signal?: AbortSignal;
   deliveryPurpose?: "heartbeat-owner";
   currentSessionKey?: string;
   resolvedTarget?: ResolvedMessagingTarget;
