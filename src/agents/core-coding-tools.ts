@@ -114,6 +114,14 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
           workspaceAccess: sandbox.workspaceAccess,
         })
       : [];
+  // Exec workdir admission must accept the same bind targets the file tools
+  // already serve; reuse the authoritative mount selection, not a parallel view.
+  const sandboxBindMounts =
+    sandbox && options.includeShellTools
+      ? buildSandboxFsMounts(sandbox)
+          .filter((mount) => mount.source === "bind")
+          .map((mount) => ({ hostPath: mount.hostRoot, containerPath: mount.containerRoot }))
+      : [];
 
   // Older external SDK bridges predate pathMappings. Only absence selects
   // their reconstructed admission; a supplied empty table is authoritative.
@@ -326,6 +334,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               ),
               workdirRoots: sandbox.backend?.workdirRoots,
               readOnlyWorkspaceSkillMounts,
+              bindMounts: sandboxBindMounts,
               env: sandbox.backend?.env ?? sandbox.docker.env,
               buildExecSpec: sandbox.backend?.buildExecSpec.bind(sandbox.backend),
               finalizeExec: sandbox.backend?.finalizeExec?.bind(sandbox.backend),

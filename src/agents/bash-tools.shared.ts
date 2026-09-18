@@ -13,7 +13,7 @@ import type {
 const CHUNK_LIMIT = 8 * 1024;
 
 /** Sandbox metadata needed to map host workspaces into container exec calls. */
-type BashSandboxWorkdirMount = {
+export type BashSandboxWorkdirMount = {
   hostPath: string;
   containerPath: string;
 };
@@ -28,6 +28,11 @@ export type BashSandboxConfig = {
   workdirRoots?: readonly string[];
   /** Approved read-only skill mounts that may be selected as an exec workdir. */
   readOnlyWorkspaceSkillMounts?: readonly BashSandboxWorkdirMount[];
+  /**
+   * Operator-configured bind mounts from the sandbox mount selection; the same
+   * targets file tools accept may be selected as an exec workdir.
+   */
+  bindMounts?: readonly BashSandboxWorkdirMount[];
   env?: Record<string, string>;
   buildExecSpec?: (params: {
     command: string;
