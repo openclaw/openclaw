@@ -24,11 +24,11 @@ import { GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
-import { normalizeChannelMessageSendResult } from "./deliver-types.js";
 import {
   assertOutboundHandoffCurrent,
   findOutboundHandoffRejectedError,
 } from "./deliver-handoff.js";
+import { normalizeChannelMessageSendResult } from "./deliver-types.js";
 import {
   resolveOutboundDurableFinalDeliverySupport,
   type OutboundDeliveryResult,
