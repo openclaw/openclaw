@@ -27,7 +27,7 @@ import {
   normalizeOptionalString as normalizeSlackApiString,
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe, truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
+import { chunkTextRanges } from "openclaw/plugin-sdk/text-chunking";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
@@ -499,14 +499,9 @@ function resolveSlackTextChunks(params: {
   const text = params.preservePlainText ? params.text : params.text.trim();
   const chunkLimit = resolveSlackTextChunkLimit(params);
   if (params.preservePlainText) {
-    const chunks: string[] = [];
-    let remaining = text;
-    while (remaining) {
-      const chunk = sliceUtf16Safe(remaining, 0, chunkLimit) || truncateCodePoints(remaining, 1);
-      chunks.push(chunk);
-      remaining = remaining.slice(chunk.length);
-    }
-    return chunks;
+    return chunkTextRanges(text, { limit: chunkLimit, mode: "hard" }).map(({ start, end }) =>
+      text.slice(start, end),
+    );
   }
   if (params.textIsSlackMrkdwn) {
     return resolveTextChunksWithFallback(text, chunkSlackMrkdwnText(text, chunkLimit));

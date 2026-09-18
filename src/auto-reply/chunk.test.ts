@@ -570,6 +570,17 @@ describe("chunkMarkdownText", () => {
       },
     },
     {
+      name: "keeps the closing-fence reservation for an oversized grapheme",
+      run: () => {
+        const limit = 20;
+        const text = `\`\`\`\n${`a${"\u0301".repeat(20)}`}\n\`\`\``;
+        const chunks = chunkMarkdownText(text, limit);
+
+        expect(chunks.every((chunk) => chunk.length <= limit)).toBe(true);
+        expectFencesBalanced(chunks);
+      },
+    },
+    {
       name: "does not emit a header-only fence at the reopen budget boundary",
       run: () => {
         const limit = 20;

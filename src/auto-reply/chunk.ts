@@ -9,7 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import {
-  avoidTrailingHighSurrogateBreak,
+  avoidTrailingGraphemeBreak,
   chunkTextByBreakResolver,
   normalizeChunkLimit,
 } from "../shared/text-chunking.js";
@@ -148,9 +148,9 @@ export function chunkByNewline(
     }
 
     const lineValue = trimLines ? trimmed : line;
-    // Leave room for the first whole code point before folding in blank lines.
-    const firstCodePointLength = avoidTrailingHighSurrogateBreak(lineValue, 0, 1);
-    const maxPrefix = Math.max(0, lineLimit - firstCodePointLength);
+    // Leave room for the first whole grapheme before folding in blank lines.
+    const firstGraphemeLength = avoidTrailingGraphemeBreak(lineValue, 0, 1, lineLimit);
+    const maxPrefix = Math.max(0, lineLimit - firstGraphemeLength);
     const prefix = "\n".repeat(Math.min(pendingBlankLines, maxPrefix));
     pendingBlankLines = 0;
 
@@ -159,10 +159,9 @@ export function chunkByNewline(
       continue;
     }
 
-    // Back the head cut off to a code-point boundary so an over-long line never splits a surrogate
-    // pair; the recursive chunkText below is already surrogate-safe, only this first cut was raw.
+    // Back the head cut off to a grapheme boundary; oversized graphemes retain code-point progress.
     const rawLimit = Math.max(1, lineLimit - prefix.length);
-    const firstLimit = avoidTrailingHighSurrogateBreak(lineValue, 0, rawLimit);
+    const firstLimit = avoidTrailingGraphemeBreak(lineValue, 0, rawLimit);
     const first = lineValue.slice(0, firstLimit);
     chunks.push(prefix + first);
     const remaining = lineValue.slice(firstLimit);
@@ -465,7 +464,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
       }
     }
 
-    const safeBreakIdx = avoidTrailingHighSurrogateBreak(text, start, breakIdx);
+    const safeBreakIdx = avoidTrailingGraphemeBreak(text, start, breakIdx, breakIdx);
     if (safeBreakIdx !== breakIdx) {
       breakIdx = safeBreakIdx;
       if (fenceToSplit) {

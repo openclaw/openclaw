@@ -227,6 +227,15 @@ describe("chunkDiscordText", () => {
     expect(chunks.join("")).toBe(text);
   });
 
+  it("does not split a family emoji at a hard fallback boundary", () => {
+    const family = "👨‍👩‍👧‍👦";
+    const prefix = "a".repeat(11);
+    const chunks = chunkDiscordText(`${prefix}${family}Z`, { maxChars: 13, maxLines: 50 });
+
+    expect(chunks).toEqual([prefix, `${family}Z`]);
+    expect(chunks.every((chunk) => chunk.length <= 13)).toBe(true);
+  });
+
   it("keeps reasoning italics balanced across chunks", () => {
     const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join("\n");
     const text = `Reasoning:\n_${body}_`;

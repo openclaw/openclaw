@@ -23,6 +23,21 @@ function renderEscapedHtml(ir: MarkdownIR): string {
 }
 
 describe("renderMarkdownIRChunksWithinLimit", () => {
+  it("keeps a family emoji whole when retrying against the rendered limit", () => {
+    const family = "👨‍👩‍👧‍👦";
+    const prefix = "a".repeat(11);
+    const ir = markdownToIR(`${prefix}${family}Z`);
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir,
+      limit: 13,
+      renderChunk: (chunk) => chunk.text,
+      measureRendered: (rendered) => rendered.length,
+    });
+
+    expect(chunks.map((chunk) => chunk.source.text)).toEqual([prefix, `${family}Z`]);
+    expect(chunks.every((chunk) => chunk.rendered.length <= 13)).toBe(true);
+  });
+
   it("prefers word boundaries when escaping shrinks the render budget", () => {
     const ir = markdownToIR("alpha <<");
     const chunks = renderMarkdownIRChunksWithinLimit({

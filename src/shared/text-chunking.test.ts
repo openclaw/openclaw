@@ -63,4 +63,18 @@ describe("shared/text-chunking", () => {
       expected,
     );
   });
+
+  it("keeps a family emoji whole at the hard message boundary", () => {
+    const family = "👨‍👩‍👧‍👦";
+    const prefix = "a".repeat(11);
+    const text = `${prefix}${family}Z`;
+
+    for (const chunks of [
+      splitLongTextLine(text, 13, { preserveWhitespace: true }),
+      chunkTextByBreakResolver(text, 13, () => 13),
+    ]) {
+      expect(chunks).toEqual([prefix, `${family}Z`]);
+      expect(chunks.every((chunk) => chunk.length <= 13)).toBe(true);
+    }
+  });
 });

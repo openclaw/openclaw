@@ -397,6 +397,15 @@ describe("markdownToTelegramHtml", () => {
     expect(() => splitTelegramHtmlChunks(`A&amp;${"B".repeat(20)}`, 4)).toThrow(/leading entity/i);
   });
 
+  it("keeps an HTML entity whole when a combining mark follows it", () => {
+    const input = "aaaaa&amp;\u0301Z";
+    const chunks = splitTelegramHtmlChunks(input, 10);
+
+    expect(chunks).toEqual(["aaaaa", "&amp;\u0301Z"]);
+    expect(chunks.every((chunk) => chunk.length <= 10)).toBe(true);
+    expect(chunks.join("")).toBe(input);
+  });
+
   it("treats malformed leading ampersands as plain text when chunking html", () => {
     const chunks = splitTelegramHtmlChunks(`&${"A".repeat(5000)}`, 4000);
     expect(chunks.length).toBeGreaterThan(1);
@@ -517,6 +526,15 @@ describe("markdownToTelegramHtml", () => {
     for (const chunk of chunks) {
       expect(containsLoneSurrogate(chunk)).toBe(false);
     }
+  });
+
+  it("does not split a family emoji across HTML chunks", () => {
+    const family = "👨‍👩‍👧‍👦";
+    const prefix = "A".repeat(11);
+    const chunks = splitTelegramHtmlChunks(`${prefix}${family}Z`, 13);
+
+    expect(chunks).toEqual([prefix, `${family}Z`]);
+    expect(chunks.every((chunk) => chunk.length <= 13)).toBe(true);
   });
 
   it("keeps an astral char whole when a positive limit starts on its pair", () => {

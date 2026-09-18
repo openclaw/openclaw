@@ -12,6 +12,8 @@ function isLowSurrogate(codeUnit: number): boolean {
   return codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
 }
 
+const GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
 /** Moves a chunk boundary away from the middle of a UTF-16 surrogate pair. */
 export function avoidTrailingHighSurrogateBreak(text: string, start: number, end: number): number {
   if (
@@ -24,6 +26,33 @@ export function avoidTrailingHighSurrogateBreak(text: string, start: number, end
   }
   const adjusted = end - 1;
   return adjusted > start ? adjusted : end + 1;
+}
+
+/**
+ * Moves a proposed UTF-16 cut to an extended grapheme boundary within the hard window.
+ * A grapheme larger than the whole window falls back to complete-code-point progress.
+ */
+export function avoidTrailingGraphemeBreak(
+  text: string,
+  start: number,
+  end: number,
+  maxEnd: number = end,
+): number {
+  if (end <= start || end >= text.length) {
+    return end;
+  }
+  const segment = GRAPHEME_SEGMENTER.segment(text).containing(end);
+  if (!segment || segment.index === end) {
+    return end;
+  }
+  if (segment.index > start) {
+    return segment.index;
+  }
+  const segmentEnd = segment.index + segment.segment.length;
+  if (segmentEnd <= maxEnd) {
+    return segmentEnd;
+  }
+  return avoidTrailingHighSurrogateBreak(text, start, maxEnd);
 }
 
 /** Slices a UTF-16 string without returning dangling surrogate halves at either edge. */

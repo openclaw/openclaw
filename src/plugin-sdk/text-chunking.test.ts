@@ -114,6 +114,11 @@ describe("chunkTextRanges", () => {
     ]);
   });
 
+  it("stops after the requested number of ranges", () => {
+    expect(chunkTextRanges("abcdefgh", { limit: 3, maxRanges: 1 })).toEqual([{ start: 0, end: 3 }]);
+    expect(chunkTextRanges("abcdefgh", { limit: 3, maxRanges: 0 })).toEqual([]);
+  });
+
   it.each(["hard", "preferred"] as const)(
     "keeps astral characters whole with fractional limits in %s mode",
     (mode) => {

@@ -3,6 +3,7 @@ import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   FILE_REF_EXTENSIONS_WITH_TLD,
+  chunkTextRanges,
   findCodeRegions,
   isAutoLinkedFileRef,
   isInsideCode,
@@ -641,20 +642,6 @@ function buildTelegramHtmlCloseSuffixLength(tags: TelegramHtmlTag[]): number {
   return tags.reduce((total, tag) => total + tag.closeTag.length, 0);
 }
 
-// Never return a split index that lands between a UTF-16 surrogate pair, or
-// both chunks would carry a lone surrogate that re-encodes to U+FFFD. If the
-// pair starts the segment, keep it whole so chunking still advances.
-function clampToSurrogateBoundary(text: string, index: number): number {
-  const high = text.charCodeAt(index - 1);
-  const low = text.charCodeAt(index);
-  const splitsPair =
-    index > 0 && high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
-  if (!splitsPair) {
-    return index;
-  }
-  return index > 1 ? index - 1 : index + 1;
-}
-
 // Prefer a word/paragraph boundary inside the entity-safe window so long text
 // runs break between words instead of mid-word. Whitespace never falls inside
 // an HTML entity, so this keeps entities intact; the caller falls back to the
@@ -679,9 +666,18 @@ function findTelegramHtmlSafeSplitIndex(text: string, maxLength: number): number
   }
   const normalizedMaxLength = Math.max(1, Math.floor(maxLength));
   const entitySafeIndex = findTelegramHtmlEntitySafeSplitIndex(text, normalizedMaxLength);
-  const wordSafeIndex = findTelegramHtmlWordSafeSplitIndex(text, entitySafeIndex);
-  const splitIndex = wordSafeIndex > 0 ? wordSafeIndex : entitySafeIndex;
-  return clampToSurrogateBoundary(text, splitIndex);
+  let splitIndex = findTelegramHtmlWordSafeSplitIndex(text, entitySafeIndex) || entitySafeIndex;
+  while (splitIndex > 0) {
+    const graphemeSafeIndex =
+      chunkTextRanges(text, { limit: splitIndex, maxRanges: 1, mode: "hard" })[0]?.end ??
+      splitIndex;
+    const nextIndex = findTelegramHtmlEntitySafeSplitIndex(text, graphemeSafeIndex);
+    if (nextIndex === splitIndex) {
+      return splitIndex;
+    }
+    splitIndex = nextIndex;
+  }
+  return splitIndex;
 }
 
 function findTelegramHtmlEntitySafeSplitIndex(text: string, normalizedMaxLength: number): number {

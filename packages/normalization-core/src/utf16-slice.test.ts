@@ -1,11 +1,44 @@
-// Tests for surrogate-safe UTF-16 string slicing helpers.
+// Tests for Unicode-safe UTF-16 string slicing helpers.
 import { describe, expect, it } from "vitest";
 import {
+  avoidTrailingGraphemeBreak,
   avoidTrailingHighSurrogateBreak,
   sliceUtf16Safe,
   truncateUtf16Safe,
   truncateWithMarker,
 } from "./utf16-slice.js";
+
+describe("avoidTrailingGraphemeBreak", () => {
+  it.each([
+    ["family emoji", "👨‍👩‍👧‍👦"],
+    ["flag", "🇺🇸"],
+    ["emoji modifier", "👋🏽"],
+    ["combining sequence", "e\u0301"],
+    ["Indic conjunct", "क्ष"],
+  ])("moves a cut before a %s cluster", (_name, grapheme) => {
+    const prefix = "ab";
+    const firstCodePointLength = Array.from(grapheme)[0]?.length ?? 1;
+    const text = `${prefix}${grapheme}z`;
+
+    expect(
+      avoidTrailingGraphemeBreak(
+        text,
+        0,
+        prefix.length + firstCodePointLength,
+        prefix.length + grapheme.length,
+      ),
+    ).toBe(prefix.length);
+  });
+
+  it("keeps the first cluster whole when it fits the hard window", () => {
+    const family = "👨‍👩‍👧‍👦";
+    expect(avoidTrailingGraphemeBreak(`${family}z`, 0, 2, family.length)).toBe(family.length);
+  });
+
+  it("makes code-point progress when one cluster exceeds the hard window", () => {
+    expect(avoidTrailingGraphemeBreak("👨‍👩‍👧‍👦z", 0, 5)).toBe(5);
+  });
+});
 
 describe("avoidTrailingHighSurrogateBreak", () => {
   it("keeps ordinary and terminal boundaries unchanged", () => {
