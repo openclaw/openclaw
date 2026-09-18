@@ -574,6 +574,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         selectionScopeDescription: resolveModelSelectionScopeDescription(
           props.modelSelectionTarget,
         ),
+        showTriggerTooltip: props.modelSelectionTarget !== "session",
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,
