@@ -574,7 +574,7 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
           toolCallId,
           result,
-          resultContentSource: tool.resultContentSource,
+          resultContentSource: result.resultContentSource ?? tool.resultContentSource,
           toolCallOrdinal,
           terminalPresentation: preparedTerminalPresentation?.project?.(result),
         });
