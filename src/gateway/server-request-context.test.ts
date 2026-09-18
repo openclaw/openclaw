@@ -11,8 +11,13 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { heartbeatNotifications } from "../infra/heartbeat-events.js";
+import {
+  resetGatewayWorkAdmission,
+  runWithGatewayShutdownCleanupAdmission,
+} from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   assertAgentDatabaseAdmitted,
   recordAgentDatabaseAdmissions,
@@ -146,6 +151,30 @@ describe("createGatewayRequestContext", () => {
         vi.useRealTimers();
       }
     });
+
+  it("tracks shutdown cleanup chain executions into the caller scope after connection work drains", async () => {
+    // The close sequence drains received connection work before the gateway
+    // close step runs plugin-service cleanup. Owner-bound cleanup RPCs dispatched
+    // from the shutdown cleanup chain must not land in the drained scope.
+    const connectionWork = new AsyncWorkScope();
+    await connectionWork.drain();
+    const context = createGatewayRequestContext(
+      makeContextParams({
+        connectionWork: { track: (run) => connectionWork.track(run) },
+      }),
+    );
+    await expect(context.trackExecution(() => Promise.resolve("external"))).rejects.toThrow(
+      "Async work scope is closed",
+    );
+    try {
+      await expect(
+        runWithGatewayShutdownCleanupAdmission(() =>
+          context.trackExecution(() => Promise.resolve("cleanup")),
+        ),
+      ).resolves.toBe("cleanup");
+    } finally {
+      resetGatewayWorkAdmission();
+    }
   });
 
   it("prepares every recipient before the real merge's first notification and contains resolution failure", async () => {
