@@ -471,10 +471,14 @@ export function captureAbortedPartial(params: {
   }
 }
 
+export const ABORTED_PARTIAL_PERSISTENCE_WARNING =
+  "An assistant message streamed before this abort could not be saved to the transcript and is missing from history. It cannot be recovered; the abort itself completed.";
+
 export async function persistAbortedPartials(params: {
   context: { logGateway: { warn: (message: string) => void } };
   snapshots: AbortedPartialSnapshot[];
-}): Promise<void> {
+}): Promise<boolean> {
+  let failed = false;
   for (const snapshot of params.snapshots) {
     if (!snapshot.ok) {
       throw snapshot.error;
@@ -489,8 +493,10 @@ export async function persistAbortedPartials(params: {
       if (snapshot.abortOrigin === "placement-abandon") {
         throw new Error(error);
       }
+      failed = true;
     }
   }
+  return failed;
 }
 
 async function touchAssistantTranscriptSessionEntry(

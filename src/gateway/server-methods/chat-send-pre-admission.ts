@@ -24,6 +24,7 @@ import {
 import {
   abortChatRunsForSessionKeyWithPartials,
   descendantAbortError,
+  withAbortedPartialPersistenceWarning,
 } from "./chat-abort-runtime.js";
 import { hasRestartRecoveryTerminalRun, resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
@@ -441,10 +442,15 @@ export async function runChatSendPreAdmission(
       ? errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized")
       : (res.error ?? descendantAbortError(res.descendants, "Session"));
     if (error) {
-      respond(false, undefined, error);
+      respond(false, undefined, withAbortedPartialPersistenceWarning(error, res.warning));
       return false;
     }
-    respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
+    respond(true, {
+      ok: true,
+      aborted: res.aborted,
+      runIds: res.runIds,
+      ...(res.warning ? { warning: res.warning } : {}),
+    });
     return false;
   }
 

@@ -31,12 +31,17 @@ import {
   cancelWorkerInferenceForSession,
   abortControlledSubagents,
   descendantAbortError,
+  withAbortedPartialPersistenceWarning,
 } from "./chat-abort-runtime.js";
 import {
   normalizeOptionalChatText as normalizeOptionalText,
   normalizeUnknownChatText as normalizeUnknownText,
 } from "./chat-text-normalization.js";
-import { captureAbortedPartial, persistAbortedPartials } from "./chat-transcript-persistence.js";
+import {
+  ABORTED_PARTIAL_PERSISTENCE_WARNING,
+  captureAbortedPartial,
+  persistAbortedPartials,
+} from "./chat-transcript-persistence.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -138,12 +143,21 @@ export async function handleChatAbortRequestWithLifecycle(
     requester.isAdmin
       ? cancelWorkerInferenceForSession({ context, sessionId, ...(runId ? { runId } : {}) })
       : [];
-  const respondWithWorkerRuns = (localRunIds: string[], sessionId?: string): void => {
+  const respondWithWorkerRuns = (
+    localRunIds: string[],
+    sessionId?: string,
+    warning?: string,
+  ): void => {
     const runIds = [...new Set([...localRunIds, ...cancelWorkerRun(sessionId)])];
     if (!abortSession.ok) {
       throw abortSession.error;
     }
-    respond(true, { ok: true, aborted: runIds.length > 0, runIds });
+    respond(true, {
+      ok: true,
+      aborted: runIds.length > 0,
+      runIds,
+      ...(warning ? { warning } : {}),
+    });
   };
 
   if (!runId) {
@@ -171,10 +185,15 @@ export async function handleChatAbortRequestWithLifecycle(
     }
     const error = res.error ?? descendantAbortError(res.descendants, "Session");
     if (error) {
-      respond(false, undefined, error);
+      respond(false, undefined, withAbortedPartialPersistenceWarning(error, res.warning));
       return;
     }
-    respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
+    respond(true, {
+      ok: true,
+      aborted: res.aborted,
+      runIds: res.runIds,
+      ...(res.warning ? { warning: res.warning } : {}),
+    });
     return;
   }
   const normalizedAgentIdOverride = normalizeAgentId(abortAgentId);
@@ -340,18 +359,34 @@ export async function handleChatAbortRequestWithLifecycle(
       (aborted = abortChatRunById(ops, { runId, sessionKey, stopReason: "rpc" }).aborted),
   });
   // Transcript failure must not abandon children after the parent loses its controller.
-  if (aborted && snapshot) {
-    await persistAbortedPartials({ context, snapshots: [snapshot] });
-  }
+  const partialPersistenceFailed =
+    aborted && snapshot ? await persistAbortedPartials({ context, snapshots: [snapshot] }) : false;
+  const persistenceWarning = partialPersistenceFailed
+    ? ABORTED_PARTIAL_PERSISTENCE_WARNING
+    : undefined;
   if (!abortSession.ok) {
-    throw abortSession.error;
+    const message =
+      abortSession.error instanceof Error ? abortSession.error.message : String(abortSession.error);
+    respond(
+      false,
+      undefined,
+      withAbortedPartialPersistenceWarning(
+        errorShape(ErrorCodes.UNAVAILABLE, message),
+        persistenceWarning,
+      ),
+    );
+    return;
   }
   const descendantError = descendantAbortError(descendants, "Parent run");
   if (descendantError) {
-    respond(false, undefined, descendantError);
+    respond(
+      false,
+      undefined,
+      withAbortedPartialPersistenceWarning(descendantError, persistenceWarning),
+    );
     return;
   }
-  respondWithWorkerRuns(aborted ? [runId] : [], sessionId);
+  respondWithWorkerRuns(aborted ? [runId] : [], sessionId, persistenceWarning);
 }
 
 export async function handleChatAbortRequest(options: GatewayRequestHandlerOptions): Promise<void> {

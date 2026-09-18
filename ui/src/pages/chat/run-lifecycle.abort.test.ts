@@ -137,6 +137,40 @@ describe("handleAbortChat", () => {
     expect(host.chatRunId).toBe("run-live");
   });
 
+  it("shows a successful abort's transcript-persistence warning", async () => {
+    const warning = "The streamed assistant message could not be saved.";
+    const request = vi.fn(async () => ({
+      ok: true,
+      aborted: true,
+      runIds: ["run-live"],
+      warning,
+    }));
+    const host = makeAbortHost({
+      client: createTestGatewayClient(request),
+      chatRunId: "run-live",
+    });
+
+    await handleAbortChat(host, { preserveDraft: true });
+
+    expect(host.chatError).toBe(warning);
+  });
+
+  it("does not publish an abort warning into a newly selected chat", async () => {
+    const warning = "The streamed assistant message could not be saved.";
+    const host = makeAbortHost({ chatRunId: "run-live" });
+    host.client = createTestGatewayClient(
+      vi.fn(async () => {
+        host.sessionKey = "agent:other";
+        host.chatRunId = "run-other";
+        return { ok: true, aborted: true, runIds: ["run-live"], warning };
+      }),
+    );
+
+    await handleAbortChat(host, { preserveDraft: true });
+
+    expect(host.chatError ?? null).toBeNull();
+  });
+
   it("settles a recovered embedded run when sessions.abort reports no active run", async () => {
     const request = vi.fn(async () => ({ ok: true, abortedRunId: null, status: "no-active-run" }));
     const refreshCurrentChat = vi.fn(async () => {});
@@ -318,6 +352,32 @@ describe("replayPendingChatAbort", () => {
       runId: "run-main",
     });
     expect(host.pendingAbort).toBeNull();
+  });
+
+  it("does not publish a replayed abort warning after the selected agent changes", async () => {
+    const warning = "The streamed assistant message could not be saved.";
+    const client = createTestGatewayClient(
+      vi.fn(async () => {
+        host.assistantAgentId = "other";
+        return { aborted: true, warning };
+      }),
+    );
+    const host = makeAbortHost({
+      client,
+      sessionKey: "global",
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main", scope: "global" },
+      pendingAbort: {
+        sourceClient: client,
+        runId: "run-main",
+        sessionKey: "global",
+        agentId: "main",
+      },
+    });
+
+    await expect(replayPendingChatAbort(host)).resolves.toBe(true);
+
+    expect(host.chatError ?? null).toBeNull();
   });
 
   it("denies a queued exact-run stop when the reconnect is read-only", async () => {

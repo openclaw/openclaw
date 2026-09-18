@@ -46,6 +46,7 @@ import {
   normalizeUnknownChatText as normalizeUnknownText,
 } from "./chat-text-normalization.js";
 import {
+  ABORTED_PARTIAL_PERSISTENCE_WARNING,
   captureAbortedPartial,
   persistAbortedPartials,
   type AbortedPartialSnapshot,
@@ -100,10 +101,44 @@ export function descendantAbortError(
     : undefined;
 }
 
+/** Keeps transcript-loss visibility when abort cleanup itself must return an error. */
+export function withAbortedPartialPersistenceWarning(
+  error: ErrorShape,
+  warning: string | undefined,
+): ErrorShape {
+  return warning ? { ...error, message: `${error.message} ${warning}` } : error;
+}
+
+type QueuedCollectorAbortOutcome = Result<
+  { aborted: boolean; runIds: string[]; warning?: string },
+  ErrorShape
+>;
+
+function withQueuedCollectorPersistenceWarning(
+  outcome: QueuedCollectorAbortOutcome,
+  failed: boolean,
+): QueuedCollectorAbortOutcome {
+  if (!failed) {
+    return outcome;
+  }
+  return outcome.ok
+    ? {
+        ok: true,
+        value: { ...outcome.value, warning: ABORTED_PARTIAL_PERSISTENCE_WARNING },
+      }
+    : {
+        ok: false,
+        error: withAbortedPartialPersistenceWarning(
+          outcome.error,
+          ABORTED_PARTIAL_PERSISTENCE_WARNING,
+        ),
+      };
+}
+
 /** Queued collectors retain scheduler ownership while Gateway admission is still pending. */
 export function abortQueuedCollectorSession(
   params: Omit<ChatSessionAbortParams, "ops"> & { runId?: string },
-): Promise<Result<{ aborted: boolean; runIds: string[] }, ErrorShape>> | undefined {
+): Promise<QueuedCollectorAbortOutcome> | undefined {
   const entry = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
   if (
     !entry ||
@@ -319,7 +354,10 @@ export function abortQueuedCollectorSession(
       // after later owner failures; the transcript writer still fences the session.
       if (sessionAbort?.ok) {
         try {
-          await sessionAbort.value.plan.finish(sessionAbort.value.result);
+          const partialPersistenceFailed = await sessionAbort.value.plan.finish(
+            sessionAbort.value.result,
+          );
+          outcome = withQueuedCollectorPersistenceWarning(outcome, partialPersistenceFailed);
         } catch (error) {
           if (outcome.ok) {
             outcome = {
@@ -456,6 +494,7 @@ type ChatSessionAbortResult = {
   runIds: string[];
   unauthorized: boolean;
   error?: ErrorShape;
+  warning?: string;
   descendants?: Awaited<ReturnType<typeof abortControlledSubagents>>;
 };
 
@@ -660,10 +699,11 @@ function prepareChatSessionAbort(params: ChatSessionAbortParams, selectedRunId?:
     canCascade: canRunLifecycleCleanup && !hasUnauthorizedLifecycleOwner,
     hasOtherWork,
     abort: abortAuthorizedRuns,
-    async finish(result: Pick<ChatSessionAbortResult, "aborted" | "runIds">) {
+    async finish(result: Pick<ChatSessionAbortResult, "aborted" | "runIds">): Promise<boolean> {
+      let partialPersistenceFailed = false;
       if (result.aborted && snapshots.length > 0) {
         const abortedRunIds = new Set(result.runIds);
-        await persistAbortedPartials({
+        partialPersistenceFailed = await persistAbortedPartials({
           context: params.context,
           snapshots: snapshots.filter((snapshot) => abortedRunIds.has(snapshot.runId)),
         });
@@ -671,6 +711,7 @@ function prepareChatSessionAbort(params: ChatSessionAbortParams, selectedRunId?:
       if (params.session && !params.session.ok) {
         throw params.session.error;
       }
+      return partialPersistenceFailed;
     },
   };
 }
@@ -706,6 +747,11 @@ export async function abortChatRunsForSessionKeyWithPartials(
   if (!result.unauthorized && !result.error) {
     params.onCancellationStarted?.();
   }
-  await plan.finish(result);
-  return { ...result, aborted: result.aborted || Boolean(descendants?.killed), descendants };
+  const partialPersistenceFailed = await plan.finish(result);
+  return {
+    ...result,
+    aborted: result.aborted || Boolean(descendants?.killed),
+    descendants,
+    ...(partialPersistenceFailed ? { warning: ABORTED_PARTIAL_PERSISTENCE_WARNING } : {}),
+  };
 }

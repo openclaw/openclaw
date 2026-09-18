@@ -268,7 +268,9 @@ function queuedSessionAbortParams(
 
 type ChatAbortOptions = { preserveDraft?: boolean };
 
-type ChatAbortRequestResult = { ok: true; noActiveRun: boolean } | { ok: false; error: unknown };
+type ChatAbortRequestResult =
+  | { ok: true; noActiveRun: boolean; warning?: string }
+  | { ok: false; error: unknown };
 
 /**
  * Only an explicit Gateway "nothing to abort" answer counts: chat.abort
@@ -283,6 +285,14 @@ function readNoActiveRunResponse(response: unknown): boolean {
     ("aborted" in response && response.aborted === false) ||
     ("status" in response && response.status === "no-active-run")
   );
+}
+
+function readAbortWarning(response: unknown): string | undefined {
+  if (!response || typeof response !== "object" || !("warning" in response)) {
+    return undefined;
+  }
+  const warning = response.warning;
+  return typeof warning === "string" && warning.trim() ? warning : undefined;
 }
 
 async function requestChatAbort(
@@ -317,22 +327,31 @@ async function requestChatAbort(
         ...(intent.clearQueued ? { clearQueued: true } : {}),
       });
     }
-    return { ok: true, noActiveRun: readNoActiveRunResponse(response) };
+    const warning = readAbortWarning(response);
+    return {
+      ok: true,
+      noActiveRun: readNoActiveRunResponse(response),
+      ...(warning ? { warning } : {}),
+    };
   } catch (err) {
     return { ok: false, error: err };
   }
 }
 
-// Non-abortable runs can still be finalizing; only the refreshed session owner
-// may retire them. Check the captured UI scope before starting that refresh.
+// Async abort results belong only to their captured connection and chat scope.
+// A later selection must not receive the old chat's warning or refresh.
+function isCurrentChatAbortIntent(state: ChatAbortRunState, intent: ChatAbortIntent): boolean {
+  return (
+    state.connected &&
+    state.client === intent.sourceClient &&
+    state.sessionKey === intent.sessionKey &&
+    (state.chatRunId ?? null) === intent.runId &&
+    scopedAgentParamsForSession(state, state.sessionKey).agentId === intent.agentId
+  );
+}
+
 async function settleNoopAbort(state: ChatAbortRunState, intent: ChatAbortIntent): Promise<void> {
-  if (
-    !state.connected ||
-    state.client !== intent.sourceClient ||
-    state.sessionKey !== intent.sessionKey ||
-    (state.chatRunId ?? null) !== intent.runId ||
-    scopedAgentParamsForSession(state, state.sessionKey).agentId !== intent.agentId
-  ) {
+  if (!isCurrentChatAbortIntent(state, intent)) {
     return;
   }
   await state.refreshCurrentChat?.();
@@ -372,6 +391,9 @@ async function abortChatRun(state: ChatAbortRunState): Promise<void> {
   if (result.noActiveRun) {
     await settleNoopAbort(state, intent);
   }
+  if (result.warning && isCurrentChatAbortIntent(state, intent)) {
+    setChatError(state, result.warning);
+  }
 }
 
 export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boolean> {
@@ -400,6 +422,9 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
   if (result.ok) {
     if (result.noActiveRun) {
       await settleNoopAbort(host, intent);
+    }
+    if (result.warning && isCurrentChatAbortIntent(host, intent)) {
+      setChatError(host, result.warning);
     }
     return true;
   }

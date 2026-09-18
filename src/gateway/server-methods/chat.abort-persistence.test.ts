@@ -363,7 +363,7 @@ describe("chat abort transcript persistence", () => {
     if (rejects) {
       await expect(persistence).rejects.toThrow("transcript identity not resolved");
     } else {
-      await expect(persistence).resolves.toBeUndefined();
+      await expect(persistence).resolves.toBe(true);
     }
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("transcript identity not resolved"));
   });
@@ -835,6 +835,42 @@ describe("chat abort transcript persistence", () => {
       idempotencyKey: "run-stop-1:assistant",
       origin: "stop-command",
       runId: "run-stop-1",
+    });
+  });
+
+  it("returns a warning when /stop cannot persist its streamed partial", async () => {
+    const { sessionId } = await createTranscriptFixture("openclaw-chat-stop-failure-");
+    sessionEntryState.storePath = "";
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-stop-failure", createActiveRun("main", { sessionId })]]),
+      chatRunState: createAbortTestRunState([
+        ["run-stop-failure", { buffer: "Unsaved /stop partial", deltaSentAt: Date.now() }],
+      ]),
+    });
+
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
+      params: {
+        sessionKey: "main",
+        message: "/stop",
+        idempotencyKey: "idem-stop-failure",
+      },
+      respond,
+      context: context as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({
+      aborted: true,
+      runIds: ["run-stop-failure"],
+      warning: expect.stringContaining("could not be saved to the transcript"),
     });
   });
 
