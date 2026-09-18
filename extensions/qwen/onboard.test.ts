@@ -17,13 +17,13 @@ describe.each([
     name: "Token Plan global",
     provider: "qwen-token-plan",
     apply: (cfg: OpenClawConfig) => applyQwenTokenPlanConfig(cfg, "global"),
-    rows: 8,
+    rows: 19,
   },
   {
     name: "Token Plan China",
     provider: "qwen-token-plan",
     apply: (cfg: OpenClawConfig) => applyQwenTokenPlanConfig(cfg, "cn"),
-    rows: 8,
+    rows: 19,
   },
 ])("Qwen $name setup", ({ provider, apply, rows }) => {
   it.each([undefined, "merge"] as const)(
