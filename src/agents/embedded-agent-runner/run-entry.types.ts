@@ -21,7 +21,7 @@ import type { AuthProfileFailurePolicy } from "./run/auth-profile-failure-policy
 import type { createQuotaContinuationBudget } from "./run/quota-continuation-budget.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
-export type RunEntryCandidateOptions = {
+type RunEntryCandidateOptions = {
   agentHarnessRuntimeOverride: string | undefined;
   quotaContinuation?: QuotaContinuation;
   quotaBudget?: ReturnType<typeof createQuotaContinuationBudget>;
@@ -42,16 +42,16 @@ export type RunEntryCandidate<T> = {
   turnAttempt?: ContextEngineTurnAttemptFacts;
 };
 
-export type RunEntryHarnessPreparation =
+type RunEntryHarnessPreparation =
   | { kind: "direct" }
   | {
       kind: "measured";
       run: (prepare: () => Promise<void>) => Promise<void>;
     };
 
-export type RunEntryBehavior = RunEntryTerminalBehavior;
+type RunEntryBehavior = RunEntryTerminalBehavior;
 
-export type RunEntrySessionOverride =
+type RunEntrySessionOverride =
   | { kind: "preserve" }
   | {
       kind: "reconcile-completed";

@@ -1,5 +1,6 @@
 import { isProxy } from "node:util/types";
 import { responsesPromptObserver } from "@openclaw/ai/internal/openai";
+import { createNormalizingPayloadHook } from "@openclaw/ai/internal/shared";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex, sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
@@ -81,10 +82,13 @@ export function markLastProviderPromptContextRejected(
 }
 
 /** Capture without invoking accessors/toJSON or retaining any hook-owned reference. */
-function captureContinuationPayload(value: unknown): unknown {
+function captureContinuationPayload(
+  value: unknown,
+  normalize: (payload: unknown) => unknown,
+): unknown {
   const ancestors = new Set<object>();
   let nodes = 0;
-  const visit = (input: unknown, depth: number): unknown => {
+  const visit = (input: unknown, depth: number, protectJson: boolean): unknown => {
     if (++nodes > 1_000_000 || depth > 128) {
       throw new Error("Quota continuation provider payload exceeds snapshot bounds");
     }
@@ -114,7 +118,9 @@ function captureContinuationPayload(value: unknown): unknown {
     const output: Record<string, unknown> | unknown[] = array ? [] : {};
     // JSON must not consult a mutable inherited toJSON after admission. A captured
     // own data property of that name (never a function) may replace this shadow.
-    Object.defineProperty(output, "toJSON", { value: undefined, configurable: true });
+    if (protectJson) {
+      Object.defineProperty(output, "toJSON", { value: undefined, configurable: true });
+    }
     const descriptors = Object.getOwnPropertyDescriptors(input);
     for (const key of Reflect.ownKeys(descriptors)) {
       if (array && key === "length") {
@@ -129,7 +135,7 @@ function captureContinuationPayload(value: unknown): unknown {
         throw new Error("Quota continuation cannot snapshot accessor or hidden provider state");
       }
       Object.defineProperty(output, key, {
-        value: visit(descriptor.value, depth + 1),
+        value: visit(descriptor.value, depth + 1, protectJson),
         enumerable: true,
         writable: true,
         configurable: true,
@@ -141,7 +147,12 @@ function captureContinuationPayload(value: unknown): unknown {
     ancestors.delete(input);
     return output;
   };
-  return freezeJsonSnapshot(visit(value, 0));
+  // Normalize a detached graph, never a hook-owned accessor/reference. Capture
+  // once more afterwards: normalization can create new objects, which also need
+  // JSON prototype protection before the exact final body is frozen/admitted.
+  const normalized = normalize(visit(value, 0, false));
+  nodes = 0;
+  return freezeJsonSnapshot(visit(normalized, 0, true));
 }
 
 /** Hashes the post-onPayload body for context-retry admission. */
@@ -157,14 +168,14 @@ export function wrapStreamFnWithProviderPromptState(params: {
     const originalOnPayload = options?.onPayload;
     const observedOptions: NonNullable<Parameters<StreamFn>[2]> = {
       ...options,
-      onPayload: async (payload, payloadModel) => {
+      onPayload: createNormalizingPayloadHook(async (payload, payloadModel, normalize) => {
         const replacement = await originalOnPayload?.(payload, payloadModel);
         const candidate = replacement === undefined ? payload : replacement;
         // Ordinary retries preserve their existing payload contract. Custody requires
         // the serializer to receive exactly the detached graph admitted below.
         const finalPayload = params.assertFinalPayload
-          ? captureContinuationPayload(candidate)
-          : candidate;
+          ? captureContinuationPayload(candidate, normalize)
+          : normalize(candidate);
         params.assertFinalPayload?.(finalPayload, payloadModel.api);
         const snapshot = snapshotProviderPrompt({
           model: payloadModel,
@@ -174,7 +185,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
         assertProviderPromptRetryProgress(params.state, snapshot);
         params.state.lastAttempt = snapshot;
         return finalPayload;
-      },
+      }),
     };
     if (params.recordEvent) {
       responsesPromptObserver.set(observedOptions, (observation) =>

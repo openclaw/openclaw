@@ -38,10 +38,6 @@ export function markSynchronousCoreFileResult(
   synchronousCoreFileResults.set(response, receipt);
 }
 
-export function isSynchronousCoreFileResult(response: CodexDynamicToolRuntimeResponse): boolean {
-  return synchronousCoreFileResults.has(response);
-}
-
 export function readSynchronousCoreFileReceipt(
   response: CodexDynamicToolRuntimeResponse,
 ): SynchronousCoreFileReceipt | undefined {

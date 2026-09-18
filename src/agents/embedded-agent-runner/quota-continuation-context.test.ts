@@ -1,6 +1,7 @@
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamOpenAICompletions } from "../../../packages/ai/src/providers/openai-completions.js";
+import { applyProviderPayloadHook } from "../../../packages/ai/src/utils/provider-payload.js";
 import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
 import { assertQuotaPrefixInProviderPayload } from "./quota-continuation-context.js";
 
@@ -379,6 +380,53 @@ describe("detached final provider body", () => {
       expect(getter).not.toHaveBeenCalled();
     },
   );
+  it("protects provider-created objects in the final normalized snapshot", async () => {
+    const body = payload();
+    let checked: unknown;
+    const wrapped = wrapStreamFnWithProviderPromptState({
+      state: {},
+      effectiveContextTokenBudget: 8192,
+      assertFinalPayload(value, api) {
+        assertQuotaPrefixInProviderPayload(required, value, api);
+        checked = value;
+      },
+      streamFn: async (_model, _context, options) => {
+        const admitted = await applyProviderPayloadHook(
+          options?.onPayload,
+          body,
+          model,
+          (value) => {
+            expect(value).not.toBe(body);
+            return { ...(value as object), providerOwned: { enabled: true }, stream: true };
+          },
+        );
+        // Even objects created by the provider must shadow JSON's inherited hook.
+        // Inspect the final graph instead of modifying process-wide prototypes.
+        if (!admitted || typeof admitted !== "object" || !("providerOwned" in admitted)) {
+          throw new Error("Missing normalized provider body");
+        }
+        for (const value of [admitted, admitted.providerOwned]) {
+          if (!value || typeof value !== "object") {
+            throw new Error("Missing provider-created object");
+          }
+          expect(Object.isFrozen(value)).toBe(true);
+          expect(Object.getOwnPropertyDescriptor(value, "toJSON")).toEqual({
+            value: undefined,
+            enumerable: false,
+            writable: false,
+            configurable: false,
+          });
+        }
+        const serialized = JSON.stringify(admitted);
+        expect(serialized).toBe(JSON.stringify(checked));
+        expect(serialized).toContain('"providerOwned":{"enabled":true}');
+        expect(checked).toMatchObject({ providerOwned: { enabled: true }, stream: true });
+        return createAssistantMessageEventStream();
+      },
+    });
+    await wrapped(model, { messages: [] }, {});
+  });
+
   it("does not change ordinary onPayload object identity", async () => {
     const body = payload();
     const wrapped = wrapStreamFnWithProviderPromptState({

@@ -373,10 +373,15 @@ policies. Its final request must retain the complete admitted user/tool prefix e
 once, including partial-frame occurrences. The host distinguishes older identical
 requests from the admitted current turn and accepts new successor tool rounds only
 from observed loop outcomes. It detaches the final post-hook plain-data body before
-validation so retained hook references cannot change the serialized evidence.
+provider-owned normalization and validation so retained hook references cannot change
+the serialized evidence. The normalized snapshot is frozen before admission.
 Windowing, compaction or transforms that lose that inventory prevent dispatch. The initial
 contract supports built-in OpenAI-compatible chat/Responses and Anthropic message
-transports with final-payload admission, not arbitrary custom transports. Result
+transports (`openai-completions`, `openai-responses`, `anthropic-messages`) with
+final-payload admission, including configured OCI OpenAI-compatible Responses routes.
+Azure Responses and ChatGPT/subscription-specific Responses remain ineligible until
+their separate final-I/O authority and serializer contracts have equivalent proof.
+This does not change their ordinary non-continuation behavior. Result
 middleware, legacy extensions, redaction and context budgeting still run normally;
 if they change the concrete result's required text evidence, continuation is withheld
 rather than certifying the transformed output as the original result.

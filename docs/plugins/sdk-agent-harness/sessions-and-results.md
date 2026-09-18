@@ -323,10 +323,14 @@ call, only the loop's observed no-start failure can supply its validation-only c
 projection; executed effects still require their durable call/result pair. Older identical requests and distinct, observed
 successor rounds remain valid. Normal bijective call-ID normalization is allowed, but
 extra user admissions, duplicated subsets, missing or rewritten effect evidence are not.
-The post-hook supported plain-data body is detached before validation, and that same
+The post-hook supported plain-data body is detached before provider-owned normalization
+and validation, then frozen. That same
 snapshot reaches the built-in serializer. Accessors, cycles and opaque bodies fail closed. A smaller context window cannot silently discard earlier
 completed frames. This initial contract accepts only built-in transports exposing
-final-payload admission for OpenAI-compatible chat/Responses and Anthropic messages.
+final-payload admission for `openai-completions`, `openai-responses` (including
+configured OCI-compatible routes), and `anthropic-messages`. Azure and
+ChatGPT/subscription-specific Responses are not yet admitted: they require separate
+final-I/O authority and serializer proof.
 Custom/session transports and opaque provider items fail closed. Canonical, runtime,
 legacy and layout media metadata, historical media and non-text source output are
 outside the initial portable scope. CLI dispatch is not supported.

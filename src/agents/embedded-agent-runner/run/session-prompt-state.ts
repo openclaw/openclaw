@@ -10,14 +10,12 @@ import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import type { AcceptedCompactionSuccessor } from "../compaction-successor.js";
 import { log } from "../logger.js";
+import { CONTINUATION_PROMPT } from "./continuation-prompt.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import {
   buildContextEngineCompactionSessionTarget,
   prepareInitialSessionWriter,
 } from "./session-bootstrap.js";
-
-export const CONTINUATION_PROMPT =
-  "Continue the current task from the existing transcript, preserving completed work. If an action was interrupted, inspect its state before deciding whether to retry it. Do not restart the task or repeat completed actions.";
 
 type ActivePrompt = {
   override?: string;

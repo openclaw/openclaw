@@ -7,12 +7,6 @@ import {
 } from "../admitted-run-context.js";
 import type { ToolOutcomeObservation } from "../agent-tools.before-tool-call.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
-import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
-import {
-  createContextEngineLogicalTurnLease,
-  selectContextEngineForTranscriptHost,
-} from "../harness/context-engine-logical-turn.js";
-import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { normalizeUsage } from "../usage.js";
 import { log } from "./logger.js";
@@ -47,14 +41,8 @@ import {
 } from "./run/loop-initial-policy.js";
 import { prepareLoopRuntime } from "./run/loop-runtime-preparation.js";
 import { createEmbeddedRunPermissionChanges } from "./run/permission-change.js";
-import { measureEmbeddedAgentPreparation } from "./run/preparation-timing.js";
 import { createProviderReviewRun } from "./run/provider-review-run.js";
-import {
-  beginRunAttempt,
-  createRunRetryBudget,
-  isRunRetryBudgetExhausted,
-  recordRunRetry,
-} from "./run/retry-budget.js";
+import { beginRunAttempt, isRunRetryBudgetExhausted, recordRunRetry } from "./run/retry-budget.js";
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run/run-attempt-dispatch.js";
 import { settleEmbeddedLoop } from "./run/run-settlement.js";
@@ -79,7 +67,6 @@ export async function runPreparedEmbeddedLoop(
   params = prepareQuotaRunParams(params);
   const {
     agentDir,
-    workspaceDir: resolvedWorkspace,
     globalLane,
     hookRunner,
     hookContext: hookCtx,

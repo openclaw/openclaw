@@ -9,7 +9,7 @@ import type {
 import { ResponsesWS } from "openai/resources/responses/ws.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
-import type { StreamOptions, UserMessage } from "../types.js";
+import type { Model, StreamOptions, UserMessage } from "../types.js";
 import {
   resolveResponsesContinuationRequest,
   type ResponsesContinuationRequest,
@@ -21,6 +21,7 @@ import {
   OpenAIResponsesWebSocketPostDispatchError,
   OpenAIResponsesWebSocketPreDispatchError,
   OpenAIResponsesWebSocketSafeRetryError,
+  type OpenAIResponsesOptions,
 } from "./openai-responses-contracts.js";
 import {
   responsesInputFingerprint,
@@ -103,6 +104,19 @@ export function supportsNativeOpenAIResponsesEndpoint(params: {
     params.api === "openai-responses" &&
     isOfficialOpenAIResponsesBaseUrl(params.baseUrl)
   );
+}
+
+export function resolveNativeOpenAIResponsesWebSocketMode(
+  model: Model,
+  transport: OpenAIResponsesOptions["transport"],
+): OpenAIResponsesWebSocketMode | undefined {
+  if (transport !== "websocket" && transport !== "websocket-cached" && transport !== "auto") {
+    return undefined;
+  }
+  if (getAiTransportHost().requiresManagedTransport(model)) {
+    return undefined;
+  }
+  return supportsNativeOpenAIResponsesEndpoint(model) ? transport : undefined;
 }
 
 function closeWebSocketSilently(socket: ResponsesWS, reason = "done"): void {

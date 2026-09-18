@@ -6,11 +6,11 @@ import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { isSettledQuotaTranscript } from "./quota-continuation-transcript.js";
 import {
   assertQuotaContinuationProviderPayload,
   bindQuotaContinuationSuccessor,
   claimQuotaContinuation as claimForApi,
-  isSettledQuotaTranscript,
   offerQuotaContinuation,
   readQuotaContinuation,
   settleQuotaContinuation,
@@ -196,6 +196,20 @@ describe("settled quota continuation custody", () => {
       f.offer();
       await settleQuotaContinuation(f.result, Promise.resolve());
       expect(readQuotaContinuation(f.result, f.params, () => true)).toBeUndefined();
+    },
+  );
+
+  it.each(["azure-openai-responses", "openai-chatgpt-responses"])(
+    "withholds continuation from the unproved %s transport",
+    async (api) => {
+      const f = await fixture();
+      onTestFinished(() => f.admission.close());
+      f.offer();
+      await settleQuotaContinuation(f.result, Promise.resolve());
+      const token = readQuotaContinuation(f.result, f.params, () => true)!;
+      expect(() =>
+        claimQuotaContinuation(token, { ...f.params, provider: "fallback" }, "openclaw", api),
+      ).toThrow("exact admitted turn or fallback target");
     },
   );
 

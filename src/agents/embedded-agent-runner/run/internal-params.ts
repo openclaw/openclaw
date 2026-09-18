@@ -7,6 +7,7 @@ import type { CompactionRequestBudget } from "../../sessions/compaction/request-
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import type { DeferredEmbeddedRunLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
+import type { QuotaContinuationBudget } from "./quota-continuation-budget.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export type CompactionAccountingTarget = Readonly<
@@ -36,7 +37,7 @@ export type CompactionAccountingFact = Readonly<
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   /** Host-only, single-use continuation of the exact settled quota-failed turn. */
   quotaContinuation?: import("../quota-continuation.js").QuotaContinuation;
-  quotaBudget?: import("./quota-continuation-budget.js").QuotaContinuationBudget;
+  quotaBudget?: QuotaContinuationBudget;
   activeQuotaContinuation?: import("../quota-continuation.js").QuotaContinuation;
   /** Reset deferred terminal facts when the host admits a new attempt, before preparation. */
   onAttemptStart?: () => void;

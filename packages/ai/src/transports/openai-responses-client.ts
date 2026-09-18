@@ -72,7 +72,7 @@ import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
   createOpenAIResponsesWebSocketStream,
-  type OpenAIResponsesWebSocketMode,
+  resolveNativeOpenAIResponsesWebSocketMode,
   supportsNativeOpenAIResponsesEndpoint,
 } from "./openai-responses-websocket.js";
 import {
@@ -104,25 +104,6 @@ import {
   withProviderResponseHook,
 } from "./transport-stream-shared.js";
 import { redactIdentifier } from "./transport-utils.js";
-
-function resolveNativeOpenAIResponsesWebSocketMode(
-  model: Model,
-  transport: OpenAIResponsesOptions["transport"],
-): OpenAIResponsesWebSocketMode | undefined {
-  if (transport !== "websocket" && transport !== "websocket-cached" && transport !== "auto") {
-    return undefined;
-  }
-  if (getAiTransportHost().requiresManagedTransport(model)) {
-    return undefined;
-  }
-  return supportsNativeOpenAIResponsesEndpoint({
-    provider: model.provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-  })
-    ? transport
-    : undefined;
-}
 
 function combineWebSocketTimeoutSignal(
   signal: AbortSignal,

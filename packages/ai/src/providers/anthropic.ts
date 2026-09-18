@@ -25,7 +25,6 @@ import {
   resolveAnthropicCacheOptions,
   applyAnthropicContextManagementToRequest,
   isDirectAnthropicModel,
-  resolveAnthropicContextManagementBetaHeader,
 } from "../transports/anthropic-payload-policy.js";
 import { consumeAnthropicStream } from "../transports/anthropic-stream-reducer.js";
 // Anthropic provider adapts Anthropic streams and tool calls for the runtime.
@@ -54,7 +53,6 @@ import {
   usesFoundryBearerAuth,
 } from "./anthropic-auth-headers.js";
 import {
-  applyClaudeRequestContract,
   buildAnthropicClaudeCodeIdentity,
   prepareClaudeNoPrefillRequestContext,
   resolveAnthropicThinkingEffort,
@@ -65,11 +63,11 @@ import {
   usesClaudeFable5MessagesContract,
   usesClaudeStreamingRefusalContract,
 } from "./anthropic-model-contract.js";
+import { finalizeAnthropicRequestPayload } from "./anthropic-request-payload.js";
 import {
   ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
   ANTHROPIC_SERVER_SIDE_FALLBACKS,
 } from "./anthropic-server-fallback.js";
-import { applyAnthropicThinkingBindingControls } from "./anthropic-thinking-replay.js";
 import {
   normalizeAnthropicToolCallId,
   type AnthropicToolProjection,
@@ -241,26 +239,20 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         requestOptions,
         directApiKeyBetaHeader,
       );
-      const nextParams = await requestOptions?.onPayload?.(params, model);
-      if (nextParams !== undefined) {
-        params = nextParams as MessageCreateParamsStreaming;
-      }
-      applyClaudeRequestContract(params, model);
-      const betaHeader = resolveAnthropicContextManagementBetaHeader(
+      const finalized = await finalizeAnthropicRequestPayload(
         params,
+        model,
+        requestOptions?.onPayload,
         directApiKeyBetaHeader,
       );
+      params = finalized.payload as MessageCreateParamsStreaming;
       const sdkRequestOptions = {
         ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
         ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
         maxRetries: 0,
-        headers:
-          applyAnthropicThinkingBindingControls(params, betaHeader) ??
-          (betaHeader ? { "anthropic-beta": betaHeader } : undefined),
+        headers: finalized.headers,
       };
-      const response = await client.messages
-        .create({ ...params, stream: true }, sdkRequestOptions)
-        .asResponse();
+      const response = await client.messages.create(params, sdkRequestOptions).asResponse();
       await notifyProviderHttpResponse({ options: requestOptions, response, model });
 
       await consumeAnthropicStream({

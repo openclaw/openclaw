@@ -214,14 +214,15 @@ describe("Codex settled quota continuation offer", () => {
           mirroredMessages: [],
         });
       }
-      params.sessionTarget = {
+      const sessionTarget = {
         agentId: "main",
         sessionId: params.sessionId,
         sessionKey: params.sessionKey!,
         storePath: path.join(tempDir, "openclaw-agent.sqlite"),
       };
+      params.sessionTarget = sessionTarget;
       await upsertSessionEntry({
-        ...params.sessionTarget,
+        ...sessionTarget,
         entry: { sessionId: params.sessionId, updatedAt: 1 },
       });
       setCodexTestModelSupportsTools(params, true);

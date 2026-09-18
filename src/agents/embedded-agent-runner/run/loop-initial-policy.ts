@@ -1,13 +1,13 @@
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { isStrictAgenticExecutionContractActive } from "../../execution-contract.js";
 import { claimQuotaContinuation, type QuotaContinuation } from "../quota-continuation.js";
+import { CONTINUATION_PROMPT } from "./continuation-prompt.js";
 import { resolveMaxRunRetryIterations } from "./helpers.js";
 import type {
   RunEmbeddedAgentInternalParams,
   RunEmbeddedAgentParamsWithSessionFile,
 } from "./internal-params.js";
 import { createRunRetryBudget } from "./retry-budget.js";
-import { CONTINUATION_PROMPT } from "./session-prompt-state.js";
 
 export function prepareQuotaRunParams(
   input: RunEmbeddedAgentParamsWithSessionFile,

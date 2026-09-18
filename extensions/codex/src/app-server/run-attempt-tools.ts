@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
-import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
 import {

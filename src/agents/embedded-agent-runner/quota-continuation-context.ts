@@ -9,11 +9,11 @@ type Event = {
   name?: string;
   error?: boolean;
 };
+// Azure and subscription-specific transports need their own final-I/O custody proof.
+// Keep ordinary OpenAI-compatible Responses (including configured OCI routes).
 export const QUOTA_CONTINUATION_APIS = new Set([
   "openai-completions",
   "openai-responses",
-  "azure-openai-responses",
-  "openai-chatgpt-responses",
   "anthropic-messages",
 ]);
 
