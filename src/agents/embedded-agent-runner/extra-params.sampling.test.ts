@@ -486,6 +486,56 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     expect(callOptions?.presencePenalty).toBe(0.7);
   });
 
+  it("forwards configured top_p as topP and prefers a camelCase runtime topP", () => {
+    const callTopP = (override?: Record<string, unknown>) => {
+      const underlying = vi.fn(() => ({
+        push: vi.fn(),
+        result: vi.fn(async () => undefined),
+        [Symbol.asyncIterator]: vi.fn(async function* () {}),
+      })) as unknown as StreamFn;
+      const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+
+      applyExtraParamsToAgent(
+        agent,
+        {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.4": {
+                  params: {
+                    top_p: 0.3,
+                  },
+                },
+              },
+            },
+          },
+        },
+        "openai",
+        "gpt-5.4",
+        override,
+      );
+
+      if (!agent.streamFn) {
+        throw new Error("expected extra params to wrap streamFn");
+      }
+
+      void agent.streamFn(
+        { id: "gpt-5.4", api: "openai-completions", provider: "openai" } as never,
+        { messages: [], tools: [] } as never,
+        undefined,
+      );
+
+      return (
+        (underlying as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[2] as
+          | { topP?: number }
+          | undefined
+      )?.topP;
+    };
+
+    expect(callTopP()).toBe(0.3);
+    expect(callTopP({ topP: 0.9 })).toBe(0.9);
+  });
+
   it("preserves each request's dynamic fast mode override", () => {
     const prepareProviderExtraParams = vi.fn((params) => ({
       ...params.context.extraParams,
