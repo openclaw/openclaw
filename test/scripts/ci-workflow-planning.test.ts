@@ -2016,13 +2016,14 @@ describe("ci workflow guards", () => {
       });
     }
 
-    it("counts the actual workflow rows and admits five offloads only below the base threshold", () => {
+    it.each([true, false])("bounds hosted rows with Android=%s", (androidSelected) => {
       const planner = readCiWorkflow().jobs.preflight.steps.find(
         (step: WorkflowStep) => step.name === "Build CI manifest",
       );
       expect(planner.run).toContain("const HYBRID_HOSTED_ROW_LIMIT = 45;");
       expect(planner.run).toContain("const HYBRID_HOSTED_BASE_ROW_LIMIT = 40;");
-      const baseline = manifestWithHostedNodeRows(0);
+      const scopeEnv = { OPENCLAW_CI_RUN_ANDROID: String(androidSelected) };
+      const baseline = manifestWithHostedNodeRows(0, { scopeEnv });
       expect(baseline.status, baseline.output).toBe(0);
       const originalBase = emittedHostedRows({
         ...baseline.outputs,
@@ -2030,7 +2031,7 @@ describe("ci workflow guards", () => {
       }).length;
       expect(Number(baseline.outputs.hybrid_hosted_base_rows)).toBe(originalBase);
       for (const baseRows of [40, 41, 45, 46]) {
-        const manifest = manifestWithHostedNodeRows(baseRows - originalBase);
+        const manifest = manifestWithHostedNodeRows(baseRows - originalBase, { scopeEnv });
         expect(manifest.status, manifest.output).toBe(0);
         if (baseRows === 46) {
           expect(manifest.output).toContain(
@@ -2038,6 +2039,9 @@ describe("ci workflow guards", () => {
           );
         }
         const hosted = emittedHostedRows(manifest.outputs);
+        expect(hosted.filter((name) => name === "android-access-native")).toHaveLength(
+          androidSelected ? 2 : 0,
+        );
         expect(manifest.outputs.hybrid_hosted_offload).toBe(String(baseRows <= 40));
         expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBe(baseRows);
         expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(hosted.length);

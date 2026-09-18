@@ -2325,6 +2325,7 @@ jobs:
               "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
               "macos-swift": count(manifest.run_macos_swift, 2),
               "ios-build": count(manifest.run_ios_build),
+              "android-access-native": count(manifest.run_android_job && !compatibilityTarget, 2),
               "docker-seed-e2e": count(manifest.run_docker_seed_e2e && eventName === "pull_request" &&
                 process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY),
             }).reduce((total, rows) => total + rows, 0);
