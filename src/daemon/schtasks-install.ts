@@ -343,7 +343,12 @@ async function activateScheduledTask(params: {
       );
       return "startup-fallback";
     }
-    throw new Error(`schtasks create failed: ${detail}`.trim());
+    if (!updated) {
+      throw new Error(`schtasks create failed: ${detail}`.trim());
+    }
+    params.warn(
+      `Scheduled Task ${taskName} launch command was refreshed, but XML settings (including battery settings) were not: ${detail.trim() || "unknown error"}. Inspect Task Scheduler and retry the service installation to refresh those settings.`,
+    );
   }
 
   await params.definitionTransaction?.beforeWrite();

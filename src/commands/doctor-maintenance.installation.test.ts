@@ -26,10 +26,16 @@ const mocks = vi.hoisted(() => ({
   activeRoot: "",
   runtimeDirectory: "",
   installPlanBuilt: false,
+  audit: vi.fn<typeof import("../daemon/service-audit.js").auditGatewayServiceConfig>(),
+  confirm: vi.fn(),
   note: vi.fn(),
   health: vi.fn(async () => ({ healthy: true })),
   suspend: vi.fn<typeof import("../daemon/schtasks.js").suspendScheduledTaskAutoStartForUpdate>(),
   resume: vi.fn<typeof import("../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate>(),
+}));
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
+  confirm: mocks.confirm,
 }));
 vi.mock("../daemon/schtasks.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/schtasks.js")>()),
@@ -61,7 +67,7 @@ vi.mock("./daemon-install-helpers.js", () => ({
 }));
 vi.mock("../daemon/service-audit.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/service-audit.js")>()),
-  auditGatewayServiceConfig: async () => ({ ok: true, issues: [] }),
+  auditGatewayServiceConfig: mocks.audit,
 }));
 vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../cli/daemon-cli/restart-health.js")>()),
@@ -97,8 +103,10 @@ vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.audit.mockResolvedValue({ ok: true, issues: [] });
   mocks.installPlanBuilt = false;
   for (const native of [mocks.suspend, mocks.resume]) {
     native.mockImplementation(async (_env, options) => {
@@ -110,6 +118,11 @@ beforeEach(() => {
   }
 });
 afterEach(() => {
+  if (originalStdinIsTTY) {
+    Object.defineProperty(process.stdin, "isTTY", originalStdinIsTTY);
+  } else {
+    Reflect.deleteProperty(process.stdin, "isTTY");
+  }
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -124,8 +137,20 @@ async function runInstallationCase(params: {
   inspectionFailure?: "unavailable" | "lost-before-install";
   inspectionScenario?: "slow-admission" | "competing-update";
   invocationPort?: string;
+  consent?: { aggressive: boolean; approved: boolean; interactive: boolean };
 }) {
   const { installFails, initiallyStopped } = params;
+  if (params.consent) {
+    const { auditGatewayServiceConfig } = await vi.importActual<
+      typeof import("../daemon/service-audit.js")
+    >("../daemon/service-audit.js");
+    mocks.audit.mockImplementation(auditGatewayServiceConfig);
+    mocks.confirm.mockResolvedValue(params.consent.approved);
+    Object.defineProperty(process.stdin, "isTTY", {
+      value: params.consent.interactive,
+      configurable: true,
+    });
+  }
   mockProcessPlatform(params.platform);
   mockSystemAccountHome();
   const home = await fs.realpath(tempDirs.make("openclaw-doctor-installation-"));
@@ -170,7 +195,7 @@ async function runInstallationCase(params: {
         programArguments: [
           process.execPath,
           path.join(oldRoot, "dist/index.js"),
-          "gateway",
+          ...(params.consent?.aggressive ? ["node", "run"] : ["gateway"]),
           "--port",
           "19989",
         ],
@@ -253,14 +278,25 @@ async function runInstallationCase(params: {
           { gateway: { auth: { mode: "token", token: "synthetic-doctor-token" } } },
           "local",
           runtime,
-          createDoctorPrompter({ runtime, options: { repair: true, nonInteractive: true } }),
+          createDoctorPrompter({
+            runtime,
+            options: { repair: true, nonInteractive: !params.consent?.interactive },
+          }),
         );
         const notes = mocks.note.mock.calls.flat().join("\n");
         expect(notes).toContain(`${oldRoot} (2026.9.4)`);
         expect(notes).toContain(`${mocks.activeRoot} (2026.9.17)`);
         expect(notes).toContain("openclaw doctor --fix");
         expect(notes).toContain("openclaw gateway install --force");
-        if (params.inspectionFailure) {
+        if (params.consent) {
+          expect(mocks.confirm).toHaveBeenCalledTimes(
+            Number(params.consent.aggressive && params.consent.interactive),
+          );
+          if (params.consent.aggressive) {
+            expect(notes).toContain("Service command does not include the gateway subcommand");
+          }
+        }
+        if (params.inspectionFailure || (params.consent?.aggressive && !params.consent.approved)) {
           expect(events).toEqual([]);
           expect(command.programArguments[1]).toBe(path.join(oldRoot, "dist/index.js"));
         } else {
@@ -403,6 +439,16 @@ it.each(["linux", "darwin", "win32"] as const)(
 
 it("honors an explicit invoking Gateway port while repairing installation drift", async () =>
   runInstallationCase({ platform: "linux", mode: "direct", invocationPort: "19990" }));
+
+it.each([
+  { aggressive: true, approved: false, interactive: true },
+  { aggressive: true, approved: true, interactive: true },
+  { aggressive: true, approved: false, interactive: false },
+  { aggressive: false, approved: false, interactive: true },
+])(
+  "requires consent beyond installation drift (aggressive=$aggressive, approved=$approved, interactive=$interactive)",
+  async (consent) => runInstallationCase({ platform: "darwin", mode: "direct", consent }),
+);
 
 it.each([
   { installFails: false, releaseStateBeforeFinish: false },

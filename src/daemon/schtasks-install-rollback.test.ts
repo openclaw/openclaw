@@ -6,6 +6,7 @@ import { installScheduledTask, stageScheduledTask } from "./schtasks-install.js"
 import {
   buildTaskScript,
   encodeWindowsLauncherScript,
+  readScheduledTaskCommand,
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
 
@@ -60,7 +61,7 @@ it("leaves both original launchers intact when staging cannot capture the hidden
 });
 
 it.each(["registration", "xml-upgrade", "run"])(
-  "retains the prior definition when %s fails",
+  "preserves recovery when %s fails",
   async (failure) => {
     const runAttempted = failure === "run";
     const { args, scriptPath, launcherPath, original } = await fixture();
@@ -80,11 +81,27 @@ it.each(["registration", "xml-upgrade", "run"])(
         ? { code: 0, stdout: "", stderr: "" }
         : { code: 2, stdout: "", stderr: "registration rejected" };
     });
-    native.run.mockRejectedValue(new Error("run completion unknown"));
+    if (failure === "xml-upgrade") {
+      native.run.mockResolvedValue("scheduled-task");
+    } else {
+      native.run.mockRejectedValue(new Error("run completion unknown"));
+    }
     const warn = vi.fn();
-    await expect(installScheduledTask({ ...args, warn })).rejects.toThrow(
-      runAttempted ? "run completion unknown" : "registration rejected",
-    );
+    const installation = installScheduledTask({ ...args, warn });
+    if (failure === "xml-upgrade") {
+      await expect(installation).resolves.toEqual({ scriptPath });
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringMatching(/launch command.*refreshed.*XML settings.*not.*Task Scheduler/u),
+      );
+      expect(native.run).toHaveBeenCalledOnce();
+      expect((await readScheduledTaskCommand(args.env))?.programArguments).toEqual(
+        args.programArguments,
+      );
+    } else {
+      await expect(installation).rejects.toThrow(
+        runAttempted ? "run completion unknown" : "registration rejected",
+      );
+    }
     expect(await fs.readFile(`${scriptPath}.bak`)).toEqual(original);
     expect(await fs.readFile(`${launcherPath}.bak`, "utf8")).toBe("original hidden launcher");
     expect((await fs.readFile(`${scriptPath}.task.xml.bak`)).subarray(2).toString("utf16le")).toBe(
@@ -93,7 +110,7 @@ it.each(["registration", "xml-upgrade", "run"])(
     if (runAttempted) {
       expect(await fs.readFile(scriptPath)).not.toEqual(original);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("queued task may still start"));
-    } else {
+    } else if (failure === "registration") {
       expect(await fs.readFile(scriptPath)).toEqual(original);
       expect(await fs.readFile(launcherPath, "utf8")).toBe("original hidden launcher");
       expect(native.run).not.toHaveBeenCalled();
