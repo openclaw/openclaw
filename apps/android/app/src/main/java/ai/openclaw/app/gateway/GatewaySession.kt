@@ -1112,7 +1112,22 @@ class GatewaySession(
               tls = target.tls,
               customHeadersProvider = customHeadersProvider,
             )
-          val request = ingressAuthorization?.authorizeUpgrade(original) ?: original
+          val request =
+            if (ingressAuthorization == null) {
+              original
+            } else {
+              // This probe belongs to the connecting transport, not a shared sign-in. Retirement
+              // cancels and drains it before the reconnect loop can start another attempt.
+              val authorization = async(start = CoroutineStart.LAZY) { ingressAuthorization.authorizeUpgrade(original) }
+              try {
+                select {
+                  closedDeferred.onAwait { error("Gateway closed") }
+                  authorization.onAwait { it }
+                }
+              } finally {
+                authorization.cancelAndJoin()
+              }
+            }
           check(request.url == original.url) { "Ingress authorization cannot change the Gateway route" }
           ingressAuthorization?.requireCurrent(request)
           if (ingressAuthorization != null) {

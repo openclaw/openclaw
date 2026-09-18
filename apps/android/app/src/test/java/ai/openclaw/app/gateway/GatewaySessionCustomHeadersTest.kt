@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
@@ -741,6 +742,89 @@ class GatewaySessionCustomHeadersTest {
     }
 
   @Test
+  fun replacingGatewayCancelsAndDrainsPendingIngressBeforeConnecting() = runBlocking { assertPendingIngressRetirement("replace") }
+
+  @Test
+  fun reconnectingGatewayCancelsAndDrainsPendingIngressBeforeConnecting() = runBlocking { assertPendingIngressRetirement("reconnect") }
+
+  @Test
+  fun disconnectingGatewayCancelsAndDrainsPendingIngress() = runBlocking { assertPendingIngressRetirement("disconnect") }
+
+  private suspend fun assertPendingIngressRetirement(mode: String) =
+    coroutineScope {
+      val started = CompletableDeferred<Unit>()
+      val canceled = CompletableDeferred<Unit>()
+      val releaseCleanup = CompletableDeferred<Unit>()
+      val cleanupFinished = CompletableDeferred<Unit>()
+      val socketAttempted = CompletableDeferred<Unit>()
+      val authorizations = AtomicInteger()
+      val sockets = AtomicInteger()
+      val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+      val authorization =
+        object : GatewayIngressAuthorization {
+          override suspend fun authorizeUpgrade(request: Request): Request {
+            if (authorizations.incrementAndGet() == 1) {
+              started.complete(Unit)
+              try {
+                awaitCancellation()
+              } finally {
+                withContext(NonCancellable) {
+                  canceled.complete(Unit)
+                  releaseCleanup.await()
+                  cleanupFinished.complete(Unit)
+                }
+              }
+            }
+            check(cleanupFinished.isCompleted) { "Successor authorization started before old probe drained" }
+            return request.newBuilder().header("CF-Access-Token", "successor-grant").build()
+          }
+
+          override fun requireCurrent(request: Request) = Unit
+
+          override fun rejection(response: Response): GatewayExternalAuthorizationException? = null
+        }
+      val session =
+        ingressSession(scope, authorization, socketFactory = { _, request, _ ->
+          assertTrue(cleanupFinished.isCompleted)
+          assertEquals(if (mode == "replace") "replacement.example.test" else "gateway.example.test", request.url.host)
+          assertEquals("successor-grant", request.header("CF-Access-Token"))
+          sockets.incrementAndGet()
+          socketAttempted.complete(Unit)
+          throw GatewayExternalAuthorizationException("Test ends after successor socket admission")
+        })
+      try {
+        connectIngressSession(session)
+        withTimeout(TEST_TIMEOUT_MS) { started.await() }
+        when (mode) {
+          "replace" -> connectIngressSession(session, host = "replacement.example.test")
+          "reconnect" -> session.reconnect()
+          "disconnect" -> session.disconnect()
+          else -> error("Unexpected retirement mode")
+        }
+        val disconnected = if (mode == "disconnect") async { session.disconnectAndJoin() } else null
+        // Cancellation must arrive without releasing the probe or waiting for its connect timeout.
+        withTimeout(TEST_TIMEOUT_MS) { canceled.await() }
+        assertEquals(1, authorizations.get())
+        assertEquals(0, sockets.get())
+        assertTrue(disconnected?.isCompleted != true)
+        releaseCleanup.complete(Unit)
+        if (disconnected != null) {
+          withTimeout(TEST_TIMEOUT_MS) { disconnected.await() }
+          assertEquals(1, authorizations.get())
+          assertEquals(0, sockets.get())
+        } else {
+          withTimeout(TEST_TIMEOUT_MS) { socketAttempted.await() }
+          assertEquals(2, authorizations.get())
+          assertEquals(1, sockets.get())
+        }
+      } finally {
+        releaseCleanup.complete(Unit)
+        session.disconnectAndJoin()
+        scope.cancel()
+      }
+    }
+
+  @Test
   fun ingressDenialPausesReconnectUntilExplicitRetry() =
     runBlocking {
       val failure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
@@ -1209,8 +1293,11 @@ class GatewaySessionCustomHeadersTest {
     webSocketFactory = socketFactory,
   )
 
-  private fun connectIngressSession(session: GatewaySession) {
-    val endpoint = GatewayEndpoint.manual("gateway.example.test", 443)
+  private fun connectIngressSession(
+    session: GatewaySession,
+    host: String = "gateway.example.test",
+  ) {
+    val endpoint = GatewayEndpoint.manual(host, 443)
     session.connect(
       endpoint = endpoint,
       token = "gateway-token",
