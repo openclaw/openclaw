@@ -46,6 +46,20 @@ Owner-derived heartbeat routes pass `deliveryPurpose: "heartbeat-owner"` to this
 resolver. Plugins can use it to resolve missing operator delivery context without
 relaxing destination requirements for other outbound callers.
 
+The resolver may also receive a caller-owned `signal` when core needs to cancel
+provider lookups. Treat this as cooperative cancellation: pass the signal to
+provider APIs that support `AbortSignal`, stop new work after it is aborted, and
+return or reject promptly according to the provider API contract. The signal is
+optional, so existing resolvers that accept the original parameter shape and
+ignore cancellation remain compatible; plugins must not require it to be
+present.
+
+Cancellation does not replace the caller's deadline. In particular, announcement
+delivery keeps an independent verification deadline so a resolver that ignores
+the signal cannot hold settlement open indefinitely. A cancelled or expired
+lookup is inconclusive; it must not be reported as a successful route or used to
+erase delivery evidence that core has already confirmed.
+
 ## Conversation route ownership
 
 Implement `messaging.resolveConversationRouteOwner(...)` when generic route

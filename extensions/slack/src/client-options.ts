@@ -16,10 +16,14 @@ import type { EnvHttpProxyAgent as SlackSocketModeEnvHttpProxyAgent } from "undi
 
 export type SlackProxyDispatcher = ReturnType<typeof createHttp1EnvHttpProxyAgent>;
 export type SlackSocketModeDispatcher = SlackSocketModeEnvHttpProxyAgent;
+type SlackWebApiFetchInit = Parameters<NonNullable<WebClientOptions["fetch"]>>[1];
 export type SlackLookupClientOptions = Pick<
   WebClientOptions,
   "fetch" | "slackApiUrl" | "teamId" | "timeout"
->;
+> & {
+  /** Caller-owned cancellation for a short-lived provider lookup. */
+  signal?: AbortSignal;
+};
 
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
   retries: 2,
@@ -39,8 +43,8 @@ const SLACK_LOOKUP_RETRY_OPTIONS: RetryOptions = {
   retries: 0,
 };
 
-function normalizeSlackFetchInit(init?: RequestInit): RequestInit | undefined {
-  if (init?.body !== "") {
+function normalizeSlackFetchInit(init?: SlackWebApiFetchInit): SlackWebApiFetchInit {
+  if (!init || init.body !== "") {
     return init;
   }
   // Parameterless Slack Web API calls use an explicit empty body. Older Undici HTTP/2
@@ -163,10 +167,10 @@ function buildSlackFetch(
     if (!slackFetch) {
       return undefined;
     }
-    return ((input: RequestInfo | URL, init?: RequestInit) =>
+    return ((input: RequestInfo | URL, init?: SlackWebApiFetchInit) =>
       slackFetch(input, normalizeSlackFetchInit(init))) as NonNullable<WebClientOptions["fetch"]>;
   }
-  return ((input: RequestInfo | URL, init?: RequestInit) => {
+  return ((input: RequestInfo | URL, init?: SlackWebApiFetchInit) => {
     return fetchWithRuntimeDispatcher(input, {
       ...normalizeSlackFetchInit(init),
       dispatcher,
@@ -299,7 +303,18 @@ export function resolveSlackLookupClientOptions(
   dispatcher = resolveSlackProxyDispatcher(),
   assertDirectAdapterHandoff?: () => void,
 ): WebClientOptions {
-  const resolved = resolveSlackClientOptions(options, dispatcher, assertDirectAdapterHandoff);
+  const { signal, ...clientOptions } = options;
+  const resolved = resolveSlackClientOptions(clientOptions, dispatcher, assertDirectAdapterHandoff);
+  if (signal) {
+    const fetchFn = resolved.fetch;
+    if (fetchFn) {
+      resolved.fetch = (input, init) =>
+        fetchFn(input, {
+          ...init,
+          signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal,
+        });
+    }
+  }
   // Slack otherwise sleeps through the full Retry-After window after receiving 429,
   // outside the Axios request timeout.
   resolved.rejectRateLimitedCalls = true;

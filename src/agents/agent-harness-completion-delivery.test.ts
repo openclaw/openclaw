@@ -9,6 +9,7 @@ import {
   readAdmittedHarnessCompletionInput,
 } from "../agents/agent-harness-completion-recovery.js";
 import { createAgentHarnessCompletionScope } from "../agents/agent-harness-completion-scope.js";
+import * as loadedChannelRegistry from "../channels/plugins/registry-loaded.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
   getRestartRecoveryTerminalDeliveryEvidence,
@@ -105,7 +106,15 @@ async function admit(
   };
 }
 
-function terminalEntry(entry: SessionEntry, final = true): SessionEntry {
+function terminalEntry(
+  entry: SessionEntry,
+  final = true,
+  sentTarget: { provider: string; accountId?: string; to: string } = {
+    provider: "discord",
+    accountId: "main",
+    to: "channel:123",
+  },
+): SessionEntry {
   return {
     ...entry,
     status: "done",
@@ -116,9 +125,7 @@ function terminalEntry(entry: SessionEntry, final = true): SessionEntry {
       terminalDeliveryEvidence: buildRestartRecoveryTerminalDeliveryEvidence({
         messagingToolSentTargets: [
           {
-            provider: "discord",
-            accountId: "main",
-            to: "channel:123",
+            ...sentTarget,
             text: "reply",
             sourceReplyFinal: final,
           },
@@ -500,6 +507,39 @@ describe("host-owned harness completion recovery", () => {
       const { entry, target, request } = await admit(state);
       await replaceSessionEntry(target, terminalEntry(entry));
       expect(await reconcileHarnessCompletionDelivery(request)).toBe("delivered");
+    });
+  });
+
+  it("uses the bundled Slack target matcher for cold durable final receipts", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const slackTarget = { channel: "slack", to: "user:U0A1B2", accountId: "main" };
+      const { entry, claim, target, request } = await admit(state, slackTarget);
+      const terminal = terminalEntry(entry, true, {
+        provider: "slack",
+        accountId: "main",
+        to: "user:u0a1b2",
+      });
+      await replaceSessionEntry(target, terminal);
+      const coldEntry = loadExactSessionEntry(target)?.entry;
+      expect(coldEntry).toBeDefined();
+      if (!coldEntry) {
+        throw new Error("terminal session was not persisted");
+      }
+
+      const resolveLoadedEntry = loadedChannelRegistry.getLoadedChannelPluginEntryById;
+      const loadedEntrySpy = vi
+        .spyOn(loadedChannelRegistry, "getLoadedChannelPluginEntryById")
+        .mockImplementation((id, registry) =>
+          id === "slack" ? undefined : resolveLoadedEntry(id, registry),
+        );
+      try {
+        // The minimal harness normally installs Slack stubs. Hide that loaded
+        // registration so both recovery paths must use the bundled matcher.
+        expect(getOwedHarnessCompletionTask(claim, coldEntry)).toBeUndefined();
+        expect(await reconcileHarnessCompletionDelivery(request)).toBe("delivered");
+      } finally {
+        loadedEntrySpy.mockRestore();
+      }
     });
   });
 
