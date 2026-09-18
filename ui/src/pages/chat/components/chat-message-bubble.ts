@@ -1,7 +1,5 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
-import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { icons } from "../../../components/icons.ts";
@@ -11,11 +9,7 @@ import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
-import type {
-  MessageContentItem,
-  NormalizedMessage,
-  ToolCard,
-} from "../../../lib/chat/chat-types.ts";
+import type { MessageContentItem, ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { extractThinkingCached } from "../../../lib/chat/message-extract.ts";
 import {
@@ -32,7 +26,6 @@ import {
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
-import "../../../styles/chat/reply-preview.css";
 import "./chat-clawhub-card.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
@@ -60,6 +53,11 @@ import {
   renderMessageMarkdown,
   type AssistantMessageDisclosure,
 } from "./chat-message-text.ts";
+import {
+  renderReplyAttribution,
+  resolveMessageReplyAttribution,
+} from "./chat-reply-attribution.ts";
+import type { ReplyPreview } from "./chat-reply-preview.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import {
@@ -122,75 +120,6 @@ function renderInlineToolCards(
   `;
 }
 
-type ReplyPreview = {
-  sourceMessageId?: string;
-  senderLabel?: string | null;
-  text: string;
-};
-
-function renderReplyPreview(
-  replyTarget: NormalizedMessage["replyTarget"],
-  preview: ReplyPreview | undefined,
-  onOpenReply: ((replyToId: string) => void) | undefined,
-  onResolveReply: ((replyToId: string) => void) | undefined,
-  navigationLoading: boolean,
-) {
-  if (!replyTarget) {
-    return nothing;
-  }
-  const replyToId = replyTarget.kind === "id" ? replyTarget.id : null;
-  const name = preview?.senderLabel?.trim()
-    ? preview.senderLabel
-    : replyTarget.kind === "current"
-      ? t("chat.messages.currentMessage")
-      : t("chat.messages.message");
-  const content = preview?.text.trim() ?? "";
-  const resolveMissingPreview = (element?: Element) => {
-    if (element && replyToId && !preview) {
-      onResolveReply?.(replyToId);
-    }
-  };
-  const body = html`
-    <span class="chat-reply-preview__icon"
-      >${
-        navigationLoading
-          ? html`<span class="session-run-spinner" aria-hidden="true"></span>`
-          : icons.messageSquare
-      }</span
-    >
-    <span class="chat-reply-preview__label"> ${t("chat.messages.replyingTo", { name })} </span>
-    ${
-      content
-        ? html`<span class="chat-reply-preview__text"
-            >${truncateUtf16Safe(content, 120)}${content.length > 120 ? "..." : ""}</span
-          >`
-        : nothing
-    }
-  `;
-  if (replyToId && onOpenReply) {
-    return html`
-      <button
-        ${ref(resolveMissingPreview)}
-        type="button"
-        class="chat-reply-preview chat-reply-preview--message"
-        ?disabled=${navigationLoading}
-        aria-busy=${navigationLoading ? "true" : "false"}
-        @click=${() => onOpenReply(replyToId)}
-      >
-        ${body}
-      </button>
-    `;
-  }
-  return html`
-    <div
-      ${ref(resolveMissingPreview)}
-      class="chat-reply-preview chat-reply-preview--message chat-reply-preview--unavailable"
-    >
-      ${body}
-    </div>
-  `;
-}
-
 function renderPairingQrExpiryNotices(count: number) {
   if (count === 0) {
     return nothing;
@@ -233,6 +162,7 @@ export function renderGroupedMessage(
     transcriptVisible?: boolean;
     boardProvider?: BoardProvider;
     agentId?: string;
+    userId?: string | null;
     duplicateCount?: number;
     showReasoning: boolean;
     showToolCalls?: boolean;
@@ -245,6 +175,7 @@ export function renderGroupedMessage(
     onToggleUserMessageExpanded?: (messageId: string) => void;
     assistantMessageDisclosure?: AssistantMessageDisclosure;
     messageActions?: MessageActionDetails | null;
+    actionOverlay?: TemplateResult | typeof nothing;
     isToolExpanded?: (toolCardId: string) => boolean;
     onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
     toolCardOverrides?: ReadonlyMap<ToolCard, unknown>;
@@ -272,6 +203,7 @@ export function renderGroupedMessage(
     onResolveReply?: (replyToId: string) => void;
     onOpenReply?: (replyToId: string) => void;
     replyNavigationId?: string | null;
+    suppressReplyPreview?: boolean;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -618,6 +550,15 @@ export function renderGroupedMessage(
     }
   `;
 
+  const replyAttribution = opts.suppressReplyPreview
+    ? undefined
+    : resolveMessageReplyAttribution(normalizedMessage, opts.resolveReplyPreview, opts.userId);
+  const reply = renderReplyAttribution(replyAttribution, opts.onOpenReply, opts.onResolveReply, {
+    variant: "inline",
+    navigationLoading:
+      normalizedMessage.replyTarget?.kind === "id" &&
+      opts.replyNavigationId === normalizedMessage.replyTarget.id,
+  });
   return html`
     <div
       class="${bubbleClasses}"
@@ -626,17 +567,7 @@ export function renderGroupedMessage(
       data-message-text=${actionText || nothing}
       .messageActions=${opts.messageActions}
     >
-      ${renderReplyPreview(
-        normalizedMessage.replyTarget,
-        normalizedMessage.replyTarget?.kind === "id"
-          ? (opts.resolveReplyPreview?.(normalizedMessage.replyTarget.id) ??
-              normalizedMessage.replyPreview)
-          : undefined,
-        opts.onOpenReply,
-        opts.onResolveReply,
-        normalizedMessage.replyTarget?.kind === "id" &&
-          opts.replyNavigationId === normalizedMessage.replyTarget.id,
-      )}
+      ${opts.actionOverlay} ${reply}
       ${
         onlyToolCards
           ? renderInlineToolCards(toolCards, toolRenderOptions)

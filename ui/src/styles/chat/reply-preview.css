@@ -66,29 +66,3 @@
   fill: none;
   stroke-width: 2px;
 }
-
-.chat-reply-preview--message {
-  width: 100%;
-  margin: 0 0 8px;
-  font: inherit;
-  text-align: left;
-}
-
-button.chat-reply-preview--message {
-  cursor: var(--cursor-action);
-}
-
-button.chat-reply-preview--message:hover {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-}
-
-button.chat-reply-preview--message:disabled {
-  cursor: var(--cursor-default);
-  opacity: 0.8;
-}
-
-.chat-reply-preview--unavailable {
-  border-color: var(--border);
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
-}

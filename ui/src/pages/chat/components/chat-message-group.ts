@@ -12,7 +12,6 @@ import { t } from "../../../i18n/index.ts";
 import type { MessageGroup, ToolCard } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
-import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
 import {
   readToolApprovalReviewOutcome,
   readToolApprovalReviews,
@@ -54,6 +53,14 @@ import {
 } from "./chat-message-stream.ts";
 import type { AssistantMessageDisclosure } from "./chat-message-text.ts";
 import { extractGroupMeta, renderMessageMeta } from "./chat-message-timestamp.ts";
+import {
+  renderReplyAttribution,
+  resolveMessageReplyAttribution,
+  resolveReplyAttribution,
+  type ReplyAttribution,
+} from "./chat-reply-attribution.ts";
+import { renderReplyConnector } from "./chat-reply-connector.ts";
+import type { ReplyPreview } from "./chat-reply-preview.ts";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
@@ -72,8 +79,6 @@ type ActiveContinuation = {
   options: StreamGroupOptions;
 };
 
-type ReplyPreview = MessageReplyTarget & { sourceMessageId: string };
-
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
 
 type RenderMessageGroupOptions = Omit<
@@ -85,9 +90,12 @@ type RenderMessageGroupOptions = Omit<
   | "entryId"
   | "entryAnimated"
   | "resolveReplyPreview"
+  | "suppressReplyPreview"
 > &
   ChatSendStatusActions &
   Parameters<typeof renderForwardedAvatar>[1] & {
+    replyAttribution?: ReplyAttribution;
+    hasReplyAttribution?: boolean;
     latestBrowserTabs?: ReadonlyMap<string, BrowserTabSelection>;
     /** Configured main-session key; an agent's main source labels as the agent. */
     mainKey?: string;
@@ -173,6 +181,7 @@ function renderPreparedGroupMessage(
     item.key,
     {
       ...opts,
+      suppressReplyPreview: opts.hasReplyAttribution,
       isStreaming: group.isStreaming && index === group.messages.length - 1,
       entryId: persistedMessageEntryId(item.message) ?? undefined,
       entryAnimated:
@@ -452,7 +461,10 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     !isOwnSenderGroup(group, opts.userId);
   const forwardedSource = hasForwardedSource(group);
   const isForwarded = normalizedRole === "assistant" && forwardedSource;
+  const replyAttribution =
+    opts.replyAttribution ?? resolveReplyAttribution(group, opts.resolveReplyPreview);
   const showSenderName =
+    resolveMessageGroupSenderLabel(group, opts) !== replyAttribution?.name &&
     !isForwarded &&
     !sourceOnly &&
     (normalizedRole !== "user" || isPeerGroup || opts.showOwnSenderName !== false);
@@ -531,14 +543,11 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         ? resolveIdentityHue(group.sender)
         : null;
   const sendStatus = readPendingSendStatus(group.messages.at(-1)?.message);
-  const replyToLabel =
-    normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
-  const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
 
   const inlineUserAvatar =
     normalizedRole === "user" &&
     avatarPlacement === "gutter" &&
-    Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown);
+    (isPeerGroup || Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown));
   const avatar =
     !sourceOnly &&
     normalizedRole !== "tool" &&
@@ -559,61 +568,76 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           )
       : nothing;
 
+  const hasReplyConnector = Boolean(replyAttribution && avatar !== nothing);
   return html`
     <div
       class="chat-group ${roleClass} chat-group--with-footer${
         opts.latestAssistant ? " chat-group--latest-assistant" : ""
       }${isPeerGroup ? " chat-group--peer" : ""}${
         isForwarded ? " chat-group--forwarded" : ""
-      }${senderHue === null ? "" : " chat-group--sender-tint"}"
+      }${senderHue === null ? "" : " chat-group--sender-tint"}${hasReplyConnector ? " chat-group--reply" : ""}"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
       ${inlineUserAvatar ? nothing : avatar}
       <div class="chat-group-messages">
         ${forwardedSource ? renderForwardedAttribution(group, opts) : nothing}
-        ${
-          replyToLabel
-            ? html`
-                <div
-                  class="chat-reply-attribution"
-                  title=${replyToTitle}
-                  aria-label=${replyToTitle}
-                >
-                  <span class="chat-reply-attribution__icon" aria-hidden="true"
-                    >${icons.cornerDownLeft}</span
-                  >
-                  <span>${replyToLabel}</span>
-                </div>
-              `
-            : nothing
-        }
+        ${replyAttribution ? renderReplyAttribution(replyAttribution, opts.onOpenReply, opts.onResolveReply, { navigationLoading: replyAttribution.target?.kind === "id" && opts.replyNavigationId === replyAttribution.target.id }) : nothing}
         ${
           opts.frameContent ??
           preparedMessages.map((prepared, index) => {
             const { item, actions: actionDetails } = prepared;
+            const actions =
+              actionDetails &&
+              (actionDetails.markdown || (actionDetails.replyTarget && opts.onReply)) &&
+              index < lastMessageIndex &&
+              !ownsRunFrame
+                ? html`
+                    <div class="chat-message-actions-row" data-message-actions-for=${item.key}>
+                      ${renderMessageActionButtons(actionDetails, opts)}
+                    </div>
+                  `
+                : nothing;
+            const peerAttribution = isPeerGroup
+              ? resolveMessageReplyAttribution(
+                  prepared.source.normalizedMessage,
+                  opts.resolveReplyPreview,
+                  opts.userId,
+                )
+              : undefined;
+            const message = renderPreparedGroupMessage(
+              group,
+              index,
+              {
+                ...opts,
+                isForwarded: forwardedSource,
+                actionOverlay: isPeerGroup ? actions : nothing,
+                hasReplyAttribution: Boolean(replyAttribution || peerAttribution),
+                avatar:
+                  !peerAttribution &&
+                  inlineUserAvatar &&
+                  (isPeerGroup || index === lastMessageIndex)
+                    ? avatar
+                    : undefined,
+              },
+              prepared,
+            );
             return html`
-              ${renderPreparedGroupMessage(
-                group,
-                index,
-                {
-                  ...opts,
-                  isForwarded: forwardedSource,
-                  avatar: inlineUserAvatar && index === lastMessageIndex ? avatar : undefined,
-                },
-                prepared,
-              )}
               ${
-                actionDetails &&
-                (actionDetails.markdown || (actionDetails.replyTarget && opts.onReply)) &&
-                index < lastMessageIndex &&
-                !ownsRunFrame
-                  ? html`
-                      <div class="chat-message-actions-row" data-message-actions-for=${item.key}>
-                        ${renderMessageActionButtons(actionDetails, opts)}
-                      </div>
-                    `
-                  : nothing
+                peerAttribution
+                  ? html`<div class="chat-message--reply">
+                      ${renderReplyAttribution(peerAttribution, opts.onOpenReply, opts.onResolveReply, { navigateToUnloaded: true, navigationLoading: peerAttribution.target?.kind === "id" && opts.replyNavigationId === peerAttribution.target.id })}
+                      ${message}${avatar} ${avatar !== nothing ? renderReplyConnector() : nothing}
+                    </div>`
+                  : message
+              }
+              ${
+                isPeerGroup && actions !== nothing
+                  ? html`<div
+                      class="chat-message-actions-row chat-message-actions-row--spacer"
+                      aria-hidden="true"
+                    ></div>`
+                  : actions
               }
             `;
           })
@@ -693,6 +717,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               }
             </div>`
       }
+      ${hasReplyConnector ? renderReplyConnector() : nothing}
     </div>
   `;
 }

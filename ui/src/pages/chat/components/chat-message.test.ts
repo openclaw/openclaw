@@ -2439,27 +2439,6 @@ describe("grouped chat rendering", () => {
     ).toBe(peer);
   });
 
-  it("renders assistant reply attribution for a multi-sender thread", () => {
-    const container = document.createElement("div");
-    render(
-      renderMessageGroup(
-        createMessageGroup({ role: "assistant", content: "hello" }, "assistant", {
-          key: "reply-attribution",
-          replyToSender: { id: "alice@example.com", name: "Alice" },
-          messages: [{ key: "reply", message: { role: "assistant", content: "hello" } }],
-          timestamp: 1000,
-        }),
-        { showReasoning: true, showToolCalls: true },
-      ),
-      container,
-    );
-
-    const attribution = container.querySelector<HTMLElement>(".chat-reply-attribution");
-    expect(attribution?.textContent?.trim()).toBe("Alice");
-    expect(attribution?.getAttribute("title")).toBe("Replying to Alice");
-    expect(attribution?.nextElementSibling?.classList.contains("chat-bubble")).toBe(true);
-  });
-
   it("renders multiline system notices as sanitized markdown", () => {
     const container = document.createElement("div");
     markdownRenderMock.mockImplementationOnce(renderMarkdownHtml);
@@ -3833,8 +3812,8 @@ describe("grouped chat rendering", () => {
       { showToolCalls: false, onOpenImage },
     );
 
-    expect(container.querySelector(".chat-reply-preview__label")?.textContent?.trim()).toBe(
-      "Replying to current message",
+    expect(container.querySelector(".chat-reply-attribution__name")?.textContent?.trim()).toBe(
+      "current message",
     );
     expect(container.querySelector(".chat-text")?.textContent?.trim()).toBe("Here is the image.");
     expect(expectElement(container, ".chat-message-image", HTMLImageElement).src).toBe(
@@ -3876,8 +3855,8 @@ describe("grouped chat rendering", () => {
       },
     );
 
-    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
-    expect(preview?.textContent).toContain("Replying to Marie");
+    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-attribution__target");
+    expect(preview?.getAttribute("aria-label")).toBe("Replying to Marie");
     expect(preview?.textContent).toContain("The original answer");
     preview?.click();
     expect(onOpenReply).toHaveBeenCalledWith("transcript-123");
@@ -3899,8 +3878,8 @@ describe("grouped chat rendering", () => {
       { onOpenReply },
     );
 
-    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
-    expect(preview?.textContent).toContain("Replying to Marie");
+    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-attribution__target");
+    expect(preview?.getAttribute("aria-label")).toBe("Replying to Marie");
     expect(preview?.textContent).toContain("The original answer");
     expect(preview).toBeInstanceOf(HTMLButtonElement);
     preview?.click();
@@ -3921,10 +3900,9 @@ describe("grouped chat rendering", () => {
       { onOpenReply: vi.fn(), replyNavigationId: "unloaded-message" },
     );
 
-    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-preview--message");
+    const preview = container.querySelector<HTMLButtonElement>(".chat-reply-attribution__target");
     expect(preview?.disabled).toBe(true);
     expect(preview?.getAttribute("aria-busy")).toBe("true");
-    expect(preview?.querySelector(".session-run-spinner")).toBeInstanceOf(HTMLElement);
   });
 
   it("checks local assistant audio against server metadata", async () => {

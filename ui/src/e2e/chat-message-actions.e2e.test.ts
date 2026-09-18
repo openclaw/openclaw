@@ -400,11 +400,12 @@ describeControlUiE2e("Control UI chat message actions", () => {
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const sent = await gateway.waitForRequest("chat.send");
         expect(sent.params).toMatchObject({ message: text, replyToId: sourceId });
-        const sentPreview = page.locator(".chat-reply-preview--message");
+        const sentPreview = page.locator(".chat-reply-attribution--inline");
         await expect
-          .poll(() => sentPreview.locator(".chat-reply-preview__text").textContent())
+          .poll(() => sentPreview.locator(".chat-reply-attribution__excerpt-text").textContent())
           .toBe(fileName);
-        await sentPreview.click();
+        expect(await sentPreview.locator(".chat-reply-attribution__file svg").count()).toBe(1);
+        await sentPreview.getByRole("button").click();
         await expect
           .poll(() =>
             bubble.evaluate((element) => element.classList.contains("chat-bubble--reply-target")),

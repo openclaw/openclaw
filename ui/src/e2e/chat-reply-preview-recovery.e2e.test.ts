@@ -62,9 +62,13 @@ suite.define(() => {
       let firstCount = 0;
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:reply-preview"));
-        const reply = page.locator(".chat-pane-cache__pane--active .chat-reply-preview--message");
+        const reply = page.locator(
+          ".chat-pane-cache__pane--active .chat-reply-attribution--inline",
+        );
         await reply.waitFor({ state: "visible" });
-        expect(await reply.textContent()).toContain("Replying to message");
+        expect(await reply.locator(".chat-reply-attribution__name").textContent()).toBe("message");
+        expect(await reply.textContent()).toContain("Original message unavailable");
+        expect(await reply.getByRole("button").count()).toBe(0);
         await gateway.waitForRequest("chat.message.get");
         const composer = page.locator(
           ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
@@ -73,15 +77,6 @@ suite.define(() => {
         expect(await composer.inputValue()).toBe("This draft remains usable.");
         firstCount = (await gateway.getRequests("chat.message.get")).length;
         await expectRequestCountStable(gateway, "chat.message.get", 1);
-        if (artifact === "unavailable-source") {
-          await reply.click();
-          await page
-            .locator(".chat-pane-cache__pane--active")
-            .getByRole("alert")
-            .getByText("The original message is unavailable.", { exact: true })
-            .waitFor();
-          await expectRequestCountStable(gateway, "chat.message.get", 1);
-        }
       } finally {
         if (artifactDir) {
           await page.screenshot({
@@ -94,7 +89,7 @@ suite.define(() => {
               {
                 firstCount,
                 finalCount: (await gateway.getRequests("chat.message.get")).length,
-                replyText: await page.locator(".chat-reply-preview--message").allTextContents(),
+                replyText: await page.locator(".chat-reply-attribution--inline").allTextContents(),
               },
               null,
               2,
@@ -183,7 +178,9 @@ suite.define(() => {
 
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:reply-reconnect"));
-        const preview = page.locator(".chat-pane-cache__pane--active .chat-reply-preview--message");
+        const preview = page.locator(
+          ".chat-pane-cache__pane--active .chat-reply-attribution--inline",
+        );
         await preview.waitFor();
         await gateway.waitForRequest("chat.message.get");
         await expectRequestCountStable(gateway, "chat.message.get", 1);
@@ -197,7 +194,7 @@ suite.define(() => {
         await expect.poll(() => preview.textContent()).toContain("The current original answer.");
         await expectRequestCountStable(gateway, "chat.message.get", 2);
 
-        await preview.click();
+        await preview.getByRole("button").click();
         await page
           .locator(".chat-pane-cache__pane--active .chat-text")
           .getByText("The current original answer.", { exact: true })

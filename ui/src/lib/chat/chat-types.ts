@@ -272,10 +272,12 @@ export type MessageGroup = {
   sender?: SenderIdentity;
   sourceClients?: MessageClientSource[];
   replyToSender?: SenderIdentity;
+  replyToMessage?: { message: unknown; key: string };
   messages: Array<{
     message: unknown;
     key: string;
     duplicateCount?: number;
+    replyTarget?: NormalizedMessage["replyTarget"];
     /** Rendered reply content, excluding assistant thinking tags. */
     hasVisibleContent: boolean;
   }>;

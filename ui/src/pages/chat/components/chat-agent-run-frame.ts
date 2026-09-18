@@ -16,6 +16,7 @@ import {
   renderWorkGroupSummary,
   type StreamGroupOptions,
 } from "./chat-message.ts";
+import { resolveReplyAttribution } from "./chat-reply-attribution.ts";
 import { renderChatSourcePreviews } from "./chat-source-previews.ts";
 import { renderBrowserTabPreviews } from "./chat-tool-cards.ts";
 
@@ -49,14 +50,25 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
     role: "assistant",
     senderLabel: firstAssistant?.senderLabel,
     replyToSender: firstAssistant?.replyToSender,
+    replyToMessage: firstAssistant?.replyToMessage,
     messages: representative?.messages ?? [],
     visibleContent: representative?.visibleContent ?? "none",
     timestamp: Math.min(...groups.map((group) => group.timestamp), ...streamStarts, Date.now()),
     isStreaming: frame.outcome.kind === "active",
     runId: frame.runId,
   };
+  const attributionGroup =
+    (actionOwner && groups.find((group) => group.messages.includes(actionOwner))) || shell;
+  const replyAttribution = resolveReplyAttribution(
+    attributionGroup,
+    opts.renderGroupOptions(shell).resolveReplyPreview,
+    groups.flatMap((group) => group.messages),
+  );
   const renderFrameGroup = (group: MessageGroup) =>
-    renderMessageGroupContent(group, opts.renderGroupOptions(group));
+    renderMessageGroupContent(group, {
+      ...opts.renderGroupOptions(group),
+      hasReplyAttribution: Boolean(replyAttribution),
+    });
   const frameContent = frame.parts.map((part) => {
     if (part.kind === "stream-run") {
       // The frame owns layout continuity; the indicator stays standalone so
@@ -100,6 +112,7 @@ export function renderAgentRunFrame(frame: AgentRunFrameRenderItem, opts: AgentR
   return renderMessageGroup(shell, {
     ...opts.renderGroupOptions(shell),
     frameContent,
+    replyAttribution,
     frameActionOwner: actionOwner,
     turnRecap: opts.turnRecap,
   });
