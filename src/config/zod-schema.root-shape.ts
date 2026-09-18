@@ -503,6 +503,7 @@ export const OpenClawSchemaShape = {
           maxPending: z.number().int().min(1).optional(),
           /** Maximum generated skill proposal size in bytes. */
           maxSkillBytes: z.number().int().min(1).optional(),
+          model: z.string().optional(),
         })
         .optional(),
       entries: z.record(z.string(), SkillEntrySchema).optional(),
