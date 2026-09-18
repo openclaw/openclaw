@@ -1576,6 +1576,14 @@
 
 .session-detail-bottom {
   grid-template-columns: minmax(0, 1.8fr) minmax(0, 1fr);
+  align-items: start;
+}
+
+.context-details-panel,
+.context-breakdown-grid,
+.context-breakdown-card,
+.context-breakdown-list {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .usage-badges {
