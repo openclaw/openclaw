@@ -237,6 +237,8 @@ export abstract class MatrixClientBase {
         this.messageWireDispatchGuards.wasCurrentnessRejected(event.getTxnId()),
       ),
       store: this.syncStore,
+      // SAFETY: Matrix SDK crypto callbacks use a structurally compatible callback shape
+      // whose concrete generic type is not expressible across this plugin boundary.
       cryptoCallbacks: cryptoCallbacks as never,
       verificationMethods: [
         VerificationMethod.Sas,
