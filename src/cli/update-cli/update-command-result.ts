@@ -17,7 +17,11 @@ import {
   writeControlPlaneUpdateRestartSentinel,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
-import { createUpdateErrorFact, type UpdateFailureFact } from "../../infra/update-failure-facts.js";
+import {
+  createUpdateErrorFact,
+  createUpdateFailureFact,
+  type UpdateFailureFact,
+} from "../../infra/update-failure-facts.js";
 import { FreeBsdPkgOwnershipError } from "../../infra/update-freebsd-pkg-ownership.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { UpdateRunAdmissionBusyError } from "../../infra/update-run-admission.js";
@@ -36,14 +40,26 @@ import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import type { OwnedManagedUpdateContext } from "./update-command-managed-context.js";
 import type {
+  ManagedGatewayUpdateVerdict,
   PreManagedServiceStop,
   UpdateRestartParams,
 } from "./update-command-service-context-types.js";
-import {
-  collectServiceInspectionFailureFacts,
-  GatewayServiceUpdateOwnershipError,
-} from "./update-command-service-plan.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
+
+export function collectServiceInspectionFailureFacts(
+  verdict: ManagedGatewayUpdateVerdict | undefined,
+): UpdateFailureFact[] | undefined {
+  return verdict?.kind === "unavailable"
+    ? [
+        createUpdateFailureFact({
+          check: "managed-service",
+          code: verdict.inspectionReason ?? "service-inspection-unavailable",
+          message: verdict.message,
+        }),
+      ]
+    : undefined;
+}
 
 export function recordServiceReconciliationWarning(
   result: UpdateRunResult,

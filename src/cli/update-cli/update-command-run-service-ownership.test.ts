@@ -22,6 +22,7 @@ import {
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
 import { admitUpdateCommandRun } from "./update-command-run.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 import * as servicePlan from "./update-command-service-plan.js";
@@ -268,9 +269,7 @@ it.each([
       expect(inspected.serviceEnv === undefined).toBe(true);
       expect(inspected.serviceDefinitionEnv === undefined).toBe(true);
       expect(inspected.serviceNodeRunner).toBeUndefined();
-      const facts = servicePlan.collectServiceInspectionFailureFacts(
-        inspected.serviceUpdateVerdict,
-      );
+      const facts = collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict);
       expect(facts).toEqual([
         expect.objectContaining({
           check: "managed-service",
