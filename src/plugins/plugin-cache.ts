@@ -153,6 +153,7 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
       snapshot: undefined,
       owner: "operation",
       configFingerprint: undefined,
+      agentWorkspaceFingerprint: undefined,
       envFingerprint: undefined,
       defaultDiscoveryCompatible: false,
       compatiblePolicyHashes: undefined,
