@@ -27,6 +27,16 @@ export type GatewayServiceInstallationDrift = {
   activeVersion?: string;
 };
 
+export function resolveManagedServiceNodeRunner(
+  command: GatewayServiceCommandConfig | null,
+): string | undefined {
+  const args = command?.programArguments ?? [];
+  // Native heap flags and dev loaders separate the executable from the entrypoint.
+  const runner = args.indexOf("gateway") > 1 ? args[0] : undefined;
+  const executable = normalizeOptionalString(runner ? path.basename(runner) : undefined);
+  return ["node", "node.exe"].includes(executable?.toLowerCase() ?? "") ? runner : undefined;
+}
+
 /** Local package evidence remains available when the Gateway cannot answer a probe. */
 export async function inspectGatewayServiceInstallationDrift(
   layout: Pick<GatewayServiceLayoutSummary, "packageRootReal" | "packageVersion"> | undefined,
