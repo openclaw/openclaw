@@ -7,7 +7,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
-import { createSlackReadClient, createSlackWebClient } from "./client.js";
+import { createSlackLookupClient, createSlackReadClient, createSlackWebClient } from "./client.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { normalizeAllowListLower } from "./monitor/allow-list.js";
 
@@ -79,6 +79,7 @@ export async function resolveSlackConversationInfo(params: {
   operation?: "read" | "write";
   requireFreshName?: boolean;
   assertDirectAdapterHandoff?: () => void;
+  signal?: AbortSignal;
 }): Promise<SlackConversationInfo> {
   const channelId = params.channelId.trim();
   if (!channelId) {
@@ -128,7 +129,13 @@ export async function resolveSlackConversationInfo(params: {
         }
         return result;
       }
-      const client = params.assertDirectAdapterHandoff
+      const client = params.signal
+        ? createSlackLookupClient(
+            token,
+            { teamId: params.teamId, signal: params.signal },
+            params.assertDirectAdapterHandoff,
+          )
+        : params.assertDirectAdapterHandoff
         ? createSlackReadClient(
             token,
             { teamId: params.teamId },
@@ -172,6 +179,7 @@ export async function resolveSlackChannelType(params: {
   accountId?: string | null;
   channelId: string;
   teamId?: string;
+  signal?: AbortSignal;
 }): Promise<"channel" | "group" | "dm" | "unknown"> {
   return (await resolveSlackConversationInfo(params)).type;
 }

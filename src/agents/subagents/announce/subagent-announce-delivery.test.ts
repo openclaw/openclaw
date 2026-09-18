@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateAgentParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatValidationErrors } from "../../../../packages/gateway-protocol/src/validation-errors.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import type { ChannelMessagingAdapter } from "../../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -57,6 +58,7 @@ import {
   loadRequesterSessionEntry,
 } from "./subagent-announce-delivery.test-support.js";
 import { runDescendantWake } from "./subagent-announce-descendant-wake.js";
+import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 
 const sessionDeliveryQueueMocks = vi.hoisted(() => ({
   enqueueClaimedSessionDelivery: vi.fn(
@@ -426,7 +428,10 @@ const committedSessionSpawnEvidence = {
   acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:main:child" }],
 } as const;
 
-function registerDirectTargetTestChannel(channelId: string): void {
+function registerDirectTargetTestChannel(
+  channelId: string,
+  resolveOutboundSessionRoute?: NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>,
+): void {
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -440,6 +445,7 @@ function registerDirectTargetTestChannel(channelId: string): void {
           messaging: {
             inferTargetChatType: ({ to }: { to: string }) =>
               to.startsWith("channel:") || to.startsWith("thread:") ? "channel" : "direct",
+            ...(resolveOutboundSessionRoute ? { resolveOutboundSessionRoute } : {}),
           },
         },
       },
@@ -1405,6 +1411,95 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
 });
 
 describe("deliverSubagentAnnouncement completion delivery", () => {
+  it("does not direct-fallback after confirmed source progress outlives final verification", async () => {
+    const resolveOutboundSessionRoute = vi.fn(
+      async ({ target, signal }: { target: string; signal?: AbortSignal }) => {
+        if (target === "D000000001") {
+          return {
+            sessionKey: "agent:main:slack:user:U123",
+            baseSessionKey: "agent:main:slack:user:U123",
+            recipientSessionExact: true,
+            peer: { kind: "direct", id: "U123" },
+            chatType: "direct",
+            from: "slack:U123",
+            to: "user:U123",
+          };
+        }
+        await new Promise<void>((resolve) => {
+          if (!signal || signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return null;
+      },
+    );
+    registerDirectTargetTestChannel(
+      "slack",
+      resolveOutboundSessionRoute as unknown as NonNullable<
+        ChannelMessagingAdapter["resolveOutboundSessionRoute"]
+      >,
+    );
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "child done" }],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "D000000001",
+            sourceReplyFinal: false,
+          },
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "D000000002",
+            sourceReplyFinal: true,
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({ sessionId: "requester-session", isActive: false }),
+      getRuntimeConfig: () =>
+        ({
+          session: { dmScope: "main" },
+          agents: { defaults: { subagents: { announceTimeoutMs: 25 } } },
+        }) as never,
+      sendMessage,
+    });
+
+    const result = await sendSubagentAnnounceDirectly({
+      requesterSessionKey: "agent:main:main",
+      targetRequesterSessionKey: "agent:main:main",
+      triggerMessage: "child done",
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-progress-timeout-no-fallback",
+      directOrigin: { channel: "slack", accountId: "acct-1", to: "user:U123" },
+      requesterSessionOrigin: { channel: "slack", accountId: "acct-1", to: "user:U123" },
+      requesterIsSubagent: false,
+      sourceSessionKey: "agent:main:subagent:child",
+      sourceTool: "subagent_announce",
+    });
+
+    expect(result).toMatchObject({ delivered: true, path: "direct" });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(resolveOutboundSessionRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ target: "D000000001" }),
+    );
+    const stalledLookup = resolveOutboundSessionRoute.mock.calls.find(
+      ([params]) => params.target === "D000000002",
+    );
+    expect(stalledLookup?.[0].signal?.aborted).toBe(true);
+  });
+
   it("uses an active requester queue as the completion handoff when message-tool delivery is not required", async () => {
     const callGateway = createGatewayMock();
     const transcript = await createRequesterTranscriptFixture("requester-session-1");
@@ -4717,6 +4812,55 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       } else {
         expect(sendMessage).not.toHaveBeenCalled();
       }
+    },
+  );
+
+  it.each([
+    ["source receipt first", (source: object, unrelated: object) => [source, unrelated]],
+    ["source receipt second", (source: object, unrelated: object) => [unrelated, source]],
+  ] as const)(
+    "does not fallback-resend after an exact source final when an unrelated lookup stalls (%s)",
+    async (_label, order) => {
+      const resolveOutboundSessionRoute = vi.fn(
+        async (
+          ..._args: Parameters<NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>>
+        ) => await new Promise<never>(() => {}),
+      );
+      registerDirectTargetTestChannel("discord", resolveOutboundSessionRoute);
+      const callGateway = createGatewayMock({
+        result: {
+          payloads: [],
+          didSendViaMessagingTool: true,
+          messagingToolSentTargets: order(
+            {
+              tool: "message",
+              provider: "discord",
+              accountId: "acct-1",
+              to: "dm:U123",
+              sourceReplyFinal: true,
+            },
+            {
+              tool: "message",
+              provider: "discord",
+              accountId: "acct-1",
+              to: "dm:OTHER",
+              sourceReplyFinal: true,
+            },
+          ),
+        },
+      });
+      const sendMessage = createSendMessageMock();
+      const result = await deliverDiscordDirectMessageCompletion({
+        callGateway,
+        sendMessage,
+        runtimeConfig: { agents: { defaults: { subagents: { announceTimeoutMs: 25 } } } },
+        sourceTool: "subagent_announce",
+        internalEvents: taskCompletionEvents({ childSessionId: "child-session-id" }),
+      });
+
+      expect(result).toMatchObject({ delivered: true, path: "direct" });
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(resolveOutboundSessionRoute).not.toHaveBeenCalled();
     },
   );
 
