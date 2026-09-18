@@ -683,6 +683,50 @@ describe("buildExecApprovalPendingToolResult", () => {
     });
   });
 
+  it("leaves a no-route allowlist fallback to the caller's enforceable-plan evaluation", async () => {
+    const route = await createExecApprovalRequestRoute({
+      warnings: [],
+      approvalRunningNoticeMs: 1_000,
+      createApprovalSlug: (approvalId) => approvalId,
+      register: async (approvalId) => ({
+        id: approvalId,
+        expiresAtMs: 60_000,
+        finalDecision: null,
+      }),
+      askFallback: "allowlist",
+      requiresExplicitApproval: false,
+    });
+
+    expect(route).toMatchObject({
+      kind: "inline",
+      // Not a user decision: the timeout state keeps the caller's fallback hook —
+      // and its enforceable-plan revalidation — reachable instead of a blanket denial.
+      preResolvedDecision: null,
+      state: { baseDecision: { timedOut: true }, approvedByAsk: false, deniedReason: null },
+    });
+  });
+
+  it("resolves a no-route full fallback as an approved timeout", async () => {
+    const route = await createExecApprovalRequestRoute({
+      warnings: [],
+      approvalRunningNoticeMs: 1_000,
+      createApprovalSlug: (approvalId) => approvalId,
+      register: async (approvalId) => ({
+        id: approvalId,
+        expiresAtMs: 60_000,
+        finalDecision: null,
+      }),
+      askFallback: "full",
+      requiresExplicitApproval: false,
+    });
+
+    expect(route).toMatchObject({
+      kind: "inline",
+      preResolvedDecision: null,
+      state: { baseDecision: { timedOut: true }, approvedByAsk: true, deniedReason: null },
+    });
+  });
+
   it.each([
     ["a live route", undefined, "webchat"],
     ["an explicit decision", "allow-once", undefined],
