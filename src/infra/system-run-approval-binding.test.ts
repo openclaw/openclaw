@@ -294,21 +294,25 @@ describe("matchSystemRunApprovalBinding", () => {
   it.each([
     {
       name: "argv mismatch",
+      mismatchField: "argv",
       actual: { ...expected, argv: ["bash", "-lc", "echo bye"] },
     },
     {
       name: "cwd mismatch",
+      mismatchField: "cwd",
       actual: { ...expected, cwd: "/var/tmp" },
     },
     {
       name: "agent mismatch",
+      mismatchField: "agentId",
       actual: { ...expected, agentId: "other" },
     },
     {
       name: "session mismatch",
+      mismatchField: "sessionKey",
       actual: { ...expected, sessionKey: "agent:main:other" },
     },
-  ])("rejects $name", ({ actual }) => {
+  ])("rejects $name", ({ actual, mismatchField }) => {
     expect(
       matchSystemRunApprovalBinding({
         expected,
@@ -319,7 +323,7 @@ describe("matchSystemRunApprovalBinding", () => {
       ok: false,
       code: "APPROVAL_REQUEST_MISMATCH",
       message: "approval id does not match request",
-      details: undefined,
+      details: { mismatchField },
     });
   });
 });

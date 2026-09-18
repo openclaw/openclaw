@@ -20,7 +20,9 @@ const mocks = vi.hoisted(() => ({
       rawParams,
     }: {
       rawParams: unknown;
-    }): { ok: true; params: unknown } | { ok: false; message: string } => ({
+    }):
+      | { ok: true; params: unknown }
+      | { ok: false; message: string; details?: Record<string, unknown> } => ({
       ok: true,
       params: rawParams,
     }),
@@ -237,6 +239,10 @@ describe("node.invoke caller cancellation", () => {
     mocks.sanitizeNodeInvokeParamsForForwarding.mockReturnValueOnce({
       ok: false,
       message: "system.run approval could not be verified",
+      details: {
+        code: "APPROVAL_REQUEST_MISMATCH",
+        mismatchField: "argv",
+      },
     });
     const stream = {
       onProgress: vi.fn(),
@@ -259,7 +265,14 @@ describe("node.invoke caller cancellation", () => {
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ message: "system.run approval could not be verified" }),
+      expect.objectContaining({
+        message: "system.run approval could not be verified",
+        details: expect.objectContaining({
+          code: "APPROVAL_REQUEST_MISMATCH",
+          mismatchField: "argv",
+          nodeCommandDispatched: false,
+        }),
+      }),
     );
   });
 
