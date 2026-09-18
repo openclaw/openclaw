@@ -14,6 +14,7 @@ import {
 } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
+import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { isCurrentManagedServiceUpdateHandoffProcess } from "../../infra/update-managed-service-handoff.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -440,6 +441,7 @@ async function stopManagedServiceBeforeMutableUpdate(
     serviceDefinitionEnv:
       resolveManagedGatewayServiceCommand(serviceState.command)?.environment ?? {},
     serviceNodeRunner: resolveManagedServiceNodeRunner(serviceState.command),
+    servicePort: parseTcpPortFromArgs(serviceState.command?.programArguments) ?? undefined,
     ...(process.platform === "linux"
       ? { serviceManagerUid: observedSystemdManagerUid(serviceState) }
       : {}),

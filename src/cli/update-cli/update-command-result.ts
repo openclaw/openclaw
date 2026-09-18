@@ -33,6 +33,10 @@ import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { formatCliCommand } from "../command-format.js";
+import {
+  formatDaemonServiceInstallCommand,
+  resolveDaemonServiceInstallGuidance,
+} from "../daemon-cli/shared.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
@@ -65,11 +69,12 @@ export function recordServiceReconciliationWarning(
   result: UpdateRunResult,
   env: NodeJS.ProcessEnv,
   message: string,
+  port?: number,
 ): void {
   defaultRuntime.error(message);
   result.steps.push({
     name: "managed-service-reconciliation",
-    command: formatCliCommand("openclaw gateway install --force", env),
+    command: formatDaemonServiceInstallCommand(env, port),
     cwd: result.root ?? "",
     durationMs: 0,
     exitCode: 0,
@@ -106,7 +111,8 @@ export function prepareUpdateServiceResult(
       params.result,
       serviceEnv,
       `Gateway service still targets ${verdict.root}; the active installation is ${params.result.root ?? params.root}. ` +
-        `Service reconciliation was skipped because restart is disabled or the service is stopped. Run \`${formatCliCommand("openclaw doctor --fix", serviceEnv)}\` to apply the installation change.`,
+        `Service reconciliation was skipped because restart is disabled or the service is stopped. ${resolveDaemonServiceInstallGuidance(undefined, serviceEnv, { stopped: params.preManagedServiceStop?.running === false, port: params.preManagedServiceStop?.servicePort })}`,
+      params.preManagedServiceStop?.servicePort,
     );
   }
   return shouldRestart;

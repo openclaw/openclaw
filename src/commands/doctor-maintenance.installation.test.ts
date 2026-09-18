@@ -367,7 +367,12 @@ async function runInstallationCase(params: {
           expect(events).toEqual(["repair-state"]);
           expect(running).toBe(false);
           expect(command.programArguments[1]).toBe(path.join(oldRoot, "dist/index.js"));
-          expect(maintenance?.warnings).toEqual([expect.stringContaining("already stopped")]);
+          expect(maintenance?.warnings).toEqual([
+            expect.stringContaining(
+              "Stopped service definitions are preserved; run `openclaw gateway install --force --port 19989` from the active CLI.",
+            ),
+          ]);
+          expect(maintenance?.warnings?.[0]).not.toContain("doctor --fix");
           expect(runtime.log).toHaveBeenCalledWith(
             expect.stringContaining(`${oldRoot} (2026.9.4)`),
           );

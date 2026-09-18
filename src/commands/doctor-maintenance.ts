@@ -200,7 +200,15 @@ export async function beginDoctorMaintenance(params: {
         if (drift) {
           const { formatGatewayServiceInstallationDrift } =
             await import("../cli/daemon-cli/shared.js");
-          const message = `${formatGatewayServiceInstallationDrift(drift, undefined, env)} The service was already stopped; Doctor left its definition and stop state unchanged.`;
+          const message = formatGatewayServiceInstallationDrift(
+            drift,
+            undefined,
+            before.serviceEnv,
+            {
+              stopped: true,
+              port: before.servicePort,
+            },
+          );
           warnings.push(message);
           params.runtime.log(message);
         }

@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gatewayService from "../../daemon/service.js";
-import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import {
+  createMockGatewayService,
+  mockSystemAccountHome,
+} from "../../daemon/service.test-helpers.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import {
   createUpdateRun,
@@ -572,20 +575,31 @@ describe("maybeRestartService", () => {
   );
 
   it.each(["default", "work"])(
-    "preserves the selected profile in skipped reconciliation: %s",
+    "directs stopped-service drift to the selected native installer: %s",
     (profile) => {
+      const home = tempDirs.make("stopped-service-guidance-");
+      vi.stubEnv("HOME", home);
+      mockSystemAccountHome();
+      const stateDir = path.join(home, profile === "default" ? ".openclaw" : ".openclaw-work");
       const result: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
       expect(
         prepareUpdateServiceResult({
           result,
           root: "/cli-install",
-          shouldRestart: false,
+          shouldRestart: true,
+          coreAlreadyCurrent: true,
           preManagedServiceStop: {
             stopped: false,
             inspected: true,
             runtimeInspected: true,
             running: false,
-            serviceEnv: { OPENCLAW_PROFILE: profile },
+            serviceEnv: {
+              HOME: home,
+              OPENCLAW_PROFILE: profile,
+              OPENCLAW_STATE_DIR: stateDir,
+              OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+            },
+            servicePort: 19989,
             serviceUpdateVerdict: {
               kind: "owned",
               root: "/service-install",
@@ -599,12 +613,15 @@ describe("maybeRestartService", () => {
       const cli = profile === "default" ? "openclaw" : "openclaw --profile work";
       expect(result.steps).toEqual([
         expect.objectContaining({
-          command: `${cli} gateway install --force`,
+          command: `${cli} gateway install --force --port 19989`,
           advisory: expect.objectContaining({
-            message: expect.stringContaining(`Run \`${cli} doctor --fix\``),
+            message: expect.stringContaining(
+              `Stopped service definitions are preserved; run \`${cli} gateway install --force --port 19989\` from the active CLI.`,
+            ),
           }),
         }),
       ]);
+      expect(result.steps[0]?.advisory?.message).not.toContain("doctor --fix");
     },
   );
 
