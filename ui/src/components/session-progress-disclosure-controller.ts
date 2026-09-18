@@ -15,6 +15,7 @@ import {
 export type ComposerProgressRunLifecycle = {
   gatewayScope?: object;
   sessionIdentity?: string;
+  initiallyCollapsed?: boolean;
   activeRunId?: string | null;
   completedRunId?: string | null;
   readingHistory?: boolean;
@@ -83,7 +84,7 @@ class ProgressDisclosureController {
         : remembered;
     return resolveProgressDisclosure(undefined, {
       type: "mount",
-      open: initialOpen,
+      open: initialOpen && !lifecycle?.initiallyCollapsed,
       manualOpen,
       activeRunId: lifecycle?.activeRunId ?? null,
       completedRunId: lifecycle?.completedRunId ?? null,

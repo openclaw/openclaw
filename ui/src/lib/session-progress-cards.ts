@@ -321,7 +321,7 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       // only a refresh hint; the captured owner request alone may clear a card.
       entry.generation += 1;
       entry.dirty = true;
-      delete entry.error;
+      // A refresh hint cannot confirm an empty snapshot or restore denied access.
       if (!entry.load && watched.has(key)) {
         void load(entry.target).catch(() => undefined);
       }

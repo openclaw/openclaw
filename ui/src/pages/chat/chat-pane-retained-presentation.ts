@@ -122,8 +122,28 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     });
   }
 
-  private progressPresentationSessionKey: string | undefined;
-  private progressPresentationReady = false;
+  private progressEntry:
+    | {
+        gatewayScope: object;
+        client: ChatPageHost["client"];
+        key: string;
+        phase: "unpainted" | "waiting" | "settled";
+        frame: number | null;
+      }
+    | undefined;
+
+  private clearProgressEntry(): void {
+    if (this.progressEntry?.frame != null) {
+      cancelAnimationFrame(this.progressEntry.frame);
+    }
+    this.progressEntry = undefined;
+  }
+
+  override disconnectedCallback(): void {
+    this.clearProgressEntry();
+    super.disconnectedCallback();
+  }
+
   private retainedProgressCard:
     | {
         gatewayScope: object;
@@ -133,10 +153,15 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         agentId: string | undefined;
         card: ProgressCard;
         identity: string;
+        initiallyCollapsed: boolean;
       }
     | undefined;
 
-  protected get progressCardPresentation(): { card: ProgressCard; identity: string } | null {
+  protected get progressCardPresentation(): {
+    card: ProgressCard;
+    identity: string;
+    initiallyCollapsed: boolean;
+  } | null {
     const state = this.state;
     if (
       !state ||
@@ -145,10 +170,31 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       parseCatalogSessionKey(state.sessionKey)
     ) {
       this.retainedProgressCard = undefined;
+      this.clearProgressEntry();
       return null;
     }
     const gatewayScope = gatewayPresentationScope(this.context.gateway);
     const agentId = resolveUiSelectedSessionAgentId(state);
+    const key = JSON.stringify([state.sessionKey, state.currentSessionId, agentId]);
+    if (
+      !this.progressEntry ||
+      this.progressEntry.gatewayScope !== gatewayScope ||
+      this.progressEntry.client !== state.client ||
+      this.progressEntry.key !== key
+    ) {
+      this.clearProgressEntry();
+      this.progressEntry = {
+        gatewayScope,
+        client: state.client,
+        key,
+        phase: "unpainted",
+        frame: null,
+      };
+    }
+    const entry = this.progressEntry;
+    const hasPresentedHistory = () =>
+      (this.transcriptReady && getChatHistoryLoadState(state).phase !== "failed") ||
+      getAcceptedChatHistorySession(state) !== undefined;
     const previous = this.retainedProgressCard;
     if (
       previous &&
@@ -173,9 +219,42 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         card,
         // Global and ordinary sessions can share the progress-card wire key.
         identity: JSON.stringify([target.agentId ?? null, target.sessionKey]),
+        initiallyCollapsed:
+          this.retainedProgressCard?.initiallyCollapsed ?? entry.phase === "waiting",
       };
     } else if (!this.progressCard.loading) {
       this.retainedProgressCard = undefined;
+    }
+    if (card || (!this.progressCard.loading && !this.progressCard.error)) {
+      entry.phase = "settled";
+      if (entry.frame !== null) {
+        cancelAnimationFrame(entry.frame);
+        entry.frame = null;
+      }
+    } else if (entry.phase === "unpainted" && entry.frame === null && hasPresentedHistory()) {
+      // Record a painted transcript without waiting for the progress request.
+      // The disclosure owner uses this only for a new card's default, never a saved choice.
+      entry.frame = requestAnimationFrame(() => {
+        entry.frame = null;
+        if (
+          this.progressEntry === entry &&
+          entry.phase === "unpainted" &&
+          this.state === state &&
+          this.isConnected &&
+          this.presented &&
+          document.visibilityState !== "hidden" &&
+          hasPresentedHistory() &&
+          state.client === entry.client &&
+          JSON.stringify([
+            state.sessionKey,
+            state.currentSessionId,
+            resolveUiSelectedSessionAgentId(state),
+          ]) === entry.key
+        ) {
+          entry.phase =
+            this.progressCard.loading || this.progressCard.error ? "waiting" : "settled";
+        }
+      });
     }
     // Reconnect retires read admission, not the mounted card's disclosure state.
     return this.retainedProgressCard ?? null;
@@ -195,44 +274,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     // Unlike secondary metadata, the progress card determines transcript geometry.
     return this.resolveChatReadTarget();
-  }
-
-  protected get progressCardInitialLoading(): boolean {
-    const state = this.state;
-    if (!state) {
-      return false;
-    }
-    if (this.progressPresentationSessionKey !== state.sessionKey) {
-      this.progressPresentationSessionKey = state.sessionKey;
-      this.progressPresentationReady = false;
-    }
-    if (this.progressPresentationReady) {
-      return false;
-    }
-    const phase = this.context.gateway.snapshot.phase;
-    if (
-      !this.isCurrentSessionArchived(state) &&
-      !parseCatalogSessionKey(state.sessionKey) &&
-      getChatHistoryLoadState(state).phase !== "failed"
-    ) {
-      if (phase === "connecting" || phase === "starting") {
-        return true;
-      }
-      if (
-        state.connected &&
-        (!this.presented ||
-          document.visibilityState === "hidden" ||
-          (!this.transcriptReady && !getAcceptedChatHistorySession(state)) ||
-          (this.initialProgressCardTarget() &&
-            this.progressCard.loading &&
-            !this.progressCard.error))
-      ) {
-        return true;
-      }
-    }
-    // Only the first read reserves an empty card slot; refreshes retain the mounted card.
-    this.progressPresentationReady = true;
-    return false;
   }
 
   protected clearComposerPrefillAttention(): void {

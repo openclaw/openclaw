@@ -102,8 +102,14 @@ describe("session progress card Gateway response boundary", () => {
       expect(store.get(target)).toEqual(denied ? null : card);
       expect(store.get(sibling)).toEqual(siblingCard);
       const restored = { ...card, revision: 2, markdown: "Refreshed progress" };
-      request.mockResolvedValueOnce({ card: restored });
-      await expect(store.load(target)).resolves.toEqual(restored);
+      const pending = createDeferred<{ card: typeof restored }>();
+      request.mockReturnValueOnce(pending.promise);
+      emitChange(sessionKey, 2);
+      const refresh = store.load(target);
+      expect(store.getError(target)).toBe(denied ? "access-denied" : "unavailable");
+      expect(store.get(target)).toEqual(denied ? null : card);
+      pending.resolve({ card: restored });
+      await expect(refresh).resolves.toEqual(restored);
       expect(request).toHaveBeenLastCalledWith("progressCard.get", target);
       expect(store.getError(target)).toBeUndefined();
     },

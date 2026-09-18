@@ -64,6 +64,70 @@ describe("elastic progress disclosure controller", () => {
   });
 
   it.each([true, false])(
+    "closes a late mount synchronously without saving a choice (default collapsed=%s)",
+    (collapseByDefault) => {
+      const container = createContainer();
+      const gatewayScope = {};
+      const show = (initiallyCollapsed?: boolean) =>
+        render(
+          renderSessionProgressCard(
+            progressCard,
+            "composer",
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            true,
+            collapseByDefault,
+            { gatewayScope, initiallyCollapsed },
+          ),
+          container,
+        );
+      show(true);
+      // No timer or microtask may be needed to hide the expanded body.
+      expect(container.querySelector("details")!.open).toBe(false);
+      render(nothing, container);
+      show();
+      expect(container.querySelector("details")!.open).toBe(!collapseByDefault);
+    },
+  );
+
+  it.each([true, false])(
+    "preserves the user's expanded=%s choice across late and cached remounts",
+    (manualOpen) => {
+      const container = createContainer();
+      const gatewayScope = {};
+      const show = (initiallyCollapsed?: boolean) =>
+        render(
+          renderSessionProgressCard(
+            progressCard,
+            "composer",
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            true,
+            false,
+            { gatewayScope, initiallyCollapsed },
+          ),
+          container,
+        );
+      show(true);
+      const summary = container.querySelector("summary")!;
+      summary.click();
+      if (!manualOpen) {
+        summary.click();
+      }
+      expect(container.querySelector("details")!.open).toBe(manualOpen);
+      for (const initiallyCollapsed of [true, undefined]) {
+        render(nothing, container);
+        show(initiallyCollapsed);
+        expect(container.querySelector("details")!.open).toBe(manualOpen);
+      }
+    },
+  );
+
+  it.each([true, false])(
     "records endpoint wheel ownership and cancels following (collapsed=%s)",
     (collapsed) => {
       const container = createContainer();

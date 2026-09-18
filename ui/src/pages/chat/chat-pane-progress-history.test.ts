@@ -21,7 +21,7 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 
-const history: ChatHistoryResult = {
+const history = {
   sessionId: "research-notes",
   sessionInfo: {
     key: "agent:research:notes",
@@ -31,7 +31,7 @@ const history: ChatHistoryResult = {
     updatedAt: 1,
   },
   messages: [{ role: "assistant", content: [{ type: "text", text: "Research transcript" }] }],
-};
+} satisfies ChatHistoryResult;
 
 function progressCard(revision = 1): ProgressCard {
   return {
@@ -60,7 +60,11 @@ function createHistoryProgressPane(request: GatewayRequestHandler) {
   state.settings = { sessionKey: "notes", lastActiveSessionKey: "notes" } as typeof state.settings;
   const presentation = pane as TestChatPane & {
     progressCard: SessionProgressCardController;
-    readonly progressCardPresentation: { card: ProgressCard; identity: string } | null;
+    readonly progressCardPresentation: {
+      card: ProgressCard;
+      identity: string;
+      initiallyCollapsed: boolean;
+    } | null;
   };
   const progress = presentation.progressCard;
   onTestFinished(() => progress.hostDisconnected());
@@ -254,6 +258,59 @@ describe("retained bare pane progress follows accepted history ownership", () =>
     progress.hostUpdate();
     expect(progress.card).toEqual(card);
     expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(1);
+  });
+
+  it("mounts late progress closed when history refresh starts before the presentation frame", async () => {
+    const frames = new Map<number, FrameRequestCallback>();
+    let nextFrame = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      const id = ++nextFrame;
+      frames.set(id, callback);
+      return id;
+    });
+    vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const firstProgress = createDeferred<{ card: ProgressCard }>();
+    const refreshed = createDeferred<ChatHistoryResult>();
+    let historyReads = 0;
+    const request = vi.fn((method: string) =>
+      method === "chat.history"
+        ? ++historyReads === 1
+          ? Promise.resolve(history)
+          : refreshed.promise
+        : firstProgress.promise,
+    );
+    const { state, progress, presentation } = createHistoryProgressPane(request);
+    await loadChatHistory(state, { deferBranches: true });
+    progress.hostUpdate();
+    expect(presentation.progressCardPresentation).toBeNull();
+    const refreshing = loadChatHistory(state, { deferBranches: true });
+    try {
+      progress.hostUpdate();
+      expect(state.chatMessages).toMatchObject(history.messages);
+      expect(presentation.progressCardPresentation).toBeNull();
+      // The accepted transcript stays visible while its replacement is pending.
+      // Deliver precisely the queued first presentation frame during that read.
+      const queued = [...frames.values()];
+      frames.clear();
+      expect(queued.length).toBeGreaterThan(0);
+      for (const callback of queued) {
+        callback(performance.now());
+      }
+      const card = progressCard();
+      firstProgress.resolve({ card });
+      await vi.waitFor(() => expect(progress.card).toEqual(card));
+      expect(presentation.progressCardPresentation).toMatchObject({
+        card,
+        initiallyCollapsed: true,
+      });
+      expect(state.chatMessages).toMatchObject(history.messages);
+    } finally {
+      refreshed.resolve(history);
+      await refreshing;
+    }
   });
 
   it("does not infer an existing progress owner from a missing history row", async () => {

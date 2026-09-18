@@ -402,8 +402,8 @@ export class ChatPane extends ChatPaneLayoutRender {
       providerPolicyNotice: catalogKey ? null : state.providerPolicyNotice,
       progressCard: progressPresentation?.card ?? null,
       progressCardIdentity: progressPresentation?.identity,
+      progressCardInitiallyCollapsed: progressPresentation?.initiallyCollapsed,
       gatewayScope: gatewayPresentationScope(this.context.gateway),
-      progressCardInitialLoading: this.progressCardInitialLoading,
       collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
       readingHistory: state.chatReadingHistory,
       onProgressManipulate: () => {
