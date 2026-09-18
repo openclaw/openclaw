@@ -627,6 +627,10 @@ async function collectSessionIngestionBatches(params: {
   const nextFiles = { ...params.state.files };
   const nextSeenMessages: Record<string, string[]> = { ...params.state.seenMessages };
   const sources: SessionIngestionSource[] = [];
+  // Recency per discovered source, keyed by state key. Kept beside the source
+  // list rather than on SessionIngestionSource so the shared type stays a
+  // description of the transcript, not of one sweep's ordering.
+  const sourceRecencyMs = new Map<string, number>();
   for (const agentId of agentIds) {
     const knownStateKeys = new Set<string>();
     const forgottenSessionIds = new Set(
@@ -667,6 +671,7 @@ async function collectSessionIngestionBatches(params: {
         continue;
       }
       sources.push(source);
+      sourceRecencyMs.set(source.stateKey, entry.updatedAtMs ?? 0);
     }
     // Complete corpus enumeration proves which owned checkpoints are stale;
     // foreign backfill checkpoints belong to a separate lifecycle.
@@ -676,7 +681,16 @@ async function collectSessionIngestionBatches(params: {
       }
     }
   }
+  // A busy agent can have more transcript files than the sweep-wide cap can
+  // visit. Prefer the most recently active sessions so current conversations are
+  // not starved behind an old lexicographic prefix. Agent and path remain the
+  // tie-break, so ordering stays deterministic when recency is equal or absent.
   const sortedSources = sources.toSorted((a, b) => {
+    const recencyDelta =
+      (sourceRecencyMs.get(b.stateKey) ?? 0) - (sourceRecencyMs.get(a.stateKey) ?? 0);
+    if (recencyDelta !== 0) {
+      return recencyDelta;
+    }
     if (a.agentId !== b.agentId) {
       return a.agentId.localeCompare(b.agentId);
     }
