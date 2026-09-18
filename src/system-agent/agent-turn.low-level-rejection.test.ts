@@ -1,33 +1,18 @@
-import fs from "node:fs";
-import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
-import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import { prepareEmbeddedSkills } from "../agents/embedded-agent-runner/skill-runtime.js";
-import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
-import { createSystemAgentTool } from "../agents/tools/system-agent-tool.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
-import { CommandLane } from "../process/lanes.js";
-import {
-  cleanupSystemAgentSession,
-  createSystemAgentSession,
-  type SystemAgentSession,
-} from "./agent-turn.js";
+import { createSystemAgentSession, type SystemAgentSession } from "./agent-turn.js";
 import {
   runSystemAgentTurnWithDeps as runSystemAgentTurnWithDepsImpl,
   type SystemAgentTurnDeps,
 } from "./agent-turn.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
-import { resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl } from "./inference-route.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture as createSystemAgentVerifiedInferenceTestFixtureImpl,
   installSystemAgentClaudeCliBackendTestFixture,
   createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
-import { createSystemAgentVerifiedInferenceBinding as createSystemAgentVerifiedInferenceBindingImpl } from "./verified-inference.js";
 
 vi.mock("../plugins/providers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/providers.js")>()),
@@ -42,7 +27,6 @@ vi.mock("../agents/harness/runtime-plugin.js", async (importOriginal) => ({
   ),
 }));
 
-type RunCliAgentParams = Parameters<NonNullable<SystemAgentTurnDeps["runCliAgent"]>>[0];
 type RunEmbeddedAgentParams = Parameters<NonNullable<SystemAgentTurnDeps["runEmbeddedAgent"]>>[0];
 
 const mocks = vi.hoisted(() => ({
@@ -82,17 +66,6 @@ const createSystemAgentVerifiedInferenceTestFixture: typeof createSystemAgentVer
       () => createSystemAgentVerifiedInferenceTestFixtureImpl(...args),
       args[0],
     );
-
-const resolveSystemAgentConfiguredRouteFromConfig: typeof resolveSystemAgentConfiguredRouteFromConfigImpl =
-  (...args) =>
-    pluginMetadataSnapshot!.run(
-      () => resolveSystemAgentConfiguredRouteFromConfigImpl(...args),
-      args[0],
-    );
-
-const createSystemAgentVerifiedInferenceBinding: typeof createSystemAgentVerifiedInferenceBindingImpl =
-  (...args) =>
-    pluginMetadataSnapshot!.run(() => createSystemAgentVerifiedInferenceBindingImpl(...args));
 
 function useTempStateDir(): string {
   const stateDir = tempDirs.make("openclaw-turn-");

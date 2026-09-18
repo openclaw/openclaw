@@ -1,23 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import {
-  embeddedAgentLog,
-  supportsModelTools,
-  type HarnessContextEngine as ContextEngine,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { HarnessContextEngine as ContextEngine } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
-import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
-import {
-  createMockPluginRegistry,
-  getActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -25,8 +9,6 @@ import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 // Codex tests cover run attempt.context engine plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
-import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
-import { shouldEnableCodexAppServerNativeToolSurface } from "./dynamic-tool-build.js";
 import {
   assistantMessage,
   createParams as createSharedParams,
@@ -34,17 +16,9 @@ import {
   runCodexAppServerAttempt as runSharedCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
-  threadStartResult,
-  turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
 import { createContextEngine } from "./run-attempt.context-engine.test-support.js";
-import {
-  readCodexAppServerBinding,
-  writeCodexAppServerBinding as writeRawCodexAppServerBinding,
-} from "./session-binding.test-helpers.js";
-
-const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
   const params = createSharedParams(sessionFile, workspaceDir);
@@ -126,63 +100,6 @@ async function createSqliteParams(
   return params;
 }
 
-const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
-  "features.standalone_web_search": false,
-  web_search: "disabled",
-});
-
-function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
-  const [sessionFile, binding, lookup] = args;
-  return writeRawCodexAppServerBinding(
-    sessionFile,
-    {
-      webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
-      ...binding,
-    },
-    lookup,
-  );
-}
-
-function makeThreadBootstrapBinding(params: {
-  threadId: string;
-  cwd: string;
-  policyFingerprint: string;
-  epoch: string;
-}): Parameters<typeof writeCodexAppServerBinding>[1] {
-  return {
-    threadId: params.threadId,
-    cwd: params.cwd,
-    dynamicToolsFingerprint: "[]",
-    contextEngine: {
-      schemaVersion: 1,
-      engineId: "lossless-claw",
-      policyFingerprint: params.policyFingerprint,
-      projection: {
-        schemaVersion: 1,
-        mode: "thread_bootstrap",
-        epoch: params.epoch,
-      },
-    },
-  };
-}
-
-function toolResultMessage(payload: unknown, timestamp: number): AgentMessage {
-  return {
-    role: "toolResult",
-    toolCallId: `call-${timestamp}`,
-    toolName: "bulk_context_probe",
-    content: [
-      {
-        type: "toolResult",
-        toolUseId: `call-${timestamp}`,
-        output: payload,
-      },
-    ],
-    isError: false,
-    timestamp,
-  } as unknown as AgentMessage;
-}
-
 function createStartedThreadHarness(
   requestImpl?: Parameters<typeof createSharedStartedThreadHarness>[0],
   options?: Parameters<typeof createSharedStartedThreadHarness>[1],
@@ -208,38 +125,13 @@ function createStartedThreadHarness(
   };
 }
 
-type MockCallReader = { mock: { calls: unknown[][] } };
-
 const requireRecord = createRequireRecord("record", "expected-label-object");
-
-function requireFirstCallArg(mock: unknown, label: string): unknown {
-  const call = (mock as MockCallReader).mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} to be called`);
-  }
-  return call[0];
-}
-
-function requireRequestParams(
-  harness: ReturnType<typeof createStartedThreadHarness>,
-  method: string,
-): Record<string, unknown> {
-  const request = harness.requests.find((entry) => entry.method === method);
-  return requireRecord(request?.params, `${method} params`);
-}
 
 function requireArray(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) {
     throw new Error(`expected ${label} to be an array`);
   }
   return value;
-}
-
-function expectRequestInputTextContains(
-  harness: ReturnType<typeof createStartedThreadHarness>,
-  expected: string,
-): void {
-  expect(getRequestInputText(harness)).toContain(expected);
 }
 
 function getRequestInputText(harness: ReturnType<typeof createStartedThreadHarness>): string {
