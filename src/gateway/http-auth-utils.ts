@@ -30,6 +30,10 @@ import {
   setControlUiPluginAuthCookie,
 } from "./control-ui-plugin-auth-cookie.js";
 import {
+  controlUiPluginCookieOriginBlocked,
+  resolveHttpBrowserOriginPolicy,
+} from "./control-ui-plugin-origin-gate.js";
+import {
   listControlUiPluginTabAuthGrants,
   type ControlUiPluginTabAuthGrant,
 } from "./control-ui-plugin-tabs.js";
@@ -53,7 +57,6 @@ import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   authorizeOperatorScopesForMethod,
 } from "./method-scopes.js";
-import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
@@ -133,13 +136,6 @@ type ControlUiReadAuthParams = Omit<GatewayHttpRequestAuthParams, "auth"> & {
   requiredOperatorMethod?: string;
   onPluginFrameGrants?: (grants: readonly ControlUiPluginFrameGrantAck[]) => void;
 };
-
-export function resolveHttpBrowserOriginPolicy(
-  req: IncomingMessage,
-  cfg = getRuntimeConfig(),
-): NonNullable<Parameters<typeof authorizeHttpGatewayConnect>[0]["browserOriginPolicy"]> {
-  return resolveBrowserOriginPolicy({ req, cfg });
-}
 
 function usesSharedSecretHttpAuth(auth: SharedSecretGatewayAuth | undefined): boolean {
   return auth?.mode === "token" || auth?.mode === "password";
@@ -490,6 +486,12 @@ export function authorizeControlUiPluginCookieRequest(
     return null;
   }
   const cfg = getRuntimeConfig();
+  // The cookie is SameSite=None: reject concrete cross-site browser Origins
+  // (CSRF via fetch(credentials:include)); the sandboxed plugin-tab iframe and
+  // Origin-less non-browser clients still pass — see the gate's docstring.
+  if (controlUiPluginCookieOriginBlocked(req, cfg)) {
+    return null;
+  }
   let authenticatedProfile: AuthenticatedHttpUserProfile = {};
   if (cfg.gateway?.roles) {
     const profileId = grants[0]?.profileId;
