@@ -41,18 +41,7 @@ import { createMatrixGuardedFetch } from "./transport.js";
 import type { MatrixClientEventMap, MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
 import type { MatrixVerificationSummary } from "./verification-manager.js";
 
-type MatrixCryptoRuntime = typeof import("./crypto-runtime.js");
-
 const MATRIX_ENCRYPTED_STARTUP_TIMEOUT_MS = 60_000;
-
-let loadedMatrixCryptoRuntime: MatrixCryptoRuntime | null = null;
-
-export const loadMatrixCryptoRuntime = createLazyRuntimeModule(() =>
-  import("./crypto-runtime.js").then((runtime) => {
-    loadedMatrixCryptoRuntime = runtime;
-    return runtime;
-  }),
-);
 
 export abstract class MatrixClientBase {
   abstract getUserId(): Promise<string>;
