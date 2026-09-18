@@ -103,12 +103,12 @@ describe.skipIf(process.platform !== "win32")("native Windows source CLI shim", 
       const cjkCheckout = path.join(root, "用户", "OpenClaw source");
       await fs.cp(fixture.checkout, cjkCheckout, { recursive: true });
       const cjkEntryPath = path.join(cjkCheckout, "src", "entry.ts");
-      const invocation = {
-        ...fixture.invocation,
-        args: fixture.invocation.args.map((arg) =>
-          arg === fixture.entryPath ? cjkEntryPath : arg,
-        ),
-      };
+      const invocation = resolveCurrentOpenClawCliInvocation([], {
+        argv1: cjkEntryPath,
+        cwd: fixture.callerCwd,
+        execArgv: fixture.execArgv,
+        execPath: process.execPath,
+      });
       const stateDir = path.join(root, "state");
       const shimPath = path.join(stateDir, "tmp", "agent-cli", "openclaw.cmd");
       const command = buildWindowsCmdExeCommandLine(shimPath, ["probe"]);
