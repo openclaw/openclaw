@@ -37,6 +37,7 @@ import { createSrtFsBridge } from "./fs-bridge.js";
 import { PinOwnerClient } from "./pin-owner-client.js";
 import { buildPinOwnerCommand } from "./pin-owner-source.js";
 import { ScopeChildReaper } from "./scope-reaper.js";
+import { SessionBroker } from "./session-broker.js";
 import {
   buildSrtRuntimeConfig,
   resolveWritableRoots,
@@ -100,6 +101,12 @@ class SrtSandboxBackend {
   /** Per-scope AC4 pin owner RPC client (S3). Lazily spawns the owner process. */
   private readonly pinOwnerClient: PinOwnerClient;
   private fsBridge: ReturnType<typeof createSrtFsBridge> | undefined;
+  /**
+   * Per-session network broker (S4-P1). Lazily spawned the first time a command
+   * runs when perSessionNetwork is enabled; owns this session's private proxy +
+   * allowlist + (Linux) netns. Left undefined on the P0 in-process path.
+   */
+  private sessionBroker: SessionBroker | undefined;
 
   constructor(
     private readonly params: CreateSandboxBackendParams,
@@ -120,10 +127,43 @@ class SrtSandboxBackend {
   /** Tear down this scope: reap every tracked sandbox process group, drop the pin owner. */
   dispose(): void {
     this.pinOwnerClient.dispose();
+    this.sessionBroker?.dispose();
+    this.sessionBroker = undefined;
     this.fsBridge?.dispose();
     this.fsBridge = undefined;
     this.reaper.dispose();
     liveScopeBackends.delete(this);
+  }
+
+  /**
+   * Whether this scope routes commands through a per-session broker (S4-P1).
+   * Only under the "deny" posture — "allow" leaves the network fully open, and
+   * per-session isolation of an open network is meaningless.
+   */
+  private get perSessionNetworkEnabled(): boolean {
+    return this.deps.pluginConfig.perSessionNetwork && this.deps.pluginConfig.network === "deny";
+  }
+
+  /** Lazily create the per-session broker for this scope (S4-P1). */
+  private ensureSessionBroker(): SessionBroker {
+    if (!this.sessionBroker) {
+      const writableRoots = resolveWritableRoots(
+        scopePolicyFromParams(this.params),
+        this.deps.pluginConfig.writablePaths,
+      );
+      this.sessionBroker = new SessionBroker({
+        reaper: this.reaper,
+        writableRoots,
+        policy: {
+          allowedDomains: this.deps.pluginConfig.allowedDomains,
+          parentProxy: this.deps.pluginConfig.parentProxy,
+        },
+        cwd: this.params.workspaceDir,
+        binShell: this.deps.pluginConfig.binShell,
+        rpcTimeoutMs: this.deps.pluginConfig.commandTimeoutMs,
+      });
+    }
+    return this.sessionBroker;
   }
 
   /**
@@ -165,6 +205,25 @@ class SrtSandboxBackend {
   ): Promise<SandboxBackendCommandResult> {
     params.signal?.throwIfAborted();
     const script = withPositionalArgs(params.script, params.args);
+    // S4-P1: per-session isolation routes the command through this scope's own
+    // broker — a private srt process with its own proxy/allowlist/netns. The
+    // executor runs the command INSIDE that sandbox, so its network scope is the
+    // session's, not a shared one. A broker spawn/health failure fails closed
+    // (throws) rather than falling back to the in-process (P0) path.
+    if (this.perSessionNetworkEnabled) {
+      const broker = this.ensureSessionBroker();
+      const result = await broker.exec({
+        script,
+        stdin: params.stdin,
+        timeoutMs: this.deps.pluginConfig.commandTimeoutMs,
+      });
+      if (!params.allowFailure && result.code !== 0) {
+        throw new Error(
+          `srt-sandbox broker command failed (exit ${result.code}): ${result.stderr.toString("utf8").trim()}`,
+        );
+      }
+      return { stdout: result.stdout, stderr: result.stderr, code: result.code };
+    }
     const { argv, env } = await this.wrap(script, params.signal);
     const result = await this.reaper.spawn({
       argv,

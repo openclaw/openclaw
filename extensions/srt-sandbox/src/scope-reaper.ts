@@ -33,6 +33,13 @@ import { spawn, type ChildProcess } from "node:child_process";
 /** Inherited fd the sandboxed outer shell reads to detect parent death. */
 export const LIVENESS_FD = 3;
 
+/**
+ * Inherited fd the per-session broker's `srt` process reads config updates from
+ * (`srt --control-fd 4`). Distinct from {@link LIVENESS_FD} so a broker can hold
+ * both: the liveness watcher on fd 3, live allowlist updates on fd 4 (S4-P1).
+ */
+export const CONTROL_FD = 4;
+
 /** Buffered result of a reaped sandbox command (mirrors SandboxBackendCommandResult). */
 export type ReapedCommandResult = {
   stdout: Buffer;
@@ -77,6 +84,30 @@ export type PersistentChildHandle = {
   stdin: NodeJS.WritableStream;
   /** Owner response channel (child stdout, fd 1). */
   stdout: NodeJS.ReadableStream;
+};
+
+/** Inputs for a per-session broker spawn (S4-P1). `argv` is the outer wrapper
+ *  argv `[binShell, "-c", <srt invocation>]`; the launcher is injected here. */
+export type BrokerSpawnParams = {
+  argv: string[];
+  env: NodeJS.ProcessEnv;
+  cwd: string;
+};
+
+/**
+ * Handle for a per-session broker child (S4-P1). Adds a control channel (fd 4)
+ * to the persistent handle: the driver writes JSON-lines config updates there
+ * so `srt --control-fd 4` re-scopes the session's allowlist live. Reaper owns
+ * the process-group lifecycle exactly as for {@link PersistentChildHandle}.
+ */
+export type BrokerChildHandle = {
+  child: ChildProcess;
+  /** Executor request channel (child stdin, fd 0). */
+  stdin: NodeJS.WritableStream;
+  /** Executor response channel (child stdout, fd 1). */
+  stdout: NodeJS.ReadableStream;
+  /** Broker control channel ({@link CONTROL_FD}); JSON-lines to updateConfig(). */
+  control: NodeJS.WritableStream;
 };
 
 /**
@@ -304,6 +335,73 @@ export class ScopeChildReaper {
   }
 
   /**
+   * Launch a per-session network broker (S4-P1): the same detached-group +
+   * liveness-launcher lifecycle as {@link spawnPersistent}, plus a dedicated
+   * control channel on {@link CONTROL_FD}. The broker is the `srt --control-fd`
+   * process; fd 0/1 carry the executor RPC, fd 3 the liveness pipe, fd 4 the
+   * live config-update channel. Tracked exactly like every other reaped child,
+   * so scope teardown / host death group-kills the broker (and, on Linux, the
+   * bwrap child + its socat bridge, which live in the broker's process group).
+   */
+  spawnBroker(params: BrokerSpawnParams): BrokerChildHandle {
+    if (this.disposed) {
+      throw new ScopeReaperDisposedError();
+    }
+    const [command, ...rest] = params.argv;
+    if (!command) {
+      throw new Error("srt-sandbox produced an empty broker command.");
+    }
+    const wrappedArgs = [...rest];
+    const last = wrappedArgs.length - 1;
+    if (last < 0) {
+      throw new Error("srt-sandbox broker command is missing its script.");
+    }
+    wrappedArgs[last] = wrapWithLivenessLauncher(wrappedArgs[last]!);
+
+    const child = spawn(command, wrappedArgs, {
+      cwd: params.cwd,
+      env: params.env,
+      // Own session/process group so the whole broker subtree (srt + bwrap +
+      // socat on Linux) is reapable with one group signal.
+      detached: true,
+      // 0/1: executor RPC; 2: srt + executor diagnostics; 3: liveness pipe
+      // (write end held only here); 4: control-fd config-update channel.
+      stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
+    });
+
+    const livenessEnd = child.stdio[LIVENESS_FD];
+    const controlEnd = child.stdio[CONTROL_FD];
+    livenessEnd?.on("error", () => {});
+    controlEnd?.on("error", () => {});
+    child.stdin?.on("error", () => {});
+    child.stdout?.on("error", () => {});
+
+    const forget = () => {
+      this.live.delete(child);
+      livenessEnd?.destroy();
+      controlEnd?.destroy();
+    };
+    child.on("exit", () => {
+      killGroup(child.pid, "SIGKILL");
+      forget();
+    });
+    child.on("error", forget);
+
+    this.live.add(child);
+    if (!child.stdin || !child.stdout || !controlEnd || typeof controlEnd === "number") {
+      killGroup(child.pid, "SIGKILL");
+      forget();
+      throw new Error("srt-sandbox broker is missing its stdio/control channels.");
+    }
+    return {
+      child,
+      stdin: child.stdin,
+      stdout: child.stdout,
+      control: controlEnd as NodeJS.WritableStream,
+    };
+  }
+
+  /**
    * Tear the scope down: SIGKILL every tracked process group and refuse further
    * work. Idempotent. After this returns, no sandbox process spawned by this
    * scope survives, including background descendants.
@@ -312,7 +410,10 @@ export class ScopeChildReaper {
     this.disposed = true;
     for (const child of this.live) {
       killGroup(child.pid, "SIGKILL");
-      child.stdio[3]?.destroy();
+      child.stdio[LIVENESS_FD]?.destroy();
+      // Brokers (S4-P1) also hold a control pipe on CONTROL_FD; other children
+      // spawn with a 4-element stdio array so this index is simply undefined.
+      child.stdio[CONTROL_FD]?.destroy();
     }
     // Registry entries are removed by each command's own "close"/"error" path
     // once the kill lands; nothing else to release here.

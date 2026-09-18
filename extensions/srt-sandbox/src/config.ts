@@ -37,6 +37,21 @@ export type ResolvedSrtPluginConfig = {
   writablePaths: string[];
   /** Buffered-command timeout in milliseconds (runShellCommand / probes). */
   commandTimeoutMs: number;
+  /**
+   * S4-P1 (XIN-1936): when true, each session is routed through its OWN
+   * `srt --control-fd` broker process (Candidate 2), giving real per-session
+   * network isolation — a private proxy + token + allowlist + (Linux) netns per
+   * session. When false (default) the P0 global-allowlist in-process path is
+   * used unchanged. Only meaningful under the "deny" posture.
+   */
+  perSessionNetwork: boolean;
+  /**
+   * Optional upstream proxy the per-session broker tunnels through. Baked into
+   * the broker at spawn; NOT hot-swappable (SRT captures parentProxy by value at
+   * proxy creation, sandbox-manager.ts:1979-1982). Only consulted when
+   * perSessionNetwork is true.
+   */
+  parentProxy?: { http?: string; https?: string; noProxy?: string };
 };
 
 const DEFAULT_BIN_SHELL = "/bin/bash";
@@ -72,6 +87,14 @@ const SrtPluginConfigSchema = z.strictObject({
     .min(1, { error: "commandTimeoutSeconds must be a number >= 1" })
     .max(MAX_TIMER_TIMEOUT_SECONDS, {
       error: `commandTimeoutSeconds must be a number <= ${MAX_TIMER_TIMEOUT_SECONDS}`,
+    })
+    .optional(),
+  perSessionNetwork: z.boolean({ error: "perSessionNetwork must be a boolean" }).optional(),
+  parentProxy: z
+    .strictObject({
+      http: z.string().url({ error: "parentProxy.http must be a URL" }).optional(),
+      https: z.string().url({ error: "parentProxy.https must be a URL" }).optional(),
+      noProxy: nonEmptyTrimmedString("parentProxy.noProxy must be a non-empty string").optional(),
     })
     .optional(),
 });
@@ -135,6 +158,7 @@ export function resolveSrtPluginConfig(value: unknown): ResolvedSrtPluginConfig 
       allowedDomains: [],
       writablePaths: [],
       commandTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+      perSessionNetwork: false,
     };
   }
   const parsed = SrtPluginConfigSchema.safeParse(value);
@@ -152,5 +176,7 @@ export function resolveSrtPluginConfig(value: unknown): ResolvedSrtPluginConfig 
       typeof cfg.commandTimeoutSeconds === "number"
         ? Math.floor(cfg.commandTimeoutSeconds * 1000)
         : DEFAULT_COMMAND_TIMEOUT_MS,
+    perSessionNetwork: cfg.perSessionNetwork ?? false,
+    parentProxy: cfg.parentProxy,
   };
 }
