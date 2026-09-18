@@ -1,5 +1,5 @@
 // Whatsapp tests cover media plugin behavior.
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   mockExtractMessageContent,
@@ -160,6 +160,12 @@ describe("downloadInboundMedia", () => {
 
   it("preserves the store's fractional limit error for the message owner", async () => {
     const limitError = Object.assign(new Error("Media exceeds 256KB limit"), { code: "too-large" });
+    const source = new PassThrough();
+    const stream = source.pipe(new PassThrough());
+    const closed = new Promise<void>((resolve) => {
+      stream.once("close", resolve);
+    });
+    downloadMediaMessage.mockResolvedValueOnce(stream);
     saveMediaStream.mockRejectedValueOnce(limitError);
 
     await expect(
@@ -169,6 +175,9 @@ describe("downloadInboundMedia", () => {
         0.25 * 1024 * 1024,
       ),
     ).rejects.toBe(limitError);
+    await closed;
+    expect(stream.destroyed).toBe(true);
+    expect(source.destroyed).toBe(true);
   });
 
   it("propagates transport download failures to the message owner", async () => {
@@ -224,5 +233,54 @@ describe("downloadInboundMedia", () => {
       id: "quoted-image",
       participant,
     });
+  });
+  it("releases both a stalled decrypt stream and its piped HTTP source after the idle deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const source = new PassThrough();
+      const stream = source.pipe(new PassThrough());
+      const closed = new Promise<void>((resolve) => {
+        stream.once("close", resolve);
+      });
+      downloadMediaMessage.mockResolvedValueOnce(stream);
+      const download = downloadInboundMedia(
+        { message: { imageMessage: { mimetype: "image/jpeg" } } } as never,
+        mockSock as never,
+      );
+      const rejection = expect(download).rejects.toMatchObject({
+        name: "WhatsAppInboundMediaTimeoutError",
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await rejection;
+      await closed;
+      expect(source.destroyed).toBe(true);
+      expect(stream.destroyed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets the idle deadline as media progresses beyond one timeout interval", async () => {
+    vi.useFakeTimers();
+    try {
+      const stream = new PassThrough();
+      downloadMediaMessage.mockResolvedValueOnce(stream);
+      let settled = false;
+      const download = downloadInboundMedia(
+        { message: { imageMessage: { mimetype: "image/jpeg" } } } as never,
+        mockSock as never,
+      ).finally(() => {
+        settled = true;
+      });
+      for (let chunk = 0; chunk < 3; chunk++) {
+        stream.write(Buffer.from("part"));
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(settled).toBe(false);
+      }
+      stream.end();
+      expect((await download)?.saved.size).toBe(12);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
