@@ -16,10 +16,7 @@ import {
   clearMemoryPluginState,
   registerMemoryPromptPreparation,
 } from "../../../plugins/memory-state.test-fixtures.js";
-import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
-import { sumToolResultTextChars } from "../tool-result-context-guard.test-support.js";
 import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import {
   cleanupTempPaths,
