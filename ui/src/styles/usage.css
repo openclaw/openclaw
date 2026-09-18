@@ -1080,8 +1080,8 @@
   align-items: start;
 }
 
-/* Expand to two columns when the detail panel column is present */
-.usage-grid:has(.usage-grid-column:nth-child(2)) {
+/* Keep detail detection at base specificity so responsive rules can override it. */
+.usage-grid:where(:has(.usage-grid-column:nth-child(2))) {
   grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
 }
 
