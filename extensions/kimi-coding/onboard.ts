@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 // Kimi Coding setup module handles plugin onboarding behavior.
 import {
   createDefaultModelsPresetAppliers,
@@ -38,4 +39,19 @@ const kimiCodingPresetAppliers = createDefaultModelsPresetAppliers({
 
 export function applyKimiCodeConfig(cfg: OpenClawConfig): OpenClawConfig {
   return kimiCodingPresetAppliers.applyConfig(cfg);
+}
+
+export function applyKimiProviderConnectionConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const existing =
+    cfg.models?.providers?.kimi ??
+    Object.entries(cfg.models?.providers ?? {}).find(
+      ([id]) => normalizeProviderId(id) === "kimi",
+    )?.[1];
+  const next = kimiCodingPresetAppliers.applyProviderConfig(cfg);
+  const connection = next.models?.providers?.kimi;
+  if (existing && connection) {
+    connection.baseUrl = existing.baseUrl;
+    connection.api = existing.api ?? connection.api;
+  }
+  return next;
 }

@@ -49,6 +49,28 @@ export default defineSingleProviderPluginEntry({
       ].join("\n"),
       noteTitle: "Kimi",
     },
+    extraAuth: [
+      {
+        id: "device-code",
+        label: "Kimi Code sign-in",
+        kind: "device_code",
+        wizard: {
+          choiceId: "kimi-code-oauth",
+          choiceLabel: "Kimi Code sign-in",
+          groupId: "moonshot",
+          groupLabel: "Moonshot AI (Kimi)",
+        },
+        run: async (ctx) => (await import("./oauth.js")).loginKimiDeviceCode(ctx),
+      },
+    ],
+    refreshOAuth: async (credential) => (await import("./oauth.js")).refreshKimiOAuth(credential),
+    prepareRuntimeAuth: async (ctx) =>
+      ctx.authMode === "oauth"
+        ? {
+            apiKey: ctx.apiKey,
+            request: { auth: { mode: "authorization-bearer", token: ctx.apiKey } },
+          }
+        : undefined,
     catalog: {
       order: "simple",
       run: async (ctx) => {
