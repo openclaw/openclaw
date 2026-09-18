@@ -18,6 +18,9 @@ function threadSpecFromTarget(target: TelegramTarget): TelegramThreadSpec | null
   if (target.directMessagesTopicId != null) {
     return { id: target.directMessagesTopicId, scope: "direct-messages" };
   }
+  if (target.dmTopicId != null) {
+    return { id: target.dmTopicId, scope: "dm" };
+  }
   return target.messageThreadId == null ? null : { id: target.messageThreadId, scope: "forum" };
 }
 
@@ -34,9 +37,11 @@ function serializeTelegramTopicConversation(params: {
   const marker =
     params.thread.scope === "direct-messages" && id > 0
       ? "direct-topic"
-      : params.thread.scope === "forum" && id >= 0
-        ? "topic"
-        : null;
+      : params.thread.scope === "dm" && id > 0
+        ? "dm-topic"
+        : params.thread.scope === "forum" && id >= 0
+          ? "topic"
+          : null;
   return marker ? `${chatId}:${marker}:${id}` : null;
 }
 
@@ -54,7 +59,10 @@ export function parseTelegramTopicConversation(params: {
 }): ParsedTelegramTopicConversation | null {
   const conversationId = params.conversationId
     .trim()
-    .replace(/:(direct-topic|topic):/i, (_match, marker: string) => `:${marker.toLowerCase()}:`);
+    .replace(
+      /:(dm-topic|direct-topic|topic):/i,
+      (_match, marker: string) => `:${marker.toLowerCase()}:`,
+    );
   const target = parseTelegramTarget(conversationId);
   const chatId =
     normalizeTelegramChatId(target.chatId) ?? normalizeTelegramLookupTarget(target.chatId);
