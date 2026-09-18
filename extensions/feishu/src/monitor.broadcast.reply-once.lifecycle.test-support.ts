@@ -18,6 +18,7 @@ import {
   runFeishuLifecycleSequence,
   setFeishuLifecycleStateDir,
   setupFeishuLifecycleHandler,
+  stopFeishuLifecycleMonitors,
 } from "./test-support/lifecycle-test-support.js";
 import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
 
@@ -169,9 +170,13 @@ describe("Feishu broadcast reply-once lifecycle", () => {
     });
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    restoreFeishuLifecycleStateDir(originalStateDir);
+  afterEach(async () => {
+    try {
+      await stopFeishuLifecycleMonitors();
+    } finally {
+      vi.useRealTimers();
+      restoreFeishuLifecycleStateDir(originalStateDir);
+    }
   });
 
   it("uses one active reply path when the same broadcast event reaches two accounts", async () => {

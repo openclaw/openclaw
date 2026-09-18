@@ -137,6 +137,7 @@ async function dispatchVcMeetingInvitedTurn(params: {
   runtime?: RuntimeEnv;
   channelRuntime?: PluginRuntime["channel"];
   turn: VcMeetingInvitedTurn;
+  trackTask?: (task: Promise<void>) => void;
 }): Promise<void> {
   params.runtime?.log?.(
     `feishu[${params.accountId}]: vc meeting invited, dispatching synthetic p2p message sender=${params.turn.inviter.senderId} meeting_no=${params.turn.meetingNo}`,
@@ -146,6 +147,7 @@ async function dispatchVcMeetingInvitedTurn(params: {
     `user:${params.turn.inviter.senderId}`,
   );
   await handleFeishuMessage({
+    trackTask: params.trackTask,
     cfg: params.cfg,
     accountId: params.accountId,
     event,
@@ -161,12 +163,17 @@ export function createFeishuVcMeetingInvitedHandler(params: {
   channelRuntime?: PluginRuntime["channel"];
   fireAndForget?: boolean;
   autoJoin: boolean;
+  isAccountActive?: () => boolean;
+  trackTask?: (task: Promise<void>) => void;
 }): (data: unknown) => Promise<void> {
   const { cfg, accountId, runtime, fireAndForget, autoJoin } = params;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
   return async (data) => {
+    if (params.isAccountActive?.() === false) {
+      return;
+    }
     // Meeting invitations represent remote intent, but joining changes the bot's live presence.
     // Keep the event inert unless this account explicitly opts into unattended joins.
     if (!autoJoin) {
@@ -183,12 +190,14 @@ export function createFeishuVcMeetingInvitedHandler(params: {
         return;
       }
       const promise = dispatchVcMeetingInvitedTurn({
+        trackTask: params.trackTask,
         cfg,
         accountId,
         runtime,
         channelRuntime: params.channelRuntime,
         turn,
       });
+      params.trackTask?.(promise);
       if (fireAndForget) {
         promise.catch((err: unknown) => {
           error(`feishu[${accountId}]: error handling vc meeting invited event: ${String(err)}`);

@@ -4,6 +4,7 @@ import {
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { hasControlCommand, isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
@@ -24,6 +25,7 @@ const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 
 let handlers: Record<string, (data: unknown) => Promise<void>> = {};
+let stopDebounceMonitor: (() => Promise<void>) | undefined;
 
 vi.mock("./client.js", () => ({
   createEventDispatcher: createEventDispatcherMock,
@@ -183,7 +185,13 @@ async function setupDebounceMonitor(params?: {
   });
   createEventDispatcherMock.mockReturnValue({ register });
 
-  await monitorSingleAccount({
+  const started = createDeferred<void>();
+  const finish = createDeferred<void>();
+  monitorWebSocketMock.mockImplementationOnce(async () => {
+    started.resolve();
+    await finish.promise;
+  });
+  const monitor = monitorSingleAccount({
     cfg: buildDebounceConfig(),
     account: buildDebounceAccount(),
     runtime: createNonExitingRuntimeEnv(),
@@ -193,6 +201,11 @@ async function setupDebounceMonitor(params?: {
       botName: params?.botName,
     },
   });
+  stopDebounceMonitor = async () => {
+    finish.resolve();
+    await monitor;
+  };
+  await Promise.race([started.promise, monitor]);
 
   const onMessage = handlers["im.message.receive_v1"];
   if (!onMessage) {
@@ -628,9 +641,14 @@ describe("Feishu inbound debounce regressions", () => {
     setFeishuRuntime(createFeishuMonitorRuntime());
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
+  afterEach(async () => {
+    try {
+      await stopDebounceMonitor?.();
+    } finally {
+      stopDebounceMonitor = undefined;
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
   });
 
   it("keeps root-less topic threads in separate debounce buckets", async () => {

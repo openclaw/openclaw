@@ -107,6 +107,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/discord/src/monitor/model-picker-preferences.test.ts",
   "extensions/discord/src/monitor/presence-cooldown-store.test.ts",
   "extensions/discord/src/monitor/thread-bindings.state.test.ts",
+  "extensions/feishu/src/monitor.dedupe-lifecycle.test.ts",
   "extensions/imessage/src/monitor.approval-reaction-replay.test.ts",
   "extensions/imessage/src/message-resource.test.ts",
   "extensions/imessage/src/monitor-reply-cache.test.ts",

@@ -4,12 +4,29 @@ import {
   createPluginRuntimeMock,
   createTestInboundDebounceFlush,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, vi, type Mock } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
+import { getFeishuLifecycleTestMocks } from "../lifecycle.test-support.js";
 import { getFeishuRuntime, setFeishuRuntime } from "../runtime.js";
 import type { ResolvedFeishuAccount } from "../types.js";
 
 const FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS = 10_000;
+const activeMonitors = new Set<{ controller: AbortController; completion: Promise<void> }>();
+
+export async function stopFeishuLifecycleMonitors(): Promise<void> {
+  const monitors = [...activeMonitors];
+  activeMonitors.clear();
+  for (const monitor of monitors) {
+    monitor.controller.abort();
+  }
+  const results = await Promise.allSettled(monitors.map((monitor) => monitor.completion));
+  for (const result of results) {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+  }
+}
 type InboundDebounceFlush = ReturnType<
   Parameters<PluginRuntime["channel"]["debounce"]["createInboundDebouncer"]>[0]["onFlush"]
 >;
@@ -478,13 +495,27 @@ export async function setupFeishuLifecycleHandler(params: {
   ) as unknown as PluginRuntime["config"]["current"];
 
   const monitorSingleAccount = await loadMonitorSingleAccount();
-  await monitorSingleAccount({
+  const started = createDeferred<void>();
+  const controller = new AbortController();
+  getFeishuLifecycleTestMocks().monitorWebSocketMock.mockImplementationOnce(async () => {
+    started.resolve();
+    if (!controller.signal.aborted) {
+      await new Promise<void>((resolve) => {
+        controller.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    }
+  });
+  const completion = monitorSingleAccount({
     cfg: params.cfg,
     account: params.account,
     runtime: params.runtime,
     botOpenIdSource: FEISHU_PREFETCHED_BOT_OPEN_ID_SOURCE,
     fireAndForget: false,
+    abortSignal: controller.signal,
   });
+  activeMonitors.add({ controller, completion });
+  void completion.catch(started.reject);
+  await started.promise;
 
   const handlers: Record<string, (data: unknown) => Promise<void>> = {};
   for (const [key, value] of Object.entries(register.mock.calls.at(0)?.[0] ?? {})) {

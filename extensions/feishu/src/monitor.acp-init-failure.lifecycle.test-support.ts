@@ -16,6 +16,7 @@ import {
   restoreFeishuLifecycleStateDir,
   setFeishuLifecycleStateDir,
   setupFeishuLifecycleHandler,
+  stopFeishuLifecycleMonitors,
 } from "./test-support/lifecycle-test-support.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -153,9 +154,13 @@ describe("Feishu ACP-init failure lifecycle", () => {
     });
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    restoreFeishuLifecycleStateDir(originalStateDir);
+  afterEach(async () => {
+    try {
+      await stopFeishuLifecycleMonitors();
+    } finally {
+      vi.useRealTimers();
+      restoreFeishuLifecycleStateDir(originalStateDir);
+    }
   });
 
   it("sends one ACP failure notice to the topic root across replay", async () => {

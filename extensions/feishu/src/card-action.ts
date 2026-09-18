@@ -157,6 +157,7 @@ function resolveCallbackTarget(event: FeishuCardActionEvent): string {
 }
 
 async function dispatchSyntheticCommand(params: {
+  trackTask?: (task: Promise<void>) => void;
   cfg: ClawdbotConfig;
   event: FeishuCardActionEvent;
   command: string;
@@ -174,6 +175,7 @@ async function dispatchSyntheticCommand(params: {
     log: params.runtime?.log ?? console.log,
   });
   await handleFeishuMessage({
+    trackTask: params.trackTask,
     cfg: params.cfg,
     event: buildSyntheticMessageEvent(
       params.event,
@@ -319,6 +321,7 @@ async function sendInvalidInteractionNotice(params: {
 }
 
 export async function handleFeishuCardAction(params: {
+  trackTask?: (task: Promise<void>) => void;
   cfg: ClawdbotConfig;
   event: FeishuCardActionEvent;
   botOpenId?: string;
@@ -441,6 +444,7 @@ export async function handleFeishuCardAction(params: {
           return;
         }
         await dispatchSyntheticCommand({
+          trackTask: params.trackTask,
           cfg,
           event,
           command,
@@ -472,6 +476,7 @@ export async function handleFeishuCardAction(params: {
     );
 
     await dispatchSyntheticCommand({
+      trackTask: params.trackTask,
       cfg,
       event,
       command: content,
