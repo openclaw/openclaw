@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   applyChatFontSmoothing,
@@ -42,20 +45,28 @@ describe("typeface presentation", () => {
     syncTypefaceStylesheets(faces);
     // The mono face is always declared: base.css --mono promises JetBrains
     // Mono for code spans on every theme; its woff2 still downloads lazily.
-    expect(hrefs()).toEqual(
-      [...new Set([ui, chat, "jetbrains-mono"])]
-        .filter((face) => face !== "system")
-        .map((face) => `/fonts/${face}.css`),
-    );
+    const facesLoaded = [...new Set([ui, chat])]
+      .filter((face) => face !== "system")
+      .map((face) => `/fonts/${face}.css`);
+    expect(hrefs()).toEqual([
+      ...facesLoaded,
+      "/fonts/noto-sans-vietnamese.css",
+      ...(facesLoaded.includes("/fonts/jetbrains-mono.css") ? [] : ["/fonts/jetbrains-mono.css"]),
+    ]);
   });
 
   it("loads overrides once, retaining them without fetching for system or custom defaults", () => {
     syncTypefaceStylesheets(resolveTypefaces("dash", "system", "system"));
-    expect(hrefs()).toEqual(["/fonts/jetbrains-mono.css"]);
+    expect(hrefs()).toEqual(["/fonts/noto-sans-vietnamese.css", "/fonts/jetbrains-mono.css"]);
     const faces = resolveTypefaces("dash", "geist", "lora");
     expect(faces).toEqual({ ui: "geist", chat: "lora" });
     syncTypefaceStylesheets(faces);
-    expect(hrefs()).toEqual(["/fonts/jetbrains-mono.css", "/fonts/geist.css", "/fonts/lora.css"]);
+    expect(hrefs()).toEqual([
+      "/fonts/noto-sans-vietnamese.css",
+      "/fonts/jetbrains-mono.css",
+      "/fonts/geist.css",
+      "/fonts/lora.css",
+    ]);
     expect(resolveTypefaces("custom", "lora")).toEqual({ ui: "lora", chat: "system" });
     const loaded = fontLinks();
     for (const next of [
@@ -76,11 +87,50 @@ describe("typeface presentation", () => {
     loadTypefaceSpecimens();
     const specimens = fontLinks();
     expect(specimens).toEqual(expect.arrayContaining(active));
-    expect(specimens).toHaveLength(9);
-    expect(new Set(hrefs()).size).toBe(9);
+    expect(specimens).toHaveLength(10);
+    expect(new Set(hrefs()).size).toBe(10);
     loadTypefaceSpecimens();
     syncTypefaceStylesheets(resolveTypefaces("knot", "lora"));
     expect(fontLinks()).toEqual(specimens);
+  });
+
+  it("places the shared Vietnamese fallback after proportional bundled faces only", () => {
+    for (const [id, typeface] of Object.entries(TYPEFACES)) {
+      // System and mono stacks stay Noto-free so code/CRT metrics stay fixed-width.
+      if (id === "system" || id === "jetbrains-mono") {
+        expect(typeface.stack).not.toContain("Noto Sans");
+      } else {
+        expect(typeface.stack).toContain('"Noto Sans"');
+        expect(typeface.stack.indexOf('"Noto Sans"')).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("covers Vietnamese precomposed and combining-mark ranges in the served CSS", () => {
+    const css = readFileSync(
+      path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../../public/fonts/noto-sans-vietnamese.css",
+      ),
+      "utf8",
+    );
+    const range = (css.match(/U\+[0-9A-F]+(?:-U?\+?[0-9A-F]+)?/gu) ?? []).map((token) => {
+      const [start = "", end = start] = token.replaceAll("U+", "").split("-");
+      return [Number.parseInt(start, 16), Number.parseInt(end, 16)] as const;
+    });
+    const covered = (codepoint: number) =>
+      range.some(([start, end]) => start <= codepoint && codepoint <= end);
+    // Precomposed Vietnamese letters that Instrument Sans latin-ext jumps over.
+    for (let codepoint = 0x1ea0; codepoint <= 0x1ef1; codepoint += 1) {
+      expect(covered(codepoint), `U+${codepoint.toString(16)}`).toBe(true);
+    }
+    // NFD marks including horn (U+031B).
+    for (let codepoint = 0x300; codepoint <= 0x309; codepoint += 1) {
+      expect(covered(codepoint), `U+${codepoint.toString(16)}`).toBe(true);
+    }
+    for (const codepoint of [0x31b, 0x323, 0x329, 0x1ebf]) {
+      expect(covered(codepoint), `U+${codepoint.toString(16)}`).toBe(true);
+    }
   });
 
   it("removes inline overrides to return ownership to theme CSS without changing code", () => {

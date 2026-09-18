@@ -132,7 +132,12 @@ suite.define(() => {
     );
     await page.evaluate(() => document.fonts.ready);
     expect(new Set(fontRequests())).toEqual(
-      new Set(["dm-sans.css 200", "fraunces.css 200", "jetbrains-mono.css 200"]),
+      new Set([
+        "dm-sans.css 200",
+        "fraunces.css 200",
+        "noto-sans-vietnamese.css 200",
+        "jetbrains-mono.css 200",
+      ]),
     );
     const families = () =>
       preview.evaluate((panel) => ({
@@ -154,7 +159,8 @@ suite.define(() => {
     await captureTypography(page, "picker-default");
     await openPicker(ui);
     await ui.locator('[role="option"][data-value="geist"]').waitFor({ state: "visible" });
-    await expect.poll(() => fontRequests().length).toBe(9);
+    // Nine bundled faces plus the shared Vietnamese fallback stylesheet.
+    await expect.poll(() => fontRequests().length).toBe(10);
     await captureTypography(page, "picker-specimens");
     await selectPickerValue(ui, "geist");
     await expect.poll(async () => (await families()).ui).toContain("Geist");
@@ -264,9 +270,10 @@ suite.define(() => {
         };
       });
 
-      // Every theme also declares the mono face: base.css --mono names
-      // JetBrains Mono for code spans regardless of the active family.
-      const expectedFaces = [...new Set([...faces, "jetbrains-mono"])];
+      // Every theme also declares the shared Vietnamese fallback and mono face:
+      // base.css --mono names JetBrains Mono for code spans regardless of the
+      // active family; the Noto link is unconditional (stacks stay proportional-only).
+      const expectedFaces = [...new Set([...faces, "noto-sans-vietnamese", "jetbrains-mono"])];
       if (report.buildId !== null) {
         expect(report.buildId).not.toBe("");
       }
