@@ -109,7 +109,7 @@ describe("provider public artifacts", () => {
           baseUrl: "https://api.openai.com/v1",
           authRequirement: "api-key",
           requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+          runtimePolicy: { compatibleIds: ["openclaw", "codex", "agentsapi"] },
         },
         {
           api: "openai-chatgpt-responses",
