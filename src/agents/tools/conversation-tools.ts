@@ -4,13 +4,18 @@ import { Type } from "typebox";
 // Keep Gateway wire schemas as the single owner so Code Mode never advertises a divergent shape.
 import {
   ConversationListResultSchema,
-  ConversationSendResultSchema,
   ConversationTurnResultSchema,
   type ConversationListResult,
   type ConversationSendResult,
   type ConversationTurnResult,
 } from "../../../packages/gateway-protocol/src/schema/agent.js";
+import {
+  resolveConversation,
+  resolveConversationRegistryScope,
+  type ConversationRecord,
+} from "../../config/sessions/conversation-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveEffectiveMessageToolsConfig } from "../../infra/outbound/outbound-policy.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
@@ -18,6 +23,7 @@ import {
   jsonResult,
   readPositiveIntegerParam,
   readToolStringParam,
+  textResult,
   ToolAuthorizationError,
   ToolInputError,
 } from "./common.js";
@@ -25,6 +31,13 @@ import {
   callAgentToolGatewayRequest,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
+import {
+  buildTurnSendLedgerSessionKey,
+  buildTurnSendTargetKey,
+  commitTurnSend,
+  releaseTurnSend,
+  reserveTurnSend,
+} from "./turn-send-ledger.js";
 
 const CONVERSATION_REF_PATTERN = /^conv_[a-f0-9]{32}$/u;
 
@@ -54,20 +67,52 @@ const ConversationsTurnSchema = Type.Object(
   { additionalProperties: false },
 );
 
+// Tool-local closed output schema for conversations_send: every field of the
+// Gateway ConversationSendResultSchema plus an optional turnSendNotice. Code Mode
+// projects a tool's details to the guest and validates them against this declared
+// schema (assertCatalogOutputMatchesSchema); the send-budget guidance must ride in
+// a declared details field to survive that projection, since content is dropped.
+// It intentionally stays a superset of the Gateway result rather than mutating the
+// public protocol schema, so no wire/SDK surface changes. Keep the shape aligned
+// with ConversationSendResultSchema in packages/gateway-protocol.
+// Module-private: production wires it only through the send tool's outputSchema
+// below, and tests read it back from that tool rather than importing the symbol,
+// so it needs no export.
+const ConversationSendToolResultSchema = Type.Object(
+  {
+    status: Type.Union([
+      Type.Literal("sent"),
+      Type.Literal("queued"),
+      Type.Literal("suppressed"),
+      Type.Literal("unknown"),
+    ]),
+    conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN.source }),
+    channel: Type.String({ minLength: 1 }),
+    messageId: Type.Optional(Type.String({ minLength: 1 })),
+    queueId: Type.Optional(Type.String({ minLength: 1 })),
+    turnSendNotice: Type.Optional(Type.String({ minLength: 1 })),
+  },
+  { additionalProperties: false },
+);
+
 type ConversationToolOptions = {
   agentId?: string;
   agentSessionId?: string;
   agentSessionKey?: string;
+  /** Current agent run; scopes the per-turn send ledger to one turn. */
+  runId?: string;
   config?: OpenClawConfig;
   senderIsOwner?: boolean;
 };
 
 type ConversationToolDeps = {
   callGateway: AgentToolGatewayRequestCaller;
+  resolveConversation: typeof resolveConversation;
 };
 
 const defaultDeps: ConversationToolDeps = {
   callGateway: callAgentToolGatewayRequest,
+  resolveConversation,
 };
 
 function resolveToolAgentId(options: ConversationToolOptions): string {
@@ -139,6 +184,57 @@ export function createConversationsListTool(
   };
 }
 
+function resolveConversationBudgetContext(
+  options: ConversationToolOptions,
+  deps: ConversationToolDeps,
+  conversationRef: string,
+): { sessionKey: string; runId: string; targetKey: string; channel: string } | undefined {
+  // Scope the ledger by the same agent-prefixed session slot the message tool uses
+  // (buildTurnSendLedgerSessionKey), not the raw session key: keying one tool raw and
+  // the other agent-prefixed splits one turn across two slots and lets alternating the
+  // tools evade the nudge and hard cap. This only changes the ledger slot key; the raw
+  // agentSessionKey still flows unchanged to the Gateway sourceSessionKey and operationId.
+  const ledgerSessionKey = buildTurnSendLedgerSessionKey(
+    resolveToolAgentId(options),
+    options.agentSessionKey,
+  );
+  if (!ledgerSessionKey || !options.runId || !options.config) {
+    return undefined;
+  }
+  // Resolve the opaque ref to its real (channel, account, target) route via the local
+  // registry so the ledger key matches the message tool's key for the same recipient;
+  // alternating the two tools at one peer must not evade the nudge or hard cap. Fail
+  // open on any miss — a registry read that comes up empty (or throws) must never
+  // block a send, mirroring resolveOutboundActionRoute returning undefined on ambiguity.
+  let record: ConversationRecord | undefined;
+  try {
+    record = deps.resolveConversation(
+      resolveConversationRegistryScope({
+        agentId: resolveToolAgentId(options),
+        config: options.config,
+      }),
+      conversationRef,
+    );
+  } catch {
+    return undefined;
+  }
+  if (!record) {
+    return undefined;
+  }
+  return {
+    sessionKey: ledgerSessionKey,
+    runId: options.runId,
+    targetKey: buildTurnSendTargetKey({
+      channel: record.channel,
+      accountId: record.accountId,
+      target: record.target,
+    }),
+    // The resolved channel, reused for a schema-valid suppressed result below so the
+    // capped path does not have to re-read the registry to satisfy the send contract.
+    channel: record.channel,
+  };
+}
+
 /** Sends directly to one external conversation without invoking its backing local session. */
 export function createConversationsSendTool(
   options: ConversationToolOptions = {},
@@ -151,7 +247,7 @@ export function createConversationsSendTool(
     description:
       "Send directly through a conversationRef. This performs channel delivery; it does not run the local agent in the backing session.",
     parameters: ConversationsSendSchema,
-    outputSchema: ConversationSendResultSchema,
+    outputSchema: ConversationSendToolResultSchema,
     execute: async (toolCallId, args, signal) => {
       requireOwner(options);
       const params = args as Record<string, unknown>;
@@ -165,19 +261,111 @@ export function createConversationsSendTool(
         toolName: "conversations_send",
         conversationRef,
       });
-      const result = await deps.callGateway<ConversationSendResult>({
-        method: "conversations.send",
-        params: {
-          agentId: resolveToolAgentId(options),
-          ...(options.agentSessionKey ? { sourceSessionKey: options.agentSessionKey } : {}),
-          operationId,
+      // Per-turn send budget, shared with the message tool: count successful sends
+      // per (turn, resolved route) so a reworded resend to the same conversation is
+      // visible even though the loop detector hashes full params and can't see it.
+      // The ref is resolved to its (channel, account, target) route so the ledger key
+      // is identical to the message tool's for the same recipient.
+      const budgetContext = resolveConversationBudgetContext(options, deps, conversationRef);
+      // Reserve one send before the Gateway call so a concurrent same-target send cannot
+      // slip past a positive cap while this one is in flight. The reserve is keyed by the
+      // operationId: an idempotent replay (the same toolCallId retried) resolves to the
+      // same operationId, so it is admitted past the cap (`replay`) — the Gateway returns
+      // the completed operation as "sent" without re-delivering
+      // (conversation-send.ts resultForCompletedOperation) and settle is skipped so the
+      // count and nudge stay put. The hard cap (opt-in via
+      // tools.message.maxMessagesPerTurnPerTarget) is enforced by the `exhausted` result.
+      const maxPerTurn =
+        budgetContext && options.config
+          ? resolveEffectiveMessageToolsConfig({
+              cfg: options.config,
+              agentId: resolveToolAgentId(options),
+            })?.maxMessagesPerTurnPerTarget
+          : undefined;
+      const reservation = budgetContext
+        ? reserveTurnSend(budgetContext, { maxPerTurn, operationId })
+        : undefined;
+      if (reservation?.status === "exhausted" && budgetContext) {
+        // conversations_send declares the tool-local ConversationSendToolResultSchema,
+        // which is the closed Gateway send result plus an optional turnSendNotice. The
+        // block reason rides in that declared details field (not only text content) so
+        // it survives Code Mode's details projection while Code Mode's output-schema
+        // check (assertCatalogOutputMatchesSchema) still passes.
+        // Report the configured per-turn limit, not a delivered count: admission is
+        // blocked on committed + in-flight pending reaching the cap, so the number actually
+        // delivered to this conversation may be fewer than `maxPerTurn`.
+        const blockedNotice = `Blocked: reached this turn's configured limit of ${maxPerTurn} message(s) to this conversation (maxMessagesPerTurnPerTarget). Finalize your reply instead of sending another message.`;
+        return textResult(blockedNotice, {
+          status: "suppressed" as const,
           conversationRef,
-          message,
-        },
-        ...(options.config ? { config: options.config } : {}),
-        ...(signal ? { signal } : {}),
-      });
-      return jsonResult(result);
+          channel: budgetContext.channel,
+          turnSendNotice: blockedNotice,
+        });
+      }
+      let result: ConversationSendResult;
+      try {
+        result = await deps.callGateway<ConversationSendResult>({
+          method: "conversations.send",
+          params: {
+            agentId: resolveToolAgentId(options),
+            ...(options.agentSessionKey ? { sourceSessionKey: options.agentSessionKey } : {}),
+            operationId,
+            conversationRef,
+            message,
+          },
+          ...(options.config ? { config: options.config } : {}),
+          ...(signal ? { signal } : {}),
+        });
+      } catch (error) {
+        // Nothing reached the peer: roll back the reservation so a throwing send does
+        // not consume the cap. A `replay` reservation took no pending slot, so this is
+        // a no-op for it.
+        if (reservation?.status === "reserved") {
+          releaseTurnSend(reservation.reservation);
+        }
+        throw error;
+      }
+      const base = jsonResult(result);
+      // Settle the reservation against the outcome. Only a confirmed "sent" commits;
+      // "queued" (enqueue-only, unconfirmed), "suppressed", and "unknown" have not
+      // reached the peer, so they release the reservation and draw no nudge. This
+      // matches the delivery owner's confirmed-delivery definition and the message
+      // tool (which has no "queued" concept). A `replay` reservation is left unsettled
+      // (the Gateway deduped it to the completed receipt), so it neither re-commits nor
+      // nudges. The soft reminder fires from the second committed send onward unless
+      // turnSendNudge is explicitly disabled.
+      if (reservation?.status === "reserved") {
+        if (result.status !== "sent") {
+          releaseTurnSend(reservation.reservation);
+        } else {
+          const sendCount = commitTurnSend(reservation.reservation);
+          const nudgeEnabled =
+            !options.config ||
+            resolveEffectiveMessageToolsConfig({
+              cfg: options.config,
+              agentId: resolveToolAgentId(options),
+            })?.turnSendNudge !== false;
+          if (sendCount >= 2 && nudgeEnabled) {
+            // Carry the reminder in both the presentation content (direct tool
+            // callers) and the declared details.turnSendNotice, so a Code Mode guest
+            // — which only receives the projected details — still sees it. The two
+            // strings are identical by construction.
+            const turnSendNotice = `You have already sent ${sendCount} messages to this conversation this turn; if this is a rewrite of the same reply, finalize now instead of sending another variant.`;
+            return {
+              ...base,
+              content: [
+                ...base.content,
+                {
+                  type: "text" as const,
+                  text: turnSendNotice,
+                },
+              ],
+              details: { ...result, turnSendNotice },
+            };
+          }
+        }
+      }
+      return base;
     },
   };
 }

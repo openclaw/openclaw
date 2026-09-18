@@ -1,6 +1,7 @@
 /** Tests native CLI continuity projection and bounded transcript-flush probing. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { AuthProfileStore } from "../auth-profiles.js";
 import {
   isCliBindingFlushed,
   restoreCliRunnerTestDeps,
@@ -8,7 +9,21 @@ import {
 } from "../cli-runner.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { applyCliSessionBindingResult, getCliSessionBinding } from "../cli-session.js";
-import { buildBlockedCliRunResult, buildCliRunResult } from "./cli-run-settlement.js";
+import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
+import {
+  buildTurnSendLedgerSessionKey,
+  clearTurnSendLedgerForRun,
+  commitTurnSend,
+  peekTurnSendCount,
+  reserveTurnSend,
+  resetTurnSendLedgerForTest,
+} from "../tools/turn-send-ledger.js";
+import {
+  buildBlockedCliRunResult,
+  buildCliRunResult,
+  settlePreparedCliRun,
+} from "./cli-run-settlement.js";
+import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 describe("isCliBindingFlushed", () => {
   const workspaceDir = "/tmp/openclaw-workspace";
@@ -180,4 +195,306 @@ describe("CLI native continuity projection", () => {
       );
     },
   );
+});
+
+describe("settlePreparedCliRun per-turn send ledger terminal cleanup", () => {
+  // Mirrors the exact slot the loopback message/conversations_send tools write under
+  // for a direct CLI run: buildCliMcpGrantContext forwards agentId + canonical
+  // sessionKey + runId, and prepare stashes them as context.turnSendLedgerScope.
+  const agentId = "main";
+  const grantSessionKey = "agent:main:main";
+  const targetKey = "imessage default +15550001111";
+  const ledgerSessionKey = buildTurnSendLedgerSessionKey(agentId, grantSessionKey)!;
+
+  beforeEach(() => {
+    resetTurnSendLedgerForTest();
+  });
+  afterEach(() => {
+    resetTurnSendLedgerForTest();
+  });
+
+  // A landed send committed by the message tool during the run, keyed exactly as
+  // the tool keys it for this (session, run) pair.
+  function commitSend(runId: string): number {
+    const key = { sessionKey: ledgerSessionKey, runId, targetKey };
+    const reserved = reserveTurnSend(key, {});
+    if (reserved.status !== "reserved") {
+      throw new Error(`expected a reserved send, got "${reserved.status}"`);
+    }
+    return commitTurnSend(reserved.reservation);
+  }
+
+  function makeContext(params: {
+    runId: string;
+    isFinalFallbackAttempt?: boolean | "omit";
+    withScope?: boolean;
+    effectiveAuthProfileId?: string;
+    authProfileStore?: AuthProfileStore;
+    onDeferredTurnSendLedgerScope?: RunCliAgentParams["onDeferredTurnSendLedgerScope"];
+    scope?: { agentId?: string; sessionKey: string; runId: string };
+  }): PreparedCliRunContext {
+    const scope = { agentId, sessionKey: grantSessionKey, runId: params.runId };
+    // Cron forwards isFinalFallbackAttempt to every CLI candidate, so it defaults to a
+    // terminal candidate here; "omit" models an embedded/command-rpc dispatched candidate
+    // (run-entry.ts owns that terminal) or a tool-less direct run.
+    const finalFallback = params.isFinalFallbackAttempt ?? true;
+    // SAFETY: settlePreparedCliRun reads only params.{cleanup*, sessionId, provider,
+    // runId, isFinalFallbackAttempt}, turnSendLedgerScope, and — when the auth-profile
+    // settlement path is exercised — context.{effectiveAuthProfileId, authProfileStore,
+    // agentDir, modelId}; the rest of the prepared context is unused.
+    return {
+      params: {
+        cleanupCliLiveSessionOnRunEnd: false,
+        cleanupBundleMcpOnRunEnd: false,
+        sessionId: "session-1",
+        provider: "claude-cli",
+        runId: params.runId,
+        onDeferredTurnSendLedgerScope: params.onDeferredTurnSendLedgerScope,
+        ...(finalFallback === "omit" ? {} : { isFinalFallbackAttempt: finalFallback }),
+      },
+      started: 0,
+      modelId: "opus",
+      ...(params.effectiveAuthProfileId
+        ? { effectiveAuthProfileId: params.effectiveAuthProfileId }
+        : {}),
+      ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
+      ...(params.withScope === false ? {} : { turnSendLedgerScope: params.scope ?? scope }),
+    } as unknown as PreparedCliRunContext;
+  }
+
+  const okResult = { payloads: [], meta: {} } as unknown as EmbeddedAgentRunResult;
+
+  it("clears the committed slot when a direct CLI run succeeds", async () => {
+    const runId = "run-success";
+    commitSend(runId);
+    expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(1);
+
+    await settlePreparedCliRun({
+      context: makeContext({ runId }),
+      run: async () => okResult,
+    });
+
+    expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(0);
+  });
+
+  it("defers a non-final candidate that succeeds, keeping counts for the next candidate", async () => {
+    // isFinalFallbackAttempt === false but the run returned without throwing. Settlement
+    // cannot tell whether runWithModelFallback will reclassify this "success" as retryable
+    // and drive another candidate that reuses the runId, so it must NOT clear here — the
+    // committed counts have to survive to that next candidate. A pre-fix `!threw` gate wiped
+    // them the instant a non-final candidate returned successfully.
+    const runId = "run-early-success";
+    commitSend(runId);
+
+    let deferredScope;
+    await settlePreparedCliRun({
+      context: makeContext({
+        runId,
+        isFinalFallbackAttempt: false,
+        onDeferredTurnSendLedgerScope: (scope) => (deferredScope = scope),
+      }),
+      run: async () => okResult,
+    });
+
+    // Survived settlement: the next candidate on this runId still sees the committed send.
+    expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(1);
+    // The candidate handed its canonical scope to the logical-run owner; the owner's terminal
+    // drains it by runId even though it clears by a different (raw) identity.
+    clearTurnSendLedgerForRun(deferredScope!);
+    expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(0);
+  });
+
+  it("clears the committed slot when a direct CLI run throws at its terminal", async () => {
+    const runId = "run-error";
+    commitSend(runId);
+    const failure = new Error("cli run failed");
+
+    await expect(
+      settlePreparedCliRun({
+        context: makeContext({ runId, isFinalFallbackAttempt: true }),
+        run: async () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+
+    expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(0);
+  });
+
+  it("does NOT clear when a non-final fallback candidate fails mid-turn", async () => {
+    const runId = "run-fallback";
+    commitSend(runId);
+    const failure = new Error("candidate failed, another remains");
+
+    await expect(
+      settlePreparedCliRun({
+        // isFinalFallbackAttempt === false: runWithModelFallback will run another
+        // candidate that reuses this runId; the budget must survive to it.
+        context: makeContext({ runId, isFinalFallbackAttempt: false }),
+        run: async () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+
+    expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(1);
+  });
+
+  // A run success drives the auth-profile settlement branch, which is not wrapped in
+  // the cleanup try/catch: if it throws, settlement exits exceptionally even though
+  // the run itself succeeded (runError stays undefined). Terminal cleanup must gate on
+  // that real exceptional exit, not on runError.
+  const successResult = {
+    payloads: [],
+    meta: { executionTrace: { attempts: [{ result: "success" }] } },
+  } as unknown as EmbeddedAgentRunResult;
+
+  function throwingAuthProfileStore(): AuthProfileStore {
+    return {
+      get profiles(): Record<string, unknown> {
+        throw new Error("auth-profile settlement failed");
+      },
+    } as unknown as AuthProfileStore;
+  }
+
+  it("does NOT clear when a non-final candidate succeeds but auth-profile settlement throws", async () => {
+    // The run succeeded (runError === undefined) yet settlement exits exceptionally.
+    // A pre-fix gate of `runError !== undefined` would read threw === false and wipe
+    // this non-final candidate's committed counts mid-chain.
+    const runId = "run-settle-throw-nonfinal";
+    commitSend(runId);
+
+    await expect(
+      settlePreparedCliRun({
+        context: makeContext({
+          runId,
+          isFinalFallbackAttempt: false,
+          effectiveAuthProfileId: "profile-1",
+          authProfileStore: throwingAuthProfileStore(),
+        }),
+        run: async () => successResult,
+      }),
+    ).rejects.toThrow("auth-profile settlement failed");
+
+    expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(1);
+  });
+
+  it("clears when a final candidate succeeds but auth-profile settlement throws", async () => {
+    // Same exceptional exit, but this is the chain's terminal (isFinalFallbackAttempt
+    // === true), so the slot is released for the reused runId's next turn.
+    const runId = "run-settle-throw-final";
+    commitSend(runId);
+
+    await expect(
+      settlePreparedCliRun({
+        context: makeContext({
+          runId,
+          isFinalFallbackAttempt: true,
+          effectiveAuthProfileId: "profile-1",
+          authProfileStore: throwingAuthProfileStore(),
+        }),
+        run: async () => successResult,
+      }),
+    ).rejects.toThrow("auth-profile settlement failed");
+
+    expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(0);
+  });
+
+  it("defers a dispatched candidate but hands its canonical scope to the outer owner's drain", async () => {
+    // Embedded/command-rpc CLI dispatch does not forward isFinalFallbackAttempt; the
+    // embedded runner's fallback-chain finally (run-entry.ts) clears the slot after the
+    // whole chain, so settlement must not clear it here even on success.
+    const runId = "run-dispatched";
+    commitSend(runId);
+
+    let deferredScope;
+    await settlePreparedCliRun({
+      context: makeContext({
+        runId,
+        isFinalFallbackAttempt: "omit",
+        onDeferredTurnSendLedgerScope: (scope) => (deferredScope = scope),
+      }),
+      run: async () => okResult,
+    });
+
+    // Not cleared by the dispatched candidate's own settlement.
+    expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(1);
+    // The embedded owner clears by its raw identity (a different agent/session key than the
+    // loopback grant's canonical scope) plus the shared runId. The runId-keyed deferred-scope
+    // drain deletes the exact canonical slot the owner could not reconstruct.
+    clearTurnSendLedgerForRun(deferredScope!);
+    expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(0);
+  });
+
+  it("hands off the prepared scope when an empty raw session canonicalizes to main", async () => {
+    const runId = "run-empty-session";
+    const scope = { agentId: "reef", sessionKey: "agent:reef:main", runId };
+    const sessionKey = buildTurnSendLedgerSessionKey(scope.agentId, scope.sessionKey)!;
+    const reserved = reserveTurnSend({ sessionKey, runId, targetKey }, {});
+    expect(reserved.status).toBe("reserved");
+    if (reserved.status === "reserved") {
+      commitTurnSend(reserved.reservation);
+    }
+    let deferredScope;
+    await settlePreparedCliRun({
+      context: makeContext({
+        runId,
+        isFinalFallbackAttempt: "omit",
+        scope,
+        onDeferredTurnSendLedgerScope: (value) => (deferredScope = value),
+      }),
+      run: async () => okResult,
+    });
+    clearTurnSendLedgerForRun(deferredScope!);
+    expect(peekTurnSendCount({ sessionKey, runId, targetKey })).toBe(0);
+  });
+
+  it("repeated runs reusing one runId each start with an empty budget", async () => {
+    // Isolated cron reuses its durable session id as the runId (run-executor.ts), so
+    // turn 2 must not inherit turn 1's committed counts once turn 1's terminal clears.
+    const runId = "cron-durable-session";
+    const budgetAtStartOfTurn: number[] = [];
+
+    for (let turn = 0; turn < 2; turn += 1) {
+      await settlePreparedCliRun({
+        context: makeContext({ runId }),
+        run: async () => {
+          budgetAtStartOfTurn.push(
+            peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey }),
+          );
+          commitSend(runId);
+          return okResult;
+        },
+      });
+    }
+
+    expect(budgetAtStartOfTurn).toEqual([0, 0]);
+    expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(0);
+  });
+
+  it("clears exactly the run's slot, not a sibling run or session slot", async () => {
+    const runId = "run-target";
+    const siblingRunId = "run-sibling";
+    const otherSessionKey = buildTurnSendLedgerSessionKey(agentId, "agent:main:other")!;
+    commitSend(runId);
+    commitSend(siblingRunId);
+    // A concurrent run on a different session keyed independently.
+    const otherReserved = reserveTurnSend({ sessionKey: otherSessionKey, runId, targetKey }, {});
+    if (otherReserved.status === "reserved") {
+      commitTurnSend(otherReserved.reservation);
+    }
+
+    await settlePreparedCliRun({
+      context: makeContext({ runId }),
+      run: async () => okResult,
+    });
+
+    expect(peekTurnSendCount({ sessionKey: ledgerSessionKey, runId, targetKey })).toBe(0);
+    // A distinct runId on the same session — an independent live turn — is untouched.
+    expect(
+      peekTurnSendCount({ sessionKey: ledgerSessionKey, runId: siblingRunId, targetKey }),
+    ).toBe(1);
+    // A distinct session slot is untouched.
+    expect(peekTurnSendCount({ sessionKey: otherSessionKey, runId, targetKey })).toBe(1);
+  });
 });

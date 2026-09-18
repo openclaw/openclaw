@@ -241,6 +241,12 @@ single-tool schema response inside the program.
 The guest runtime never sees host objects directly. Inputs and outputs cross
 the bridge as JSON-compatible values with explicit size caps.
 
+Because only `details` is projected, any model-actionable guidance a tool would
+otherwise append to its presentation `content` must instead ride in a declared
+`details` field to reach a Code Mode guest. For example, the per-turn send-budget
+reminder is carried as an optional `turnSendNotice` field on the
+`conversations_send` result rather than in content alone.
+
 Tool arguments and values passed to `results.save` must serialize to JSON.
 BigInts, cycles, and throwing serialization hooks fail the affected call instead
 of silently replacing its data. Catch the error and convert the value explicitly;

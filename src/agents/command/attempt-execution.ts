@@ -104,6 +104,7 @@ import {
 } from "../subagents/announce/subagent-announce-handoff.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
+import type { TurnSendLedgerScope } from "../tools/turn-send-ledger.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -268,6 +269,7 @@ export function runAgentAttempt(params: {
   fastModeStartedAtMs?: number;
   fastModeAutoOnSeconds?: number;
   isFinalFallbackAttempt?: boolean;
+  onDeferredTurnSendLedgerScope?: (scope: TurnSendLedgerScope) => void;
   timeoutMs: number;
   runTimeoutOverrideMs?: number;
   runId: string;
@@ -509,6 +511,7 @@ export function runAgentAttempt(params: {
     groupSpace: params.runContext.groupSpace,
     spawnedBy: params.spawnedBy,
     currentChannelId: params.runContext.currentChannelId,
+    currentMessagingTarget: params.runContext.currentMessagingTarget,
     chatId: params.runContext.chatId,
     channelContext: params.runContext.channelContext,
     currentThreadTs: params.runContext.currentThreadTs,
@@ -1060,6 +1063,7 @@ export function runAgentAttempt(params: {
     fastModeStartedAtMs: params.fastModeStartedAtMs,
     fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
     isFinalFallbackAttempt: params.isFinalFallbackAttempt,
+    onDeferredTurnSendLedgerScope: params.onDeferredTurnSendLedgerScope,
     verboseLevel: params.resolvedVerboseLevel,
     execSession: params.sessionEntry,
     bashElevated: params.opts.bashElevated,

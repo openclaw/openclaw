@@ -33,6 +33,7 @@ import type {
 } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
+import { clearTurnSendLedgerForRun, type TurnSendLedgerScope } from "../tools/turn-send-ledger.js";
 import {
   didEmbeddedCyberFailoverTargetCommitWork,
   EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE,
@@ -71,6 +72,7 @@ type RunEntryCandidateOptions = {
   modelRoutingProvenance: ModelFallbackAttemptProvenance;
   contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
   onContextEngineTurnCandidate: (facts: ContextEngineTurnAttemptFacts) => void;
+  onDeferredTurnSendLedgerScope: (scope: TurnSendLedgerScope) => void;
 };
 
 type RunEntryCandidate<T> = {
@@ -199,6 +201,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
   let failed = true;
   let unsettledContextEngineTurnAttempt: ContextEngineTurnAttemptFacts | undefined;
   let candidateIndex = 0;
+  const deferredTurnSendLedgerScopes = new Set<TurnSendLedgerScope>();
   const committedSideEffect =
     params.behavior.kind === "command-rpc" ? params.behavior.hasCommittedSideEffect : undefined;
   const readChannelDeliveryEvidence =
@@ -425,6 +428,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
                 contextEngineTurnCandidate = facts;
                 unsettledContextEngineTurnAttempt = facts;
               },
+              onDeferredTurnSendLedgerScope: (scope) => deferredTurnSendLedgerScopes.add(scope),
             });
             return {
               result,
@@ -705,6 +709,26 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
     try {
       await assistantErrorTranscript.settle(failed && !params.abortSignal?.aborted);
     } finally {
+      // Reset the per-turn send budget once the whole logical run terminates. This is the
+      // fallback-chain boundary, not the per-candidate run-loop.ts `finally`: internal
+      // retries and provider fallbacks reuse this runId and must keep the same budget, so
+      // the opt-in hard cap holds for the entire turn (turn-send-ledger.ts). By here every
+      // candidate's tool work has settled (runWithModelFallback awaited the run() calls),
+      // so no reservation is in flight. Two slot scopes can exist under this runId: a
+      // native attempt's message/conversations_send tools key by agentSessionKey =
+      // `sessionKey?.trim() || sessionId` (attempt-setup.ts), rebuilt here; a dispatched CLI
+      // candidate's loopback grant instead writes under a canonicalized, possibly
+      // agent-shifted scope this raw identity cannot reproduce, so that candidate's
+      // settlement hands its exact prepared scope to this owner-held collection. Clear the
+      // native scope first, then every deferred prepared scope. Missing slots are harmless.
+      clearTurnSendLedgerForRun({
+        agentId: params.identity.agentId,
+        sessionKey: params.identity.sessionKey?.trim() || params.identity.sessionId,
+        runId: params.identity.runId,
+      });
+      for (const scope of deferredTurnSendLedgerScopes) {
+        clearTurnSendLedgerForRun(scope);
+      }
       await contextEngineLogicalTurnLease.dispose();
     }
   }
