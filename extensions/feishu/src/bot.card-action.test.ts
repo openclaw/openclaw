@@ -1,5 +1,9 @@
-import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 // Feishu tests cover bot.card action plugin behavior.
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
@@ -15,6 +19,8 @@ import {
   FEISHU_APPROVAL_CONFIRM_ACTION,
   FEISHU_APPROVAL_REQUEST_ACTION,
 } from "./card-ux-approval.js";
+import { feishuDedupeState } from "./dedup-state.js";
+import { hasProcessedFeishuMessage } from "./dedup.js";
 
 // Mock account resolution
 vi.mock("./accounts.js", () => ({
@@ -45,6 +51,8 @@ import { handleFeishuMessage } from "./bot.js";
 describe("Feishu Card Action Handler", () => {
   const cfg: ClawdbotConfig = {};
   const runtime: RuntimeEnv = createRuntimeEnv();
+  let tempDir: string | undefined;
+  let previousStateDir: string | undefined;
 
   afterAll(() => {
     vi.doUnmock("./accounts.js");
@@ -52,10 +60,6 @@ describe("Feishu Card Action Handler", () => {
     vi.doUnmock("./client.js");
     vi.doUnmock("./send.js");
     vi.resetModules();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
   });
 
   function createCardActionEvent(params: {
@@ -107,6 +111,11 @@ describe("Feishu Card Action Handler", () => {
   }
 
   beforeEach(() => {
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-feishu-card-action-"));
+    process.env.OPENCLAW_STATE_DIR = tempDir;
+    resetPluginStateStoreForTests();
+    feishuDedupeState.reset();
     vi.clearAllMocks();
     createFeishuClientMock.mockReset().mockReturnValue({
       im: {
@@ -120,6 +129,21 @@ describe("Feishu Card Action Handler", () => {
       .mockResolvedValue(undefined as never);
     processedCardActions.clear();
     resolvedCardActionChatTypes.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    resetPluginStateStoreForTests();
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+    tempDir = undefined;
+    feishuDedupeState.reset();
   });
 
   function mockCallArg(
@@ -160,6 +184,17 @@ describe("Feishu Card Action Handler", () => {
       mockCallArg(sendCardFeishuMock, callIndex, "sendCardFeishu"),
       "sendCardFeishu args",
     );
+  }
+
+  function createCancelActionEvent(token: string): FeishuCardActionEvent {
+    return createCardActionEvent({
+      token,
+      actionValue: createFeishuCardInteractionEnvelope({
+        k: "button",
+        a: FEISHU_APPROVAL_CANCEL_ACTION,
+        c: { u: "u123", h: "chat1", t: "group", e: Date.now() + 60_000 },
+      }),
+    });
   }
 
   it("handles card action with text payload", async () => {
@@ -585,6 +620,81 @@ describe("Feishu Card Action Handler", () => {
     await handleFeishuCardAction({ cfg, event, runtime });
 
     expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a replayed cancel notice after process restart", async () => {
+    const event = createCancelActionEvent("tok-restart-persist");
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    await expect(
+      hasProcessedFeishuMessage("card-action:tok-restart-persist", "mock-account"),
+    ).resolves.toBe(true);
+
+    processedCardActions.clear();
+    feishuDedupeState.reset();
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(handleFeishuMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not write a second durable claim for command callbacks", async () => {
+    const event = createStructuredQuickActionEvent({
+      token: "tok-command-no-second-claim",
+      action: "feishu.quick_actions.help",
+      command: "/help",
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+    await expect(
+      hasProcessedFeishuMessage("card-action:tok-command-no-second-claim", "mock-account"),
+    ).resolves.toBe(false);
+
+    processedCardActions.clear();
+    feishuDedupeState.reset();
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(handleFeishuMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not persist a failed direct send across restart", async () => {
+    const event = createCancelActionEvent("tok-failed-direct");
+    sendMessageFeishuMock.mockRejectedValueOnce(new Error("send failed"));
+
+    await expect(handleFeishuCardAction({ cfg, event, runtime })).rejects.toThrow("send failed");
+    await expect(
+      hasProcessedFeishuMessage("card-action:tok-failed-direct", "mock-account"),
+    ).resolves.toBe(false);
+
+    processedCardActions.clear();
+    feishuDedupeState.reset();
+    sendMessageFeishuMock.mockResolvedValueOnce(undefined);
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageCall(1).text).toBe("Cancelled.");
+  });
+
+  it("releases a failed direct-send claim so same-process retry can proceed", async () => {
+    const event = createCancelActionEvent("tok-failed-release");
+    sendMessageFeishuMock.mockRejectedValueOnce(new Error("send failed"));
+
+    await expect(handleFeishuCardAction({ cfg, event, runtime })).rejects.toThrow("send failed");
+    await expect(
+      hasProcessedFeishuMessage("card-action:tok-failed-release", "mock-account"),
+    ).resolves.toBe(false);
+
+    processedCardActions.clear();
+    sendMessageFeishuMock.mockResolvedValueOnce(undefined);
+
+    await handleFeishuCardAction({ cfg, event, runtime });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageCall(1).text).toBe("Cancelled.");
   });
 
   it("does not log raw duplicate callback tokens", async () => {
