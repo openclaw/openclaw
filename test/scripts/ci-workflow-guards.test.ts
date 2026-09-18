@@ -14101,6 +14101,51 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ]);
   });
 
+  it("requires selected current lifecycle execution for an explicit simulator export", () => {
+    const manifest = expectDefined(
+      readCiWorkflow().jobs.preflight.steps.find(
+        (step: WorkflowStep) => step.name === "Build CI manifest",
+      ),
+      "CI manifest step",
+    );
+    expect(manifest.env?.OPENCLAW_CI_EXPORT_IOS_RELEASE_SIMULATOR).toBe(
+      "${{ inputs.export_ios_release_simulator && 'true' || 'false' }}",
+    );
+    const scopeEnv = {
+      OPENCLAW_CI_EXPORT_IOS_RELEASE_SIMULATOR: "true",
+      OPENCLAW_CI_TARGET_REF: "a".repeat(40),
+      OPENCLAW_CI_RELEASE_SCOPE: "full",
+    };
+    const supported = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      scopeEnv,
+    });
+    expect(supported.status, supported.output).toBe(0);
+    expect(supported.outputs.frozen_target).toBe("true");
+    expect(supported.outputs.compatibility_target).toBe("false");
+    expect(supported.outputs.run_ios_build).toBe("true");
+    for (const options of [
+      { bundledPlanner: false },
+      { bundledPlanner: true, historicalCompatibility: false, iosCapabilities: false },
+      { bundledPlanner: true },
+      { bundledPlanner: true, historicalCompatibility: false, releaseCandidateCompatibility: true },
+      { bundledPlanner: true, historicalCompatibility: false, targetContextCompatibility: true },
+    ]) {
+      const rejected = runCiManifestFixture({ ...options, scopeEnv });
+      expect(rejected.status, rejected.output).toBe(1);
+      expect(rejected.output).toContain(
+        "Release simulator export requires a selected iOS build with current lifecycle tests",
+      );
+      expect(rejected.outputChars).toBe(0);
+      const disabled = runCiManifestFixture({
+        ...options,
+        scopeEnv: { ...scopeEnv, OPENCLAW_CI_EXPORT_IOS_RELEASE_SIMULATOR: "false" },
+      });
+      expect(disabled.status, disabled.output).toBe(0);
+    }
+  });
+
   it("uses target-owned CI plans and capabilities for older release checkouts", () => {
     const androidRun = readCiWorkflow().jobs.android.steps.find(
       (step: WorkflowStep) => step.name === "Run Android ${{ matrix.task }}",

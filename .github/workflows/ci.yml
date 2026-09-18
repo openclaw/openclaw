@@ -18,6 +18,11 @@ on:
         required: false
         default: false
         type: boolean
+      export_ios_release_simulator:
+        description: Export the signed Release simulator app after full native tests for an exact target SHA.
+        required: false
+        default: false
+        type: boolean
       release_scope:
         description: Release qualification scope; npm-beta and npm-stable defer native apps for a validated exact release target.
         required: false
@@ -168,6 +173,19 @@ jobs:
       run_protocol_event_coverage: ${{ steps.manifest.outputs.run_protocol_event_coverage }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
+      - name: Validate Release simulator export dispatch
+        if: inputs.export_ios_release_simulator
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+          RELEASE_SCOPE: ${{ inputs.release_scope }}
+          RELEASE_GATE: ${{ inputs.release_gate }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || "$RELEASE_SCOPE" != full || "$RELEASE_GATE" == true || ! "$TARGET_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Release simulator export requires manual full validation, a full target SHA, and no release gate." >&2
+            exit 1
+          fi
+
       - name: Validate release-gate dispatch
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
@@ -1234,6 +1252,7 @@ jobs:
           OPENCLAW_CI_RUN_MACOS: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}
           OPENCLAW_CI_RUN_MACOS_NODE: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_macos_node || 'false' }}
           OPENCLAW_CI_RUN_IOS_BUILD: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}
+          OPENCLAW_CI_EXPORT_IOS_RELEASE_SIMULATOR: ${{ inputs.export_ios_release_simulator && 'true' || 'false' }}
           OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
           OPENCLAW_CI_RUN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_ONLY: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}
@@ -1472,6 +1491,10 @@ jobs:
             (!frozenTarget ||
               supportsCurrentIosCi ||
               (releaseCandidateTarget && supportsIosBuild));
+          if (parseBoolean(process.env.OPENCLAW_CI_EXPORT_IOS_RELEASE_SIMULATOR) &&
+              (!runIosBuild || compatibilityTarget)) {
+            throw new Error("Release simulator export requires a selected iOS build with current lifecycle tests");
+          }
           const runAndroid =
             parseBoolean(process.env.OPENCLAW_CI_RUN_ANDROID) && !npmQualification &&
             !docsOnly && isCanonicalRepository;
@@ -5543,6 +5566,279 @@ jobs:
           xcodebuild "${xcodebuild_args[@]}" "${test_args[@]}" \
             -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.xcresult \
             test-without-building
+
+      - name: Export Release iOS simulator app
+        id: ios_release_simulator
+        if: github.event_name == 'workflow_dispatch' && inputs.export_ios_release_simulator && matrix.phase == 'tests'
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+          CHECKOUT_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          LIFECYCLE_OUTCOME: ${{ steps.ios_lifecycle_tests.outcome }}
+        run: |
+          python3 -I -S - <<'PY'
+          import hashlib
+          import json
+          import mmap
+          import os
+          import pathlib
+          import plistlib
+          import re
+          import shutil
+          import stat
+          import struct
+          import subprocess
+          import tarfile
+          import tempfile
+
+          LIMIT = 512 * 1024 * 1024
+          APP_ID = "ai.openclawfoundation.app"
+          GROUP_ID = "group.ai.openclawfoundation.app.shared"
+          ARCHES = {0x100000C: "arm64", 0x1000007: "x86_64"}
+
+          def require(condition, reason):
+              if not condition:
+                  raise ValueError(reason)
+
+          def output(argv):
+              result = subprocess.run(argv, capture_output=True, text=True, check=False)
+              require(result.returncode == 0, "inspection-command-failed")
+              return result.stdout + result.stderr
+
+          def sha256_file(path):
+              digest = hashlib.sha256()
+              with path.open("rb") as stream:
+                  for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                      digest.update(chunk)
+              return digest.hexdigest()
+
+          def source_fence():
+              target = os.environ["TARGET_REF"]
+              require(re.fullmatch(r"[0-9a-f]{40}", target), "invalid-target-sha")
+              require(target == os.environ["CHECKOUT_SHA"], "checkout-target-mismatch")
+              require(output(["git", "rev-parse", "HEAD"]).strip() == target, "head-target-mismatch")
+              require(not output(["git", "status", "--porcelain", "--untracked-files=no"]).strip(), "tracked-source-changed")
+              tree = output(["git", "rev-parse", "HEAD^{tree}"]).strip()
+              require(re.fullmatch(r"[0-9a-f]{40}", tree), "invalid-source-tree")
+              return target, tree
+
+          # Simulator ad-hoc signatures can report an empty entitlement dictionary.
+          # Read each built Mach-O slice's section, not generated signing inputs.
+          def macho_entitlements(data):
+              require(32 <= len(data) <= LIMIT, "invalid-mach-o-size")
+              magic, count = struct.unpack_from(">II", data)
+              slices = [(None, 0, len(data))]
+              if magic in (0xCAFEBABE, 0xCAFEBABF):
+                  width = 20 if magic == 0xCAFEBABE else 32
+                  require(1 <= count <= 2 and 8 + count * width <= len(data), "invalid-fat-header")
+                  slices = []
+                  for index in range(count):
+                      position = 8 + index * width
+                      cpu, _ = struct.unpack_from(">II", data, position)
+                      offset, size = struct.unpack_from(">II" if width == 20 else ">QQ", data, position + 8)
+                      require(offset >= 8 + count * width and size >= 32 and offset + size <= len(data), "invalid-fat-slice")
+                      require(all(offset + size <= start or start + length <= offset for _, start, length in slices), "overlapping-fat-slices")
+                      slices.append((cpu, offset, size))
+              result = {}
+              for expected_cpu, start, length in slices:
+                  magic, cpu, _, kind, commands, command_bytes, _, _ = struct.unpack_from("<8I", data, start)
+                  require(magic == 0xFEEDFACF and kind == 2 and cpu in ARCHES, "unsupported-mach-o")
+                  require(expected_cpu in (None, cpu) and ARCHES[cpu] not in result, "ambiguous-architecture")
+                  require(commands <= 4096 and 32 + command_bytes <= length, "invalid-load-commands")
+                  cursor, end = start + 32, start + 32 + command_bytes
+                  entitlements, platforms = [], []
+                  for _ in range(commands):
+                      require(cursor + 8 <= end, "truncated-load-command")
+                      command, size = struct.unpack_from("<II", data, cursor)
+                      require(size >= 8 and size % 8 == 0 and cursor + size <= end, "invalid-load-command")
+                      if command == 0x32:  # LC_BUILD_VERSION; platform 7 is iOS Simulator.
+                          require(size >= 24, "truncated-build-version")
+                          platforms.append(struct.unpack_from("<I", data, cursor + 8)[0])
+                      if command == 0x19:  # LC_SEGMENT_64 followed by section_64 records.
+                          require(size >= 72, "truncated-segment")
+                          parent_segment = struct.unpack_from("<16s", data, cursor + 8)[0].rstrip(bytes(1))
+                          sections = struct.unpack_from("<I", data, cursor + 64)[0]
+                          require(72 + sections * 80 <= size, "truncated-sections")
+                          for index in range(sections):
+                              section = cursor + 72 + index * 80
+                              name, segment = struct.unpack_from("<16s16s", data, section)
+                              if parent_segment == b"__TEXT" and name.rstrip(bytes(1)) == b"__entitlements" and segment.rstrip(bytes(1)) == b"__TEXT":
+                                  size_bytes, offset = struct.unpack_from("<QI", data, section + 40)
+                                  require(0 < size_bytes <= 65536 and offset + size_bytes <= length, "invalid-entitlement-section")
+                                  entitlements.append(bytes(data[start + offset:start + offset + size_bytes]))
+                      cursor += size
+                  require(cursor == end and platforms == [7] and len(entitlements) == 1, "missing-simulator-entitlements")
+                  raw = entitlements[0]
+                  value = plistlib.loads(raw)
+                  require(isinstance(value, dict), "invalid-entitlement-plist")
+                  result[ARCHES[cpu]] = (hashlib.sha256(raw).hexdigest(), value)
+              require("arm64" in result, "missing-arm64")
+              require(len({digest for digest, _ in result.values()}) == 1, "architecture-entitlements-differ")
+              return result
+
+          def inspect_bundle(bundle, identifier):
+              info_path = bundle / "Info.plist"
+              require(info_path.is_file() and not info_path.is_symlink() and info_path.stat().st_size <= 1024 * 1024, "invalid-info-plist")
+              info = plistlib.loads(info_path.read_bytes())
+              require(info.get("CFBundleIdentifier") == identifier, "bundle-identifier-mismatch")
+              require(info.get("OpenClawAppGroupIdentifier") == GROUP_ID, "bundle-app-group-mismatch")
+              require(info.get("CFBundleSupportedPlatforms") == ["iPhoneSimulator"], "bundle-platform-mismatch")
+              executable_name = info.get("CFBundleExecutable", "")
+              require(re.fullmatch(r"[A-Za-z0-9_.-]+", executable_name), "invalid-executable-name")
+              executable = bundle / executable_name
+              require(executable.is_file() and not executable.is_symlink() and 0 < executable.stat().st_size <= LIMIT, "invalid-executable")
+              require(executable.stat().st_mode & 0o111, "executable-mode-missing")
+              signature = output(["codesign", "-d", "--verbose=4", str(bundle)])
+              require(re.findall(r"^Identifier=(.+)$", signature, re.MULTILINE) == [identifier], "signature-identifier-mismatch")
+              output(["codesign", "--verify", "--deep", "--strict", str(bundle)])
+              with executable.open("rb") as stream, mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                  entitlements = macho_entitlements(data)
+              teams = set()
+              for _, value in entitlements.values():
+                  require(value.get("com.apple.security.application-groups") == [GROUP_ID], "entitlement-app-group-mismatch")
+                  application_id = value.get("application-identifier", "")
+                  require(application_id == "FWJYW4S8P8." + identifier, "entitlement-identifier-mismatch")
+                  teams.add(application_id.split(".", 1)[0])
+              require(len(teams) == 1, "entitlement-team-mismatch")
+              for key in ("CFBundleShortVersionString", "CFBundleVersion"):
+                  require(re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,2}", info.get(key, "")), "invalid-bundle-version")
+              return info, teams.pop(), {
+                  "identifier": identifier,
+                  "version": info["CFBundleShortVersionString"],
+                  "build": info["CFBundleVersion"],
+                  "architectures": sorted(entitlements),
+                  "executableSHA256": sha256_file(executable),
+                  "entitlementsSHA256": {arch: value[0] for arch, value in sorted(entitlements.items())},
+                  "signatureVerified": True,
+                  "canonicalApplicationIdentifier": True,
+                  "canonicalAppGroup": True,
+                  "simulatorPlatform": True,
+              }
+
+          def app_tree(app):
+              require(app.is_dir() and not app.is_symlink(), "invalid-app-root")
+              entries, total, digest = [], 0, hashlib.sha256()
+              def visit(path):
+                  nonlocal total
+                  require(len(entries) < 8192, "too-many-app-entries")
+                  relative = path.relative_to(app.parent).as_posix()
+                  require(not any(part in (".git", "node_modules") or part.endswith(".dSYM") for part in path.relative_to(app).parts), "private-app-entry")
+                  require(path.suffix.lower() not in (".mobileprovision", ".provisionprofile", ".log", ".p12", ".key"), "private-app-file")
+                  mode = path.lstat().st_mode
+                  require(not mode & 0o7000, "special-app-mode")
+                  fields = [relative, f"{stat.S_IMODE(mode):04o}"]
+                  entries.append(path)
+                  if stat.S_ISLNK(mode):
+                      target = os.readlink(path)
+                      require(not os.path.isabs(target) and path.resolve(strict=True).is_relative_to(app.resolve()), "escaping-app-link")
+                      fields = ["link", *fields, target]
+                  elif stat.S_ISREG(mode):
+                      size = path.stat().st_size
+                      total += size
+                      require(total <= LIMIT, "app-size-limit")
+                      fields = ["file", *fields, str(size), sha256_file(path)]
+                  else:
+                      require(stat.S_ISDIR(mode), "unsupported-app-entry")
+                      fields = ["directory", *fields]
+                  for field in fields:
+                      digest.update(field.encode("utf8") + bytes(1))
+                  if stat.S_ISDIR(mode):
+                      for child in sorted(path.iterdir(), key=lambda item: item.name.encode("utf8")):
+                          visit(child)
+              visit(app)
+              return digest.hexdigest(), total, entries
+
+          def write_archive(app, manifest, destination):
+              tree, total, entries = app_tree(app)
+              require(tree == manifest["appTreeSHA256"], "staged-app-changed")
+              manifest_bytes = (json.dumps(manifest, sort_keys=True, indent=2) + chr(10)).encode()
+              require(len(manifest_bytes) <= 65536 and total + len(manifest_bytes) <= LIMIT, "manifest-size-limit")
+              manifest_path = app.parent / "manifest.json"
+              manifest_path.write_bytes(manifest_bytes)
+              manifest_path.chmod(0o644)
+              require({path.name for path in app.parent.iterdir()} == {"OpenClaw.app", "manifest.json"}, "unexpected-staged-entry")
+              with tarfile.open(destination, "x", format=tarfile.PAX_FORMAT, dereference=False) as archive:
+                  for path in [*entries, manifest_path]:
+                      info = archive.gettarinfo(str(path), arcname=path.relative_to(app.parent).as_posix())
+                      info.uid = info.gid = 0
+                      info.uname = info.gname = ""
+                      info.mtime = 0
+                      if info.isfile():
+                          with path.open("rb") as stream:
+                              archive.addfile(info, stream)
+                      else:
+                          archive.addfile(info)
+              require(destination.stat().st_size <= LIMIT, "archive-size-limit")
+
+          def main():
+              source, tree = source_fence()
+              require(os.environ["LIFECYCLE_OUTCOME"] == "success", "native-lifecycle-proof-missing")
+              workflow = os.environ["WORKFLOW_SHA"]
+              require(re.fullmatch(r"[0-9a-f]{40}", workflow), "invalid-workflow-sha")
+              run_id, attempt = os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_RUN_ATTEMPT"]
+              require(re.fullmatch(r"[1-9][0-9]*", run_id) and re.fullmatch(r"[1-9][0-9]*", attempt), "invalid-run-identity")
+              build_root = pathlib.Path("apps/ios/build/ReleaseSimulatorArtifact")
+              require(not build_root.exists() and not build_root.is_symlink(), "artifact-build-already-exists")
+              require(not pathlib.Path("apps/ios/build").is_symlink(), "symlinked-build-root")
+              for argv in [
+                  ["./scripts/ios-configure-signing.sh"],
+                  ["./scripts/ios-write-version-xcconfig.sh"],
+                  ["node", "scripts/ios-write-swift-filelist.mjs"],
+                  ["xcodegen", "generate", "--spec", "apps/ios/project.yml", "--project", "apps/ios"],
+                  ["xcodebuild", "-project", "apps/ios/OpenClaw.xcodeproj", "-scheme", "OpenClaw",
+                   "-configuration", "Release", "-destination", "generic/platform=iOS Simulator",
+                   "-derivedDataPath", str(build_root / "DerivedData"), "build"],
+              ]:
+                  require(subprocess.run(argv, check=False).returncode == 0, "release-build-failed")
+              require(source_fence() == (source, tree), "post-build-source-mismatch")
+              app = build_root / "DerivedData/Build/Products/Release-iphonesimulator/OpenClaw.app"
+              app_hash, _, _ = app_tree(app)
+              app_info, team, app_identity = inspect_bundle(app, APP_ID)
+              share_info, share_team, share_identity = inspect_bundle(app / "PlugIns/OpenClawShareExtension.appex", APP_ID + ".share")
+              require(app_info.get("OpenClawGitCommit") == source, "app-source-stamp-mismatch")
+              require(team == share_team, "share-team-mismatch")
+              require(all(app_info[key] == share_info[key] for key in ("CFBundleVersion", "CFBundleShortVersionString")), "share-version-mismatch")
+              require(app_identity["architectures"] == share_identity["architectures"], "share-architecture-mismatch")
+              xcode = re.fullmatch(r"Xcode ([0-9.]+)\s+Build version ([A-Za-z0-9]+)\s*", output(["xcodebuild", "-version"]))
+              swift = re.search(r"Apple Swift version ([0-9.]+)", output(["swift", "--version"]))
+              require(xcode and swift, "unrecognized-toolchain-version")
+              manifest = {
+                  "schemaVersion": 1, "sourceSHA": source, "sourceTree": tree,
+                  "workflowSHA": workflow, "runID": run_id, "runAttempt": attempt,
+                  "xcodeVersion": xcode[1], "xcodeBuild": xcode[2], "swiftVersion": swift[1],
+                  "configuration": "Release", "sourceStampVerified": True,
+                  "app": app_identity, "shareExtension": share_identity,
+                  "appTreeSHA256": app_hash, "treeHashFormat": "lstat-path-mode-content-v1",
+              }
+              staging = pathlib.Path(tempfile.mkdtemp(prefix="ios-release-simulator-", dir=os.environ["RUNNER_TEMP"]))
+              copied = staging / "payload/OpenClaw.app"
+              shutil.copytree(app, copied, symlinks=True)
+              name = f"ios-release-simulator-{source}-{run_id}-{attempt}.tar"
+              archive = staging / name
+              write_archive(copied, manifest, archive)
+              require(app_tree(app)[0] == app_hash and source_fence() == (source, tree), "export-source-changed")
+              require(not any(character in str(archive) for character in (chr(10), chr(13))), "invalid-output-path")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as outputs:
+                  outputs.write(f"path={archive}\nname={name}\nsha256={sha256_file(archive)}\n")
+              print("Release simulator app verified and archived.")
+
+          if __name__ == "__main__":
+              try:
+                  main()
+              except Exception:
+                  # Inspector errors can contain private build paths or signing details.
+                  raise SystemExit("Release simulator export failed; no artifact was admitted.")
+          PY
+
+      - name: Upload Release iOS simulator app
+        if: steps.ios_release_simulator.outcome == 'success'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.ios_release_simulator.outputs.name }}
+          path: ${{ steps.ios_release_simulator.outputs.path }}
+          archive: false
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload iOS lifecycle simulator evidence
         if: ${{ always() && ((steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped') || (steps.ios_voice_cleanup_tests.outcome != '' && steps.ios_voice_cleanup_tests.outcome != 'skipped')) }}
