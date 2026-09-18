@@ -14,6 +14,8 @@
     "../../src/cron/**/*.test.tsx",
     "../../src/daemon/**/*.test.ts",
     "../../src/daemon/**/*.test.tsx",
+    "../../src/infra/heartbeat-*.test.ts",
+    "../../src/infra/heartbeat-*.test.tsx",
     "../../src/process/**/*.test.ts",
     "../../src/process/**/*.test.tsx",
     "../../src/skills/**/*.test.ts",

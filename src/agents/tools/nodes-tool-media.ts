@@ -20,6 +20,7 @@ import {
   resolveCameraSnapTargets,
   writeCameraClipPayloadToFile,
   writeCameraPayloadToFile,
+  withCameraArtifactBatch,
 } from "../../cli/nodes-camera.js";
 import { mediaPathMatchesFormat } from "../../cli/nodes-media-utils.js";
 import {
@@ -125,53 +126,61 @@ async function createNodePhotoResult(params: {
   modelHasVision?: boolean;
   imageSanitization: ImageSanitizationLimits;
 }): Promise<AgentToolResult<unknown>> {
-  const command = params.kind === "snaps" ? "camera.snap" : "photos.latest";
-  const content: AgentToolResult<unknown>["content"] = [];
-  const details: Array<Record<string, unknown> & { path: string }> = [];
-  for (const [index, { photo, facing, createdAt, isJpeg }] of params.photos.entries()) {
-    const filePath = cameraTempPath({
+  const generatedPaths = params.photos.map(({ facing, isJpeg }) =>
+    cameraTempPath({
       kind: "snap",
       ...(facing ? { facing } : { id: crypto.randomUUID() }),
       ext: isJpeg ? "jpg" : "png",
-    });
-    await writeCameraPayloadToFile({
-      filePath,
-      payload: photo,
-      expectedHost: params.expectedHost,
-      invalidPayloadMessage: `invalid ${command} payload`,
-    });
-    content.push(
-      params.modelHasVision && photo.base64
-        ? {
-            type: "image",
-            data: photo.base64,
-            mimeType: imageMimeFromFormat(photo.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
-          }
-        : {
-            type: "text",
-            text: `${facing ? "Camera" : "Library"} photo saved to ${filePath}.`,
-          },
-    );
-    details.push({
-      ...(facing ? { facing } : { index }),
-      path: filePath,
-      width: photo.width,
-      height: photo.height,
-      ...(typeof createdAt === "string" ? { createdAt } : {}),
-    });
-  }
-  if (details.length === 0) {
-    content.push({ type: "text", text: "No photos found." });
-  }
-  const mediaUrls = details.map((entry) => entry.path);
-  return await sanitizeToolResultImages(
-    {
-      content,
-      details: details.length > 0 ? { [params.kind]: details, media: { mediaUrls } } : [],
-    },
-    params.kind === "snaps" ? "nodes:camera_snap" : "nodes:photos_latest",
-    params.imageSanitization,
+    }),
   );
+  return await withCameraArtifactBatch(generatedPaths, async (filePaths) => {
+    const command = params.kind === "snaps" ? "camera.snap" : "photos.latest";
+    const content: AgentToolResult<unknown>["content"] = [];
+    const details: Array<Record<string, unknown> & { path: string }> = [];
+    for (const [index, { photo, facing, createdAt, isJpeg }] of params.photos.entries()) {
+      const filePath = filePaths[index];
+      if (filePath === undefined) {
+        throw new Error("missing camera batch output path");
+      }
+      await writeCameraPayloadToFile({
+        filePath,
+        payload: photo,
+        expectedHost: params.expectedHost,
+        invalidPayloadMessage: `invalid ${command} payload`,
+      });
+      content.push(
+        params.modelHasVision && photo.base64
+          ? {
+              type: "image",
+              data: photo.base64,
+              mimeType: imageMimeFromFormat(photo.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
+            }
+          : {
+              type: "text",
+              text: `${facing ? "Camera" : "Library"} photo saved to ${filePath}.`,
+            },
+      );
+      details.push({
+        ...(facing ? { facing } : { index }),
+        path: filePath,
+        width: photo.width,
+        height: photo.height,
+        ...(typeof createdAt === "string" ? { createdAt } : {}),
+      });
+    }
+    if (details.length === 0) {
+      content.push({ type: "text", text: "No photos found." });
+    }
+    const mediaUrls = details.map((entry) => entry.path);
+    return await sanitizeToolResultImages(
+      {
+        content,
+        details: details.length > 0 ? { [params.kind]: details, media: { mediaUrls } } : [],
+      },
+      params.kind === "snaps" ? "nodes:camera_snap" : "nodes:photos_latest",
+      params.imageSanitization,
+    );
+  });
 }
 
 async function executeCameraSnap({

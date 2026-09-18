@@ -16,6 +16,7 @@ import {
   resolveCameraClipTarget,
   resolveCameraSnapTargets,
   writeCameraPayloadToFile,
+  withCameraArtifactBatch,
   writeCameraClipPayloadToFile,
 } from "../nodes-camera.js";
 import { parseDurationMs } from "../parse-duration.js";
@@ -198,27 +199,36 @@ export function registerNodesCameraCommands(nodes: Command) {
             });
           }
 
-          const results = [];
-          for (const { facing: artifactFacing, payload, filePath } of captures) {
-            await writeCameraPayloadToFile({
-              filePath,
-              payload,
-              expectedHost: node.remoteIp,
-              invalidPayloadMessage: "invalid camera.snap payload",
-            });
-            results.push({
-              facing: artifactFacing,
-              path: filePath,
-              width: payload.width,
-              height: payload.height,
-            });
-          }
+          await withCameraArtifactBatch(
+            captures.map((capture) => capture.filePath),
+            async (filePaths) => {
+              const results = [];
+              for (const [index, { facing: artifactFacing, payload }] of captures.entries()) {
+                const filePath = filePaths[index];
+                if (filePath === undefined) {
+                  throw new Error("missing camera batch output path");
+                }
+                await writeCameraPayloadToFile({
+                  filePath,
+                  payload,
+                  expectedHost: node.remoteIp,
+                  invalidPayloadMessage: "invalid camera.snap payload",
+                });
+                results.push({
+                  facing: artifactFacing,
+                  path: filePath,
+                  width: payload.width,
+                  height: payload.height,
+                });
+              }
 
-          if (opts.json) {
-            defaultRuntime.writeJson({ files: results });
-            return;
-          }
-          defaultRuntime.log(results.map((r) => shortenHomePath(r.path)).join("\n"));
+              if (opts.json) {
+                defaultRuntime.writeJson({ files: results });
+                return;
+              }
+              defaultRuntime.log(results.map((r) => shortenHomePath(r.path)).join("\n"));
+            },
+          );
         });
       }),
     { timeoutMs: 60_000 },
