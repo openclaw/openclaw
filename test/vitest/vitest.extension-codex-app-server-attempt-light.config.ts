@@ -15,6 +15,8 @@ export function createExtensionCodexAppServerAttemptLightVitestConfig(
       "extensions/codex/src/app-server/run-attempt-connection.test.ts",
       "extensions/codex/src/app-server/run-attempt-session-owners.test.ts",
       "extensions/codex/src/app-server/run-attempt-state.test.ts",
+      "extensions/codex/src/app-server/run-attempt-tool-disposal.test.ts",
+      "extensions/codex/src/app-server/run-attempt-tools.quota-continuation.test.ts",
       "extensions/codex/src/app-server/run-attempt-tools.test.ts",
       "extensions/codex/src/app-server/run-attempt-turn-request.provider-review.test.ts",
       "extensions/codex/src/app-server/run-attempt-turn-start.provider-review.test.ts",
