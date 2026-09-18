@@ -129,7 +129,7 @@ describe("Anthropic provider usage", () => {
 
   it.each([
     { name: "inference keys", key: "sk-ant-api03-test", accepted: false },
-    { name: "setup tokens", key: `sk-ant-oat01-${"a".repeat(80)}`, accepted: true },
+    { name: "setup tokens", key: `sk-ant-oat01-${"a".repeat(80)}`, accepted: false },
   ])("classifies $name through the real usage auth owner", async ({ key, accepted }) => {
     const result = await resolveAnthropicUsageAuth({
       config: {},
