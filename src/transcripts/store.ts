@@ -5,6 +5,7 @@ import type { TranscriptUtterance as ProjectedTranscriptUtterance } from "../../
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { iterateOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
@@ -15,7 +16,10 @@ import {
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
-import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
+import {
+  executeOpenClawStateWorker,
+  runOpenClawStateWorkerOperation,
+} from "../state/openclaw-state-worker-store.js";
 import type {
   TranscriptSessionDescriptor,
   TranscriptSourceLocator,
@@ -51,13 +55,16 @@ import {
   writeMeetingTranscriptSummaryInDatabase,
 } from "./store-sqlite-write.js";
 import {
-  appendMeetingTranscriptUtterance,
   meetingTranscriptDb,
   meetingTranscriptSessionQuery,
   sessionFromRow,
 } from "./store-sqlite.js";
 import type * as StoreTypes from "./store-types.js";
-import type { TranscriptReadRequests } from "./store-worker-contract.js";
+import type {
+  TranscriptAppendScheduler,
+  TranscriptReadRequests,
+  TranscriptWriteOperations,
+} from "./store-worker-contract.js";
 import type { TranscriptsSummary } from "./summary.js";
 import { renderTranscriptsMarkdown } from "./summary.js";
 
@@ -420,13 +427,43 @@ export class TranscriptsStore {
   async appendUtteranceForSession(
     session: TranscriptSessionDescriptor,
     utterance: TranscriptUtterance,
+    schedule?: TranscriptAppendScheduler,
   ): Promise<void> {
     const metadataJson = utterance.metadata ? JSON.stringify(utterance.metadata) : null;
     const now = Date.now();
-    ensureMeetingTranscriptsSchema(this.databaseOptions);
-    this.transaction("meeting-transcripts.utterance.append", ({ db: database }) =>
-      appendMeetingTranscriptUtterance({ database, metadataJson, now, session, utterance }),
-    );
+    const speaker = utterance.speaker;
+    const input: TranscriptWriteOperations["transcripts.append"]["input"] = {
+      session: { sessionId: session.sessionId, startedAt: session.startedAt },
+      utterance: {
+        id: utterance.id,
+        startedAt: utterance.startedAt,
+        endedAt: utterance.endedAt,
+        speaker: speaker ? { id: speaker.id, label: speaker.label } : undefined,
+        text: utterance.text,
+        final: utterance.final,
+      },
+      metadataJson,
+      now,
+      readOnly: this.databaseOptions.readOnly,
+    };
+    const context = captureOpenClawStateWorkerContext(this.databaseOptions);
+    const append = (assertOwner?: () => void) => {
+      const assertCurrent = () => {
+        context.admission.assertCurrent();
+        assertOwner?.();
+      };
+      return runOpenClawStateWorkerOperation(
+        context,
+        (scope) => scope.execute({ type: "transcripts.append", input }),
+        {
+          assertCurrent,
+          createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+            context.admission.databasePath,
+          ]),
+        },
+      );
+    };
+    await (schedule ? schedule(append) : append());
   }
 
   async readUtterancesForSession(

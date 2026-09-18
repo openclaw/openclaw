@@ -301,7 +301,8 @@ async function runAdmittedOpenClawStateWorkerOperation<T>(
       operation,
       options?.assertCurrent,
       options?.createAdmission,
-      options?.requireStateLifecycle,
+      // Host-held lifecycle custody keeps native writers from blocking the worker's grant handler.
+      options?.requireStateLifecycle === true || options?.createAdmission !== undefined,
     );
   } catch (error) {
     if (error instanceof Error) {

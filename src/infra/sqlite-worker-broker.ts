@@ -11,8 +11,6 @@ import {
   captureSqliteWorkerOpen,
   captureSqliteWorkerAdmissionPaths,
   findUnclaimedSharedStateActors,
-  prepareSqliteWorkerActorContext,
-  prepareSqliteWorkerLifecycle,
   releaseSqliteWorkerActorCoordinators,
   prepareSqliteWorkerDatabaseAdmission,
   resolveOpenedSqliteWorkerIdentity,
@@ -512,11 +510,15 @@ export class SqliteWorkerBroker {
         slot.queue.splice(index, 1);
         this.finish(job, signal?.reason ?? new Error("SQLite worker operation canceled"));
       }
+      if (slot.current === job && !job.nativeDispatched) {
+        job.cancelPreparation?.abort(signal?.reason);
+      }
       // Once dispatched, retain the Promise until the database outcome is known.
     };
     this.requests += 1;
     this.bytes += reservedBytes;
     if (activeInput) {
+      signal?.addEventListener("abort", abort, { once: true });
       // A complete oversized value is active-operation memory, never retained in the bounded queue.
       if (signal?.aborted) {
         this.finish(job, signal.reason ?? new Error("SQLite worker operation canceled"));
@@ -548,29 +550,21 @@ export class SqliteWorkerBroker {
 
   private dispatchJob(slot: Slot, job: Job): void {
     slot.current = job;
-    job.detach();
     slot.worker.ref();
-    try {
-      job.assertCurrent?.();
-      const actor = [...slot.actors].find((candidate) => candidate.id === job.request.actor);
-      prepareSqliteWorkerActorContext(actor, job.request);
-      prepareSqliteWorkerLifecycle(job, actor);
-      dispatchSqliteWorkerJob(slot.worker, job);
-    } catch (error) {
-      if (
-        job.request.gatewaySchemaFence ||
-        job.request.maintenanceSchemaFence ||
-        job.request.stateLifecycle ||
-        job.request.operationAdmission
-      ) {
-        // A failed transfer cannot attest that the receiving native owner is gone.
+    dispatchSqliteWorkerJob(slot, job, (error, retire) => {
+      // Slot failure owns settlement after joining preparation and native retirement.
+      if (slot.current !== job) {
+        return;
+      }
+      if (retire) {
+        // Retire uncertain transfers or failed prepared-custody cleanup before settlement.
         this.fail(slot, error, toErrorObject(error, "SQLite worker transfer failed"));
       } else {
         slot.current = undefined;
         this.finish(job, error);
         this.dispatch(slot);
       }
-    }
+    });
   }
 
   private finish(
@@ -604,7 +598,7 @@ export class SqliteWorkerBroker {
       queued,
       error,
       currentError,
-      retirement: this.retire(slot),
+      retire: () => this.retire(slot),
       finish: (job, failure, value, settlement) => this.finish(job, failure, value, settlement),
     });
   }

@@ -12,7 +12,7 @@ import {
   type SqliteWorkerStore,
 } from "./sqlite-worker-contract.js";
 import {
-  createSqliteWorkerOperationAdmission,
+  createSqliteWorkerWriteAdmission,
   type SqliteWorkerAdmissionFactory,
 } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
@@ -87,27 +87,13 @@ export function runSqliteWorkerStoreWrite<Operations extends SqliteWorkerOperati
   assertCurrent: () => void,
   nativeLocations: readonly string[],
 ): Promise<T> {
-  return runSqliteWorkerStoreOperation(store, operation, undefined, assertCurrent, () => {
-    let phase: "waiting" | "transaction" | "commit" = "waiting";
-    return {
-      nativeLocations,
-      admission: createSqliteWorkerOperationAdmission((request, grant) => {
-        if (
-          !(
-            (phase === "waiting" && request.stage === "transaction") ||
-            (phase === "transaction" && request.stage === "commit")
-          )
-        ) {
-          throw new Error("SQLite worker write authority requested out of order");
-        }
-        assertCurrent();
-        if (!grant()) {
-          throw new Error("SQLite worker write authority expired");
-        }
-        phase = phase === "waiting" ? "transaction" : "commit";
-      }),
-    };
-  });
+  return runSqliteWorkerStoreOperation(
+    store,
+    operation,
+    undefined,
+    assertCurrent,
+    createSqliteWorkerWriteAdmission(assertCurrent, nativeLocations),
+  );
 }
 
 /** Read the broker's recorded lifecycle state without probing native storage. */

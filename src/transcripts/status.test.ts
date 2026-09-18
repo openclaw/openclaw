@@ -22,6 +22,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createTranscriptCaptureAppends } from "./capture-appends.js";
 import { activeSessions } from "./capture.js";
 import { sanitizeTranscriptSourceLocator } from "./source-locator.js";
 import { readTranscriptLibraryStatus } from "./status.js";
@@ -51,6 +52,7 @@ describe("transcript library capture health", () => {
     };
     await store.writeSession(session);
     activeSessions.set(session.sessionId, {
+      appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: source.providerId,
       provider: {},
@@ -84,6 +86,7 @@ describe("transcript library capture health", () => {
     const session = { sessionId: "alias-capture", startedAt: "2026-08-20T10:00:00.000Z", source };
     await store.writeSession(session);
     activeSessions.set(session.sessionId, {
+      appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: "canonical-captions",
       provider: {},
@@ -124,6 +127,7 @@ describe("transcript library capture health", () => {
       activeSubscription: false,
     });
     activeSessions.set(session.sessionId, {
+      appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: source.providerId,
       phase: "active",

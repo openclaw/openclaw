@@ -25,6 +25,7 @@ import * as nodeSqlite from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { SqliteSchemaVersionError } from "./sqlite-user-version.js";
+import { registerSharedStateWorkerAdmissionTests } from "./sqlite-worker-shared-state-admission.test-support.js";
 import { closeUnclaimedSharedStateSqliteWorkers } from "./sqlite-worker-store.js";
 import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
 
@@ -355,3 +356,5 @@ describe("canonical shared-state worker admission", () => {
     }
   });
 });
+
+registerSharedStateWorkerAdmissionTests(context);

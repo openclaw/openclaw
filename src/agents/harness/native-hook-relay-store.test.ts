@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  resolveStateDatabaseCoordinatorPath,
+  resolveStateLifecycleRuntimeDirectory,
+} from "../../infra/state-database-coordinator.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
 import {
   deleteNativeHookRelayBridgeRecordIfOwned,
   pruneNativeHookRelayBridgeRecords,
@@ -46,8 +50,30 @@ function bridgeRecord(
 }
 
 describe("native hook relay store", () => {
-  it("persists the bridge lifecycle without caller-thread SQLite", async () => {
-    const sql = observeMainThreadSql();
+  it("persists bridge records off thread while retaining host coordinator SQL", async () => {
+    type ObservedSql = { databasePath: string | null; sql: string };
+    const observed: ObservedSql[] = [];
+    const prepared = new WeakMap<object, ObservedSql>();
+    // oxlint-disable-next-line typescript/unbound-method -- The observation wrapper forwards its database receiver with .call.
+    const prepare = DatabaseSync.prototype.prepare;
+    // oxlint-disable-next-line typescript/unbound-method -- The observation wrapper forwards its database receiver with .call.
+    const exec = DatabaseSync.prototype.exec;
+    vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(
+      function (this: DatabaseSync, sql) {
+        const observation = { databasePath: this.location(), sql };
+        observed.push(observation);
+        const statement = prepare.call(this, sql);
+        prepared.set(statement, observation);
+        return statement;
+      },
+    );
+    vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (this: DatabaseSync, sql) {
+      observed.push({ databasePath: this.location(), sql });
+      return exec.call(this, sql);
+    });
+    const statements = (["get", "all", "run", "iterate"] as const).map((method) =>
+      vi.spyOn(StatementSync.prototype, method),
+    );
     expect(
       await readNativeHookRelayBridgeRecord({ relayId: "absent", stateDbPath: primaryStateDbPath }),
     ).toBeUndefined();
@@ -118,7 +144,39 @@ describe("native hook relay store", () => {
         stateDbPath: primaryStateDbPath,
       }),
     ).toBeUndefined();
-    sql.expectIdle();
+    for (const counter of statements) {
+      for (const receiver of counter.mock.contexts) {
+        const observation = receiver instanceof StatementSync ? prepared.get(receiver) : undefined;
+        if (!observation) {
+          throw new Error("Unattributed caller-thread SQLite statement");
+        }
+        observed.push(observation);
+      }
+    }
+    const coordinatorPath = fs.realpathSync(
+      resolveStateDatabaseCoordinatorPath({
+        databasePath: primaryStateDbPath,
+        runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
+        uid: process.getuid?.(),
+      }),
+    );
+    const probes = new Set([
+      "SELECT sqlite_version() AS version",
+      "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
+    ]);
+    const control = new Set([
+      "PRAGMA busy_timeout = 0; PRAGMA journal_mode = MEMORY; BEGIN EXCLUSIVE;",
+      "ROLLBACK",
+    ]);
+    expect(observed.some(({ databasePath }) => databasePath !== null)).toBe(true);
+    for (const { databasePath, sql } of observed) {
+      if (databasePath === null) {
+        expect(probes.has(sql), sql).toBe(true);
+      } else {
+        expect(fs.realpathSync(databasePath)).toBe(coordinatorPath);
+        expect(control.has(sql), sql).toBe(true);
+      }
+    }
   });
 
   it("requires matching token and pid to renew or delete a bridge", async () => {

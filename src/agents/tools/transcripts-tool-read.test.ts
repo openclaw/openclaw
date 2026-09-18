@@ -7,6 +7,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createTranscriptCaptureAppends } from "../../transcripts/capture-appends.js";
 import { activeSessions } from "../../transcripts/capture.js";
 import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
@@ -84,6 +85,7 @@ describe("transcripts read actions", () => {
       );
       if (state === "active") {
         activeSessions.set(session.sessionId, {
+          appends: createTranscriptCaptureAppends(() => {}),
           session: descriptor,
           providerId: "voice",
           provider: {},
@@ -203,6 +205,7 @@ describe("transcripts read actions", () => {
       },
     });
     activeSessions.set(session.sessionId, {
+      appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: "voice",
       provider: {},
@@ -262,6 +265,7 @@ describe("transcripts read actions", () => {
 
   it("bounds model-facing notes and reports active captures without summaries", async () => {
     activeSessions.set(session.sessionId, {
+      appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: "voice",
       provider: {},

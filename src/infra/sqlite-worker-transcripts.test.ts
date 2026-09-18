@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
@@ -23,6 +23,10 @@ import { readTranscriptLibraryStatus } from "../transcripts/status.js";
 import { TranscriptLibraryError } from "../transcripts/store-read.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../transcripts/store.js";
 import { summarizeTranscripts } from "../transcripts/summary.js";
+import {
+  resolveStateDatabaseCoordinatorPath,
+  resolveStateLifecycleRuntimeDirectory,
+} from "./state-database-coordinator.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -63,6 +67,70 @@ async function withoutParentSql<T>(operation: () => Promise<T>): Promise<T> {
   }
 }
 
+async function withoutParentTranscriptSql(databasePath: string, operation: () => Promise<void>) {
+  type ObservedSql = { databasePath: string | null; sql: string };
+  const observed: ObservedSql[] = [];
+  const prepared = new WeakMap<object, ObservedSql>();
+  const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
+  DatabaseSync.prototype.prepare = function (this: DatabaseSync, sql: string) {
+    const observation = { databasePath: this.location(), sql };
+    observed.push(observation);
+    const statement = prepare.call(this, sql);
+    prepared.set(statement, observation);
+    return statement;
+  };
+  DatabaseSync.prototype.exec = function (this: DatabaseSync, sql: string) {
+    observed.push({ databasePath: this.location(), sql });
+    return exec.call(this, sql);
+  };
+  const statements = (["get", "all", "run", "iterate"] as const).map((method) =>
+    vi.spyOn(StatementSync.prototype, method),
+  );
+  try {
+    await operation();
+    for (const statement of statements) {
+      for (const receiver of statement.mock.contexts) {
+        const observation = receiver instanceof StatementSync ? prepared.get(receiver) : undefined;
+        expect(observation, "unattributed caller-thread SQLite statement").toBeDefined();
+        if (observation) {
+          observed.push(observation);
+        }
+      }
+    }
+    const coordinatorPath = realpathSync(
+      resolveStateDatabaseCoordinatorPath({
+        databasePath,
+        runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
+        uid: process.getuid?.(),
+      }),
+    );
+    const probes = [
+      "SELECT sqlite_version() AS version",
+      "SELECT sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
+    ];
+    const control = [
+      "PRAGMA busy_timeout = 0; PRAGMA journal_mode = MEMORY; BEGIN EXCLUSIVE;",
+      "ROLLBACK",
+    ];
+    expect(observed.some((entry) => entry.databasePath !== null)).toBe(true);
+    for (const entry of observed) {
+      if (entry.databasePath === null) {
+        expect(probes).toContain(entry.sql);
+      } else {
+        expect(realpathSync(entry.databasePath)).toBe(coordinatorPath);
+        expect(control).toContain(entry.sql);
+      }
+    }
+  } finally {
+    prepare.mockRestore();
+    exec.mockRestore();
+    for (const statement of statements) {
+      statement.mockRestore();
+    }
+  }
+}
+
 it("keeps cold transcript reads on the canonical worker and preserves store creation", async () => {
   const { env, exportRoot, store } = fixture();
   const databasePath = resolveOpenClawStateSqlitePath(env);
@@ -80,6 +148,61 @@ it("keeps cold transcript reads on the canonical worker and preserves store crea
   });
   expect(existsSync(databasePath)).toBe(true);
   expect(existsSync(exportRoot)).toBe(false);
+});
+
+it("appends immutable speech on the canonical worker with exact-id deduplication and sequence order", async () => {
+  const { env, store } = fixture();
+  const session: TranscriptSessionDescriptor = {
+    sessionId: "append-worker",
+    startedAt: "2026-09-18T12:00:00.000Z",
+    source: { providerId: "manual-transcript" },
+    metadata: { hostOnly: () => undefined },
+  };
+  await store.writeSession(session);
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  const toJSON = vi.fn(() => ({ language: "en", nested: [1, null, "🦞"] }));
+  const utterance: TranscriptUtterance = {
+    id: "first",
+    text: "First speech",
+    speaker: { id: "speaker", label: "Sam" },
+    metadata: { toJSON },
+    final: true,
+  };
+  await withoutParentTranscriptSql(resolveOpenClawStateSqlitePath(env), async () => {
+    const writing = store.appendUtteranceForSession(session, utterance);
+    utterance.text = "Caller changed speech";
+    utterance.speaker!.label = "Caller changed speaker";
+    await writing;
+    await store.appendUtteranceForSession(session, {
+      id: "first",
+      text: "First speech",
+      speaker: { id: "speaker", label: "Sam" },
+      metadata: { language: "en", nested: [1, null, "🦞"] },
+      final: true,
+    });
+    await store.appendUtteranceForSession(session, { text: "Second speech" });
+  });
+  expect(toJSON).toHaveBeenCalledOnce();
+  expect(await store.readUtterancesForSession(session)).toEqual([
+    {
+      id: "first",
+      sessionId: session.sessionId,
+      text: "First speech",
+      speaker: { id: "speaker", label: "Sam" },
+      metadata: { language: "en", nested: [1, null, "🦞"] },
+      final: true,
+    },
+    { sessionId: session.sessionId, text: "Second speech" },
+  ]);
+  const revision = await store.readSummaryInputRevision(session);
+  expect(JSON.parse(revision!).next_utterance_seq).toBe(2);
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+  expect((await store.readUtterancesForSession(session)).map((entry) => entry.text)).toEqual([
+    "First speech",
+    "Second speech",
+  ]);
 });
 
 it("reads populated transcripts after existing-only status and through reopen without parent SQL", async () => {

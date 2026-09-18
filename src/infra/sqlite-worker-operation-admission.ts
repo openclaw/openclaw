@@ -28,6 +28,34 @@ export type SqliteWorkerAdmissionFactory = (operation: RetainedWorkerTransaction
   nativeLocations: readonly string[];
 };
 
+/** One writer's transaction and commit grants retain the same host authority. */
+export function createSqliteWorkerWriteAdmission(
+  assertCurrent: () => void,
+  nativeLocations: readonly string[],
+): SqliteWorkerAdmissionFactory {
+  return () => {
+    let phase: "waiting" | "transaction" | "commit" = "waiting";
+    return {
+      nativeLocations,
+      admission: createSqliteWorkerOperationAdmission((request, grant) => {
+        if (
+          !(
+            (phase === "waiting" && request.stage === "transaction") ||
+            (phase === "transaction" && request.stage === "commit")
+          )
+        ) {
+          throw new Error("SQLite worker write authority requested out of order");
+        }
+        assertCurrent();
+        if (!grant()) {
+          throw new Error("SQLite worker write authority expired");
+        }
+        phase = phase === "waiting" ? "transaction" : "commit";
+      }),
+    };
+  };
+}
+
 /** The caller retains real source custody before invoking the synchronous grant. */
 export function createSqliteWorkerOperationAdmission(
   admit: (request: SqliteWorkerAdmissionRequest, grant: () => boolean) => void,

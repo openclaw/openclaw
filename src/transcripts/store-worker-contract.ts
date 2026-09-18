@@ -16,11 +16,26 @@ import type {
   readTranscriptUtterances,
 } from "./store-sqlite-read.js";
 import type {
+  appendMeetingTranscriptUtterance,
   readRecentStoppedTranscriptSession,
   readTranscriptSummaryInputRevision,
 } from "./store-sqlite.js";
 
 type SessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
+
+/** Host-only capture scheduling; functions never cross the worker boundary. */
+export type TranscriptAppendScheduler = (
+  write: (assertCurrent: () => void) => Promise<void>,
+) => Promise<void>;
+
+export type TranscriptWriteOperations = {
+  "transcripts.append": {
+    input: Omit<Parameters<typeof appendMeetingTranscriptUtterance>[0], "database"> & {
+      readOnly?: boolean;
+    };
+    output: void;
+  };
+};
 
 export type TranscriptReadRequests = {
   "transcripts.sessionEntries": {
