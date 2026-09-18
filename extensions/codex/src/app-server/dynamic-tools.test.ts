@@ -965,7 +965,7 @@ describe("createCodexDynamicToolBridge", () => {
       expect.objectContaining({ toolName: "sessions_spawn", isError: false }),
     );
     expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
-      { runId: "run_5f3a9c", childSessionKey: "child-7b21" },
+      { runId: "run_5f3a9c", childSessionKey: "child-7b21", expectsCompletionMessage: false },
     ]);
   });
 
@@ -1007,7 +1007,11 @@ describe("createCodexDynamicToolBridge", () => {
 
     expect(result).toEqual(expectInputText("Child launch recorded."));
     expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
-      { runId: "run_compacted", childSessionKey: "child-compacted" },
+      {
+        runId: "run_compacted",
+        childSessionKey: "child-compacted",
+        expectsCompletionMessage: false,
+      },
     ]);
   });
 
@@ -2160,7 +2164,11 @@ describe("createCodexDynamicToolBridge", () => {
           expect(bridge.telemetry.successfulCronAdds).toBe(1);
         } else {
           expect(bridge.telemetry.acceptedSessionSpawns).toEqual([
-            { runId: "child-run", childSessionKey: "child-session" },
+            {
+              runId: "child-run",
+              childSessionKey: "child-session",
+              expectsCompletionMessage: false,
+            },
           ]);
         }
       } finally {

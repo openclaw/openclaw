@@ -55,12 +55,10 @@ import {
   extractExecOutput,
   extractLiveExecOutput,
   hasMessagingRichContent,
-  isAsyncStartedToolResult,
   isCronAddAction,
   isMiddlewareToolResultError,
   loadHookRunnerGlobal,
   readApplyPatchSummary,
-  readAsyncStartedTaskIds,
   readExecToolDetails,
   readMessagingText,
   resolveFallbackToolTerminalObserver,
@@ -84,6 +82,10 @@ import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
 } from "./embedded-agent-tool-media.js";
+import {
+  isAsyncStartedToolResult,
+  readAsyncStartedTaskIds,
+} from "./embedded-agent-tool-results.js";
 import {
   capLiveExecResult,
   extractToolErrorCode,

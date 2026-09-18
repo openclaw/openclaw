@@ -245,15 +245,20 @@ export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-a
 export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
+  extractMessagingToolSourceReplyPayload,
 } from "../agents/embedded-agent-messaging-extraction.js";
 export {
+  collectMessagingMediaUrlsFromRecord,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "../agents/embedded-agent-tool-media.js";
 export {
   extractToolErrorMessage,
+  isAsyncStartedToolResult,
+  readAsyncStartedTaskIds,
   sanitizeToolResult,
 } from "../agents/embedded-agent-tool-results.js";
+export { normalizeAcceptedSessionSpawnResult } from "../agents/accepted-session-spawn.js";
 export {
   formatToolExecutionErrorMessage,
   isToolResultError,

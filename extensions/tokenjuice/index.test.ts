@@ -34,7 +34,7 @@ describe("tokenjuice plugin", () => {
     expect(manifest.enabledByDefault).toBeUndefined();
   });
 
-  it("registers tokenjuice tool result middleware for OpenClaw and Codex runtimes", () => {
+  it("registers tokenjuice tool result middleware for OpenClaw, Codex, and Agents API runtimes", () => {
     const registerAgentToolResultMiddleware = vi.fn();
 
     plugin.register(
@@ -53,7 +53,7 @@ describe("tokenjuice plugin", () => {
     expect(tokenjuiceFactory).toHaveBeenCalledTimes(1);
     const registration = registerAgentToolResultMiddleware.mock.calls[0];
     expect(typeof registration?.[0]).toBe("function");
-    expect(registration?.[1]).toEqual({ runtimes: ["openclaw", "codex"] });
+    expect(registration?.[1]).toEqual({ runtimes: ["openclaw", "codex", "agentsapi"] });
   });
 
   it("synthesises exec status when bash provides metadata-only details", async () => {

@@ -11,6 +11,7 @@ import {
 
 export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-provenance.js";
 export { consumeTrustedToolNoStartError } from "../agents/tool-result-error.js";
+export { runWithToolExecutionValidation } from "../agents/agent-tools.execution-validation.js";
 export {
   acknowledgeInternalToolResult,
   copyInternalToolResultState,

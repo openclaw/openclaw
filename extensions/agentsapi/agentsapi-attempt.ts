@@ -4,7 +4,6 @@ import {
   agentHarnessAttemptTerminal,
   clearActiveEmbeddedRun,
   embeddedAgentLog,
-  emitAgentEvent,
   setActiveEmbeddedRun,
   type AgentHarnessAttemptParamsV2,
   type AgentHarnessAttemptResult,
@@ -13,8 +12,17 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { calculateCost, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { appendSessionTranscriptMessageByIdentityStrict } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { AgentsApiClient, type AgentsApiEvent } from "./agentsapi-client.js";
+import { collectOutputs, prepareInputs, uploadInputs } from "./agentsapi-files.js";
+import {
+  commitAgentsApiAssistant,
+  createAgentsApiSnapshotEmitter,
+  createAgentsApiUsage,
+  emitAgentsApiEvent,
+  selectAgentsApiReplyText,
+  updateAgentsApiUsage,
+} from "./agentsapi-reply.js";
+import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
 
 type SessionBinding = { sessionId: string; authFingerprint: string };
 
@@ -61,6 +69,7 @@ export async function runAgentsApiAttempt(
   if (params.contextEngine && params.contextEngine.info.id !== "legacy") {
     throw new Error("Agents API MVP currently supports only the default legacy context engine");
   }
+  assertCurrent();
   const controller = new AbortController();
   let streamController = new AbortController();
   let stage = "prepare_session";
@@ -68,15 +77,7 @@ export async function runAgentsApiAttempt(
   // Cancellation retires already admitted remote work even after host authority closes.
   const cleanupClient = new AgentsApiClient(params.resolvedApiKey, assertHarnessCurrent);
   const store = agentsApiBindingStore(runtime);
-  const fingerprint = createHash("sha256")
-    .update(JSON.stringify([params.model.id, params.resolvedApiKey]))
-    .digest("hex");
   let binding = store.lookup(params.sessionId);
-  if (binding && binding.authFingerprint !== fingerprint) {
-    throw new Error(
-      "Agents API model or credential changed; reset the OpenClaw session before continuing",
-    );
-  }
   let remoteSessionId = binding?.sessionId;
   let submitted = false;
   let stopped = false;
@@ -111,31 +112,8 @@ export async function runAgentsApiAttempt(
   let turnFailure: string | undefined;
   const texts = new Map<string, Map<number, string>>();
   const assistantPhases = new Map<string, string | null | undefined>();
-  let visibleAssistantItemId: string | undefined;
-  const emitAssistantSnapshot = (itemId: string, text: string, delta = "") => {
-    const replace = visibleAssistantItemId !== itemId;
-    visibleAssistantItemId = itemId;
-    // Steering can supersede a completed native turn before the session settles.
-    // Hold append-only consumers until authoritative items select the final reply.
-    emitAgentsApiEvent(params, {
-      stream: "assistant",
-      data: {
-        itemId,
-        text,
-        delta: replace ? "" : delta,
-        replaceable: true,
-        ...(replace ? { replace: true } : {}),
-      },
-    });
-  };
-  let usage: AssistantMessage["usage"] = {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
+  const emitAssistantSnapshot = createAgentsApiSnapshotEmitter(params);
+  let usage = createAgentsApiUsage();
   const stop = (requested = true) => {
     if (stopped) {
       return;
@@ -220,30 +198,143 @@ export async function runAgentsApiAttempt(
     params.agentId,
   );
   let lastAssistant: AssistantMessage | undefined;
+  const toolCleanups: Array<(reason: string) => Promise<void>> = [];
+  let toolSurface: Awaited<ReturnType<typeof buildAgentsApiToolSurface>> | undefined;
+  let outputMedia: Awaited<ReturnType<typeof collectOutputs>> | undefined;
+  let terminatedByTool = false;
+  let startedToolCount = 0;
+  let completedToolCount = 0;
   try {
     if (params.abortSignal?.aborted) {
       stop();
     }
     controller.signal.throwIfAborted();
+    const surface = buildAgentsApiToolSurface(params, controller.signal, assertCurrent, (cleanup) =>
+      toolCleanups.push(cleanup),
+    );
+    toolSurface = surface;
+    const inputs = await prepareInputs(
+      params.media,
+      params.workspaceDir,
+      assertCurrent,
+      controller.signal,
+    );
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify([params.model.id, params.resolvedApiKey, toolSurface.declarations]))
+      .digest("hex");
+    assertCurrent();
+    if (binding && binding.authFingerprint !== fingerprint) {
+      throw new Error(
+        "Agents API model, credential, or tool surface changed; reset the OpenClaw session before continuing",
+      );
+    }
+    const creatingSession = !remoteSessionId;
     if (!remoteSessionId) {
       remoteSessionId = await client.create(
         controller.signal,
         [
           "You are the OpenClaw assistant. Use your hosted Linux workspace for commands and files.",
-          "This MVP has no apps, connectors, OpenClaw tools, file transfers, or image generation. Do not claim access to them.",
+          "OpenClaw functions run in the Gateway and use its workspace; your hosted VM owns shell commands and VM files.",
+          "Uploaded attachments are mapped to hosted VM paths in each user message. Files you finish writing under /workspace/outputs are transferred and attached to your final reply after your turn completes.",
+          "Gateway messaging functions cannot open VM paths. Complete your assistant turn to deliver VM output attachments. Image generation is unavailable.",
           params.extraSystemPrompt,
         ]
           .filter(Boolean)
           .join("\n\n"),
         params.model.id,
+        { functions: toolSurface.declarations, files: inputs.files },
       );
       assertCurrent();
       binding = { sessionId: remoteSessionId, authFingerprint: fingerprint };
       store.register(params.sessionId, binding);
     }
+    if (!creatingSession && inputs.files.length) {
+      stage = "upload_inputs";
+      await uploadInputs(client, remoteSessionId, inputs.files, assertCurrent, controller.signal);
+    }
     const baselineTurnId = (
       await client.turns(remoteSessionId, controller.signal, undefined, true)
     )[0]?.id;
+    const nativeSessionId = remoteSessionId;
+    const relayedCalls = new Set<string>();
+    const relayFunctions = async () => {
+      assertCurrent();
+      controller.signal.throwIfAborted();
+      const calls = await client.pendingFunctionCalls(nativeSessionId, controller.signal);
+      if (!calls.length) {
+        return;
+      }
+      const turns = await client.turns(nativeSessionId, controller.signal, baselineTurnId);
+      for (const turn of turns) {
+        coordinatorTurnIds.add(turn.id);
+      }
+      const latestTurn = turns.at(-1);
+      if (!latestTurn) {
+        throw new Error("Agents API function request has no current attempt root turn");
+      }
+      latestInputTurnId = latestTurn.id;
+      for (const call of calls) {
+        if (
+          call.turn_id !== latestTurn.id ||
+          !["in_progress", "waiting"].includes(latestTurn.status)
+        ) {
+          throw new Error(
+            "Agents API function request belongs to a different or settled root turn",
+          );
+        }
+        const identity = `${remoteSessionId}:${call.turn_id}:${call.call_id}`;
+        if (relayedCalls.has(identity)) {
+          continue;
+        }
+        // Claim before execution: neither a repeated event nor an uncertain POST
+        // may run a Gateway side effect for this native call a second time.
+        relayedCalls.add(identity);
+        startedToolCount++;
+        emitAgentsApiEvent(params, {
+          stream: "tool",
+          data: { phase: "start", name: call.name, toolCallId: call.call_id },
+        });
+        const result = await surface.execute(call);
+        assertCurrent();
+        controller.signal.throwIfAborted();
+        submission = submission.then(() =>
+          client.toolResult(nativeSessionId, call, result, AbortSignal.timeout(60_000)),
+        );
+        void submission.catch(() => {});
+        await submission;
+        completedToolCount++;
+        emitAgentsApiEvent(params, {
+          stream: "tool",
+          data: {
+            phase: "result",
+            name: call.name,
+            toolCallId: call.call_id,
+            isError: !result.success,
+          },
+        });
+        if (result.terminate || result.sourceReplyDelivered) {
+          // The host has delivered the final reply. Acknowledge its native tool
+          // result before retiring the coordinator, then suppress duplicate text.
+          await cleanupClient.cancel(nativeSessionId, AbortSignal.timeout(30_000));
+          const settledSession = await client.session(nativeSessionId, controller.signal);
+          if (settledSession.status !== "idle") {
+            throw new Error(
+              settledSession.error ?? "Agents API tool termination did not establish native idle",
+            );
+          }
+          const nativeRoot = await client.turn(nativeSessionId, call.turn_id, controller.signal);
+          rootTurn = nativeRoot;
+          if (!["completed", "cancelled"].includes(nativeRoot.status)) {
+            throw new Error("Agents API tool termination did not settle its native root turn");
+          }
+          terminatedByTool = true;
+          terminal = { kind: "ok" };
+          sessionSettled = true;
+          streamController.abort();
+          return;
+        }
+      }
+    };
     stage = "subscribe";
     let events = await client.subscribe(
       remoteSessionId,
@@ -258,7 +349,7 @@ export async function runAgentsApiAttempt(
       // Mark before sending: an uncertain POST may already have started remote work.
       submitted = true;
       stage = "submit_input";
-      await submit(params.prompt);
+      await submit([params.prompt, inputs.mappingText].filter(Boolean).join("\n\n"));
       params.userTurnTranscriptRecorder?.markSentToProvider?.();
       emitAgentsApiEvent(params, { stream: "lifecycle", data: { phase: "start" } });
       stage = "stream";
@@ -309,7 +400,10 @@ export async function runAgentsApiAttempt(
             throw new Error(session.error ?? "Agents API session failed");
           }
           if (session.status === "requires_action") {
-            throw new Error("Agents API MVP cannot continue: agent.session.requires_action");
+            await relayFunctions();
+            if (sessionSettled) {
+              break;
+            }
           }
           if (
             rootTurn &&
@@ -406,13 +500,14 @@ export async function runAgentsApiAttempt(
         if (event.type === "error") {
           throw new Error(event.error?.message ?? "Agents API stream error");
         }
-        if (
-          [
-            "agent.session.failed",
-            "agent.session.environment.failed",
-            "agent.session.requires_action",
-          ].includes(event.type)
-        ) {
+        if (event.type === "agent.session.requires_action") {
+          await relayFunctions();
+          if (sessionSettled) {
+            break;
+          }
+          continue;
+        }
+        if (["agent.session.failed", "agent.session.environment.failed"].includes(event.type)) {
           throw new Error(`Agents API MVP cannot continue: ${event.type}`);
         }
         if (event.item?.type === "message" && event.item.role === "assistant") {
@@ -498,68 +593,35 @@ export async function runAgentsApiAttempt(
     if (turnFailure) {
       throw new Error(turnFailure);
     }
-    if (terminal.kind === "ok") {
+    if (terminal.kind === "ok" && !terminatedByTool) {
       stage = "read_items";
       const items = await client.items(remoteSessionId, rootTurn.id, controller.signal);
       assertCurrent();
-      const completedMessages = items.filter(
-        (item) =>
-          item.type === "message" && item.role === "assistant" && item.status === "completed",
+      const text = selectAgentsApiReplyText(items);
+      stage = "collect_outputs";
+      outputMedia = await collectOutputs(
+        client,
+        remoteSessionId,
+        rootTurn.id,
+        assertCurrent,
+        controller.signal,
       );
-      const finalItems = completedMessages.filter((item) => item.phase === "final_answer");
-      const visibleItems = finalItems.length
-        ? finalItems
-        : completedMessages.filter((item) => item.phase !== "commentary");
-      const text = visibleItems
-        .map(
-          (item) =>
-            item.content
-              ?.filter((part) => part.type === "output_text")
-              .map((part) => part.text ?? "")
-              .join("") ?? "",
-        )
-        .join("\n");
-      const nativeUsage = rootTurn.usage;
-      if (nativeUsage) {
-        usage = {
-          ...usage,
-          input: nativeUsage.input_tokens - (nativeUsage.input_tokens_details?.cached_tokens ?? 0),
-          output: nativeUsage.output_tokens,
-          cacheRead: nativeUsage.input_tokens_details?.cached_tokens ?? 0,
-          totalTokens: nativeUsage.input_tokens + nativeUsage.output_tokens,
-        };
+      if (rootTurn.usage) {
+        usage = updateAgentsApiUsage(usage, rootTurn.usage);
         params.hostCapabilities.reportOutputTokens?.(usage.output);
         calculateCost(params.model, usage);
       }
       if (text) {
         stage = "commit_reply";
-        const assistant: AssistantMessage & { idempotencyKey: string } = {
-          role: "assistant",
-          content: [{ type: "text", text }],
-          api: "openai-responses",
-          provider: "openai",
-          model: params.model.id,
+        lastAssistant = await commitAgentsApiAssistant(
+          params,
+          sessionTarget,
+          remoteSessionId,
+          rootTurn.id,
+          text,
           usage,
-          stopReason: "stop",
-          timestamp: Date.now(),
-          idempotencyKey: `agentsapi:${remoteSessionId}:${rootTurn.id}`,
-        };
-        const append = await appendSessionTranscriptMessageByIdentityStrict({
-          ...sessionTarget,
-          config: params.config,
-          message: assistant,
-          prepareMessageAfterIdempotencyCheck: (message) => {
-            assertCurrent();
-            return message;
-          },
-        });
-        assertCurrent();
-        if (append.kind !== "result") {
-          throw new Error("Agents API assistant transcript append was refused");
-        }
-        lastAssistant = append.result.message;
-      }
-      if (text) {
+          assertCurrent,
+        );
         await params.onAssistantMessageStart?.();
       }
       assertCurrent();
@@ -604,6 +666,13 @@ export async function runAgentsApiAttempt(
     }
     stopped = true;
     controller.abort();
+    for (const cleanup of toolCleanups.toReversed()) {
+      try {
+        await cleanup("Agents API attempt settled");
+      } catch (error) {
+        embeddedAgentLog.warn("Agents API tool cleanup failed", { error });
+      }
+    }
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
   }
   const assistantTexts =
@@ -622,34 +691,35 @@ export async function runAgentsApiAttempt(
     assistantTranscriptOwned: Boolean(lastAssistant),
     assistantTranscriptIdempotencyKey:
       lastAssistant && rootTurn ? `agentsapi:${remoteSessionId}:${rootTurn.id}` : undefined,
-    toolMetas: [],
+    toolMetas: toolSurface?.toolMetas ?? [],
+    lastToolError: toolSurface?.lastToolError,
+    ...toolSurface?.runtimeFacts,
     didSendViaMessagingTool: false,
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
+    ...toolSurface?.delivery,
+    ...(outputMedia && {
+      hostOwnedToolMediaUrls: outputMedia.hostOwnedToolMediaUrls,
+      toolMediaUrls: [
+        ...new Set([...(toolSurface?.delivery.toolMediaUrls ?? []), ...outputMedia.toolMediaUrls]),
+      ],
+      // A shared trust flag must not promote unrelated plugin media merely
+      // because this turn also produced a verified hosted artifact.
+      toolTrustedLocalMedia:
+        outputMedia.toolMediaUrls.length && !toolSurface?.delivery.toolMediaUrls?.length
+          ? true
+          : toolSurface?.delivery.toolTrustedLocalMedia,
+    }),
     cloudCodeAssistFormatError: false,
     attemptUsage: usage,
     // Hosted commands are opaque, so admitted work is unsafe to replay.
     // Core may still continue the existing session's transcript after a transient failure.
     replayMetadata: { hadPotentialSideEffects: submitted, replaySafe: !submitted },
-    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+    itemLifecycle: {
+      startedCount: startedToolCount,
+      completedCount: completedToolCount,
+      activeCount: Math.max(0, startedToolCount - completedToolCount),
+    },
   };
-}
-
-function emitAgentsApiEvent(
-  params: AgentHarnessAttemptParamsV2,
-  event: Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0],
-): void {
-  try {
-    emitAgentEvent({ runId: params.runId, sessionKey: params.sessionKey, ...event });
-  } catch (error) {
-    embeddedAgentLog.debug("Agents API global event handler failed", { error });
-  }
-  try {
-    void Promise.resolve(params.onAgentEvent?.(event)).catch((error: unknown) => {
-      embeddedAgentLog.debug("Agents API event handler rejected", { error });
-    });
-  } catch (error) {
-    embeddedAgentLog.debug("Agents API event handler failed", { error });
-  }
 }
