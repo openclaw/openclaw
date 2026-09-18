@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
@@ -13,13 +12,19 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "openclaw/plugin-sdk/windows-spawn";
 import { formatCodexDisplayText } from "./command-formatters.js";
-import { JSONL_FIRST_LINE_CHUNK_BYTES, visitJsonlLines } from "./jsonl-lines.js";
+import {
+  type CodexCliSessionSummary,
+  findSessionFiles,
+  hydrateSessionFiles,
+  hydrateSessionsFromSessionFiles,
+  matchesSessionFilter,
+  readHistorySessions,
+} from "./node-cli-session-files.js";
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
 export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
@@ -30,18 +35,25 @@ const DEFAULT_RESUME_TIMEOUT_MS = 20 * 60_000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const activeResumeSessions = new Set<string>();
 
-type CodexCliSessionSummary = {
-  sessionId: string;
-  updatedAt?: string;
-  lastMessage?: string;
-  cwd?: string;
-  sessionFile?: string;
-  messageCount: number;
-};
-
 type CodexCliSessionsListResult = {
   sessions: CodexCliSessionSummary[];
   codexHome: string;
+  /** Rollouts opened to build this listing. Absent from a node build that predates the counter. */
+  scannedFileCount?: number;
+  /** Rollouts present under the codex-home, whether or not they were opened. */
+  sessionFileCount?: number;
+  /**
+   * Set when a filtered listing did not search the whole corpus — either rollouts were never
+   * opened, or an opened rollout was too large to read whole and the part that went unread could
+   * have matched. An unfiltered listing is a newest-first page by construction and never sets this.
+   */
+  searchTruncated?: boolean;
+  /**
+   * Rollouts that were opened, failed the filter on a windowed summary, and had an unread span the
+   * filter term could be sitting in. Distinct from unopened files: the count is why an
+   * every-file-opened search still cannot call itself complete.
+   */
+  unreadSpanCount?: number;
 };
 
 type CodexCliSessionResumeResult = {
@@ -172,15 +184,27 @@ export function formatCodexCliSessions(params: {
   node: CodexCliSessionNodeInfo;
   result: CodexCliSessionsListResult;
 }): string {
+  const truncation = formatSessionSearchTruncation(params.result);
   if (params.result.sessions.length === 0) {
-    return `No Codex CLI sessions returned from ${formatCodexDisplayText(formatNodeLabel(params.node))}.`;
+    // The empty answer is the one most likely to be read as "no such session exists", so a cut
+    // search has to say so here too — returning early before the notice hid it exactly where it
+    // mattered most.
+    return [
+      `No Codex CLI sessions returned from ${formatCodexDisplayText(formatNodeLabel(params.node))}.`,
+      ...truncation,
+    ].join("\n");
   }
   return [
     `Codex CLI sessions on ${formatCodexDisplayText(formatNodeLabel(params.node))}:`,
+    ...truncation,
     ...params.result.sessions.map((session) => {
-      const details = [session.cwd, session.updatedAt].filter((value): value is string =>
-        Boolean(value),
-      );
+      // Say so when the preview and count come from a windowed read, so nobody reads a stale
+      // `lastMessage` off an oversized rollout as that session's latest activity.
+      const details = [
+        session.cwd,
+        session.updatedAt,
+        session.partialScan ? "partial scan" : undefined,
+      ].filter((value): value is string => Boolean(value));
       return `- ${formatCodexDisplayText(session.sessionId)}${
         session.lastMessage ? ` - ${formatCodexDisplayText(session.lastMessage)}` : ""
       }${details.length > 0 ? ` (${details.map(formatCodexDisplayText).join(", ")})` : ""}\n  Bind: /codex resume ${formatCodexDisplayText(
@@ -190,26 +214,66 @@ export function formatCodexCliSessions(params: {
   ].join("\n");
 }
 
+/**
+ * A filter that stopped short is a search with sessions missing from it, not just a short page, so
+ * say which part of the corpus was actually searched instead of presenting the cut set as the
+ * whole answer.
+ */
+function formatSessionSearchTruncation(result: CodexCliSessionsListResult): string[] {
+  if (!result.searchTruncated) {
+    return [];
+  }
+  const scanned = result.scannedFileCount;
+  const total = result.sessionFileCount;
+  const unread = result.unreadSpanCount ?? 0;
+  const sentences: string[] = [];
+  // Not "the N most recent": a filtered scan reads filename matches before the rest, so the
+  // rollouts it opened are not a recency prefix of the codex-home.
+  if (scanned === undefined || total === undefined) {
+    sentences.push(
+      "Only part of this codex-home was searched; sessions matching on directory or message text may exist outside this list.",
+    );
+  } else if (scanned < total) {
+    sentences.push(
+      `Searched ${String(scanned)} of ${String(total)} rollouts; sessions matching on directory or message text may exist outside this list.`,
+    );
+  }
+  // An opened rollout is not a read rollout. Reporting only the file count would let a search that
+  // covered every file call itself complete while a match sat in a span it never looked at.
+  if (unread > 0) {
+    sentences.push(
+      unread === 1
+        ? "1 rollout was too large to read whole, so a directory or message-text match inside the part that went unread would not appear here."
+        : `${String(unread)} rollouts were too large to read whole, so a directory or message-text match inside the parts that went unread would not appear here.`,
+    );
+  }
+  sentences.push(
+    "A session id is part of the rollout filename, so an id filter is read before the rest and reaches further back than a directory or message-text filter does.",
+  );
+  return [sentences.join(" ")];
+}
+
 async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<string> {
   const params = readRecordParam(paramsJSON);
   const limit = normalizeLimit(params.limit);
   const filter = typeof params.filter === "string" ? params.filter.trim().toLowerCase() : "";
   const codexHome = resolveCodexHome();
   const summaries = await readHistorySessions(codexHome);
-  await hydrateSessionFiles(codexHome, summaries);
-  await hydrateSessionsFromSessionFiles(codexHome, summaries);
+  const sessionFiles = await findSessionFiles(path.join(codexHome, "sessions"), 4);
+  await hydrateSessionFiles(summaries, sessionFiles);
+  const scan = await hydrateSessionsFromSessionFiles(summaries, sessionFiles, filter, limit);
   const sessions = [...summaries.values()]
-    .filter((session) => {
-      if (!filter) {
-        return true;
-      }
-      return [session.sessionId, session.cwd, session.lastMessage].some((value) =>
-        value?.toLowerCase().includes(filter),
-      );
-    })
+    .filter((session) => matchesSessionFilter(session, filter))
     .toSorted((a, b) => compareOptionalStringsDesc(a.updatedAt, b.updatedAt))
     .slice(0, limit);
-  return JSON.stringify({ sessions, codexHome } satisfies CodexCliSessionsListResult);
+  return JSON.stringify({
+    sessions,
+    codexHome,
+    scannedFileCount: scan.scannedFileCount,
+    sessionFileCount: sessionFiles.length,
+    ...(scan.searchTruncated ? { searchTruncated: true } : {}),
+    ...(scan.unreadSpanCount > 0 ? { unreadSpanCount: scan.unreadSpanCount } : {}),
+  } satisfies CodexCliSessionsListResult);
 }
 
 async function resumeLocalCodexCliSession(paramsJSON?: string | null): Promise<string> {
@@ -301,233 +365,6 @@ async function runCodexExecResume(params: {
   }
 }
 
-async function readHistorySessions(
-  codexHome: string,
-): Promise<Map<string, CodexCliSessionSummary>> {
-  const summaries = new Map<string, CodexCliSessionSummary>();
-  const historyPath = path.join(codexHome, "history.jsonl");
-  const result = await visitJsonlLines(historyPath, (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed) as unknown;
-    } catch {
-      return;
-    }
-    if (!isRecord(parsed) || typeof parsed.session_id !== "string") {
-      return;
-    }
-    const sessionId = parsed.session_id.trim();
-    if (!sessionId) {
-      return;
-    }
-    const entry = summaries.get(sessionId) ?? {
-      sessionId,
-      messageCount: 0,
-    };
-    entry.messageCount += 1;
-    if (typeof parsed.text === "string" && parsed.text.trim()) {
-      entry.lastMessage = truncateText(parsed.text.trim(), 140);
-    }
-    if (typeof parsed.ts === "number") {
-      entry.updatedAt = timestampMsToIsoString(parsed.ts * 1000) ?? entry.updatedAt;
-    }
-    summaries.set(sessionId, entry);
-  });
-  if (!result.ok) {
-    return new Map();
-  }
-  return summaries;
-}
-
-async function hydrateSessionFiles(
-  codexHome: string,
-  summaries: Map<string, CodexCliSessionSummary>,
-): Promise<void> {
-  if (summaries.size === 0) {
-    return;
-  }
-  const sessionsDir = path.join(codexHome, "sessions");
-  const files = await findSessionFiles(sessionsDir, 4);
-  const pending = new Set(summaries.keys());
-  for (const file of files) {
-    const basename = path.basename(file);
-    const sessionId = [...pending].find((id) => basename.includes(id));
-    if (!sessionId) {
-      continue;
-    }
-    const entry = summaries.get(sessionId);
-    if (!entry) {
-      continue;
-    }
-    entry.sessionFile = file;
-    const firstLine = (await readFirstLine(file)) ?? "";
-    const cwd = readSessionMetaCwd(firstLine);
-    if (cwd) {
-      entry.cwd = cwd;
-    }
-    pending.delete(sessionId);
-    if (pending.size === 0) {
-      return;
-    }
-  }
-}
-
-async function hydrateSessionsFromSessionFiles(
-  codexHome: string,
-  summaries: Map<string, CodexCliSessionSummary>,
-): Promise<void> {
-  const sessionsDir = path.join(codexHome, "sessions");
-  const files = await findSessionFiles(sessionsDir, 4);
-  for (const file of files) {
-    const summary = await readSessionFileSummary(file);
-    if (!summary) {
-      continue;
-    }
-    const existing = summaries.get(summary.sessionId);
-    summaries.set(summary.sessionId, {
-      ...summary,
-      ...existing,
-      cwd: existing?.cwd ?? summary.cwd,
-      sessionFile: existing?.sessionFile ?? summary.sessionFile,
-      updatedAt: existing?.updatedAt ?? summary.updatedAt,
-      lastMessage: existing?.lastMessage ?? summary.lastMessage,
-      messageCount: existing?.messageCount ?? summary.messageCount,
-    });
-  }
-}
-
-async function readSessionFileSummary(file: string): Promise<CodexCliSessionSummary | null> {
-  let sessionId = "";
-  let cwd: string | undefined;
-  let updatedAt: string | undefined;
-  let lastMessage: string | undefined;
-  let messageCount = 0;
-  const result = await visitJsonlLines(file, (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed) as unknown;
-    } catch {
-      return;
-    }
-    if (!isRecord(parsed)) {
-      return;
-    }
-    if (typeof parsed.timestamp === "string" && parsed.timestamp.trim()) {
-      updatedAt = parsed.timestamp.trim();
-    }
-    if (parsed.type === "session_meta" && isRecord(parsed.payload)) {
-      if (typeof parsed.payload.id === "string" && parsed.payload.id.trim()) {
-        sessionId = parsed.payload.id.trim();
-      }
-      if (typeof parsed.payload.cwd === "string" && parsed.payload.cwd.trim()) {
-        cwd = parsed.payload.cwd.trim();
-      }
-      return;
-    }
-    const messageText = readResponseItemMessageText(parsed);
-    if (messageText) {
-      messageCount += 1;
-      lastMessage = truncateText(messageText, 140);
-    }
-  });
-  if (!result.ok) {
-    return null;
-  }
-  if (result.lineCount === 0) {
-    return null;
-  }
-  if (!sessionId) {
-    sessionId = readSessionIdFromFilename(file) ?? "";
-  }
-  if (!sessionId) {
-    return null;
-  }
-  return {
-    sessionId,
-    updatedAt: updatedAt ?? (await readFileMtimeIso(file)),
-    lastMessage,
-    cwd,
-    sessionFile: file,
-    messageCount,
-  };
-}
-
-async function findSessionFiles(dir: string, maxDepth: number): Promise<string[]> {
-  if (maxDepth < 0) {
-    return [];
-  }
-  let entries: Array<import("node:fs").Dirent>;
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const files: string[] = [];
-  for (const entry of entries) {
-    const entryPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await findSessionFiles(entryPath, maxDepth - 1)));
-    } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
-      files.push(entryPath);
-    }
-  }
-  return files;
-}
-
-function readSessionMetaCwd(line: string): string | undefined {
-  try {
-    const parsed = JSON.parse(line) as unknown;
-    if (!isRecord(parsed) || parsed.type !== "session_meta" || !isRecord(parsed.payload)) {
-      return undefined;
-    }
-    return typeof parsed.payload.cwd === "string" && parsed.payload.cwd.trim()
-      ? parsed.payload.cwd.trim()
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function readResponseItemMessageText(parsed: Record<string, unknown>): string | undefined {
-  if (parsed.type !== "response_item" || !isRecord(parsed.payload)) {
-    return undefined;
-  }
-  if (parsed.payload.type !== "message") {
-    return undefined;
-  }
-  const role = typeof parsed.payload.role === "string" ? parsed.payload.role : "";
-  if (role !== "user") {
-    return undefined;
-  }
-  const content = Array.isArray(parsed.payload.content) ? parsed.payload.content : [];
-  const parts = content.flatMap((entry) => {
-    if (!isRecord(entry)) {
-      return [];
-    }
-    const text =
-      typeof entry.text === "string"
-        ? entry.text
-        : typeof entry.input_text === "string"
-          ? entry.input_text
-          : undefined;
-    return text?.trim() ? [text.trim()] : [];
-  });
-  return parts.length > 0 ? parts.join(" ") : undefined;
-}
-
-function readSessionIdFromFilename(file: string): string | undefined {
-  const match = path.basename(file).match(/[0-9a-f]{8}-[0-9a-f-]{27,}/iu);
-  return match?.[0];
-}
-
 async function resolveCodexCliNode(params: {
   runtime: PluginRuntime;
   requestedNode?: string;
@@ -567,6 +404,12 @@ function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResu
   }
   return {
     codexHome: typeof payload.codexHome === "string" ? payload.codexHome : "",
+    // Keep these absent rather than zero when the node build predates them, so the truncation
+    // notice falls back to its unquantified wording instead of claiming "0 of 0 rollouts".
+    scannedFileCount: readOptionalCount(payload.scannedFileCount),
+    sessionFileCount: readOptionalCount(payload.sessionFileCount),
+    searchTruncated: payload.searchTruncated === true ? true : undefined,
+    unreadSpanCount: readOptionalCount(payload.unreadSpanCount),
     sessions: payload.sessions.flatMap((entry) => {
       if (!isRecord(entry) || typeof entry.sessionId !== "string") {
         return [];
@@ -578,14 +421,20 @@ function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResu
           lastMessage: typeof entry.lastMessage === "string" ? entry.lastMessage : undefined,
           cwd: typeof entry.cwd === "string" ? entry.cwd : undefined,
           sessionFile: typeof entry.sessionFile === "string" ? entry.sessionFile : undefined,
-          messageCount:
-            typeof entry.messageCount === "number" && Number.isFinite(entry.messageCount)
-              ? entry.messageCount
-              : 0,
+          messageCount: readFiniteCount(entry.messageCount),
+          partialScan: entry.partialScan === true ? true : undefined,
         },
       ];
     }),
   };
+}
+
+function readFiniteCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function readOptionalCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function unwrapNodeInvokePayload(raw: unknown): unknown {
@@ -621,27 +470,6 @@ function resolveCodexHome(): string {
   return process.env.CODEX_HOME?.trim() || path.join(os.homedir(), ".codex");
 }
 
-async function readFirstLine(file: string): Promise<string | undefined> {
-  let firstLine: string | undefined;
-  const result = await visitJsonlLines(
-    file,
-    (line) => {
-      firstLine = line;
-      return false;
-    },
-    JSONL_FIRST_LINE_CHUNK_BYTES,
-  );
-  return result.ok ? firstLine : undefined;
-}
-
-async function readFileMtimeIso(file: string): Promise<string | undefined> {
-  try {
-    return (await fs.stat(file)).mtime.toISOString();
-  } catch {
-    return undefined;
-  }
-}
-
 function normalizeLimit(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value)
     ? Math.min(MAX_SESSION_LIMIT, Math.max(1, Math.floor(value)))
@@ -652,13 +480,6 @@ function normalizeTimeoutMs(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.min(60 * 60_000, Math.floor(value))
     : DEFAULT_RESUME_TIMEOUT_MS;
-}
-
-function truncateText(value: string, max: number): string {
-  if (value.length <= max) {
-    return value;
-  }
-  return `${truncateUtf16Safe(value, Math.max(0, max - 3))}...`;
 }
 
 function compareOptionalStringsDesc(a?: string, b?: string): number {
