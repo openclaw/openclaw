@@ -20,7 +20,7 @@ import type { TaskDeliveryState, TaskEventRecord, TaskRecord } from "./task-regi
 const storage = vi.hoisted(() => ({
   tasks: new Map<string, TaskRecord>(),
   delivery: new Map<string, TaskDeliveryState>(),
-  pending: new Set<string>(),
+  pending: new Map<string, symbol>(),
   ensureReady: vi.fn(),
   update: vi.fn<(taskId: string, patch: Partial<TaskRecord>) => TaskRecord | null>(),
   upsertDelivery: vi.fn<(state: TaskDeliveryState) => TaskDeliveryState>(),
@@ -51,15 +51,29 @@ vi.mock("./task-registry-mutation.js", () => ({
   updateTask: storage.update,
   getTaskDeliveryState: (taskId: string) => storage.delivery.get(taskId),
 }));
-vi.mock("./task-state-notification-ack.async.js", async () => {
+vi.mock("./task-notification-mutation.async.js", async () => {
   const { sameTaskRunScope } = await import("./task-registry-records.js");
   return {
-    captureTaskStateNotificationAcknowledger: (assertCurrent: () => void) => ({
+    captureTaskNotificationMutationOwner: (assertCurrent: () => void) => ({
       async prepare<T>(consume: () => T): Promise<T> {
         assertCurrent();
         return consume();
       },
-      bind(task: TaskRecord, eventAt: number) {
+      async updateDelivery(
+        task: TaskRecord,
+        outcome: import("./task-notification.operation.js").TaskNotificationDeliveryOutcome,
+      ) {
+        assertCurrent();
+        const current = storage.tasks.get(task.taskId);
+        if (!current || !sameTaskRunScope(current, task)) {
+          return null;
+        }
+        return storage.update(task.taskId, {
+          deliveryStatus: outcome.deliveryStatus,
+          lastEventAt: Date.now(),
+        });
+      },
+      bindStateChange(task: TaskRecord, eventAt: number) {
         assertCurrent();
         const expected = { ...task };
         return async (): Promise<TaskRecord | null> => {
@@ -157,7 +171,7 @@ it.each(["absent", "released"] as const)(
     const caller = await closeCaller(parent);
     const outcomes = await caller.run(() =>
       Promise.allSettled([
-        maybeDeliverTaskStateChangeUpdate(task.taskId, event),
+        maybeDeliverTaskStateChangeUpdate(task, event),
         maybeDeliverTaskTerminalUpdate(task.taskId),
       ]),
     );
@@ -197,7 +211,7 @@ it.each([
     const result = caller.run(() =>
       (kind === "terminal"
         ? maybeDeliverTaskTerminalUpdate(task.taskId)
-        : maybeDeliverTaskStateChangeUpdate(task.taskId, event)
+        : maybeDeliverTaskStateChangeUpdate(task, event)
       ).then(
         (value) => ({ ok: true as const, value }),
         (error: unknown) => ({ ok: false as const, error }),

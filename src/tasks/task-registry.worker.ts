@@ -59,6 +59,7 @@ export function executeTaskRegistryCommand(
 ): TaskRegistryWorkerOperations[keyof TaskRegistryWorkerOperations]["output"] {
   if (
     command.type === "tasks.acknowledgeStateChange" ||
+    command.type === "tasks.updateNotificationDelivery" ||
     command.type === "tasks.createRecord" ||
     command.type === "tasks.finalizeActive" ||
     command.type === "tasks.settleUnstarted" ||

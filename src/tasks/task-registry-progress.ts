@@ -9,8 +9,11 @@ import {
 import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
 import { hasAuthoritativeTaskBacking, readTaskBackingInstance } from "./task-backing-authority.js";
 import { getTaskExecutionObservation } from "./task-execution-observation.js";
-import { shouldAutoDeliverTaskStateChange } from "./task-executor-policy.js";
-import { canDeliverToRequesterOrigin, resolveTaskDeliveryOwner } from "./task-registry-delivery.js";
+import { shouldAutoDeliverTaskStateChange } from "./task-notification-policy.js";
+import {
+  canDeliverToRequesterOrigin,
+  resolveTaskDeliveryOwner,
+} from "./task-notification-routing.js";
 import { loadTaskRegistryDeliveryRuntime } from "./task-registry-runtime-loaders.js";
 import {
   getTasksByRunId,

@@ -78,7 +78,7 @@ function startNotification(task: TaskRecord, event: TaskEventRecord) {
     dispatched.resolve(params);
     return await transport.promise;
   });
-  const result = maybeDeliverTaskStateChangeUpdate(task.taskId, event);
+  const result = maybeDeliverTaskStateChangeUpdate(task, event);
   const complete = () => transport.resolve(sent);
   notifications.push({ complete, result });
   return {
@@ -241,7 +241,7 @@ describe("task state notification acknowledgements", () => {
     expect(afterEarlier.task?.lastEventAt).toBeGreaterThanOrEqual(earlierAckStartedAt);
     expect(afterEarlier.task?.lastEventAt).toBeGreaterThanOrEqual(laterAckAt);
     expect(getTaskDeliveryState(task.taskId)).toEqual(afterEarlier.delivery);
-    await maybeDeliverTaskStateChangeUpdate(task.taskId, earlierEvent);
+    await maybeDeliverTaskStateChangeUpdate(task, earlierEvent);
     expect(sendMessage).toHaveBeenCalledTimes(2);
   });
 
@@ -308,8 +308,8 @@ describe("task state notification acknowledgements", () => {
       return result;
     });
     const event = progress(task.createdAt + 10);
-    const first = maybeDeliverTaskStateChangeUpdate(task.taskId, event);
-    const second = maybeDeliverTaskStateChangeUpdate(task.taskId, event);
+    const first = maybeDeliverTaskStateChangeUpdate(task, event);
+    const second = maybeDeliverTaskStateChangeUpdate(task, event);
     const results = await Promise.all([first, second]);
     expect(queued).toHaveBeenCalledOnce();
     expect(consumed).toHaveLength(1);
@@ -352,7 +352,7 @@ describe("task state notification acknowledgements", () => {
           }
           return mutate(context, command, assertCurrent);
         });
-      const pending = maybeDeliverTaskStateChangeUpdate(task.taskId, event);
+      const pending = maybeDeliverTaskStateChangeUpdate(task, event);
       notifications.push({ complete: () => releaseAck.resolve(), result: pending });
       let finished = false;
       const outcome = pending
@@ -407,7 +407,7 @@ describe("task state notification acknowledgements", () => {
     const mutations = vi
       .spyOn(getTaskRegistryStore(), "runInitialMutationAsync")
       .mockRejectedValueOnce(ackFailure);
-    const pending = maybeDeliverTaskStateChangeUpdate(task.taskId, progress(task.createdAt + 10));
+    const pending = maybeDeliverTaskStateChangeUpdate(task, progress(task.createdAt + 10));
     notifications.push({ complete() {}, result: pending });
     const outcome = await pending.then(
       (value) => ({ ok: true as const, value }),
@@ -488,6 +488,105 @@ describe("task state notification acknowledgements", () => {
     expect(stored(task.taskId)).toEqual(before);
     expect(sendMessage).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps a native producer's receipt when its publication observer replaces the resident run", async () => {
+    const task = createTask();
+    const replacement: TaskRecord = {
+      ...task,
+      runId: "replacement-during-publication",
+      task: "Replacement installed by the publication observer",
+    };
+    const delivery = {
+      taskId: task.taskId,
+      requesterOrigin: nextOrigin,
+      lastNotifiedEventAt: 0,
+    };
+    let replaced = false;
+    const stop = taskRegistryState.onTaskRegistryChange(() => {
+      const current = taskRegistryState.tasks.get(task.taskId);
+      if (replaced || current?.progressSummary !== "Producer progress") {
+        return;
+      }
+      replaced = true;
+      deleteTaskRecordById(task.taskId);
+      upsertTaskWithDeliveryStateToSqlite({ task: replacement, deliveryState: delivery });
+      publishTaskRecordAfterAtomicStore(replacement);
+      commitTaskDeliveryFixture(delivery);
+    });
+    sendMessage.mockResolvedValue(sent);
+    try {
+      const [receipt] = markTaskRunningByRunId({
+        runId,
+        progressSummary: "Producer progress",
+        eventSummary: "Producer progress",
+      });
+      expect(receipt?.runId).toBe(task.runId);
+      expect(replaced).toBe(true);
+      const before = stored(task.taskId);
+      expect(before.task?.runId).toBe(replacement.runId);
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(systemEvents.drainSystemEvents(ownerKey)).toEqual([]);
+      expect(stored(task.taskId)).toEqual(before);
+    } finally {
+      stop();
+    }
+  });
+
+  it.each(["direct", "queued"] as const)(
+    "does not retarget a prepared event to a replacement run's %s delivery",
+    async (delivery) => {
+      const task = createTask();
+      const event = progress(task.createdAt + 10);
+      const loading = createDeferred();
+      const release = createDeferred();
+      const load = deliveryRuntime.loadTaskRegistryDeliveryRuntime;
+      vi.spyOn(deliveryRuntime, "loadTaskRegistryDeliveryRuntime").mockImplementationOnce(
+        async () => {
+          loading.resolve();
+          await release.promise;
+          return await load();
+        },
+      );
+      sendMessage.mockResolvedValue(sent);
+      const result = maybeDeliverTaskStateChangeUpdate(task, event);
+      notifications.push({ complete: () => release.resolve(), result });
+      try {
+        expect(
+          await Promise.race([loading.promise.then(() => "loading"), result.then(() => "settled")]),
+        ).toBe("loading");
+        expect(deleteTaskRecordById(task.taskId)).toBe(true);
+        const replacement: TaskRecord = {
+          ...task,
+          runId: "replacement-before-send",
+          task: "Unrelated replacement task",
+        };
+        const replacementDelivery = {
+          taskId: task.taskId,
+          ...(delivery === "direct" ? { requesterOrigin: nextOrigin } : {}),
+          lastNotifiedEventAt: event.at - 1,
+        };
+        upsertTaskWithDeliveryStateToSqlite({
+          task: replacement,
+          deliveryState: replacementDelivery,
+        });
+        publishTaskRecordAfterAtomicStore(replacement);
+        commitTaskDeliveryFixture(replacementDelivery);
+        const before = stored(task.taskId);
+        release.resolve();
+        const completed = await result;
+        expect(sendMessage).not.toHaveBeenCalled();
+        expect(systemEvents.drainSystemEvents(ownerKey)).toEqual([]);
+        expect(completed).toEqual(before.task);
+        expect(stored(task.taskId)).toEqual(before);
+        expect(getTaskById(task.taskId)).toEqual(before.task);
+        expect(getTaskDeliveryState(task.taskId)).toEqual(before.delivery);
+      } finally {
+        release.resolve();
+        await result;
+      }
+    },
+  );
 
   it.each(["deleted", "replaced"] as const)(
     "does not apply an old acknowledgement to a %s task identity",

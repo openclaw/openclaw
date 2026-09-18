@@ -21,6 +21,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/backup-run-records.test.ts",
   "src/tasks/task-registry.async-restore.test.ts",
   "src/tasks/task-registry-state-notification.test.ts",
+  "src/tasks/task-registry-terminal-notification.test.ts",
   "src/tasks/task-registry-flow-sync.test.ts",
   "src/tasks/task-registry-live-flow.worker.test.ts",
   "src/tasks/task-registry.restore-ownership.test.ts",

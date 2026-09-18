@@ -26,14 +26,20 @@ export async function settleTaskRecordTransitionAsync(
   creation: TaskMutationContext,
   command: Extract<
     TaskInitialWorkerCommand,
-    { type: "tasks.settleUnstarted" | "tasks.finalizeActive" | "tasks.acknowledgeStateChange" }
+    {
+      type:
+        | "tasks.settleUnstarted"
+        | "tasks.finalizeActive"
+        | "tasks.acknowledgeStateChange"
+        | "tasks.updateNotificationDelivery";
+    }
   >,
   assertCurrent: () => void,
 ): Promise<TaskRecordTransitionReceipt | null> {
   const { context, store, flowStore, assertStores } = creation;
   const { taskId } = command.input;
   assertCurrent();
-  if (command.type !== "tasks.acknowledgeStateChange") {
+  if (command.type === "tasks.settleUnstarted" || command.type === "tasks.finalizeActive") {
     const { expectedTask } = command.input;
     // Activity observers may reenter persistence, so flush before worker admission.
     try {
@@ -91,7 +97,7 @@ export async function settleTaskRecordTransitionAsync(
   if (settled?.deliver && settled.task.deliveryStatus !== "not_applicable") {
     try {
       assertTaskRegistryOwnerCurrent(context, store);
-      void maybeDeliverTaskStateChangeUpdate(taskId, settled.nextEvent);
+      void maybeDeliverTaskStateChangeUpdate(settled.task, settled.nextEvent);
       void maybeDeliverTaskTerminalUpdate(taskId);
     } catch (error) {
       log.warn("Committed task transition could not admit delivery publication", { taskId, error });

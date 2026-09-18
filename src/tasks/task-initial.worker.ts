@@ -15,10 +15,13 @@ import type {
   TaskInitialWorkerCommand,
   TaskInitialWorkerOperations,
 } from "./task-initial-worker.types.js";
+import {
+  acknowledgeTaskStateNotificationInDatabase,
+  updateTaskNotificationDeliveryInDatabase,
+} from "./task-notification.kernel.js";
 import { createTaskRecordInDatabase } from "./task-registry-create.kernel.js";
 import { transitionTaskRecordInDatabase } from "./task-registry-transition.kernel.js";
 import { readTaskRecord } from "./task-registry.store.kernel.js";
-import { acknowledgeTaskStateNotificationInDatabase } from "./task-state-notification-ack.kernel.js";
 
 const log = createSubsystemLogger("tasks/registry");
 type Result = TaskInitialWorkerOperations[keyof TaskInitialWorkerOperations]["output"];
@@ -62,6 +65,12 @@ export function executeTaskInitialMutation(
         }
         if (command.type === "tasks.acknowledgeStateChange") {
           return acknowledgeTaskStateNotificationInDatabase(database.db, command.input, write, {
+            assertCurrent,
+            onCommitted: accept,
+          });
+        }
+        if (command.type === "tasks.updateNotificationDelivery") {
+          return updateTaskNotificationDeliveryInDatabase(database.db, command.input, write, {
             assertCurrent,
             onCommitted: accept,
           });

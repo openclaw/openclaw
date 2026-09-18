@@ -63,6 +63,12 @@ import {
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
+import {
+  emitAgentEventAndWaitForTaskDelivery,
+  waitForAssertion,
+  waitForFast,
+  waitForTaskWork,
+} from "./task-registry-delivery.test-support.js";
 import { updateTaskStateByRunId } from "./task-registry-record-api.js";
 import {
   readTaskRegistryRevision,
@@ -122,13 +128,6 @@ import {
   setTaskRegistryControlRuntimeForTests,
   setTaskRegistryDeliveryRuntimeForTests,
 } from "./task-runtime.test-helpers.js";
-
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
 
 const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const LOST_TASK_RETENTION_MS = 24 * 60 * 60_000;
@@ -246,14 +245,6 @@ function createAcpSessionStoreEntry(params: {
     acp,
     storeReadFailed: false,
   };
-}
-
-function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
-  return waitForFast(assertion, { timeout: timeoutMs, interval: stepMs });
-}
-
-async function waitForTaskWork() {
-  await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
 }
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
@@ -437,7 +428,7 @@ describe("task-registry", () => {
           markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: Date.now() });
           await maybeDeliverTaskTerminalUpdate(task.taskId);
         } else {
-          await maybeDeliverTaskStateChangeUpdate(task.taskId, {
+          await maybeDeliverTaskStateChangeUpdate(task, {
             at: Date.now(),
             kind: "progress",
             summary: "Checking the result",
@@ -468,7 +459,7 @@ describe("task-registry", () => {
           notifyPolicy: "state_changes",
         });
         if (kind === "progress") {
-          await maybeDeliverTaskStateChangeUpdate(task.taskId, {
+          await maybeDeliverTaskStateChangeUpdate(task, {
             at: Date.now(),
             kind: "progress",
             summary: "Checking the result",
@@ -2318,7 +2309,7 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
-      emitAgentEvent({
+      await emitAgentEventAndWaitForTaskDelivery({
         runId,
         stream: "lifecycle",
         data: {
@@ -2380,7 +2371,7 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
-      emitAgentEvent({
+      await emitAgentEventAndWaitForTaskDelivery({
         runId,
         stream: "lifecycle",
         data: {
@@ -2428,7 +2419,7 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
-      emitAgentEvent({
+      await emitAgentEventAndWaitForTaskDelivery({
         runId,
         stream: "lifecycle",
         data: {
@@ -2504,7 +2495,7 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
-      emitAgentEvent({
+      await emitAgentEventAndWaitForTaskDelivery({
         runId,
         stream: "lifecycle",
         data: {
@@ -3010,7 +3001,8 @@ describe("task-registry", () => {
 
       const first = maybeDeliverTaskTerminalUpdate(task.taskId);
       const second = maybeDeliverTaskTerminalUpdate(task.taskId);
-      await Promise.all([first, second]);
+      // Creation also starts a notifier; join all admitted delivery work.
+      await Promise.all([first, second, waitForTaskWork()]);
 
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
       const message = sentMessageCall();
@@ -4508,7 +4500,7 @@ describe("task-registry", () => {
       expectRecordFields(requireTaskByRunId("run-state-change"), {
         notifyPolicy: "state_changes",
       });
-      await maybeDeliverTaskStateChangeUpdate(task.taskId);
+      await maybeDeliverTaskStateChangeUpdate(task);
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
     });
   });
@@ -4543,8 +4535,8 @@ describe("task-registry", () => {
       });
       const event = { at: 250, kind: "progress" as const, summary: "Still working." };
 
-      await maybeDeliverTaskStateChangeUpdate(task.taskId, event);
-      await maybeDeliverTaskStateChangeUpdate(task.taskId, event);
+      await maybeDeliverTaskStateChangeUpdate(task, event);
+      await maybeDeliverTaskStateChangeUpdate(task, event);
 
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(testCase.expectedSendCount);
     });

@@ -149,6 +149,7 @@ async function fixture(syncMode: TaskFlowRecord["syncMode"] = "task_mirrored") {
       "tasks.finalizeActive": (input) =>
         originalCreate(context, { type: "tasks.finalizeActive", input }, assertCurrent),
       "tasks.acknowledgeStateChange": unsupported,
+      "tasks.updateNotificationDelivery": unsupported,
       "flows.createForTask": unsupported,
       "tasks.linkInitialFlow": unsupported,
       "flows.deleteUnlinkedForTask": unsupported,

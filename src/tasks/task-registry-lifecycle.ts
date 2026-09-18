@@ -144,7 +144,7 @@ function ensureListener() {
             : undefined;
         const updated = updateTask(current.taskId, patch);
         if (updated) {
-          void maybeDeliverTaskStateChangeUpdate(current.taskId, stateChangeEvent);
+          void maybeDeliverTaskStateChangeUpdate(updated, stateChangeEvent);
           void maybeDeliverTaskTerminalUpdate(current.taskId);
         }
       }

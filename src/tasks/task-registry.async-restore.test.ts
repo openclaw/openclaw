@@ -485,7 +485,7 @@ describe("asynchronous registry restoration", () => {
         },
       },
     });
-    tasksWithPendingDelivery.add(task.taskId);
+    tasksWithPendingDelivery.set(task.taskId, Symbol("delivery"));
     const first = ensureTaskRegistryReadyAsync(context);
     const second = ensureTaskRegistryReadyAsync({
       ...context,
@@ -750,7 +750,7 @@ describe("asynchronous registry restoration", () => {
       async (readMode) => {
         const fixture = identityRestoreFixture(kind, { sameIdentity: true });
         await fixture.ensure(fixture.first);
-        tasksWithPendingDelivery.add(task.taskId);
+        tasksWithPendingDelivery.set(task.taskId, Symbol("delivery"));
         vi.spyOn(fixture.first.admission, "assertCurrent").mockImplementation(() => {
           throw new Error("retired fixture admission");
         });
@@ -827,7 +827,7 @@ describe("asynchronous registry restoration", () => {
   it("preserves live delivery work when a sync reader reenters a foreign pending restore", async () => {
     const fixture = identityRestoreFixture("task");
     await fixture.ensure(fixture.first);
-    tasksWithPendingDelivery.add(task.taskId);
+    tasksWithPendingDelivery.set(task.taskId, Symbol("delivery"));
     const release = createDeferred();
     fixture.beforeSnapshot(async () => {
       await release.promise;

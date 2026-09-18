@@ -18,6 +18,11 @@ import type {
   TaskFlowRegistryStoreSnapshot,
 } from "../tasks/task-flow-registry.store.types.js";
 import type { TaskInitialWorkerOperations } from "../tasks/task-initial-worker.types.js";
+import {
+  acknowledgeTaskStateNotification,
+  updateTaskNotificationDelivery,
+  type TaskNotificationOperations,
+} from "../tasks/task-notification.operation.js";
 import { selectExistingTaskForCreate } from "../tasks/task-registry-create-rules.js";
 import { runTaskCreateOperation } from "../tasks/task-registry-create.operation.js";
 import { assertParentFlowRecordLinkAllowed } from "../tasks/task-registry-parent-flow-rules.js";
@@ -29,7 +34,6 @@ import type {
 import { runTaskRecordTransitionOperation } from "../tasks/task-registry-transition.operation.js";
 import type { TaskRegistryStore, TaskRegistryStoreSnapshot } from "../tasks/task-registry.store.js";
 import type { TaskRegistryMutationScope } from "../tasks/task-registry.store.types.js";
-import { acknowledgeTaskStateNotification } from "../tasks/task-state-notification-ack.operation.js";
 
 type TaskFlowRegistryStore = ReturnType<typeof getTaskFlowRegistryStore>;
 
@@ -127,6 +131,20 @@ export function createInMemoryTaskRegistryStore(
           deferCommit: (publish) => publish(),
           onCommitted() {},
         });
+      const notificationOperations = (taskId: string): TaskNotificationOperations => ({
+        readCurrent: () => ({
+          task: state.tasks.get(taskId),
+          deliveryState: state.deliveryStates.get(taskId),
+        }),
+        write: (write) => write(),
+        assertCurrent,
+        upsertDelivery: (deliveryState) => this.upsertDeliveryState(deliveryState),
+        upsertTask: (task, deliveryState) =>
+          this.upsertTaskWithDeliveryState({ task, deliveryState }),
+        deferCommit: (publish) => publish(),
+        onCommitted() {},
+        onFailure() {},
+      });
       const operations: {
         [Key in keyof TaskInitialWorkerOperations]: (
           input: TaskInitialWorkerOperations[Key]["input"],
@@ -166,20 +184,9 @@ export function createInMemoryTaskRegistryStore(
             onCommitted() {},
           }),
         "tasks.acknowledgeStateChange": (input) =>
-          acknowledgeTaskStateNotification(input, {
-            readCurrent: () => ({
-              task: state.tasks.get(input.taskId),
-              deliveryState: state.deliveryStates.get(input.taskId),
-            }),
-            write: (write) => write(),
-            assertCurrent,
-            upsertDelivery: (deliveryState) => this.upsertDeliveryState(deliveryState),
-            upsertTask: (task, deliveryState) =>
-              this.upsertTaskWithDeliveryState({ task, deliveryState }),
-            deferCommit: (publish) => publish(),
-            onCommitted() {},
-            onFailure() {},
-          }),
+          acknowledgeTaskStateNotification(input, notificationOperations(input.taskId)),
+        "tasks.updateNotificationDelivery": (input) =>
+          updateTaskNotificationDelivery(input, notificationOperations(input.taskId)),
         "tasks.finalizeActive": (input) => transitionRecord({ kind: "state", ...input }),
         "flows.createForTask": unsupported,
         "tasks.settleUnstarted": (input) => {
