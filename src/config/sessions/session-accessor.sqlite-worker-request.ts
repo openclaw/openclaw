@@ -64,6 +64,7 @@ export function withSqliteMutationWorkerLifetime<T>(
       return run({ assertCurrent, commitGate });
     })
     .finally(() => {
+      revoke();
       completion.resolve();
       unregisterAgent();
       unregisterState();
