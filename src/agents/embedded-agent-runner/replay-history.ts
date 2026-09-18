@@ -47,7 +47,10 @@ import {
   stripToolResultDetails,
 } from "../session-transcript-repair.js";
 import type { SessionManager } from "../sessions/index.js";
-import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
+import {
+  stripStaleThinkingSignaturesForCompactionReplay,
+  stripUnreplayableThinkingSignatures,
+} from "../thinking-signatures.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -770,10 +773,19 @@ export async function sanitizeSessionHistory(params: {
   // bound to the original prefix; after compaction the prefix changes and Anthropic
   // rejects them. Timestamp comparison with the latest compaction summary identifies
   // the affected messages regardless of which compaction path produced them.
+  // A signature can be structurally corrupt on disk (secret redaction masks any
+  // "-"-delimited 40-char base64 run inside the token and splices in "…"). Such a
+  // value is present and non-blank, so the missing/blank pass below keeps it and
+  // the provider rejects the whole request every time. Drop it first so a damaged
+  // transcript degrades to unsigned thinking instead of wedging permanently.
+  const replayableSignatures =
+    signedThinkingProvider || policy.preserveSignatures
+      ? stripUnreplayableThinkingSignatures(sanitizedImages)
+      : sanitizedImages;
   const compactionStaleStripped =
     signedThinkingProvider || policy.preserveSignatures
-      ? stripStaleThinkingSignaturesForCompactionReplay(sanitizedImages)
-      : sanitizedImages;
+      ? stripStaleThinkingSignaturesForCompactionReplay(replayableSignatures)
+      : replayableSignatures;
   // Some recovery paths supply a narrow policy with preserveSignatures disabled.
   // Native signed-thinking providers still cannot replay missing/blank
   // signatures once the assistant turn is no longer latest in the outbound
