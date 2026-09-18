@@ -90,7 +90,9 @@ function resolveDurableInboundReplyToId(
 function resolveDurableInboundReplyThreadId(
   params: DurableInboundReplyDeliveryParams,
 ): string | number | null | undefined {
-  if ("threadId" in params) {
+  // Explicit null means "do not reply in a thread"; explicit undefined (from a
+  // spread of optional fields) falls back to the context thread.
+  if (params.threadId !== undefined) {
     return params.threadId;
   }
   return params.ctxPayload.MessageThreadId;
