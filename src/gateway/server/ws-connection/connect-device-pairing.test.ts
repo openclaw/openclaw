@@ -21,6 +21,7 @@ import type { GatewayAuthConfig } from "../../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readDeviceAuthTokenForTest } from "../../../infra/device-auth-store.test-support.js";
 import { issueDeviceBootstrapToken } from "../../../infra/device-bootstrap.js";
+import { publicKeyRawBase64UrlFromPem } from "../../../infra/device-identity.js";
 import * as pairingApprovals from "../../../infra/device-pairing-approval.js";
 import { ensureDeviceToken } from "../../../infra/device-pairing-tokens.js";
 import { getPairedDevice, listDevicePairing } from "../../../infra/device-pairing.js";
@@ -815,6 +816,34 @@ describe("gateway connect pairing exemptions", () => {
       await started.server.close();
       started.envSnapshot.restore();
       testTailscaleWhois.value = null;
+    }
+  });
+
+  test("creates a paired device for a node-role client presenting backend metadata", async () => {
+    const auth = { mode: "token", token: "node-backend-secret" } as const;
+    testState.gatewayAuth = auth;
+    const started = await startServerWithClient(undefined, { auth });
+    const identityName = "node-backend-pairing-required";
+    const loaded = loadDeviceIdentity(identityName);
+
+    try {
+      const response = await connectReq(started.ws, {
+        client: BACKEND_CLIENT,
+        role: "node",
+        scopes: [],
+        deviceIdentityPath: loaded.identityPath,
+        token: auth.token,
+        prePairDevice: false,
+      });
+      expect(response.ok).toBe(true);
+      const paired = await getPairedDevice(loaded.identity.deviceId);
+      expect(paired).toBeDefined();
+      expect(paired?.publicKey).toBe(publicKeyRawBase64UrlFromPem(loaded.identity.publicKeyPem));
+      expect(paired?.roles).toContain("node");
+    } finally {
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
     }
   });
 });

@@ -495,6 +495,28 @@ describe("handshake auth helpers", () => {
     ).toBe(false);
   });
 
+  it("does not skip backend self-pairing for node-role clients using backend metadata", () => {
+    expect(
+      skipBackendSelfPairing({
+        connectParams: {
+          ...GATEWAY_BACKEND_CONNECT_PARAMS,
+          role: "node",
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("skips backend self-pairing for operator-role clients using backend metadata", () => {
+    expect(
+      skipBackendSelfPairing({
+        connectParams: {
+          ...GATEWAY_BACKEND_CONNECT_PARAMS,
+          role: "operator",
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("preserves local CLI shared-auth scopes only for token/password loopback auth", () => {
     expect(preserveLocalCliSharedAuthScopes()).toBe(true);
     expect(
