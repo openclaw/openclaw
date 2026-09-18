@@ -1,6 +1,15 @@
 // Google Chat message-tool discovery stays read-only and account-isolated.
-import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
+import type {
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+} from "openclaw/plugin-sdk/channel-contract";
 import { inspectGoogleChatAccount, listGoogleChatAccountIds } from "./accounts.js";
+
+const googleChatMessageActions: ChannelMessageActionName[] = ["send", "edit"];
+
+export const supportsGoogleChatMessageAction: NonNullable<
+  ChannelMessageActionAdapter["supportsAction"]
+> = ({ action }) => googleChatMessageActions.includes(action);
 
 export function describeGoogleChatMessageTool({
   cfg,
@@ -15,5 +24,5 @@ export function describeGoogleChatMessageTool({
     (account) =>
       account.enabled && account.credentialSource !== "none" && account.tokenStatus === "available",
   );
-  return hasAvailableAccount ? { actions: ["send" as const] } : null;
+  return hasAvailableAccount ? { actions: [...googleChatMessageActions] } : null;
 }
