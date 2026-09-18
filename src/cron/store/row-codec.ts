@@ -65,7 +65,13 @@ function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<strin
 }
 
 export function resolveCronJobGrantDefinitionRevision(job: CronStoredJob): string {
-  const { enabled: _enabled, state: _state, ...definition } = stripJobRuntimeFields(job);
+  // Match job_json: drop ordinary undefined fields after deliveryToJson has
+  // encoded meaningful explicit destination clears as null.
+  const storedDefinition = tryParseJsonObject(JSON.stringify(stripJobRuntimeFields(job)));
+  if (!storedDefinition) {
+    throw new Error(`Cannot canonicalize cron job ${job.id} for grant revision`);
+  }
+  const { enabled: _enabled, state: _state, ...definition } = storedDefinition;
   return hashCronJobDefinition(definition);
 }
 
