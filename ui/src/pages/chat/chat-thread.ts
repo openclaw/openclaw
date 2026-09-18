@@ -272,7 +272,8 @@ function sameChatItemsStructuralInput(
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
     previous.initialTurnId === next.initialTurnId &&
-    previous.pendingInputs === next.pendingInputs &&
+    (previous.pendingInputs === next.pendingInputs ||
+      (!previous.pendingInputs?.length && !next.pendingInputs?.length)) &&
     previous.workspaceSyncPendingRunIds === next.workspaceSyncPendingRunIds &&
     previous.workerSetupPending === next.workerSetupPending &&
     previous.showToolCalls === next.showToolCalls &&
@@ -280,7 +281,7 @@ function sameChatItemsStructuralInput(
     previous.runWorking === next.runWorking &&
     previous.runActive === next.runActive &&
     previous.questionPrompts === next.questionPrompts &&
-    previous.loading === next.loading &&
+    (previous.loading === next.loading || next.runWorking !== true) &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery &&
     previous.messageRecovery?.messages === next.messageRecovery?.messages &&

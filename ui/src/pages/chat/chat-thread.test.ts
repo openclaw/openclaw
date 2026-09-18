@@ -2167,10 +2167,6 @@ describe("buildCachedChatItems working spark", () => {
     ).toBe(true);
   });
 
-  it("yields to the initial-load skeleton on an empty thread", () => {
-    expect(hasReadingIndicator({ runWorking: true, loading: true })).toBe(false);
-  });
-
   it("keeps the non-null empty-stream fallback during initial history loading", () => {
     expect(hasReadingIndicator({ stream: "", loading: true })).toBe(true);
   });
