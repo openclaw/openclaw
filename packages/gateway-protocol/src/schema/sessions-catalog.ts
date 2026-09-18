@@ -152,6 +152,16 @@ export const SessionCatalogTranscriptItemSchema = closedObject({
   model: Type.Optional(Type.String()),
   /** Source-supplied attribution, independent of the viewer and session adopter. */
   sender: Type.Optional(SessionParticipantSchema),
+  /** Tool identity a harness adapter reports so an imported call renders as a
+      native tool card. Call and result share `toolCallId`; adapters that cannot
+      supply these leave them unset and the import falls back to plain text. */
+  toolName: Type.Optional(Type.String()),
+  toolCallId: Type.Optional(Type.String()),
+  /** On a result, input represents a complete native invocation; import emits
+      its call and result together. Separate result rows omit this field. */
+  toolInput: Type.Optional(PluginJsonValueSchema),
+  isError: Type.Optional(Type.Boolean()),
+  exitCode: Type.Optional(Type.Integer()),
   truncated: Type.Optional(Type.Boolean()),
   raw: Type.Optional(PluginJsonValueSchema),
 });

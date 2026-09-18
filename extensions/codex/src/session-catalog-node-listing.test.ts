@@ -2,6 +2,7 @@
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import {
   nodeHostMocks,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
@@ -9,6 +10,7 @@ import {
   CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
   tempDirs,
   listCodexSessionCatalog,
+  readCodexSessionTranscript,
   registerCodexSessionCatalog,
   createCodexSessionCatalogNodeHostCommands,
   config,
@@ -612,6 +614,9 @@ describe("Codex supervision catalog", () => {
     const source = catalogThreadItem("tool-1", {
       type: "commandExecution",
       aggregatedOutput: output,
+      command: "false",
+      status: "failed",
+      exitCode: 1,
     });
     const listItemPage = vi.fn(async () => ({
       data: [{ turnId: "turn-1", item: source }],
@@ -631,6 +636,27 @@ describe("Codex supervision catalog", () => {
     const payload = await command.handle(
       JSON.stringify({ threadId: "thread-1", cursor: "native-start", limit: 2 }),
     );
+    // Pinned v2026.9.4 receiver contract: additive keys break its strict parser.
+    const releasedPageSchema = z.strictObject({
+      items: z.array(
+        z.strictObject({
+          id: z.string(),
+          type: z.enum([
+            "userMessage",
+            "agentMessage",
+            "reasoning",
+            "toolCall",
+            "toolResult",
+            "other",
+          ]),
+          text: z.string().optional(),
+          raw: z.record(z.string(), z.json()).optional(),
+          truncated: z.boolean().optional(),
+        }),
+      ),
+      nextCursor: z.string().optional(),
+    });
+    expect(releasedPageSchema.safeParse(JSON.parse(payload)).success).toBe(true);
     expect(JSON.parse(payload)).toEqual({
       items: [
         {
@@ -643,6 +669,41 @@ describe("Codex supervision catalog", () => {
       ],
       nextCursor: "native-older",
     });
+    const { runtime } = createRuntime({
+      nodes: [
+        {
+          nodeId: "devbox",
+          connected: true,
+          commands: [
+            CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
+            CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
+          ],
+        },
+      ],
+      invoke: vi.fn(async () => ({ payloadJSON: payload })),
+    });
+    const imported = await readCodexSessionTranscript({
+      runtime,
+      control,
+      hostId: "node:devbox",
+      threadId: "thread-1",
+      limit: 2,
+    });
+    expect(imported.nextCursor).toBe("native-older");
+    expect(imported.items).toEqual([
+      {
+        id: source.id,
+        type: "toolResult",
+        text: `${output.slice(0, 512 * 1024 - 3)}…`,
+        raw: source,
+        truncated: true,
+        toolName: "shell",
+        toolCallId: source.id,
+        toolInput: { command: "false" },
+        exitCode: 1,
+        isError: true,
+      },
+    ]);
     expect(Buffer.byteLength(JSON.stringify({ payloadJSON: payload }), "utf8")).toBeLessThan(
       20 * 1024 * 1024,
     );

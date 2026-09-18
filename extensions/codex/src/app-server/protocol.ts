@@ -508,7 +508,7 @@ export type CodexThreadItem = {
   query: string | null;
   arguments?: JsonValue;
   result?: JsonValue;
-  error?: CodexErrorNotification["error"];
+  error?: CodexErrorNotification["error"] | null;
   exitCode?: number | null;
   durationMs?: number | null;
   aggregatedOutput: string | null;

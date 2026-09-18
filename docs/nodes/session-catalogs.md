@@ -46,6 +46,13 @@ node and return the final text, without a streaming App Server harness bridge.
 Nodes without the required commands remain readable without Chat continuation.
 Paired-node **Archive** is unavailable.
 
+Newly imported Codex history renders tool inputs and results as paired tool
+cards, including command exit codes and failures. Reasoning appears as thinking
+activity. Existing imported transcripts keep their previous representation.
+Tool inputs that are not JSON objects remain visible as labelled JSON text.
+Paired nodes and their Gateway can be updated in either order; the existing
+node transcript format remains compatible with released Gateways.
+
 On the Gateway computer, stored and idle rows can start a distinct model-locked
 Chat branch. Either can be archived only after the operator confirms that no
 other Codex client is using it; a stored row's live activity remains unknown.
@@ -101,6 +108,10 @@ when people must not share access to files, credentials, or tools. See
 A Gateway-local Claude CLI row can be adopted from the normal Chat composer:
 OpenClaw imports bounded visible history, resumes with `--fork-session` on the
 first turn, and leaves the source transcript untouched.
+
+Imported Claude history preserves each tool call and its result, including
+parallel calls and messages that mix text, thinking, and tools. Each result
+keeps its own failure status in the Chat activity view.
 
 A headless node host can opt into the same continuation flow:
 

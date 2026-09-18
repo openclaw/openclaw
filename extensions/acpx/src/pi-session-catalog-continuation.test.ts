@@ -164,10 +164,13 @@ describe("Pi session catalog continuation", () => {
       ),
     ).toEqual([
       "hello",
-      "Thinking\n\nthinking",
+      undefined,
       "hi",
       'Tool call\n\nbash\n{"command":"pwd"}',
       "Tool result\n\nbash\n/workspace",
+    ]);
+    expect(transcriptMocks.messages[1]?.content).toEqual([
+      { type: "thinking", thinking: "thinking" },
     ]);
     expect(transcriptMocks.messages[0]?.["__openclaw"]).toEqual({
       mirrorOrigin: "pi-catalog-import",

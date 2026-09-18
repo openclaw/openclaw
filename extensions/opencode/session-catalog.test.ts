@@ -660,10 +660,13 @@ describe("OpenCode session catalog", () => {
       ),
     ).toEqual([
       "hello",
-      "Thinking\n\nthinking",
+      undefined,
       "hi",
       'Tool call\n\nbash\n{"command":"pwd"}',
       "Tool result\n\n/workspace",
+    ]);
+    expect(transcriptMocks.messages[1]?.content).toEqual([
+      { type: "thinking", thinking: "thinking" },
     ]);
     expect(transcriptMocks.messages[0]?.["__openclaw"]).toEqual({
       mirrorOrigin: "opencode-catalog-import",
