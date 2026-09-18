@@ -3,17 +3,19 @@ import { expect, vi, type Mock } from "vitest";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
+type AsyncArgsMock<TArgs extends unknown[]> = Mock<(...args: TArgs) => Promise<unknown>>;
+
+type DiscordSendModule = typeof import("./send.js");
 
 type DiscordOutboundHoisted = {
   sendMessageDiscordMock: AsyncUnknownMock;
   sendDiscordComponentMessageMock: AsyncUnknownMock;
-  sendPollDiscordMock: AsyncUnknownMock;
+  sendPollDiscordMock: AsyncArgsMock<Parameters<DiscordSendModule["sendPollDiscord"]>>;
   sendWebhookMessageDiscordMock: AsyncUnknownMock;
   sendVoiceMessageDiscordMock: AsyncUnknownMock;
   getThreadBindingManagerMock: UnknownMock;
 };
 
-type DiscordSendModule = typeof import("./send.js");
 type DiscordSendComponentsModule = typeof import("./send.components.js");
 type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js");
 
