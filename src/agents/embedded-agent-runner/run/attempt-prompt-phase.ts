@@ -92,6 +92,7 @@ export async function runEmbeddedAttemptPromptPhase(
     history: {
       contextEngineAssemblySucceeded,
       contextEnginePromptAuthority,
+      contextEngineEstimatedTokens,
       unwindowedContextEngineMessagesForPrecheck,
     },
     promptActiveSession,
@@ -375,6 +376,7 @@ export async function runEmbeddedAttemptPromptPhase(
       compactionReplayEnabled,
       contextEngineAssemblySucceeded,
       contextEnginePromptAuthority,
+      ...(contextEngineEstimatedTokens !== undefined ? { contextEngineEstimatedTokens } : {}),
       includeBoundaryTimestamp,
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
       ...(unwindowedContextEngineMessagesForPrecheck
