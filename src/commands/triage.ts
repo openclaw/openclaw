@@ -40,6 +40,7 @@ import {
   formatTriageHandoffCommands,
   type TriageExternalAgent,
 } from "./triage-handoff.js";
+import { inspectTriageMaintenanceBlock } from "./triage-maintenance-guard.js";
 import {
   renderTriagePrompt,
   type TriageBundle,
@@ -244,6 +245,7 @@ export async function triageCommand(
     redaction,
     updateFailure,
     failure: automatic?.failure,
+    maintenanceBlock: await inspectTriageMaintenanceBlock(updateFailure, targetEnv),
   });
   // Packaged OpenClaw/Bun hosts cannot interpret npm shim entrypoints. Reuse the
   // active Node runtime or require an installed node.exe before choosing a shim.

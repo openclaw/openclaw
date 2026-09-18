@@ -33,6 +33,8 @@ export type TriageFailureContext = {
   gateway: "verify-running" | "preserve";
 };
 
+export type TriageMaintenanceBlock = { runId: string; pid: number };
+
 function promptByteLength(lines: readonly string[]): number {
   return Buffer.byteLength(lines.join("\n"), "utf8") + 1;
 }
@@ -116,6 +118,7 @@ export function renderTriagePrompt(params: {
   redaction: SupportRedactionContext;
   updateFailure?: TriageUpdateFailure;
   failure?: TriageFailureContext;
+  maintenanceBlock?: TriageMaintenanceBlock;
 }): string {
   const { bundle, redaction, failure } = params;
   const findings = params.findings.toSorted((left, right) => {
@@ -124,7 +127,9 @@ export function renderTriagePrompt(params: {
     return severity || left.checkId.localeCompare(right.checkId);
   });
   const lines = [
-    "You are repairing THIS machine's OpenClaw installation. Diagnose the root cause, apply the repair autonomously within your existing permissions, and verify the result. Preserve configuration, history, and databases. Use local `openclaw doctor`, `openclaw doctor --fix`, `openclaw status --all`, and `openclaw logs` as needed. Product documentation: https://docs.openclaw.ai.",
+    params.maintenanceBlock
+      ? "You are diagnosing THIS machine's OpenClaw installation from beneath an active update owner. Preserve configuration, history, and databases. Use read-only `openclaw doctor`, `openclaw status --all`, and `openclaw logs` as needed. Product documentation: https://docs.openclaw.ai."
+      : "You are repairing THIS machine's OpenClaw installation. Diagnose the root cause, apply the repair autonomously within your existing permissions, and verify the result. Preserve configuration, history, and databases. Use local `openclaw doctor`, `openclaw doctor --fix`, `openclaw status --all`, and `openclaw logs` as needed. Product documentation: https://docs.openclaw.ai.",
     "",
     "## Environment",
     "",
@@ -133,12 +138,19 @@ export function renderTriagePrompt(params: {
     `- Node.js: ${process.versions.node} (the runtime executing OpenClaw, which may differ from the shell default)`,
     "- Local shell commands inherit `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, and `OPENCLAW_WORKSPACE_DIR` for the diagnosed installation and its default workspace; expand archive references in that shell. In embedded triage, in-process config and session tools use temporary agent run state. The execution cwd is separate from the installation's default workspace. Do not substitute a remote or sandbox installation for this local target.",
   ];
+  if (params.maintenanceBlock) {
+    lines.push(
+      `- Active update driver PID ${params.maintenanceBlock.pid} (run ${params.maintenanceBlock.runId}) is an ancestor of this triage process and owns update maintenance.`,
+    );
+  }
   const failureIndex = lines.length;
   lines.push(
     "",
     "## Completion goal",
     "",
-    "Diagnose and repair the original symptom using existing repair commands, including `openclaw doctor --fix` and, for unfinished updates, `openclaw update repair`. Respect installation ownership, locks, schema and capability approval refusals. If maintenance refuses to stop the Gateway from this fixing subtree, use read-only diagnosis or safe offline artifact repair and atomic restart, or report that an independent operator must run maintenance outside triage. Do not bypass the refusal.",
+    params.maintenanceBlock
+      ? "Do not run `openclaw doctor --fix` in this fixing subtree: the active update owner currently excludes Gateway maintenance. `openclaw update repair` may continue only the matching inherited update run; otherwise it will refuse too. Perform read-only diagnosis, then either continue that exact run or report that an independent operator must run maintenance outside this process tree after the named update driver settles. Do not bypass a refusal."
+      : "Diagnose and repair the original symptom using existing repair commands, including `openclaw doctor --fix` and, for unfinished updates, `openclaw update repair`. Respect installation ownership, locks, schema and capability approval refusals. If maintenance refuses to stop the Gateway from this fixing subtree, use read-only diagnosis or safe offline artifact repair and atomic restart, or report that an independent operator must run maintenance outside triage. Do not bypass the refusal.",
     failure?.gateway === "preserve"
       ? "Do not start or restart the Gateway: this invocation did not authorize activation. Preserve --no-restart and intentional stops. Use read-only status checks and report live health verification as deferred while it is intentionally stopped."
       : "Only activate a Gateway intended to run. For managed recovery, use atomic `openclaw gateway restart` when needed, never stop then start: an explicit stop after native scope attachment cancels this recovery and its children. Preserve later operator stops and report cancellation or infeasibility instead of claiming recovery.",
