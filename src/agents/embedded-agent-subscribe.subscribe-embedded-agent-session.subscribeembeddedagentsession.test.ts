@@ -604,8 +604,7 @@ describe("subscribeEmbeddedAgentSession", () => {
   ])(
     "settles $name through the core event producer",
     async ({ name, call, expected, contextTokens }) => {
-      const onAgentEvent = vi.fn();
-      const onContextAccountingEvent = vi.fn();
+      const [onAgentEvent, onContextAccountingEvent] = [vi.fn(), vi.fn()];
       const harness = createSubscribedSessionHarness({
         runId: "usage-" + name,
         lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
@@ -631,7 +630,9 @@ describe("subscribeEmbeddedAgentSession", () => {
         });
         expect(subscription.getLastAssistantUsage()).toMatchObject(expected);
         expect(subscription.getCurrentAttemptAssistant()).toEqual(completed);
-        expect(onContextAccountingEvent.mock.calls).toEqual([[{ kind: "model", contextTokens }]]);
+        const stopReason = "stopReason" in call ? call.stopReason : "stop";
+        const accountedEvent = [{ kind: "model", contextTokens, stopReason }];
+        expect(onContextAccountingEvent.mock.calls).toEqual([accountedEvent]);
         expect(
           onAgentEvent.mock.calls
             .map(([event]) => event)
@@ -801,8 +802,7 @@ describe("subscribeEmbeddedAgentSession", () => {
   it.each([false, true])(
     "distinguishes transport zero from explicitly unknown context=%j",
     async (unknownContext) => {
-      const onAgentEvent = vi.fn();
-      const onContextAccountingEvent = vi.fn();
+      const [onAgentEvent, onContextAccountingEvent] = [vi.fn(), vi.fn()];
       const harness = createSubscribedSessionHarness({
         runId: "run-zero-usage-" + unknownContext,
         lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
@@ -826,7 +826,7 @@ describe("subscribeEmbeddedAgentSession", () => {
           },
         );
         expect(onContextAccountingEvent.mock.calls).toEqual([
-          [{ kind: "model", contextTokens: undefined }],
+          [{ kind: "model", contextTokens: undefined, stopReason: "stop" }],
         ]);
         const usageEvents = onAgentEvent.mock.calls
           .map(([event]) => event)

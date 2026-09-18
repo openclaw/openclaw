@@ -336,6 +336,26 @@ export async function recoverEmbeddedRunOverflow(
     }
 
     if (compactResult.compacted) {
+      const tokensBefore = compactResult.result?.tokensBefore;
+      const tokensAfter = compactResult.result?.tokensAfter;
+      // Equal counts prove no measured reduction, not necessarily an uncommitted
+      // compaction, so the transcript stays as-is and the retry proceeds. The
+      // attempt stays charged until a successful model completion renews the
+      // budget; refunding here would let repeated no-reduction compactions
+      // recycle attempts without ever making progress.
+      const noMeasuredReduction =
+        typeof tokensBefore === "number" &&
+        Number.isFinite(tokensBefore) &&
+        typeof tokensAfter === "number" &&
+        Number.isFinite(tokensAfter) &&
+        tokensAfter >= tokensBefore;
+      if (noMeasuredReduction) {
+        log.warn(
+          `[context-overflow-recovery] context engine compaction reported no measured token reduction for ` +
+            `${input.modelSelection.provider}/${input.modelSelection.model} ` +
+            `(tokensBefore=${tokensBefore} tokensAfter=${tokensAfter}); keeping the recovery attempt charged`,
+        );
+      }
       if (preflightRecovery?.route === "compact_then_truncate") {
         const truncResult = await truncateToolResults();
         if (truncResult.truncated) {
@@ -358,7 +378,9 @@ export async function recoverEmbeddedRunOverflow(
         );
       } else {
         log.info(
-          `auto-compaction succeeded for ${input.modelSelection.provider}/${input.modelSelection.model}; retrying prompt`,
+          noMeasuredReduction
+            ? `[context-overflow-recovery] retrying prompt for ${input.modelSelection.provider}/${input.modelSelection.model} after a compaction with no measured token reduction`
+            : `auto-compaction succeeded for ${input.modelSelection.provider}/${input.modelSelection.model}; retrying prompt`,
         );
         input.markOwnedTranscriptRetry();
         if (requiresTranscriptContinuation) {

@@ -1,5 +1,6 @@
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
+import type { StopReason } from "../../../llm/types.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
 import type { ModelFallbackRouteResolution } from "../../model-fallback.types.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../prepared-model-runtime.types.js";
@@ -17,7 +18,12 @@ export type CompactionAccountingTarget = Readonly<
 /** Ordered producer observations; unknown context never borrows an older request's usage. */
 export type EmbeddedContextAccountingEvent = Readonly<
   | { kind: "compaction"; tokensAfter: number | undefined }
-  | { kind: "model"; contextTokens: number | undefined }
+  | {
+      kind: "model";
+      contextTokens: number | undefined;
+      /** Raw completion outcome; recovery renewal must not treat failures as progress. */
+      stopReason: StopReason;
+    }
 >;
 
 /** Writer custody is independent of telemetry; an absent snapshot is not observed unknown context. */
