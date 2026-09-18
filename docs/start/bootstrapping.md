@@ -41,6 +41,8 @@ OpenClaw:
 
 A workspace counts as configured once `SOUL.md`, `IDENTITY.md`, or `USER.md` has
 diverged from its starter template, or a `memory/` folder exists.
+When OpenClaw has recorded a file as generated, an unchanged copy of that starter
+file keeps onboarding pending even if an update changes the bundled template.
 
 <Note>
 `BOOTSTRAP.md` covers the full identity conversation. See its contents at

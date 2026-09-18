@@ -381,14 +381,24 @@ function isTransientWorkspaceReadError(error: unknown): boolean {
 async function fileContentDiffersFromTemplate(
   filePath: string,
   template: string,
+  generatedHash?: string,
 ): Promise<boolean> {
   try {
-    return await retryAsync(async () => (await fs.readFile(filePath, "utf-8")) !== template, {
-      attempts: 3,
-      minDelayMs: 50,
-      maxDelayMs: 50,
-      shouldRetry: (err) => isTransientWorkspaceReadError(err),
-    });
+    return await retryAsync(
+      async () => {
+        const content = await fs.readFile(filePath, "utf-8");
+        return (
+          content !== template &&
+          (!generatedHash || createHash("sha256").update(content).digest("hex") !== generatedHash)
+        );
+      },
+      {
+        attempts: 3,
+        minDelayMs: 50,
+        maxDelayMs: 50,
+        shouldRetry: (err) => isTransientWorkspaceReadError(err),
+      },
+    );
   } catch (err) {
     const anyErr = err as { code?: string };
     if (anyErr.code === "ENOENT") {
@@ -470,10 +480,15 @@ async function hasSkipBootstrapWorkspaceContentEvidence(dir: string): Promise<bo
 async function workspaceProfileLooksConfigured(params: {
   dir: string;
   includeGitEvidence?: boolean;
+  generatedHashes?: ReadonlyMap<string, string>;
 }): Promise<boolean> {
   const profileFileDiffs = await Promise.all(
     WORKSPACE_ONBOARDING_PROFILE_FILENAMES.map(async (fileName) =>
-      fileContentDiffersFromTemplate(path.join(params.dir, fileName), await loadTemplate(fileName)),
+      fileContentDiffersFromTemplate(
+        path.join(params.dir, fileName),
+        await loadTemplate(fileName),
+        params.generatedHashes?.get(fileName),
+      ),
     ),
   );
   return (
@@ -540,7 +555,10 @@ async function workspaceAttestedGeneratedFilesIntact(
   return true;
 }
 
-async function workspaceHasBootstrapCompletionEvidence(params: { dir: string }): Promise<boolean> {
+async function workspaceHasBootstrapCompletionEvidence(params: {
+  dir: string;
+  generatedHashes?: ReadonlyMap<string, string>;
+}): Promise<boolean> {
   return await workspaceProfileLooksConfigured(params);
 }
 
@@ -554,6 +572,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   dir: string;
   bootstrapPath: string;
   state: WorkspaceSetupState;
+  generatedHashes?: ReadonlyMap<string, string>;
   bootstrapExists?: boolean;
   beforePersistentApply?: () => void;
 }): Promise<WorkspaceBootstrapCompletionReconcileResult> {
@@ -581,6 +600,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
     !bootstrapExists ||
     !(await workspaceHasBootstrapCompletionEvidence({
       dir: params.dir,
+      generatedHashes: params.generatedHashes,
     }))
   ) {
     return { repaired: false, bootstrapExists, state: params.state };
@@ -606,13 +626,21 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   }
 }
 
-async function collectGeneratedBootstrapHashes(dir: string): Promise<Map<string, string>> {
+async function collectGeneratedBootstrapHashes(
+  dir: string,
+  previousHashes?: ReadonlyMap<string, string>,
+): Promise<Map<string, string>> {
   const hashes = new Map<string, string>();
   for (const fileName of GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES) {
     try {
       const content = await fs.readFile(path.join(dir, fileName), "utf-8");
-      if (content === (await loadTemplate(fileName))) {
-        hashes.set(fileName, createHash("sha256").update(content).digest("hex"));
+      const contentHash = createHash("sha256").update(content).digest("hex");
+      // An unchanged starter file stays generated after the bundled template changes.
+      if (
+        contentHash === previousHashes?.get(fileName) ||
+        content === (await loadTemplate(fileName))
+      ) {
+        hashes.set(fileName, contentHash);
       }
     } catch {
       // Missing or unreadable files are not attested as generated.
@@ -645,9 +673,17 @@ async function maybeWriteWorkspaceAttestation(
   // compares against a separate lock-time clock, so a newer committed scan
   // wins when this async collection finishes later.
   const attestedAtMs = Date.now();
-  const generatedHashes = await collectGeneratedBootstrapHashes(dir);
-  beforePersistentApply?.();
   try {
+    const snapshot = await readCanonicalWorkspaceStateSnapshot(
+      dir,
+      undefined,
+      beforePersistentApply,
+    );
+    const generatedHashes = await collectGeneratedBootstrapHashes(
+      dir,
+      snapshot.attestation?.generatedHashes,
+    );
+    beforePersistentApply?.();
     await replaceWorkspaceAttestation({
       workspaceDir: dir,
       attestedAtMs,
@@ -691,7 +727,12 @@ async function workspaceAttestationHasSurvivalEvidence(params: {
   ) {
     return true;
   }
-  if (await workspaceProfileLooksConfigured({ dir: params.dir })) {
+  if (
+    await workspaceProfileLooksConfigured({
+      dir: params.dir,
+      generatedHashes: params.attestation.generatedHashes,
+    })
+  ) {
     return true;
   }
   return (
@@ -1186,8 +1227,12 @@ export async function ensureAgentWorkspace(params?: {
     await publishBootstrapFile(userPath, userTemplate, beforePersistentApply);
   }
 
-  let state = (await readCanonicalWorkspaceStateSnapshot(dir, undefined, beforePersistentApply))
-    .setup;
+  const setupSnapshot = await readCanonicalWorkspaceStateSnapshot(
+    dir,
+    undefined,
+    beforePersistentApply,
+  );
+  let state = setupSnapshot.setup;
   let stateDirty = false;
   const markState = (next: Partial<WorkspaceSetupState>) => {
     state = { ...state, ...next };
@@ -1205,6 +1250,7 @@ export async function ensureAgentWorkspace(params?: {
       dir,
       bootstrapPath,
       state,
+      generatedHashes: setupSnapshot.attestation?.generatedHashes,
       bootstrapExists,
       beforePersistentApply,
     });
@@ -1227,6 +1273,7 @@ export async function ensureAgentWorkspace(params?: {
       hasRecentAttestedCustomization ||
       (await workspaceProfileLooksConfigured({
         dir,
+        generatedHashes: setupSnapshot.attestation?.generatedHashes,
         // A preexisting Git repository is user evidence. Git metadata left by
         // an expired, wiped OpenClaw workspace is not completion evidence.
         includeGitEvidence: !reseedingExpiredWorkspaceState,
