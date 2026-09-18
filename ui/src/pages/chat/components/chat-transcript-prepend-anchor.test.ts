@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import type { Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
+import { TranscriptMessageAnchors } from "./chat-transcript-message-anchors.ts";
 
 function rect(top: number, height: number): DOMRect {
   return {
@@ -37,8 +37,8 @@ function fixture() {
     bubble,
     virtualizer,
     instance: virtualizer as unknown as Virtualizer<HTMLDivElement, HTMLElement>,
-    anchor: new TranscriptPrependAnchor(),
-    measureRows: vi.fn(),
+    anchor: new TranscriptMessageAnchors(),
+    measureRows: vi.fn(() => true),
   };
 }
 
@@ -102,6 +102,46 @@ describe("transcript prepend anchor", () => {
       expect(anchor.update(scroller, instance, measureRows)).toBe(false);
       expect(scroller.scrollTop).toBe(200);
       expect(anchor.update(scroller, instance, measureRows)).toBe(false);
+    },
+  );
+});
+
+describe("empty-search message return", () => {
+  it.each([false, true])(
+    "resolves a regrouped message or discards a removed message=$removed before return",
+    (removed) => {
+      const { scroller, row, bubble, instance, anchor, measureRows } = fixture();
+      row.dataset.virtualRowKey = "old-group";
+      anchor.committedMessageRows = new Map([["visible", "old-group"]]);
+      anchor.setSearchState(scroller, true, true, false);
+      anchor.setSearchState(scroller, false, false, false);
+      anchor.capture(scroller, false);
+      anchor.measureSearchReturn(measureRows);
+      anchor.committedMessageRows = new Map(removed ? [] : [["visible", "new-group"]]);
+      anchor.capture(scroller, false);
+      const onRestored = vi.fn();
+      scroller.scrollTop = 200;
+      if (removed) {
+        bubble.remove();
+        expect(anchor.update(scroller, instance, measureRows, false, onRestored)).toBe(false);
+        expect(scroller.scrollTop).toBe(200);
+        expect(onRestored).not.toHaveBeenCalled();
+        return;
+      }
+      row.dataset.virtualRowKey = "new-group";
+      const range = anchor.extractRange(
+        { startIndex: 0, endIndex: 1, count: 8, overscan: 1 },
+        new Map([["new-group", 6]]),
+        null,
+      );
+      expect(range).toEqual([5, 6, 7]);
+      bubble.getBoundingClientRect = () => rect(390, 180);
+      expect(anchor.update(scroller, instance, measureRows, false, onRestored)).toBe(false);
+      expect(scroller.scrollTop).toBe(200);
+      anchor.measureSearchReturn(measureRows);
+      expect(anchor.update(scroller, instance, measureRows, false, onRestored)).toBe(true);
+      expect(scroller.scrollTop).toBe(500);
+      expect(onRestored).toHaveBeenCalledOnce();
     },
   );
 });

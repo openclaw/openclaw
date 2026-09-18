@@ -41,7 +41,7 @@ class EndFollowFixture extends LitElement {
           "end-follow-browser",
           "agent:main:end-follow",
           (session) => {
-            session.setContentReady(true);
+            session.setPresentationState(true, false, false);
             return session.render(
               rows,
               (row) => (row.kind === "content" ? row.content : null),

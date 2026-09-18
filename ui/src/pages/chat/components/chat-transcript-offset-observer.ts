@@ -2,7 +2,7 @@ import { observeElementOffset, type Virtualizer } from "@tanstack/virtual-core";
 import { isTranscriptScrollKey } from "../chat-scroll-input.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
 import type { ChatTranscriptInteractionAnchor } from "./chat-transcript-interaction-anchor.ts";
-import type { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
+import type { TranscriptMessageAnchors } from "./chat-transcript-message-anchors.ts";
 import {
   publishTranscriptScroll,
   type TranscriptScrollObservation,
@@ -40,7 +40,7 @@ export function createTranscriptOffsetState(): TranscriptOffsetState {
 type OffsetOwner = {
   state: TranscriptOffsetState;
   getScrollElement(): HTMLDivElement | null;
-  readonly prependAnchor: TranscriptPrependAnchor;
+  readonly messageAnchors: TranscriptMessageAnchors;
   isProgrammaticScroll(): boolean;
   cancelScroll(): void;
   requestUpdate(): void;
@@ -92,7 +92,7 @@ export function observeTranscriptOffset(
       (owner.state.touching || owner.state.touchScrolling)
     ) {
       owner.state.touchScrolling = true;
-      owner.prependAnchor.moveWithReader(offset - nativeOffset);
+      owner.messageAnchors.moveWithReader(offset - nativeOffset);
     }
     const delta = offset - nativeOffset;
     nativeOffset = offset;
@@ -221,7 +221,7 @@ export function observeTranscriptOffset(
     if (!scrolling) {
       finishScroll();
     }
-    if (!scrolling && owner.prependAnchor.hasPrepend) {
+    if (!scrolling && owner.messageAnchors.hasPrepend) {
       owner.requestUpdate();
     }
     // Idle can arrive between smooth retargets. Completion needs the

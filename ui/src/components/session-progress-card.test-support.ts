@@ -1,9 +1,9 @@
 import { VirtualizerController } from "@tanstack/lit-virtual";
+import { TranscriptMessageAnchors } from "../pages/chat/components/chat-transcript-message-anchors.ts";
 import {
   createTranscriptOffsetState,
   observeTranscriptOffset,
 } from "../pages/chat/components/chat-transcript-offset-observer.ts";
-import { TranscriptPrependAnchor } from "../pages/chat/components/chat-transcript-prepend-anchor.ts";
 
 export function observeTranscript(container: HTMLElement, cleanups: Array<() => void>) {
   const thread = container.querySelector<HTMLDivElement>(".chat-thread")!;
@@ -16,7 +16,7 @@ export function observeTranscript(container: HTMLElement, cleanups: Array<() => 
   const owner = {
     state,
     getScrollElement: () => (thread.isConnected ? thread : null),
-    prependAnchor: new TranscriptPrependAnchor(),
+    messageAnchors: new TranscriptMessageAnchors(),
     isProgrammaticScroll: () => false,
     cancelScroll() {
       state.scrollCommand = null;

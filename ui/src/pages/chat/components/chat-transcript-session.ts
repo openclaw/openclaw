@@ -58,7 +58,7 @@ export type ChatTranscriptSession = {
   /** Returns the sampled loaded message at or preceding the viewport midpoint. */
   activeMessageId(messageIds: readonly string[]): string | null;
   revealMessage(messageId: string): boolean;
-  setContentReady(ready: boolean): void;
+  setPresentationState(ready: boolean, filtered: boolean, empty: boolean): void;
   handleFocusIn(event: FocusEvent): void;
   handleFocusOut(event: FocusEvent): void;
 };

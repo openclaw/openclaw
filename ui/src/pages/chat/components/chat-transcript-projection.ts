@@ -248,7 +248,7 @@ export function projectChatTranscript(
   const hasTypingActors = (props.typingActors?.length ?? 0) > 0;
   const isEmpty =
     chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation && !hasTypingActors;
-  transcript.setContentReady(!props.loading);
+  transcript.setPresentationState(!props.loading, searchFiltering, isEmpty);
   // 1:1 exchanges do not need an avatar gutter; group threads keep it to identify
   // multiple voices. The capped sessions list may omit the selected row, so absent
   // or unknown rows classify by key, with global aliases taking precedence.
