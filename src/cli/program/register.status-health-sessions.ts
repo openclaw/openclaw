@@ -34,6 +34,17 @@ const SESSIONS_PARENT_OPTION_FLAGS = {
   limit: "--limit",
 } satisfies Record<keyof SessionsListCliOptions, string>;
 
+type SessionsSearchCliOptions = {
+  session?: string[];
+  limit?: string;
+  timeout?: string;
+  agent?: string;
+  url?: string;
+  token?: string;
+  password?: string;
+  json?: boolean;
+};
+
 function throwSessionsCliError(message: string): never {
   throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
@@ -302,6 +313,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw sessions --active 120", "Only last 2 hours."],
           ["openclaw sessions --limit 25", "Show the newest 25 sessions."],
           ["openclaw sessions --json", "Machine-readable output."],
+          ["openclaw sessions search 'deploy plan'", "Full-text search stored transcripts."],
           ["openclaw sessions --store ./tmp/sessions.sqlite", "Use a specific session store."],
         ])}\n\n${theme.muted(
           "Shows token usage per session when the agent reports it; set the model entry's contextTokens to cap the window and show %.",
@@ -530,6 +542,89 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             url: opts.url as string | undefined,
             token: opts.token as string | undefined,
             password: opts.password as string | undefined,
+            json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  addSessionsGatewayOptions(sessionsCmd.command("search <query>"))
+    .description("Full-text search stored session transcripts via the running gateway")
+    .option(
+      "--session <key>",
+      "Restrict the search to a session key (repeatable; required with --agent)",
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[], // SAFETY: Commander passes the parser accumulator declared on the previous line.
+    )
+    .option("--limit <count>", "Max hits to return (1-25; gateway default 10)")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            "openclaw sessions search 'deploy plan'",
+            "Search the Gateway-selected agent's stored transcripts.",
+          ],
+          [
+            "openclaw sessions search 'timeout' --limit 25",
+            "Return at most 25 hits (gateway max).",
+          ],
+          [
+            'openclaw sessions search "release checklist" --session "agent:main:main"',
+            "Search one session.",
+          ],
+          [
+            'openclaw sessions search "api key" --agent work --session "agent:work:main" --json',
+            "Agent-scoped search with machine-readable output.",
+          ],
+        ])}\n\n${theme.muted(
+          "Backed by the sessions.search gateway RPC (the same full-text search the Control UI uses); visibility and incognito filtering are enforced gateway-side. One call searches one agent's stored transcripts, and the gateway owns that selection for an unscoped query: it resolves the agent from the configured agents and the persisted session-key owner (and rejects ambiguous multi-agent configurations instead of guessing), so pass --agent <id> together with --session <key> keys when you need a specific agent. An empty result is not proof of absence across agents. --limit (1-25; 10 by default) is accepted before or after `search`.",
+        )}`,
+    )
+    .action(async (query: string, rawOpts, command) => {
+      // Commander fills this action's options from the flags registered by
+      // addSessionsGatewayOptions plus --session/--limit on this subcommand.
+      // SAFETY: The action option bag is exactly those registered flags.
+      const opts = rawOpts as SessionsSearchCliOptions;
+      // Like `compact`, merge parent `--agent`/`--json` and reject parent
+      // list-only options instead of silently dropping them. `--agent` and
+      // `--limit` are registered at both levels because
+      // `enablePositionalOptions()` stops the parent scan at `search`: the
+      // parent form (`sessions --limit 5 search q`) is only visible on
+      // parentOpts, the trailing form (`sessions search q --limit 5`) only on
+      // the child, and the child wins when both are supplied.
+      // Commander parses the parent `sessions` options declared by
+      // addSessionsListOptions; those are exactly this shape.
+      // SAFETY: Parent option bag is the declared SessionsListCliOptions.
+      const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
+      rejectUnsupportedSessionsParentOptions(
+        "search",
+        parentOpts,
+        ["store", "allAgents", "active", "verbose"],
+        "the gateway resolves searchable stores from --agent and --session",
+      );
+      const requestedLimit = opts.limit ?? parentOpts?.limit;
+      const limit = parseStrictPositiveInteger(requestedLimit);
+      if (requestedLimit !== undefined && limit === undefined) {
+        throwSessionsCliError("--limit must be a positive integer (1-25).");
+      }
+      const timeoutMs = parseStrictPositiveInteger(opts.timeout);
+      if (opts.timeout !== undefined && timeoutMs === undefined) {
+        throwSessionsCliError("--timeout must be a positive integer (milliseconds).");
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { sessionsSearchCommand } = await import("../../commands/sessions-search.js");
+        await sessionsSearchCommand(
+          {
+            query,
+            agent: opts.agent ?? parentOpts?.agent,
+            session: opts.session,
+            limit,
+            timeout: timeoutMs !== undefined ? String(timeoutMs) : undefined,
+            url: opts.url,
+            token: opts.token,
+            password: opts.password,
             json: Boolean(opts.json || parentOpts?.json),
           },
           defaultRuntime,
