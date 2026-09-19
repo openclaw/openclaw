@@ -108,6 +108,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/loader.trust-diagnostics.test.ts",
   "src/plugins/loader.runtime-registry.test.ts",
   "src/plugins/loader.gateway-bindings.test.ts",
+  "src/infra/outbound/channel-bootstrap.lifecycle.test.ts",
   "src/plugins/setup-registry.lifecycle.test.ts",
   "src/plugins/installed-plugin-index-store-write.receipt.test.ts",
   "src/plugins/install-record-commit.retention.test.ts",

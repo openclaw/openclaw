@@ -1,5 +1,6 @@
 // Covers lazy outbound channel bootstrap, retry guards, auto-enable config, and
 // send-capable active registry short-circuiting.
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
@@ -43,11 +44,8 @@ const bootstrapModes = [
   { mode: "sync", bootstrap: bootstrapOutboundChannelPlugin },
   { mode: "async", bootstrap: bootstrapOutboundChannelPluginAsync },
 ];
-const {
-  createChannelHandler,
-  resolveChannelOutboundDirectiveOptions,
-  resolveOutboundDurableFinalDeliverySupport,
-} = await import("./deliver-channel.js");
+const { createChannelHandler, resolveOutboundDurableFinalDeliverySupport } =
+  await import("./deliver-channel.js");
 const { resolveChannelTargetForDelivery, resolveOutboundSessionRouteForDelivery } =
   await import("../../cron/isolated-agent/delivery-target.runtime.js");
 
@@ -108,6 +106,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
     loaderMocks.resolveDiscoverableScopedChannelPluginIds.mockClear();
     resetOutboundChannelBootstrapStateForTests();
     resetPluginRuntimeStateForTest();
+    vi.unstubAllEnvs();
   });
 
   it("bootstraps when the selected channel registry has only a setup shell", () => {
@@ -140,16 +139,16 @@ describe("bootstrapOutboundChannelPlugin", () => {
     ] as never;
     loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
-    await expect(
-      resolveChannelOutboundDirectiveOptions({
-        channel: "discord",
-        cfg: explicitFleetDiscordConfig,
-        agentId: "ops",
-      }),
-    ).resolves.toEqual({ extractMarkdownImages: true });
+    const handler = await createChannelHandler({
+      channel: "discord",
+      cfg: explicitFleetDiscordConfig,
+      agentId: "ops",
+      to: "recipient",
+    });
+    await expect(handler.sendText("hello")).resolves.toMatchObject({ messageId: "1" });
 
     expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/openclaw-ops" }),
+      expect.objectContaining({ workspaceDir: path.resolve("/tmp/openclaw-ops") }),
     );
   });
 
@@ -182,16 +181,16 @@ describe("bootstrapOutboundChannelPlugin", () => {
     ] as never;
     loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
 
-    await expect(
-      resolveChannelOutboundDirectiveOptions({
-        channel: "discord",
-        cfg: migrated,
-      }),
-    ).resolves.toEqual({ extractMarkdownImages: true });
+    const handler = await createChannelHandler({
+      channel: "discord",
+      cfg: migrated,
+      to: "recipient",
+    });
+    await expect(handler.sendText("hello")).resolves.toMatchObject({ messageId: "1" });
 
     expect(migrated.agents?.entries?.ops?.default).toBeUndefined();
     expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/openclaw-legacy" }),
+      expect.objectContaining({ workspaceDir: path.resolve("/tmp/openclaw-legacy") }),
     );
   });
 
@@ -206,7 +205,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
 
     expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
     expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/openclaw-ops" }),
+      expect.objectContaining({ workspaceDir: path.resolve("/tmp/openclaw-ops") }),
     );
   });
 
@@ -245,7 +244,7 @@ describe("bootstrapOutboundChannelPlugin", () => {
     expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(2);
     expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ workspaceDir: "/tmp/openclaw-research" }),
+      expect.objectContaining({ workspaceDir: path.resolve("/tmp/openclaw-research") }),
     );
   });
 
@@ -511,17 +510,21 @@ describe("bootstrapOutboundChannelPlugin", () => {
     },
   );
 
-  it("does not retry a thrown bootstrap in the same generation", () => {
-    installDiscordSetupShell();
-    loaderMocks.loadPluginRegistryHandle.mockImplementation(() => {
-      throw new Error("load failed");
-    });
+  it.each(bootstrapModes)(
+    "does not retry a thrown bootstrap with an implicit state directory ($mode)",
+    async ({ bootstrap }) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
+      installDiscordSetupShell();
+      loaderMocks.loadPluginRegistryHandle.mockImplementation(() => {
+        throw new Error("load failed");
+      });
 
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
-    bootstrapOutboundChannelPlugin({ channel: "discord", cfg: discordConfig });
+      await bootstrap({ channel: "discord", cfg: discordConfig });
+      await bootstrap({ channel: "discord", cfg: discordConfig });
 
-    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
-  });
+      expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("bounds failed channel outcomes and refreshes misses by LRU recency", () => {
     installDiscordSetupShell();

@@ -5015,8 +5015,7 @@ describe("deliverOutboundPayloads", () => {
       undefined,
     );
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledOnce();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ content: "secret body", success: false }),
       expect.objectContaining({ channelId: "matrix" }),
     );
@@ -5051,8 +5050,7 @@ describe("deliverOutboundPayloads", () => {
 
     expect(queueMocks.ackDelivery).toHaveBeenCalledTimes(1);
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledOnce();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ content: "stopped body", success: false }),
       expect.objectContaining({ channelId: "matrix" }),
     );
@@ -5072,9 +5070,11 @@ describe("deliverOutboundPayloads", () => {
       deliveryQueueStateDir: "/queue-state",
     });
 
-    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("recovery-queue-id", "/queue-state", {
-      retainSpoolArtifacts: true,
-    });
+    expect(queueMocks.ackDelivery).toHaveBeenCalledWith(
+      "recovery-queue-id",
+      path.resolve("/queue-state"),
+      { retainSpoolArtifacts: true },
+    );
     expect(sendMatrix).toHaveBeenCalledOnce();
   });
 

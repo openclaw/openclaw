@@ -4,7 +4,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { throwIfAborted } from "./abort.js";
-import { createChannelHandler, resolveChannelOutboundDirectiveOptions } from "./deliver-channel.js";
+import { createChannelHandler } from "./deliver-channel.js";
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { applyMessageSendingHook, applyReplyPayloadSendingHook } from "./deliver-hooks.js";
 import {
@@ -122,19 +122,14 @@ export async function prepareOutboundPayloadBatch(
   params: DeliverOutboundPayloadsParams,
   options?: { onBeforeFirstModifier?: () => Promise<void>; hookRunner?: HookRunner },
 ): Promise<PreparedOutboundBatch> {
-  const directiveOptions = await resolveChannelOutboundDirectiveOptions({
-    cfg: params.cfg,
-    agentId: params.session?.agentId,
-    channel: params.channel,
-  });
+  const handler = await createPreparationHandler(params);
   const plan = createOutboundPayloadPlan(params.payloads, {
     cfg: params.cfg,
     sessionKey: params.session?.policyKey ?? params.session?.key,
     surface: params.channel,
     conversationType: params.session?.conversationType,
-    extractMarkdownImages: directiveOptions.extractMarkdownImages,
+    extractMarkdownImages: handler.extractMarkdownImages,
   });
-  const handler = await createPreparationHandler(params);
   const normalized = normalizePayloadsForChannelDelivery(plan, handler);
   const normalizedIndexes = new Set(normalized.map((entry) => entry.index));
   const entries: PreparedOutboundBatchEntry[] = [];
