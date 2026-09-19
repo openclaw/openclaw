@@ -40,6 +40,21 @@ describe("account id normalization", () => {
       input: " Prod/US East ",
       expected: "prod-us-east",
     },
+    {
+      name: "strips a leading underscore like a leading dash",
+      input: "_prod_us",
+      expected: "prod_us",
+    },
+    {
+      name: "collapses a lone underscore to the default account",
+      input: "_",
+      expected: DEFAULT_ACCOUNT_ID,
+    },
+    {
+      name: "strips leading delimiters in either order",
+      input: "_-prod_us",
+      expected: "prod_us",
+    },
     ...reservedAccountIdCases.map(({ name, input }) => ({
       name,
       input,
@@ -53,6 +68,16 @@ describe("account id normalization", () => {
     { name: "keeps undefined optional values unset", input: undefined, expected: undefined },
     { name: "keeps blank optional values unset", input: "   ", expected: undefined },
     { name: "keeps invalid optional values unset", input: " !!! ", expected: undefined },
+    {
+      name: "keeps lone-underscore optional values unset",
+      input: "_",
+      expected: undefined,
+    },
+    {
+      name: "strips leading underscores from optional ids",
+      input: "_prod_us",
+      expected: "prod_us",
+    },
     ...reservedAccountIdCases.map(({ name, input }) => ({
       name: name.replace(" pollution keys", " optional values"),
       input,

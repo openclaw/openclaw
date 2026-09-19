@@ -9,7 +9,10 @@ export const DEFAULT_ACCOUNT_ID = "default";
 // short lowercase safe keys and reject prototype-like object keys.
 const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
-const LEADING_DASH_RE = /^-+/;
+// Recover the [a-z0-9] first character VALID_ID_RE requires: both boundary
+// delimiters are decoration, so a leading underscore must not survive as a
+// still-invalid id any more than a leading dash does.
+const LEADING_DELIMITER_RE = /^[-_]+/;
 const TRAILING_DASH_RE = /-+$/;
 const ACCOUNT_ID_CACHE_MAX = 512;
 
@@ -22,14 +25,17 @@ function canonicalizeAccountId(value: string): string {
   }
   return normalized
     .replace(INVALID_CHARS_RE, "-")
-    .replace(LEADING_DASH_RE, "")
+    .replace(LEADING_DELIMITER_RE, "")
     .replace(TRAILING_DASH_RE, "")
     .slice(0, 64);
 }
 
 function normalizeCanonicalAccountId(value: string): string | undefined {
   const canonical = canonicalizeAccountId(value);
-  if (!canonical || isBlockedObjectKey(canonical)) {
+  // Check the authored input as well as the canonical form: stripping leading
+  // underscores would otherwise turn __proto__ into the safe-looking proto__ and
+  // let a prototype-like key escape the blocked-object-key guard.
+  if (!canonical || isBlockedObjectKey(value) || isBlockedObjectKey(canonical)) {
     return undefined;
   }
   return canonical;
