@@ -179,13 +179,23 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
               ? `${t("agentTools.githubCancelFailedHint")} ${authorization.message}`
               : t("agentTools.githubCancelFailedHint")
             : t("agentTools.githubAuthorizationHint"),
-        control: renderSettingsStatus({
-          kind:
-            authorization.phase === "network_error" || authorization.phase === "cancel_error"
-              ? "warn"
-              : "accent",
-          label: stateLabel,
-        }),
+        control: html`
+          ${renderSettingsStatus({
+            kind:
+              authorization.phase === "network_error" || authorization.phase === "cancel_error"
+                ? "warn"
+                : "accent",
+            label: stateLabel,
+          })}
+          <a
+            class="btn"
+            href=${authorization.verificationUri}
+            target=${EXTERNAL_LINK_TARGET}
+            rel=${buildExternalLinkRel()}
+          >
+            ${t("agentTools.githubOpen")}
+          </a>
+        `,
       })}
       ${renderSettingsRow({
         title: t("agentTools.githubDeviceCode"),
@@ -216,14 +226,6 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
       })}
       <div class="settings-row settings-row--actions">
         <div class="settings-row__control">
-          <a
-            class="btn primary"
-            href=${authorization.verificationUri}
-            target=${EXTERNAL_LINK_TARGET}
-            rel=${buildExternalLinkRel()}
-          >
-            ${t("agentTools.githubOpen")}
-          </a>
           ${
             authorization.phase === "cancelling" || authorization.phase === "finishing"
               ? nothing
@@ -247,7 +249,7 @@ function renderGitHubAuthorization(controller: GitHubIdentityController) {
     return nothing;
   }
   const authorizeButton = html`<button
-    class="btn primary"
+    class="btn"
     @click=${() => void controller.startAuthorization()}
   >
     ${t("githubConnections.continue")}

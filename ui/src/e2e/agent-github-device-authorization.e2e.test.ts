@@ -161,7 +161,9 @@ suite.define(() => {
       await section.getByRole("button", { name: "Change System GitHub" }).click();
       await expect(section.getByText("For the system", { exact: true })).toBeVisible();
       await gateway.deferNext("tools.github.authorize.start");
-      await section.getByRole("button", { name: "Continue with GitHub" }).click();
+      const continueButton = section.getByRole("button", { name: "Continue with GitHub" });
+      await expect(continueButton).not.toHaveClass(/primary/);
+      await continueButton.click();
       expect((await gateway.waitForRequest("tools.github.authorize.start")).params).toEqual({
         agentId: "main",
         scope: "system",
@@ -172,6 +174,15 @@ suite.define(() => {
       await expect(
         section.getByRole("link", { name: "Open github.com/login/device" }),
       ).toHaveAttribute("href", device.verificationUri);
+      const authorizationRow = section.locator(".settings-row", {
+        hasText: "GitHub authorization",
+      });
+      await expect(
+        authorizationRow.getByRole("link", { name: "Open github.com/login/device" }),
+      ).toBeVisible();
+      await expect(
+        authorizationRow.getByRole("link", { name: "Open github.com/login/device" }),
+      ).not.toHaveClass(/primary/);
       await capture(page, "02-system-code.png");
       await assertDeviceCodeCopy(page, device.userCode);
       await capture(page, "02b-system-code-copied.png");
@@ -192,9 +203,10 @@ suite.define(() => {
         status: "success",
         githubStatus: systemStatus,
       });
-      await expect(section.getByRole("button", { name: "Continue with GitHub" })).toBeVisible();
-      await expect(section.getByText("For the system", { exact: true })).toBeVisible();
+      await expect(section.locator("[data-github-setup]")).toHaveCount(0);
+      await expect(section.getByRole("button", { name: "Continue with GitHub" })).toHaveCount(0);
       await capture(page, "04-system-connected.png");
+      await section.getByRole("button", { name: "Change System GitHub" }).click();
       await section.getByRole("button", { name: "Use a PAT instead" }).click();
       await expect(section.getByLabel("Fine-grained PAT", { exact: true })).toBeVisible();
       await expect(section.getByRole("button", { name: "Continue with GitHub" })).toHaveCount(0);
@@ -240,6 +252,9 @@ suite.define(() => {
           account: { accountId: 4, login: "second-octocat" },
         },
       ].entries()) {
+        if (index > 0) {
+          await section.getByRole("button", { name: "Change My GitHub" }).click();
+        }
         await gateway.deferNext("users.github.authorize.start");
         await section.getByRole("button", { name: "Continue with GitHub" }).click();
         expect(
@@ -267,6 +282,8 @@ suite.define(() => {
         await expect(section.locator('[data-github-connection="system"]')).toContainText(
           "@system-octocat",
         );
+        await expect(section.locator("[data-github-setup]")).toHaveCount(0);
+        await expect(section.getByRole("button", { name: "Continue with GitHub" })).toHaveCount(0);
         await capture(page, `08-personal-connected-${index}.png`);
       }
       await gateway.setMethodResponse("users.github.status", {
