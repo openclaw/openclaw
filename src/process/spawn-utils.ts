@@ -21,7 +21,7 @@ type SpawnWithFallbackResult = {
 };
 
 type SpawnWithFallbackParams = {
-  assertCurrent?: () => void;
+  assertCurrent?: () => void | Promise<void>;
   argv: string[];
   options: SpawnOptions;
   fallbacks?: SpawnOptions[];
@@ -60,7 +60,7 @@ export async function spawnWithFallback(
   let lastError: unknown;
   for (const [index, attempt] of attempts.entries()) {
     // Caller revocation is not a spawn failure and cannot select a fallback.
-    params.assertCurrent?.();
+    await params.assertCurrent?.();
     try {
       const child = await spawnAndWaitForSpawn(spawnImpl, params.argv, attempt);
       return {

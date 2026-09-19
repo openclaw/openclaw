@@ -49,7 +49,10 @@ export async function createPtyAdapter(
   if (spawnEnv) {
     setPtyTerminalName({ env: spawnEnv, name: terminalName, platform: process.platform });
   }
-  params.assertCurrent?.();
+  const constructionGate = params.assertCurrent?.();
+  if (constructionGate) {
+    await constructionGate;
+  }
   if (params.abortSignal?.aborted) {
     throw new Error("PTY construction aborted");
   }
@@ -65,14 +68,21 @@ export async function createPtyAdapter(
     },
     {
       abortSignal: params.abortSignal,
-      assertCurrent: () => {
-        params.assertCurrent?.();
-        params.beforeSpawn?.();
+      assertCurrent: async () => {
+        const current = params.assertCurrent?.();
+        if (current) {
+          await current;
+        }
+        const admission = params.beforeSpawn?.();
+        return admission ? await admission : undefined;
       },
     },
   );
   try {
-    params.assertCurrent?.();
+    const afterSpawnGate = params.assertCurrent?.();
+    if (afterSpawnGate) {
+      await afterSpawnGate;
+    }
     if (params.abortSignal?.aborted) {
       throw new Error("PTY construction aborted");
     }

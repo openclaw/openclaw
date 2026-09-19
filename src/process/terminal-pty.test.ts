@@ -23,14 +23,15 @@ const tempDirs: string[] = [];
 
 async function spawnDirectTerminalPty(
   params: Parameters<typeof spawnTerminalPty>[0],
+  lifecycle?: Parameters<typeof spawnTerminalPty>[1],
 ): ReturnType<typeof spawnTerminalPty> {
   const bunDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
   if (!bunDescriptor) {
-    return await spawnTerminalPty(params);
+    return await spawnTerminalPty(params, lifecycle);
   }
   Object.defineProperty(process.versions, "bun", { ...bunDescriptor, value: undefined });
   try {
-    return await spawnTerminalPty(params);
+    return await spawnTerminalPty(params, lifecycle);
   } finally {
     Object.defineProperty(process.versions, "bun", bunDescriptor);
   }
@@ -383,6 +384,121 @@ describe("terminal PTY invocation", () => {
       [],
       expect.objectContaining({ cols: 80, rows: 24 }),
     );
+  });
+});
+
+describe("terminal PTY authorization fence", () => {
+  beforeEach(() => {
+    mocks.spawn.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("awaits the async guard and never spawns when it rejects", async () => {
+    let rejectGuard: (error: unknown) => void = () => {};
+    const guard = new Promise<void>((_resolve, reject) => {
+      rejectGuard = reject;
+    });
+    let guardEntered = false;
+    mocks.spawn.mockReturnValueOnce(fakePty());
+
+    const starting = spawnDirectTerminalPty(
+      { file: "/bin/sh", args: [], env: {}, cols: 80, rows: 24 },
+      {
+        assertCurrent: () => {
+          guardEntered = true;
+          return guard;
+        },
+      },
+    );
+
+    // The guard is still pending; the native PTY spawn must not run before it
+    // settles, so a later rejection can prevent any process effect.
+    await vi.waitFor(() => expect(guardEntered).toBe(true));
+    expect(mocks.spawn).not.toHaveBeenCalled();
+
+    const denial = new Error("assignment revoked during PTY construction");
+    rejectGuard(denial);
+
+    await expect(starting).rejects.toBe(denial);
+    expect(mocks.spawn).not.toHaveBeenCalled();
+  });
+
+  it("spawns only after the async guard resolves", async () => {
+    let resolveGuard: () => void = () => {};
+    const guard = new Promise<void>((resolve) => {
+      resolveGuard = resolve;
+    });
+    mocks.spawn.mockReturnValueOnce(fakePty());
+
+    const starting = spawnDirectTerminalPty(
+      { file: "/bin/sh", args: [], env: {}, cols: 80, rows: 24 },
+      {
+        assertCurrent: () => {
+          return guard;
+        },
+      },
+    );
+
+    expect(mocks.spawn).not.toHaveBeenCalled();
+
+    resolveGuard();
+    const handle = await starting;
+    expect(mocks.spawn).toHaveBeenCalledTimes(1);
+    expect(handle.pid).toBe(4321);
+  });
+});
+
+describe.runIf(process.platform !== "win32")("terminal PTY native authorization effect", () => {
+  it("prevents the real child process when the async guard rejects", async () => {
+    vi.resetModules();
+    vi.doUnmock("@lydell/node-pty");
+    vi.doUnmock("./kill-tree.js");
+    const { spawnTerminalPty: spawnRealTerminalPty } = await import("./terminal-pty.js");
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pty-native-denied-"));
+    tempDirs.push(directory);
+    const marker = path.join(directory, "spawned");
+    let rejectGuard: (error: unknown) => void = () => {};
+    const guard = new Promise<void>((_resolve, reject) => {
+      rejectGuard = reject;
+    });
+    let guardEntered = false;
+
+    const starting = spawnRealTerminalPty(
+      {
+        file: "/bin/sh",
+        args: ["-c", `touch ${JSON.stringify(marker)}; sleep 5`],
+        cwd: directory,
+        env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: os.tmpdir() },
+        cols: 80,
+        rows: 24,
+      },
+      {
+        assertCurrent: () => {
+          guardEntered = true;
+          return guard;
+        },
+      },
+    );
+
+    await vi.waitFor(() => expect(guardEntered).toBe(true));
+    // The native child must not exist while authorization is still pending.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 150);
+    });
+    expect(fs.existsSync(marker)).toBe(false);
+
+    const denial = new Error("assignment revoked before native PTY spawn");
+    rejectGuard(denial);
+
+    await expect(starting).rejects.toBe(denial);
+    // No native process effect after the denial.
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 150);
+    });
+    expect(fs.existsSync(marker)).toBe(false);
   });
 });
 

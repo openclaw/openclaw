@@ -91,6 +91,7 @@ The standard runner applies these defaults **per handler**:
 | Hooks                                                                                                          | Default timeout                     | On thrown error or timeout                                       |
 | -------------------------------------------------------------------------------------------------------------- | ----------------------------------- | ---------------------------------------------------------------- |
 | `before_agent_run`, `before_tool_call`, `before_install`                                                       | 15 seconds                          | Fail closed: block the run, tool call, or install                |
+| `secret_env_authorize`                                                                                         | 15 seconds                          | Fail closed: deny the resolved exec secret-store projection      |
 | `before_agent_finalize`, `before_prompt_build`, `message_sending`, `reply_payload_sending`, `resolve_exec_env` | 15 seconds                          | Log and skip the failed handler; retain other successful results |
 | `agent_end`, `before_compaction`, `after_compaction`, `skill_changed`, `skill_proposal_changed`                | 30 seconds                          | Log and continue                                                 |
 | `channel_pairing_requested`                                                                                    | 2 seconds                           | Log and continue                                                 |
@@ -143,13 +144,14 @@ contracts above; a modifying hook is not an observation hook.
 
 **Tools**
 
-| Hook                   | Kind               | Purpose                                                    |
-| ---------------------- | ------------------ | ---------------------------------------------------------- |
-| `before_tool_call`     | Modify / gate      | Rewrite tool params, block execution, or require approval  |
-| `after_tool_call`      | Observe            | Observe tool results, errors, and duration                 |
-| `resolve_exec_env`     | Modify             | Contribute plugin-owned environment variables to `exec`    |
-| `tool_result_persist`  | Sync modify        | Rewrite a toolResult message before transcript persistence |
-| `before_message_write` | Sync modify / gate | Rewrite or block a message before transcript persistence   |
+| Hook                   | Kind               | Purpose                                                                    |
+| ---------------------- | ------------------ | -------------------------------------------------------------------------- |
+| `before_tool_call`     | Modify / gate      | Rewrite tool params, block execution, or require approval                  |
+| `after_tool_call`      | Observe            | Observe tool results, errors, and duration                                 |
+| `resolve_exec_env`     | Modify             | Contribute plugin-owned environment variables to `exec`                    |
+| `secret_env_authorize` | Modify / gate      | Narrow the resolved exec secret-store projection to authorized entry names |
+| `tool_result_persist`  | Sync modify        | Rewrite a toolResult message before transcript persistence                 |
+| `before_message_write` | Sync modify / gate | Rewrite or block a message before transcript persistence                   |
 
 **Messages and delivery**
 
@@ -163,6 +165,22 @@ contracts above; a modifying hook is not an observation hook.
 | `message_sent`              | Observe       | Observe outbound delivery success or failure                               |
 | `before_dispatch`           | Claim         | Handle an inbound message before the normal model dispatch                 |
 | `reply_dispatch`            | Claim         | Own reply generation and dispatch instead of the default model path        |
+
+`secret_env_authorize` runs after core resolves the exec secret-store snapshot
+and before it becomes the executable environment. The event carries resolved
+entry names and kinds only, never values. Each handler returns `allowedNames`
+and the runner intersects every handler's set, so a handler can only narrow
+the projection, never widen it. Every registered handler must return a valid
+decision: a handler that returns nothing or a malformed value, throws, or times
+out denies the whole projection (fail closed), so one non-deciding policy can
+never be masked by another handler's allow. With no registered handlers the
+snapshot is returned unchanged, so the hook is compatible with plugins that do
+not participate.
+
+The authorized name set is also re-checked at the command-launch boundary. For
+a Gateway approval that is answered later, the deferred launch re-validates
+live policy immediately before spawning, so an assignment revoked while the
+approval waited cannot deliver a now-revoked entry to the process.
 
 `inbound_claim` is not a global pre-routing broadcast. OpenClaw invokes it only
 for the plugin that owns the message's core-managed conversation binding. To

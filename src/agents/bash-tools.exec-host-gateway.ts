@@ -1528,6 +1528,7 @@ export async function processGatewayAllowlist(
         | { status: "started"; run: Awaited<ReturnType<typeof runExecProcess>> }
         | { status: "approval-state-write-failed" }
         | { status: "operand-drift"; message: string }
+        | { status: "secret-projection-denied"; result: AgentToolResult<ExecToolDetails> }
         | { status: "run-aborted" }
         | { status: "spawn-failed" };
       try {
@@ -1565,7 +1566,11 @@ export async function processGatewayAllowlist(
           }
           let run: Awaited<ReturnType<typeof runExecProcess>>;
           let finalBindingDenied: string | undefined;
+          let secretProjectionDenied: AgentToolResult<ExecToolDetails> | undefined;
           const finalBindingDeniedError = new Error("gateway approval changed before spawn");
+          const secretProjectionDeniedError = new Error(
+            "secret assignment revoked before deferred spawn",
+          );
           try {
             gatewayInvocationStarted = true;
             run = await runExecProcess({
@@ -1591,6 +1596,17 @@ export async function processGatewayAllowlist(
               startupSignal: params.signal,
               assertCurrent,
               beforeSpawn: async () => {
+                // Re-validate live secret-assignment policy at this deferred
+                // launch boundary. The foreground owner validated before
+                // approval was requested; a revocation during the wait must
+                // deny here rather than deliver the captured environment.
+                if (params.secretEnvBeforeSpawn) {
+                  const denied = await params.secretEnvBeforeSpawn();
+                  if (denied) {
+                    secretProjectionDenied = denied;
+                    throw secretProjectionDeniedError;
+                  }
+                }
                 finalBindingDenied = await resolveGatewayExecApprovalDrift({
                   binding: approvalMutableFileBinding,
                   cwdSnapshot: approvedCwdSnapshot,
@@ -1605,6 +1621,12 @@ export async function processGatewayAllowlist(
           } catch (error) {
             if (params.signal?.aborted) {
               return { status: "run-aborted" as const };
+            }
+            if (error === secretProjectionDeniedError && secretProjectionDenied) {
+              return {
+                status: "secret-projection-denied" as const,
+                result: secretProjectionDenied,
+              };
             }
             if (error === finalBindingDeniedError && finalBindingDenied) {
               return { status: "operand-drift" as const, message: finalBindingDenied };
@@ -1643,6 +1665,28 @@ export async function processGatewayAllowlist(
       }
       if (admitted.status === "operand-drift") {
         await sendExecApprovalFollowupResult(followupTarget, admitted.message);
+        return;
+      }
+      if (admitted.status === "secret-projection-denied") {
+        const deniedText =
+          admitted.result.content.find((part) => part.type === "text")?.text ??
+          "secret assignment policy denied this run";
+        emitGatewayExecApprovalSecurityEvent({
+          action: "exec.approval.denied",
+          outcome: "denied",
+          severity: "high",
+          agentId: params.agentId,
+          reason: "secret-projection-denied",
+          hostSecurity,
+          hostAsk,
+          host: "gateway",
+          segmentCount: allowlistEval.segments.length,
+          trigger: params.trigger,
+        });
+        await sendExecApprovalFollowupResult(
+          followupTarget,
+          `Exec denied (gateway id=${approvalId}, secret-projection-denied): ${deniedText}\nCommand: ${params.command}`,
+        );
         return;
       }
       if (admitted.status === "spawn-failed") {

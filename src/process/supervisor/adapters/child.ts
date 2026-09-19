@@ -218,10 +218,11 @@ export async function createChildAdapter(
   };
 
   const assertCurrent = () => {
-    params.assertCurrent?.();
+    const current = params.assertCurrent?.();
     if (params.abortSignal?.aborted) {
       throw new Error("child construction aborted");
     }
+    return current;
   };
   let windowsJob: ManagedWindowsJob | undefined;
   let windowsCleanup: Promise<WindowsJobExtinction> | undefined;
@@ -242,8 +243,18 @@ export async function createChildAdapter(
                 { ...spawnOptions, signal: params.abortSignal },
                 async (launch) => {
                   await launchGate.promise;
-                  assertCurrent();
-                  params.beforeSpawn?.();
+                  const current = assertCurrent();
+                  if (current) {
+                    await current;
+                  }
+                  const admission = params.beforeSpawn?.();
+                  if (admission) {
+                    await admission;
+                  }
+                  const gate = assertCurrent();
+                  if (gate) {
+                    await gate;
+                  }
                   launch();
                 },
               );
@@ -259,8 +270,23 @@ export async function createChildAdapter(
           }
         : {}),
       assertCurrent: () => {
-        assertCurrent();
-        params.beforeSpawn?.();
+        const current = assertCurrent();
+        const admit = () => params.beforeSpawn?.();
+        if (current) {
+          return current.then(async () => {
+            await admit();
+            const gate = assertCurrent();
+            if (gate) {
+              await gate;
+            }
+          });
+        }
+        return Promise.resolve(admit()).then(async () => {
+          const gate = assertCurrent();
+          if (gate) {
+            await gate;
+          }
+        });
       },
       argv: [preparedSpawn.command, ...preparedSpawn.args],
       options,
@@ -738,7 +764,10 @@ export async function createChildAdapter(
         await windowsJob.ready;
       }
       // Construction may outlive admission; publish cleanup before any private input.
-      assertCurrent();
+      const readinessGate = assertCurrent();
+      if (readinessGate) {
+        await readinessGate;
+      }
       if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {
         throw new Error("worker lifecycle IPC channel was not created");
       }
@@ -749,7 +778,10 @@ export async function createChildAdapter(
         stdin?.end();
       }
       if (params.secretInput) {
-        assertCurrent();
+        const secretGate = assertCurrent();
+        if (secretGate) {
+          await secretGate;
+        }
         // deliverTo transfers its pipe synchronously; readiness retains the writer.
         await secretDelivery?.deliverTo(child, { abortSignal: params.abortSignal });
       }

@@ -2961,6 +2961,116 @@ EOF`,
     }
   });
 
+  it("denies a deferred approval launch when the secret assignment is revoked while waiting", async () => {
+    // The foreground owner validated the assignment before approval was
+    // requested; a revocation during the wait must deny at the detached
+    // launch boundary instead of delivering the captured environment.
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    resolveExecApprovalWaitOutcomeMock.mockResolvedValueOnce({
+      kind: "resolved",
+      decision: "allow-once",
+      state: {
+        baseDecision: { timedOut: false },
+        approvedByAsk: true,
+        deniedReason: null,
+        timeoutContext: undefined,
+      },
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+    const beforeSpawnCalls: Array<() => Promise<unknown>> = [];
+    let spawnReached = false;
+    runExecProcessMock.mockImplementation(
+      async (input: { beforeSpawn?: () => Promise<unknown> }) => {
+        if (input.beforeSpawn) {
+          beforeSpawnCalls.push(input.beforeSpawn);
+          // Mirror the real runtime: the pre-spawn recheck runs immediately
+          // before the process is created and its denial prevents the spawn.
+          await input.beforeSpawn();
+        }
+        spawnReached = true;
+        return { session: { id: "sess-revoked" }, promise: Promise.resolve({}) };
+      },
+    );
+    const captured = captureSecurityEvents();
+
+    let result: Awaited<ReturnType<typeof runGatewayAllowlist>>;
+    try {
+      result = await runGatewayAllowlist({
+        command: "openclaw sessions export-trajectory --json",
+        approvalFollowupMode: "agent",
+        sessionId: "approval-session",
+        secretEnvBeforeSpawn: async () => ({
+          content: [{ type: "text", text: "secret assignment policy revoked one or more entries" }],
+          details: { status: "failed", exitCode: null, durationMs: 0, aggregated: "revoked" },
+        }),
+      });
+      await vi.waitFor(() => {
+        expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+      });
+    } finally {
+      captured.stop();
+    }
+
+    expect(result!.pendingResult?.details.status).toBe("approval-pending");
+    expect(beforeSpawnCalls).toHaveLength(1);
+    // The revoked entry must never reach a launched process.
+    expect(spawnReached).toBe(false);
+    const text = requireSentFollowupText(0);
+    expect(text).toContain("secret-projection-denied");
+    expect(text).toContain("revoked one or more entries");
+    expect(captured.events.at(-1)).toMatchObject({
+      action: "exec.approval.denied",
+      outcome: "denied",
+      policy: { reason: "secret-projection-denied" },
+    });
+  });
+
+  it("launches a deferred approval when the assignment recheck still authorizes the run", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "allowlist",
+      hostAsk: "always",
+      askFallback: "deny",
+    });
+    mockApprovedDetachedExec({
+      outcome: { status: "completed", exitCode: 0, timedOut: false, aggregated: "ok" },
+    });
+    const recheck = vi.fn(async () => undefined);
+    runExecProcessMock.mockImplementation(
+      async (input: { beforeSpawn?: () => Promise<unknown> }) => {
+        await input.beforeSpawn?.();
+        return {
+          session: { id: "sess-allowed" },
+          promise: Promise.resolve({
+            status: "completed",
+            exitCode: 0,
+            timedOut: false,
+            aggregated: "ok",
+          }),
+        };
+      },
+    );
+
+    const result = await runGatewayAllowlist({
+      command: "openclaw sessions export-trajectory --json",
+      approvalFollowupMode: "agent",
+      sessionId: "approval-session",
+      secretEnvBeforeSpawn: recheck,
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
+    });
+    expect(recheck).toHaveBeenCalledOnce();
+    expect(requireSentFollowupText(0)).not.toContain("secret-projection-denied");
+  });
+
   it("keeps multiline gateway approval follow-up output intact", async () => {
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },

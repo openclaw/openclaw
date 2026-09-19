@@ -1,0 +1,16 @@
+{
+  "id": "secret-assignment-broker",
+  "categories": ["security"],
+  "name": "Secret assignment broker",
+  "description": "Per-agent secret-store assignment policy for the exec projection, enforced through the host secret_env_authorize seam.",
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true,
+    "onCapabilities": ["hook"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

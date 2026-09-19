@@ -9,6 +9,55 @@ import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "./tool-result-limits.js";
 
+/** Generic, identity-free text for an assignment-policy denial. Never names an entry. */
+export const SECRET_PROJECTION_DENIED_TEXT =
+  "Exec denied: an agent secret-assignment policy denied one or more store entries for this run.";
+
+/** Builds the denial tool result used when the secret projection is not authorized. */
+export function buildSecretProjectionDeniedToolResult(params: {
+  cwd?: string;
+  text?: string;
+}): AgentToolResult<ExecToolDetails> {
+  const text = params.text ?? SECRET_PROJECTION_DENIED_TEXT;
+  return {
+    content: [{ type: "text", text }],
+    details: {
+      status: "failed",
+      exitCode: null,
+      durationMs: 0,
+      aggregated: text,
+      timedOut: false,
+      ...(params.cwd ? { cwd: params.cwd } : {}),
+    },
+  };
+}
+
+/**
+ * Composes pre-spawn authorization checks. Each check returns a denial result or
+ * undefined; the first denial wins. Absent checks yield undefined so the caller
+ * keeps the host default (no extra spawn-boundary work).
+ */
+export function composeBeforeSpawnChecks(
+  ...checks: Array<(() => Promise<AgentToolResult<ExecToolDetails> | undefined>) | undefined>
+): (() => Promise<AgentToolResult<ExecToolDetails> | undefined>) | undefined {
+  const active = checks.filter(
+    (check): check is () => Promise<AgentToolResult<ExecToolDetails> | undefined> =>
+      typeof check === "function",
+  );
+  if (active.length === 0) {
+    return undefined;
+  }
+  return async () => {
+    for (const check of active) {
+      const denied = await check();
+      if (denied) {
+        return denied;
+      }
+    }
+    return undefined;
+  };
+}
+
 /** Renders automatic denials consistently for gateway and node tool transports. */
 export function buildExecAutoReviewDeniedToolResult(params: {
   command: string;

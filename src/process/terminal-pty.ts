@@ -96,10 +96,10 @@ export type TerminalPtySpawnParams = {
 
 export async function spawnTerminalPty(
   params: TerminalPtySpawnParams,
-  lifecycle?: { abortSignal?: AbortSignal; assertCurrent?: () => void },
+  lifecycle?: { abortSignal?: AbortSignal; assertCurrent?: () => void | Promise<void> },
 ): Promise<TerminalPtyHandle> {
-  const assertCurrent = () => {
-    lifecycle?.assertCurrent?.();
+  const assertCurrent = async () => {
+    await lifecycle?.assertCurrent?.();
     if (lifecycle?.abortSignal?.aborted) {
       throw new Error("PTY construction aborted");
     }
@@ -107,7 +107,7 @@ export async function spawnTerminalPty(
   if (process.versions.bun && process.platform !== "win32") {
     // Bun closes node-pty's nonblocking tty.ReadStream on EAGAIN, hanging up the child.
     const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
-    assertCurrent();
+    await assertCurrent();
     return await spawnNodeTerminalPty(params, assertCurrent);
   }
   const { spawn } = await import("@lydell/node-pty");
@@ -125,7 +125,7 @@ export async function spawnTerminalPty(
     args: params.args,
     env: env ?? process.env,
   });
-  assertCurrent();
+  await assertCurrent();
   const pty = spawn(invocation.file, invocation.args, {
     name: terminalName,
     cols: params.cols,

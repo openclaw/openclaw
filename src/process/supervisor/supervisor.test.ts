@@ -69,6 +69,30 @@ describe("process supervisor", () => {
     );
   });
 
+  it("does not construct a child when the async beforeSpawn fence rejects after a deferred wait", async () => {
+    const gate = createDeferred();
+    const denied = new Error("assignment revoked while approval pending");
+    const supervisor = createProcessSupervisor();
+    createChildAdapterMock.mockResolvedValue(createStubChildAdapter());
+
+    const pending = supervisor.spawn({
+      mode: "child",
+      argv: ["synthetic-child"],
+      beforeSpawn: async () => {
+        await gate.promise;
+        throw denied;
+      },
+    });
+    // While the deferred fence is pending, no child adapter may be constructed.
+    await Promise.resolve();
+    expect(createChildAdapterMock).not.toHaveBeenCalled();
+
+    gate.resolve();
+    await expect(pending).rejects.toBe(denied);
+    expect(createChildAdapterMock).not.toHaveBeenCalled();
+    await supervisor.shutdown();
+  });
+
   it("enforces no-output timeout for silent processes", async () => {
     vi.useFakeTimers();
     const adapter = createStubChildAdapter({

@@ -61,6 +61,13 @@ export type ProcessGatewayAllowlistParams = {
   cleanupMs?: number;
   processContinuationAvailable?: boolean;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  /**
+   * Assignment-authorization recheck for the run's secret projection. When
+   * provided, the deferred approval launch re-validates live policy at its own
+   * spawn boundary, so a revocation that lands while approval waits cannot
+   * deliver a now-revoked entry to the detached process.
+   */
+  secretEnvBeforeSpawn?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
 };
 
 /** Gateway allowlist outcome before command execution continues. */

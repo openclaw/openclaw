@@ -15,7 +15,7 @@ const CLEANUP_TIMEOUT_MS = 2_000;
 /** Keeps native PTY I/O on Node while the Gateway or node host runs on Bun. */
 export async function spawnNodeTerminalPty(
   params: TerminalPtySpawnParams,
-  beforeSpawn?: () => void,
+  beforeSpawn?: () => void | Promise<void>,
 ): Promise<TerminalPtyHandle> {
   const node = resolveNodeRuntimeExecutable();
   if (!node) {
@@ -53,6 +53,7 @@ export async function spawnNodeTerminalPty(
       return;
     }
     startupError ??= error;
+    ready.reject(error);
     if (child.connected) {
       child.disconnect();
     }
@@ -128,12 +129,12 @@ export async function spawnNodeTerminalPty(
       return;
     }
     if (message.type === "boot") {
-      try {
-        beforeSpawn?.();
-        send({ type: "start", params });
-      } catch (error) {
-        fail(toErrorObject(error, "PTY launch denied"));
-      }
+      void Promise.resolve()
+        .then(() => beforeSpawn?.())
+        .then(
+          () => send({ type: "start", params }),
+          (error: unknown) => fail(toErrorObject(error, "PTY launch denied")),
+        );
     } else if (message.type === "ready") {
       ptyPid = message.pid;
       if (!startupError) {
