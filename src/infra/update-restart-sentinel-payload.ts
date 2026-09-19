@@ -3,11 +3,24 @@ import { formatDoctorNonInteractiveHint, type RestartSentinelPayload } from "./r
 import { isUpdateGatewayReadinessPending } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner.js";
 
+export type ForegroundUpdateOrigin = {
+  owner: string;
+  pid: number;
+  host: string;
+  startedAt: number;
+  port: number;
+  stateDatabasePath: string;
+  configPath: string;
+};
+
 // Update restart sentinel payloads carry update result details across a process
 // restart so the next gateway can report completion or failure.
 /** Metadata needed to route update restart continuation messages. */
 export type UpdateRestartSentinelMeta = {
   runId?: string;
+  /** The foreground replacement Gateway verifies success after the CLI settles. */
+  completionOwner?: "gateway-restart";
+  foregroundOrigin?: ForegroundUpdateOrigin;
   /** Internal helper fact: when the owning service stop was issued. */
   serviceStoppedAtMs?: number;
   root?: string;
@@ -37,16 +50,7 @@ export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): Upda
         result.reason === "still-starting" ? "still-starting" : "gateway-readiness-unverified",
     };
   }
-  const beforeSha = result.before?.sha?.trim();
-  const afterSha = result.after?.sha?.trim();
-  return result.status === "ok" &&
-    result.mode === "git" &&
-    result.postUpdate?.plugins?.changed !== true &&
-    beforeSha &&
-    afterSha &&
-    beforeSha === afterSha
-    ? { ...result, status: "skipped", reason: "already-current" }
-    : result;
+  return result;
 }
 
 function resolvePersistedRecovery(result: UpdateRunResult): UpdateRunResult["recovery"] {

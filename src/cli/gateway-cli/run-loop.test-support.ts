@@ -1,8 +1,98 @@
+import { EventEmitter } from "node:events";
 import { expect, it, vi, type Mock } from "vitest";
 import type { GatewayServer } from "../../gateway/server-public.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
+import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.js";
+
+type ManagedUpdateOwner = NonNullable<GatewayRestartIntent["successorOwner"]>;
+type GatewayStart = Parameters<typeof import("./run-loop.js").runGatewayLoop>[0]["start"];
+type ExitRuntime = { log: Mock; error: Mock; exit: Mock<(code: number) => void> };
+export type UpdateRespawnFixtures = {
+  waitForGatewayActiveWork: Mock<
+    typeof import("../../infra/gateway-active-work.js").waitForGatewayActiveWork
+  >;
+  peekGatewaySigusr1RestartReason: Mock<() => string | undefined>;
+  respawnGatewayProcessForUpdate: Mock<
+    (opts?: { env?: NodeJS.ProcessEnv }) => UpdateRespawnResultFixture
+  >;
+  waitForGatewayHealthyRestart: Mock<
+    typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart
+  >;
+  respawnHealth: (overrides?: Partial<GatewayRestartSnapshot>) => GatewayRestartSnapshot;
+  readRestartSentinelReadOnly: Mock<
+    typeof import("../../infra/restart-sentinel.js").readRestartSentinelReadOnly
+  >;
+  writeRestartSentinelIfUnchanged: Mock<
+    typeof import("../../infra/restart-sentinel.js").writeRestartSentinelIfUnchanged
+  >;
+  restartGatewayProcessWithFreshPid: Mock<
+    (opts?: { env?: NodeJS.ProcessEnv }) => {
+      mode: "supervised" | "disabled" | "failed";
+      detail?: string;
+      exitCode?: number;
+      handoffSpawned?: Promise<boolean>;
+    }
+  >;
+  withIsolatedSignals: (
+    run: (helpers: {
+      captureSignal: (signal: "SIGTERM" | "SIGINT" | "SIGUSR1") => () => void;
+    }) => Promise<void>,
+  ) => Promise<void>;
+  createSignaledStart: (close: GatewayServer["close"]) => {
+    start: Mock<GatewayStart>;
+    started: Promise<void>;
+  };
+  createRuntimeWithExitSignal: () => { runtime: ExitRuntime; exited: Promise<number> };
+  runLoopWithStart: (params: {
+    start: Mock<GatewayStart>;
+    runtime: ExitRuntime;
+    lockPort?: number;
+    completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
+  }) => Promise<unknown>;
+  waitForStart: (started: Promise<void>) => Promise<void>;
+  waitForLoopCondition: (predicate: () => boolean, message: string) => Promise<void>;
+  createSignaledLoopHarness: () => Promise<{
+    start: Mock<GatewayStart>;
+    runtime: ExitRuntime;
+    exited: Promise<number>;
+  }>;
+  markUpdateRestartSentinelFailure: Mock<(reason: string) => Promise<null>>;
+  writeGatewayRestartHandoffSync: { mockReturnValueOnce: (value: null) => unknown };
+  consumeGatewaySigusr1RestartIntent: Mock<() => GatewayRestartIntent | null>;
+  managedUpdateSuccessorOwner: ManagedUpdateOwner;
+  isForegroundUpdateHandoff: Mock<(identity: ManagedUpdateOwner) => boolean>;
+  requestManagedServiceUpdateHandoffPark: Mock<(identity: ManagedUpdateOwner) => Promise<boolean>>;
+  hasManagedProviderLocalServices: Mock<() => boolean>;
+  stopManagedProviderLocalServices: Mock<() => Promise<void>>;
+  cancelManagedServiceUpdateHandoff: Mock<
+    (identity: ManagedUpdateOwner) => Promise<false | "restored-in-process" | "restart-after-exit">
+  >;
+  acquireGatewayLock: Mock<
+    (opts?: { port?: number }) => Promise<{ release: Mock<() => Promise<void>> }>
+  >;
+  completeForegroundUpdateHandoffAfterClose: Mock<
+    typeof import("../../infra/update-managed-service-handoff.js").completeForegroundUpdateHandoffAfterClose
+  >;
+  killProcessTree: Mock;
+  flushLogger: Mock<() => Promise<void>>;
+  gatewayLog: { warn: Mock; info: Mock };
+  isGatewayWorkAdmissionClosed: () => boolean;
+  consumeGatewayRestartIntentPayloadSync: Mock<
+    () => { reason?: string; force?: boolean; waitMs?: number } | null
+  >;
+  commitManagedServiceUpdateHandoff: Mock<
+    (identity: ManagedUpdateOwner, outcome?: "update" | "restore") => Promise<boolean>
+  >;
+  setPlatform: (platform: string) => void;
+  expectRestartHandoffCall: (expected: {
+    restartKind: "full-process" | "update-process";
+    reason: string | undefined;
+    supervisorMode: "external" | "launchd";
+  }) => void;
+  originalPlatformDescriptor: PropertyDescriptor | undefined;
+};
 
 export const createActiveWorkSnapshot = (
   counts: Partial<GatewayActiveWorkSnapshot["counts"]> = {},
@@ -209,17 +299,27 @@ export async function waitForLoopCondition(predicate: () => boolean, message: st
   throw new Error(message);
 }
 
-export type UpdateRespawnResultFixture = {
-  mode: "spawned" | "disabled" | "failed";
-  pid?: number;
-  detail?: string;
-  child?: {
-    kill: () => void;
-    pid?: number;
-    exitCode?: number | null;
-    signalCode?: NodeJS.Signals | null;
-  };
-};
+export type UpdateRespawnResultFixture =
+  | {
+      mode: "spawned";
+      pid?: number;
+      child: EventEmitter & {
+        kill: (signal?: NodeJS.Signals) => unknown;
+        pid?: number;
+        exitCode: number | null;
+        signalCode: NodeJS.Signals | null;
+      };
+    }
+  | { mode: "disabled" | "failed"; detail?: string };
+
+export function createUpdateRespawnChild(pid = 7777) {
+  return Object.assign(new EventEmitter(), {
+    pid,
+    exitCode: null as number | null,
+    signalCode: null as NodeJS.Signals | null,
+    kill: vi.fn((_signal?: NodeJS.Signals) => true),
+  });
+}
 
 export function registerUpdateRespawnProgressTests({
   runLoopWithStart,
@@ -275,10 +375,16 @@ export function registerUpdateRespawnProgressTests({
       respawnGatewayProcessForUpdate.mockReturnValueOnce({
         mode: "spawned",
         pid: process.pid,
-        child: { kill, pid: process.pid, exitCode: null, signalCode: null },
+        child: Object.assign(createUpdateRespawnChild(process.pid), { kill }),
       });
-      waitForGatewayHealthyRestart.mockImplementationOnce(async ({ child }) => {
-        expect(child).toMatchObject({ pid: process.pid, exitCode: null, signalCode: null });
+      waitForGatewayHealthyRestart.mockImplementationOnce(async (params) => {
+        expect(params).toMatchObject({
+          child: { pid: process.pid, exitCode: null, signalCode: null },
+          port: 18789,
+          probeHosts: ["127.0.0.1"],
+          requireRunningService: true,
+          requirePluginHealth: false,
+        });
         await new Promise<void>((resolve) => {
           setTimeout(resolve, elapsedMs);
         });

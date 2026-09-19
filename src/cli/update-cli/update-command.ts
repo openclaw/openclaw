@@ -82,6 +82,8 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
       root: prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
       invocationCwd,
       pkgOwnership: prepared.pkgOwnership,
+      expectedForeground:
+        prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     });
     const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
     if (await updateStateNeedsInitialization(env)) {
@@ -104,6 +106,8 @@ async function runAdmittedUpdate(
     invocationCwd,
     initialization,
     pkgOwnership: prepared.pkgOwnership,
+    expectedForeground:
+      prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     installKind: prepared.installKind,
   });
   const opts = { ...inputOpts, run };
@@ -273,6 +277,9 @@ async function initializeAndRunUpdate(
                   invocationCwd,
                   packageTargetVersion: target.targetVersion ?? undefined,
                   opts,
+                  expectedForeground:
+                    prepared.controlPlaneUpdateSentinelMeta?.completionOwner ===
+                      "gateway-restart" || undefined,
                 });
               };
               const schemaPreflight = await checkSchemas();

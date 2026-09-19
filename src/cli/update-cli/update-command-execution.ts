@@ -6,7 +6,7 @@ import { tryReadJson } from "../../infra/json-files.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
 import type { UpdateCandidateRehearsal } from "../../infra/update-candidate-rehearsal.js";
-import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
+import type { UpdateStateSchemaVersion } from "../../infra/update-candidate-state.js";
 import {
   createUpdateDoctorConfigWarningStep,
   type UpdateDoctorConfigChange,
@@ -48,6 +48,7 @@ import { updateGitInstall } from "./update-command-git.js";
 import {
   formatUpdateAncestryBlockMessage,
   handoffUpdateFromGateway,
+  parkForegroundUpdateForActivation,
 } from "./update-command-handoff.js";
 import {
   captureOwnedManagedUpdateContext,
@@ -66,6 +67,7 @@ import {
   resolveMutableUpdateFailure,
   type MutableUpdateExecutionResult,
 } from "./update-command-result.js";
+import { captureUpdateActivationSchemas } from "./update-command-schema.js";
 import { isUpdatedInstallGatewayExecutorSupported } from "./update-command-service-command.js";
 import { resolveUpdatedInstallCommandEnv } from "./update-command-service-env.js";
 import {
@@ -134,6 +136,7 @@ export async function executeMutableUpdate(
       invocationCwd: params.invocationCwd,
       managedServiceRootRedirect: params.managedServiceRootRedirect,
       expectedServices: admission.services,
+      expectedForeground: admission.foreground,
       legacyConfigPlan: params.legacyConfigPlan,
     });
     admission.contexts = await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
@@ -150,7 +153,7 @@ export async function executeMutableUpdate(
     await recheckSchemas(admittedTargetSchemaVersions);
     const { preflightConfiguredNpmPluginTargets } =
       await import("./update-command-plugin-preflight.js");
-    const context = admission!.contexts.at(-1)!;
+    const context = admission!.foreground ? admission!.contexts[0]! : admission!.contexts.at(-1)!;
     const warnings = await preflightConfiguredNpmPluginTargets({
       config: context.configSnapshot.sourceConfig,
       env: context.env,
@@ -165,8 +168,9 @@ export async function executeMutableUpdate(
   };
   let recoveryEnv: NodeJS.ProcessEnv | undefined;
   let packageTransaction: PackageUpdateTransaction | undefined;
-  let schemaVersions: Awaited<ReturnType<typeof readUpdateStateSchemaVersions>> | undefined;
+  let schemaVersions: UpdateStateSchemaVersion[] | undefined;
   let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
+  let gatewayRestartCompletion = false;
   let previousSchemaVersions: OpenClawSchemaVersions | undefined;
   let previousVerified = false;
   let observedGatewayStartupMs: number | undefined;
@@ -203,6 +207,9 @@ export async function executeMutableUpdate(
     mutationRoots: readonly string[] = [params.root],
     phase: "inspect" | "prepare" = "prepare",
   ) => {
+    if (admission?.foreground) {
+      return;
+    }
     if (params.updateInstallKind !== "package" && params.updateInstallKind !== "git") {
       return;
     }
@@ -431,6 +438,7 @@ export async function executeMutableUpdate(
       if (validation.status === "ok") {
         validatedConfigSnapshot = snapshot;
         candidateSchemaVersions = validation.candidateSchemaVersions;
+        gatewayRestartCompletion = validation.gatewayRestartCompletion === true;
         doctorConfigWrites = validation.doctorConfigWrites === true;
         observedGatewayStartupMs = validation.steps.find(
           (step) => step.name === "Checking Gateway startup" && step.exitCode === 0,
@@ -503,17 +511,15 @@ export async function executeMutableUpdate(
     }
     const config = snapshot.config;
     await recheckSchemas(admittedTargetSchemaVersions);
-    previousSchemaVersions = parsePackageOpenClawSchemaVersions(
-      await tryReadJson<unknown>(path.join(params.root, "package.json")),
-    );
-    schemaVersions = candidateSchemaVersions
-      ? await readUpdateStateSchemaVersions({
-          stateDir: resolveStateDir(env),
-          config,
-          env,
-          timeoutMs: params.updateStepTimeoutMs,
-        })
-      : undefined;
+    ({ previousSchemaVersions, schemaVersions } = await captureUpdateActivationSchemas({
+      root: params.root,
+      env,
+      config,
+      run: opts.run,
+      candidateSchemaVersions,
+      gatewayRestartCompletion,
+      timeoutMs: params.updateStepTimeoutMs,
+    }));
     if (
       preManagedServiceStop?.running &&
       preManagedServiceStop.serviceUpdateVerdict?.kind === "owned"
@@ -541,7 +547,7 @@ export async function executeMutableUpdate(
       pluginCount: Object.keys(config.plugins?.entries ?? {}).length,
       nodeRunner: params.packageUpdateNodeRunner,
     });
-    assertExecutionCurrent();
+    await parkForegroundUpdateForActivation(params, assertExecutionCurrent);
     await params.prepareMutableUpdate(env, activationTimeoutMs);
     assertExecutionCurrent();
     if (opts.run) {
@@ -560,14 +566,12 @@ export async function executeMutableUpdate(
   try {
     if (params.updateInstallKind === "package" || params.updateInstallKind === "git") {
       admission = await inspectUpdateDatabaseContexts({
+        ...params,
         roots: gitMutationRoots ?? [params.root],
         updateInstallKind: params.updateInstallKind,
-        shouldRestart: params.shouldRestart,
         jsonMode: Boolean(opts.json),
         timeoutMs: updateStepTimeoutMs,
-        invocationCwd: params.invocationCwd,
-        managedServiceRootRedirect: params.managedServiceRootRedirect,
-        legacyConfigPlan: params.legacyConfigPlan,
+        expectedForeground: opts.run?.completionOwner === "gateway-restart" || undefined,
       });
     }
     if (params.updateInstallKind === "package") {

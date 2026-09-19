@@ -15,8 +15,11 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import {
   createManagedServiceIdentityFixture,
   finishSuccessfulPackageSwitch,
+  expectFailureReport,
+  expectUpdateFailure,
   managedServiceState,
   programArguments,
+  registerForegroundFinalizationTests,
   successfulPluginUpdate,
   taskRecovery,
   validConfigSnapshot,
@@ -24,6 +27,7 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const mocks = vi.hoisted(() => ({
+  parkForeground: vi.fn(),
   checkCompletionStatus: vi.fn(),
   completePluginUpdate: vi.fn(),
   ensureCompletionCache: vi.fn(),
@@ -50,6 +54,10 @@ const mocks = vi.hoisted(() => ({
   >(async () => undefined),
 }));
 
+vi.mock("../../infra/update-managed-service-handoff.js", async (original) => ({
+  ...(await original<typeof import("../../infra/update-managed-service-handoff.js")>()),
+  parkForegroundUpdateHandoff: mocks.parkForeground,
+}));
 vi.mock("./progress.js", () => ({ printResult: mocks.printResult }));
 vi.mock("../../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/config.js")>()),
@@ -125,23 +133,6 @@ import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
 const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-function expectFailureReport(reason: string, options: unknown = expect.any(Object)) {
-  expect(mocks.printResult).toHaveBeenCalledWith(
-    expect.objectContaining({ status: "error", reason }),
-    options,
-    expect.any(Object),
-  );
-  expect(defaultRuntime.exit).not.toHaveBeenCalled();
-}
-
-function expectUpdateFailure(promise: Promise<unknown>, reason: string, details: object = {}) {
-  return expect(promise).rejects.toMatchObject({
-    name: "UpdateCommandFailure",
-    exitCode: 1,
-    result: { status: "error", reason },
-    ...details,
-  });
-}
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -182,6 +173,8 @@ describe("successful update finalization ordering", () => {
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
   });
+
+  registerForegroundFinalizationTests({ tempDirs, mocks });
 
   it("does not finalize or clean an active durable run without its live executor", async () => {
     const home = tempDirs.make("finalizer-pending-recovery-");
@@ -403,7 +396,7 @@ describe("successful update finalization ordering", () => {
       await expectUpdateFailure(finishSuccessfulPackageSwitch(), "restart-unhealthy");
 
       expect(mocks.printResult).toHaveBeenCalledOnce();
-      expectFailureReport("restart-unhealthy");
+      expectFailureReport(mocks.printResult, "restart-unhealthy");
       expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
         expect.objectContaining({ reason: "restart-unhealthy" }),
       );
@@ -460,6 +453,7 @@ describe("successful update finalization ordering", () => {
     expect(mocks.restartService).not.toHaveBeenCalled();
     expect(mocks.printResult).toHaveBeenCalledOnce();
     expectFailureReport(
+      mocks.printResult,
       "windows-task-autostart-restore-failed",
       expect.objectContaining({ json: true }),
     );
@@ -522,7 +516,7 @@ describe("successful update finalization ordering", () => {
         steps: expect.arrayContaining([retained]),
       });
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
-      expectFailureReport("wrapper-retirement-failed");
+      expectFailureReport(mocks.printResult, "wrapper-retirement-failed");
       expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
         expect.objectContaining({ reason: "wrapper-retirement-failed" }),
       );
@@ -936,7 +930,11 @@ describe("successful update finalization ordering", () => {
           "Stopped gateway service could not be revalidated; inspect it before restarting manually.",
         );
         expect(mocks.printResult).toHaveBeenCalledOnce();
-        expectFailureReport("service-revalidation-failed", expect.objectContaining({ json: true }));
+        expectFailureReport(
+          mocks.printResult,
+          "service-revalidation-failed",
+          expect.objectContaining({ json: true }),
+        );
         expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(
           mocks.printResult.mock.lastCall?.[0],
         );
@@ -1010,7 +1008,7 @@ describe("successful update finalization ordering", () => {
       } else {
         expect(mocks.writeSentinel).toHaveBeenCalledOnce();
         expect(mocks.printResult).toHaveBeenCalledOnce();
-        expectFailureReport("readyz-unhealthy");
+        expectFailureReport(mocks.printResult, "readyz-unhealthy");
         expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
           expect.objectContaining({ reason: "readyz-unhealthy" }),
         );

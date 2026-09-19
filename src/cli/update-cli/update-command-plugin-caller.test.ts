@@ -24,8 +24,9 @@ import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import * as postCore from "./update-command-post-core.js";
-import { finishUpdate, type FinishUpdateParams } from "./update-command-post-update.js";
+import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import * as postCoreResume from "./update-command-resume.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";

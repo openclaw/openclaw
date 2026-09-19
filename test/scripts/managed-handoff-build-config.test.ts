@@ -68,6 +68,7 @@ it("loads the staged production handoff runtime without neighboring SQL or JSON 
         `
           import assert from "node:assert/strict";
           import { isBuiltin, registerHooks } from "node:module";
+          import { DatabaseSync } from "node:sqlite";
           import { pathToFileURL } from "node:url";
           const entry = pathToFileURL(process.argv[1]).href;
           registerHooks({ resolve(specifier, context, nextResolve) {
@@ -80,11 +81,28 @@ it("loads the staged production handoff runtime without neighboring SQL or JSON 
             "assertOpenClawStateWriteAllowed",
             "resolveImmutableSqliteFileUri",
             "createManagedHandoffLeaseStore",
-            "hasManagedUpdateRecoveryRecord",
             "resolveUpdateRestartNoticeMeta",
             "shouldPublishUpdateRestartNotice",
+            "extractSqliteTableSchema",
+            "readRestartSentinelRowSync",
+            "writeRestartSentinelRowIfRevisionSync",
           ]) {
             assert.equal(typeof runtime[name], "function", name);
+          }
+          const db = new DatabaseSync(":memory:");
+          try {
+            db.exec(runtime.extractSqliteTableSchema(runtime.OPENCLAW_STATE_SCHEMA_SQL, "gateway_restart_sentinel", {
+              endMarker: "ON gateway_restart_sentinel(ts DESC, sentinel_key);",
+            }));
+            db.exec("BEGIN IMMEDIATE");
+            const payload = { kind: "update", status: "error", ts: 1 };
+            const written = runtime.writeRestartSentinelRowIfRevisionSync(db, payload, null);
+            assert(written);
+            assert.deepEqual(runtime.readRestartSentinelRowSync(db), { kind: "valid", sentinel: written });
+            assert.equal(runtime.writeRestartSentinelRowIfRevisionSync(db, payload, null), null);
+            db.exec("COMMIT");
+          } finally {
+            db.close();
           }
           console.log("staged production handoff runtime loaded");
         `,

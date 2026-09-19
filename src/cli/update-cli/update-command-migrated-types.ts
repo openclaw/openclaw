@@ -45,7 +45,9 @@ export type MigratedUpdateFinalizationInput = {
 export type MigratedUpdateFinalizationResult = {
   result: UpdateRunResult;
   exitCode: number;
-  terminalRunId: string;
   executorDelegation?: "pid-start-v1";
   automaticTriage?: TriageFailureContext;
-};
+} & (
+  | { terminalRunId: string; restartRunId?: never }
+  | { restartRunId: string; terminalRunId?: never }
+);

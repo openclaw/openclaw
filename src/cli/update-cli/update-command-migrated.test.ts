@@ -339,11 +339,12 @@ it.each([
   { json: false, legacy: false, parentOwns: false },
   { json: true, legacy: false, parentOwns: true },
   { json: false, legacy: true, parentOwns: true },
+  { json: true, legacy: true, parentOwns: true, foreground: true },
   { json: true, legacy: false, parentOwns: true, checkWorkMs: 31_000, stepBudgetMs: 120_000 },
   { json: true, legacy: false, parentOwns: true, checkWorkMs: 31_000, stepBudgetMs: 20_000 },
 ])(
   "fences migrated candidate finalization (json=$json, legacy=$legacy, parentOwns=$parentOwns, check=$checkWorkMs, budget=$stepBudgetMs)",
-  async ({ json, legacy, parentOwns, checkWorkMs, stepBudgetMs }) => {
+  async ({ json, legacy, parentOwns, checkWorkMs, stepBudgetMs, foreground }) => {
     const stateDir = await fs.realpath(dirs.make("migrated-update-"));
     const env = {
       ...process.env,
@@ -362,7 +363,7 @@ it.each([
         const fs = require("node:fs");
         const { DatabaseSync } = require("node:sqlite");
         if (process.argv[2] === "--check") {
-          process.stdout.write(JSON.stringify({state:${OPENCLAW_STATE_SCHEMA_VERSION + 1}, agent:${OPENCLAW_AGENT_SCHEMA_VERSION}}));
+          process.stdout.write(JSON.stringify({state:${OPENCLAW_STATE_SCHEMA_VERSION + 1}, agent:${OPENCLAW_AGENT_SCHEMA_VERSION}${foreground ? ', executorDelegation: "pid-start-v1"' : ""}}));
         } else {
           const input = JSON.parse(fs.readFileSync(0,"utf8"));
           fs.writeFileSync(${JSON.stringify(legacyEffect)}, "unfenced effect");
@@ -374,11 +375,15 @@ it.each([
       `,
       );
     }
-    const created = createUpdateRun({ trigger: "cli" }, { env });
+    const created = createUpdateRun({ trigger: foreground ? "api" : "cli" }, { env });
     const parentDriver = parentOwns
       ? adoptUpdateRun(created.runId, { env }).origin.driver
       : undefined;
-    const run = { runId: created.runId, env };
+    const run = {
+      runId: created.runId,
+      env,
+      ...(foreground ? { completionOwner: "gateway-restart" as const } : {}),
+    };
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.useFakeTimers();
     presentation = createUpdateProgress(!json, run);
@@ -514,7 +519,9 @@ it.each([
       return;
     }
     if (legacy) {
-      await expect(work).rejects.toThrow(/live executor delegation/);
+      await expect(work).rejects.toThrow(
+        foreground ? /cannot defer foreground update completion/ : /live executor delegation/,
+      );
       await expect(fs.access(legacyEffect)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await family()).toEqual(before);
       expect(terminalAtCleanup).toBeUndefined();

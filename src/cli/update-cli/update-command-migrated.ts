@@ -112,7 +112,7 @@ export async function inspectActivatedUpdateState(
 export async function continueMigratedUpdateInFreshProcess(
   params: FinishUpdateParams,
   bufferedSteps: UpdateRunStep[],
-): Promise<Omit<MigratedUpdateFinalizationResult, "terminalRunId">> {
+): Promise<Pick<MigratedUpdateFinalizationResult, "result" | "exitCode" | "automaticTriage">> {
   if (params.opts.recovery) {
     throw new UpdateCommandRecoveryPendingError("Full-state checkpoint recovery is deferred.");
   }
@@ -145,7 +145,7 @@ export async function continueMigratedUpdateInFreshProcess(
       TMP: scratchDir,
       TEMP: scratchDir,
     };
-    if (run.executorFence) {
+    if (run.executorFence || run.completionOwner) {
       assertCurrent();
       // Compatibility only, never authority. An older installed worker ignores
       // new JSON fields, so refuse before exposing any continuation input.
@@ -174,10 +174,15 @@ export async function continueMigratedUpdateInFreshProcess(
         check.code !== 0 ||
         check.cleanup !== "normal" ||
         !isRecord(contract) ||
-        contract.executorDelegation !== "pid-start-v1"
+        (run.executorFence && contract.executorDelegation !== "pid-start-v1")
       ) {
         throw new UpdateCommandRecoveryPendingError(
           "Update runtime does not support live executor delegation; recovery remains pending.",
+        );
+      }
+      if (run.completionOwner === "gateway-restart" && contract.gatewayRestartCompletion !== true) {
+        throw new UpdateCommandRecoveryPendingError(
+          "Candidate runtime cannot defer foreground update completion to Gateway restart; recovery remains pending.",
         );
       }
     }
@@ -264,7 +269,13 @@ export async function continueMigratedUpdateInFreshProcess(
       child.code !== 0 ||
       child.cleanup !== "normal" ||
       (executorFence && response.executorDelegation !== "pid-start-v1") ||
-      response.terminalRunId !== run.runId ||
+      (response.terminalRunId !== run.runId &&
+        !(
+          run.completionOwner === "gateway-restart" &&
+          run.gatewayRestartRequired === true &&
+          response.restartRunId === run.runId &&
+          response.result.status === "ok"
+        )) ||
       response.result.runId !== run.runId ||
       !Number.isInteger(response.exitCode)
     ) {

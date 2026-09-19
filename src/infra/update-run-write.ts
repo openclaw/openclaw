@@ -96,7 +96,7 @@ export function mutateRun(
 
 type RecoveryDiagnostics = Pick<UpdateRunRecord["verification"], "recovery" | "rollbackOutcome">;
 type UpdateRunDiagnostics = RecoveryDiagnostics & {
-  failure?: Pick<UpdateRunStep, "step" | "detail" | "failureFacts">;
+  failure?: Pick<UpdateRunStep, "step" | "detail" | "failureFacts" | "exitCode">;
 };
 
 /** Diagnostic capture cannot interrupt lifecycle work or replace its original outcome. */

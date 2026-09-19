@@ -13,6 +13,7 @@ import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
+import { parkForegroundUpdateForActivation } from "./update-command-handoff.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import {
   assertUpdateCommandPackageFinalization,
@@ -59,8 +60,6 @@ import {
   recordUpdatePackageCompletion,
 } from "./update-command-terminal.js";
 
-export type { FinishUpdateParams } from "./update-command-finish-types.js";
-
 export async function finishUpdate(
   params: FinishUpdateParams,
   { candidateRuntime = false } = {},
@@ -70,6 +69,8 @@ export async function finishUpdate(
     throw new Error("Deferred native service loading is not supported on this platform.");
   }
   const assertCurrent = createUpdateCommandFinalizationFence(params);
+  const parkForegroundOrigin = () => parkForegroundUpdateForActivation(params, assertCurrent);
+
   // Final publication follows restoration of the caller's environment. Retain
   // the admitted run's state for both notice policy and its matching sentinel.
   const sentinelOptions = {
@@ -94,6 +95,7 @@ export async function finishUpdate(
   }
   const shouldRestart =
     params.shouldRestart &&
+    params.opts.run?.completionOwner !== "gateway-restart" &&
     (!params.coreAlreadyCurrent || params.preManagedServiceStop?.running === true);
   let gateway: TriageFailureContext["gateway"] = "preserve";
   let triageAllowed = true;
@@ -141,7 +143,6 @@ export async function finishUpdate(
       pendingRestartAtMs = undefined;
     }
   };
-  const completedResult = (result: UpdateRunResult) => completeUpdateCommandResult(params, result);
   const recordNextAction = (
     result: UpdateRunResult,
     committed?: UpdateCommandTerminalRecord["record"],
@@ -277,7 +278,7 @@ export async function finishUpdate(
     );
     assertCurrent();
     let restoreFailure = initialRestoreFailure;
-    const finalResult = completedResult({
+    const finalResult = completeUpdateCommandResult(params, {
       ...result,
       ...(result.status === "error" && !recoverService && !rolledBack
         ? {
@@ -388,7 +389,7 @@ export async function finishUpdate(
     assertCurrent();
     const cleanupFailure = await recordUpdatePackageCompletion(params, finalResult, assertCurrent);
     assertCurrent();
-    pendingResult = completedResult(cleanupFailure?.result ?? finalResult);
+    pendingResult = completeUpdateCommandResult(params, cleanupFailure?.result ?? finalResult);
     terminalRecord = deferredTerminal
       ? await captureUpdateCommandTerminalRecord(params, pendingResult, assertCurrent)
       : undefined;
@@ -457,7 +458,13 @@ export async function finishUpdate(
 
     const postUpdateRoot = params.result.root ?? params.root;
     const convergePlugins = async (beforeDoctor?: () => Promise<void>) => {
-      const pluginParams = { ...params, beforeDoctor, assertCurrent, candidateRuntime };
+      const pluginParams = {
+        ...params,
+        beforeDoctor: beforeDoctor ?? parkForegroundOrigin,
+        beforeRuntimePublication: parkForegroundOrigin,
+        assertCurrent,
+        candidateRuntime,
+      };
       const convergence = await convergeUpdatePlugins(pluginParams);
       if (convergence.resultWithPostUpdate.status === "error") {
         triageAllowed = !convergence.cancelled;

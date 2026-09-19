@@ -13,9 +13,13 @@ import * as portProbe from "../../infra/ports-probe.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "../../infra/sqlite-coordinator.js";
 import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
+import * as updateCheck from "../../infra/update-check.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import { withGatewayRuntimeArtifactPublication } from "./update-command-service-maintenance.js";
 
 const mocks = vi.hoisted(() => ({ service: vi.fn<() => GatewayService>() }));
@@ -92,6 +96,67 @@ async function withRuntimePublicationFixture(
     expect(service.install).not.toHaveBeenCalled();
   });
 }
+
+it.each([true, false])(
+  "parks the foreground Gateway before source runtime publication only when artifacts change: %s",
+  (changed) =>
+    withRuntimePublicationFixture(async ({ root, env, service }) => {
+      vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("git");
+      const scripts = path.join(root, "scripts");
+      const artifact = path.join(root, "dist-runtime", "published.txt");
+      await fs.mkdir(path.join(scripts, "lib"), { recursive: true });
+      await fs.writeFile(
+        path.join(scripts, "stage-bundled-plugin-runtime.mts"),
+        `import fs from "node:fs/promises";
+export function prepareBundledPluginRuntime() {
+  return {
+    changed: ${changed},
+    async publish(assertCurrent) {
+      await assertCurrent();
+      await fs.writeFile(${JSON.stringify(artifact)}, "candidate");
+    },
+    async cleanup() {},
+  };
+}
+`,
+      );
+      await fs.writeFile(
+        path.join(scripts, "lib", "dist-artifact-ownership.mts"),
+        "export async function withDistArtifactOwnership(_root, run) { return await run(); }\n",
+      );
+      await fs.writeFile(artifact, "original");
+      const lock = vi.mocked(gatewayLocks.readActiveGatewayLockIdentity);
+      lock.mockResolvedValue({ pid: process.pid, createdAt: "now", port: 18789 });
+      const park = vi.fn(async () => {
+        expect(service.readRuntime).not.toHaveBeenCalled();
+        expect(lock).not.toHaveBeenCalled();
+        expect(await fs.readFile(artifact, "utf8")).toBe("original");
+        lock.mockResolvedValue(undefined);
+      });
+      try {
+        await expect(
+          withPluginLifecycleLease({ env, waitMs: 0 }, (lease) =>
+            completeSourceUpdateRuntime({
+              root,
+              timeoutMs: 1_000,
+              lease,
+              beforePublication: park,
+            }),
+          ),
+        ).resolves.toEqual({ changed });
+        expect(park).toHaveBeenCalledTimes(changed ? 1 : 0);
+        expect(await fs.readFile(artifact, "utf8")).toBe(changed ? "candidate" : "original");
+        if (changed) {
+          expect(lock).toHaveBeenCalled();
+        } else {
+          expect(service.readRuntime).not.toHaveBeenCalled();
+          expect(lock).not.toHaveBeenCalled();
+        }
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+      }
+    }),
+);
 
 it.each([
   "running",

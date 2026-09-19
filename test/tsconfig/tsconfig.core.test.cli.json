@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.core.test.shard.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-cli.tsbuildinfo"
+  },
+  "include": [
+    "../../src/cli/**/*.test.ts",
+    "../../src/cli/**/*.test.tsx"
+  ],
+  "exclude": [
+    "../../node_modules",
+    "../../dist",
+    "../../**/dist/**",
+    "../../src/cli/cron-cli/**",
+    "../../src/cli/cron*.test.ts",
+    "../../src/cli/cron*.test.tsx",
+    "../../src/cli/daemon-cli/**"
+  ]
+}

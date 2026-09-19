@@ -214,7 +214,7 @@ export async function resolveSettledUpdateCommandResult(
 
 /** Share verified retirement and unverified recovery retention across finalizers. */
 export async function recordUpdatePackageCompletion(
-  params: Pick<FinishUpdateParams, "packageTransaction" | "root">,
+  params: Pick<FinishUpdateParams, "packageTransaction" | "root" | "opts">,
   result: UpdateRunResult,
   assertCurrent: () => void,
 ): Promise<UpdateCommandFailure | void> {
@@ -222,7 +222,12 @@ export async function recordUpdatePackageCompletion(
   if (!transaction) {
     return;
   }
-  if (isUpdateGatewayReadinessPending(result)) {
+  if (
+    isUpdateGatewayReadinessPending(result) ||
+    (result.status === "ok" &&
+      params.opts.run?.completionOwner === "gateway-restart" &&
+      params.opts.run.gatewayRestartRequired === true)
+  ) {
     assertCurrent();
     const message = `Gateway readiness is pending; backup retirement deferred for ${transaction.backupRoot}. Verify readiness before cleanup.`;
     result.steps.push({

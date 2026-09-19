@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
   hasSchemaRefusal: vi.fn(),
   maybeRestartService: vi.fn(),
   maybeStopService: vi.fn(),
-  prepareMutableUpdate: vi.fn<(env?: NodeJS.ProcessEnv) => Promise<void>>(),
+  prepareMutableUpdate: vi.fn<Parameters<typeof executeMutableUpdate>[0]["prepareMutableUpdate"]>(),
   pluginPreflight: vi.fn(),
   pluginTargets: vi.fn(),
   pluginRecords: vi.fn(),
@@ -90,7 +90,8 @@ vi.mock("./update-command-git.js", async (importOriginal) => ({
   updateGitInstall: mocks.runGitUpdate,
 }));
 
-vi.mock("./update-command-handoff.js", () => ({
+vi.mock("./update-command-handoff.js", async (original) => ({
+  ...(await original<typeof import("./update-command-handoff.js")>()),
   formatUpdateAncestryBlockMessage: (message: string) => message,
   handoffUpdateFromGateway: vi.fn(),
 }));

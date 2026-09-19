@@ -103,7 +103,10 @@ function pendingPackageInvocation(
   const metaPath = path.join(home, "sentinel.json");
   fs.writeFileSync(configPath, "{}\n");
   fs.writeFileSync(contextPath, "retained triage\n");
-  fs.writeFileSync(metaPath, JSON.stringify({ meta: { triageContextPath: contextPath } }));
+  fs.writeFileSync(
+    metaPath,
+    JSON.stringify({ version: 1, meta: { triageContextPath: contextPath } }),
+  );
   for (const key of [
     "OPENCLAW_UPDATE_RUN_ID",
     POST_CORE_UPDATE_ENV,
@@ -471,7 +474,7 @@ describe("pending recovery finalizer", () => {
       const context = path.join(f.root, "triage.json");
       const meta = path.join(f.root, "sentinel.json");
       fs.writeFileSync(context, "unchanged");
-      fs.writeFileSync(meta, JSON.stringify({ meta: { triageContextPath: context } }));
+      fs.writeFileSync(meta, JSON.stringify({ version: 1, meta: { triageContextPath: context } }));
       const primary = {
         status: "error" as const,
         mode: "npm" as const,

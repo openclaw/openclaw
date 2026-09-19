@@ -16,6 +16,15 @@ import type { UpdateCampaignController } from "./update-campaign.js";
 import { isPendingControlPlaneUpdateRestartSentinel } from "./update-control-plane-sentinel.js";
 import type { TrackedDevUpdateTarget } from "./update-dev-target.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
+import {
+  buildManagedServiceHandoffUnavailableMessage,
+  formatManagedServiceUpdateCommand,
+} from "./update-managed-service-handoff-command.js";
+import {
+  cancelManagedServiceUpdateHandoff,
+  startManagedServiceUpdateHandoff,
+  transferManagedServiceUpdateHandoff,
+} from "./update-managed-service-handoff.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import {
   createUpdateRun,
@@ -27,7 +36,7 @@ import {
 } from "./update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { AUTO_UPDATE_STEP_TIMEOUT_MS } from "./update-run-timeouts.js";
-import type { UpdateRunResult } from "./update-runner.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
 
 export type AutoUpdateRunResult =
   | { status: "handoff"; command?: string; logPath?: string }
@@ -49,13 +58,6 @@ export async function runAutoUpdateCommand(
   params: AutoUpdateRunParams,
   log: { info: (msg: string, meta?: Record<string, unknown>) => void },
 ): Promise<AutoUpdateRunResult> {
-  const {
-    buildManagedServiceHandoffUnavailableMessage,
-    cancelManagedServiceUpdateHandoff,
-    formatManagedServiceUpdateCommand,
-    startManagedServiceUpdateHandoff,
-    transferManagedServiceUpdateHandoff,
-  } = await import("./update-managed-service-handoff.js");
   const startedAt = Date.now();
   const command = formatManagedServiceUpdateCommand({
     channel: params.channel,
@@ -100,8 +102,14 @@ export async function runAutoUpdateCommand(
   });
   const handoffFailure = (error: unknown): AutoUpdateRunResult => {
     log.info("automatic update handoff failed", { error: formatErrorMessage(error) });
+    const reason = "managed-service-handoff-failed";
     const fact = createUpdateErrorFact("managed-service", error);
     // Cancellation may finish the run; retain its cause before that ownership transition.
+    try {
+      recordUpdateRunStep(params.runId, { step: "requested", status: "failed", reason });
+    } catch {
+      log.info("Update failure state could not be recorded; preserving the original error.");
+    }
     recordUpdateRunDiagnostics(
       params.runId,
       { failure: { step: "managed-service", detail: fact.message, failureFacts: [fact] } },
@@ -109,7 +117,7 @@ export async function runAutoUpdateCommand(
     );
     const code = extractErrorCode(error);
     const outcome = failure(
-      "managed-service-handoff-failed",
+      reason,
       `Automatic update handoff failed${code ? ` (${code})` : ""}. Inspect the Gateway log, then run \`${command}\` from a shell to retry.`,
     );
     outcome.result.steps = [
@@ -131,31 +139,6 @@ export async function runAutoUpdateCommand(
 
   try {
     params.signal?.throwIfAborted();
-    if (params.devTarget) {
-      const { runGatewayUpdatePreflight } = await import("./update-runner.js");
-      params.signal?.throwIfAborted();
-      const result = await runGatewayUpdatePreflight(
-        params.root,
-        params.timeoutMs,
-        params.devTarget,
-        params.signal,
-      );
-      params.signal?.throwIfAborted();
-      if (result) {
-        if (classifyUpdateOutcome(result) === "noop") {
-          return {
-            status: "skipped",
-            result,
-            message: "Automatic update skipped: the selected version is already current.",
-          };
-        }
-        return {
-          status: "failed",
-          result,
-          message: `Automatic update preflight failed. Run \`${command}\` from a shell to inspect and retry.`,
-        };
-      }
-    }
     if (!params.root?.trim()) {
       throw new Error("managed auto-update install root is unavailable");
     }
@@ -221,8 +204,7 @@ export async function runAutoUpdateCommand(
 
 export type AutoUpdateRunner = (params: AutoUpdateRunParams) => Promise<AutoUpdateRunResult>;
 
-// The owner joins preflight and handoff readiness, never the detached helper's
-// subsequent wait for Gateway exit.
+// The owner joins handoff readiness, never the helper's subsequent wait for Gateway exit.
 export async function runCampaignUpdate(params: {
   channel: "stable" | "beta" | "dev";
   mode: UpdateRunResult["mode"];

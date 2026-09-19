@@ -67,7 +67,9 @@ installation's owner. Normal package-to-package updates keep using pnpm or Bun.
 Git updates build the complete runtime, including plugins and the Control UI,
 in a temporary candidate worktree. Dev updates preserve local commits by
 rebasing the candidate before its build. The updater publishes that prepared
-runtime during activation instead of repeating the build while stopped.
+runtime during activation instead of repeating the build while stopped. It
+preserves the build timestamps, so ordinary CLI commands keep using that
+validated runtime without regenerating it after the move.
 Candidate installs and nested build commands use a private pnpm virtual store,
 so preparing an update cannot prune dependencies used by the serving Gateway.
 The candidate's temporary workspace settings are restored before checking for

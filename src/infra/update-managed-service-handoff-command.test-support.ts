@@ -531,7 +531,7 @@ export function registerManagedLaunchdTeardownTests(
       });
 
       expect(commands).toEqual(["print gui/501/ai.openclaw.gateway"]);
-      expect(state).toEqual({ nativeRelease: {} });
+      expect(state).toEqual({});
       expect(sentinel).toMatchObject({
         payload: {
           status: "skipped",

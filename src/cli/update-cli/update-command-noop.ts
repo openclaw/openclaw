@@ -77,6 +77,7 @@ export async function finishAlreadyCurrentUpdate(
       updateInstallKind: params.result.mode === "git" ? ("git" as const) : ("package" as const),
       jsonMode: Boolean(params.opts.json),
       timeoutMs: params.updateStepTimeoutMs,
+      expectedForeground: params.opts.run?.completionOwner === "gateway-restart" || undefined,
     };
     const admission = await inspectUpdateDatabaseContexts(inspection);
     const service = admission.service;
@@ -86,7 +87,7 @@ export async function finishAlreadyCurrentUpdate(
       installedRoot: params.root,
       nodeRunner: params.packageUpdateNodeRunner,
       alreadyCurrent: true,
-      service: service ?? admission.services.get(params.root),
+      service: admission.foreground ? undefined : (service ?? admission.services.get(params.root)),
       sourceRoot: result.mode === "git" ? params.root : undefined,
       timeoutMs: params.updateStepTimeoutMs,
     });
@@ -97,7 +98,7 @@ export async function finishAlreadyCurrentUpdate(
       });
     }
     const packageUpdateNodeRunner = runtime.value.nodeRunner;
-    const context = admission.contexts.at(-1)!;
+    const context = admission.foreground ? admission.contexts[0]! : admission.contexts.at(-1)!;
     const pluginWarnings = await preflightConfiguredNpmPluginTargets({
       config: context.configSnapshot.sourceConfig,
       env: context.env,
@@ -112,35 +113,41 @@ export async function finishAlreadyCurrentUpdate(
         defaultRuntime.log(warning.message);
       }
     }
-    await inspectUpdateDatabaseContexts({ ...inspection, expectedServices: admission.services });
+    await inspectUpdateDatabaseContexts({
+      ...inspection,
+      expectedServices: admission.services,
+      expectedForeground: admission.foreground,
+    });
     await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
     let stopState;
     try {
-      stopState = await maybeStopManagedServiceBeforeMutableUpdate({
-        ...inspection,
-        root: params.root,
-        phase: "inspect",
-        expectedService: admission.services.get(params.root),
-        updateRun: params.opts.run,
-        handoffFromGateway: (state) =>
-          handoffUpdateFromGateway({
-            state,
+      stopState = admission.foreground
+        ? undefined
+        : await maybeStopManagedServiceBeforeMutableUpdate({
+            ...inspection,
             root: params.root,
-            mode: params.result.mode,
-            opts: params.opts,
-            tag:
-              params.channel === "extended-stable"
-                ? undefined
-                : params.packageInstallSpec &&
-                    !canResolveRegistryVersionForPackageTarget(params.packageInstallSpec)
-                  ? params.packageInstallSpec
-                  : (result.after.version ?? undefined),
-            timeoutMs: params.updateStepTimeoutMs,
-            nodeRunner: packageUpdateNodeRunner,
-            invocationCwd: params.invocationCwd,
-            stopProgress: params.stop,
-          }),
-      });
+            phase: "inspect",
+            expectedService: admission.services.get(params.root),
+            updateRun: params.opts.run,
+            handoffFromGateway: (state) =>
+              handoffUpdateFromGateway({
+                state,
+                root: params.root,
+                mode: params.result.mode,
+                opts: params.opts,
+                tag:
+                  params.channel === "extended-stable"
+                    ? undefined
+                    : params.packageInstallSpec &&
+                        !canResolveRegistryVersionForPackageTarget(params.packageInstallSpec)
+                      ? params.packageInstallSpec
+                      : (result.after.version ?? undefined),
+                timeoutMs: params.updateStepTimeoutMs,
+                nodeRunner: packageUpdateNodeRunner,
+                invocationCwd: params.invocationCwd,
+                stopProgress: params.stop,
+              }),
+          });
     } catch (error) {
       if (error instanceof UpdateCommandAbort) {
         return;
@@ -148,8 +155,9 @@ export async function finishAlreadyCurrentUpdate(
       throw error;
     }
     if (
-      stopState.blockMessage ||
-      shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop: stopState })
+      stopState &&
+      (stopState.blockMessage ||
+        shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop: stopState }))
     ) {
       throw new UpdatePreMutationError(
         "managed-service-preflight",

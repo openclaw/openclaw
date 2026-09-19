@@ -31,7 +31,7 @@ describe("gateway lifecycle hub import boundaries", () => {
 
   it("still primes the hub eagerly so signal handlers survive dist chunk rotation", () => {
     const runLoop = readSource("src/cli/gateway-cli/run-loop.ts");
-    const eagerPrime = runLoop.indexOf("await loadGatewayLifecycleRuntimeModule()");
+    const eagerPrime = runLoop.indexOf("await gatewayLifecycleRuntimeLoader.load()");
     const signalInstall = runLoop.indexOf("process.on(");
 
     expect(eagerPrime).toBeGreaterThan(-1);
