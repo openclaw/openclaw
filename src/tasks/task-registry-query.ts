@@ -466,8 +466,20 @@ export function listTaskStatesForFlowIds(
 }
 
 function findLatestTaskForRelatedSessionKey(sessionKey: string): TaskRecord | undefined {
-  const task = listTasksForRelatedSessionKey(sessionKey)[0];
-  return task ? cloneTaskRecord(task) : undefined;
+  ensureTaskRegistryReady();
+  const key = normalizeOptionalString(sessionKey);
+  if (!key) {
+    return undefined;
+  }
+  // Raw records stay inside this synchronous lookup; only the selected record is cloned.
+  const selected = [...(taskIdsByRelatedSessionKey.get(key) ?? [])]
+    .flatMap((taskId, insertionIndex) => {
+      const task = tasks.get(taskId);
+      return task ? [{ task, createdAt: task.createdAt, insertionIndex }] : [];
+    })
+    .toSorted(compareTasksNewestFirst)
+    .find(({ task }) => taskMatchesRelatedSession(task, key))?.task;
+  return selected ? cloneTaskRecord(selected) : undefined;
 }
 
 export function listTasksForRelatedSessionKey(
